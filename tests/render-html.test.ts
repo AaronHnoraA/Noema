@@ -492,6 +492,15 @@ Body.
     expect(html).toContain('data-aaronnote-image-wrap="false"');
   });
 
+  test("native adjacent images stay side by side in reading and published HTML", () => {
+    const html = renderMarkdownHTML("![A](a.png){width=60%} ![B](b.png){width=40%}");
+    expect(html).toContain("aaronnote-image-layout-row");
+    expect((html.match(/<img\b/g) ?? [])).toHaveLength(2);
+    expect(html).toContain("--cm-image-row-weight: 0.6");
+    expect(html).toContain("--cm-image-row-weight: 0.4");
+    expect(renderMarkdownHTML("![A](a.png) and ![B](b.png)")).not.toContain("aaronnote-image-layout-row");
+  });
+
   test("keeps parent-directory image URLs for asset resolution", () => {
     const html = renderMarkdownHTML('![plot](<../images/plot.png> "Plot")', {
       assetResolver: (src) => `aaronnote-asset://media/?file=${encodeURIComponent(src)}`,

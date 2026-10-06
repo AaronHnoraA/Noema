@@ -409,9 +409,43 @@ maybeDescribe("CM6 runCommand — block insert", () => {
     expect(ed.getMarkdown()).toBe("#+begin theorem\n\n#+end theorem");
     ed.destroy();
   });
+
+  it("insert-layout: inserts a native layout and places the caret inside", async () => {
+    const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
+    const host = document.createElement("div");
+    const ed = createEditorCM6(host, { initialContent: "" });
+    ed.runCommand("insert-layout", "grid");
+    expect(ed.getMarkdown()).toBe("#+begin layout {cols=2 mode=grid}\n\n#+end layout");
+    expect(ed.getMarkdownSelection().from).toBe("#+begin layout {cols=2 mode=grid}\n".length);
+    ed.destroy();
+  });
+
+  it("insert-layout: wraps complete selected lines without changing their Markdown", async () => {
+    const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
+    const host = document.createElement("div");
+    const source = "Before\nLeft text\n\n![Graph](graph.png)\nAfter";
+    const ed = createEditorCM6(host, { initialContent: source });
+    ed.setSelection(source.indexOf("Left") + 2, source.indexOf("After"));
+    ed.runCommand("insert-layout", "flow");
+    expect(ed.getMarkdown()).toBe("Before\n#+begin layout {cols=2 mode=flow}\nLeft text\n\n![Graph](graph.png)\n#+end layout\nAfter");
+    ed.destroy();
+  });
 });
 
 maybeDescribe("CM6 runCommand — table editing", () => {
+  it("sorts only body rows by numeric active column and keeps source cells", async () => {
+    const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
+    const host = document.createElement("div");
+    const source = "| Name | Score |\n| --- | ---: |\n| Z | 10 |\n| A | 2 |\n| A | 2 |";
+    const ed = createEditorCM6(host, { initialContent: source });
+    ed.setSelection(source.indexOf("10"));
+    expect(ed.runCommand("table-sort-ascending")).toBe(true);
+    expect(ed.getMarkdown()).toBe("| Name | Score |\n| --- | ---: |\n| A | 2 |\n| A | 2 |\n| Z | 10 |");
+    expect(ed.runCommand("table-sort-descending")).toBe(true);
+    expect(ed.getMarkdown()).toBe(source);
+    ed.destroy();
+  });
+
   it("table commands insert/delete rows and columns as markdown", async () => {
     const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
     const host = document.createElement("div");
@@ -483,6 +517,9 @@ maybeDescribe("CM6 getBlockContext", () => {
       "table-move-column-left",
       "table-move-column-right",
       "table-format",
+      "table-sort-ascending",
+      "table-sort-descending",
+      "table-copy-csv",
     ]);
     ed.destroy();
   });

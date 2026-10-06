@@ -55,10 +55,12 @@ import { blockMathRangesOverlapping, getBlockMathRanges, mergeOverlappingRanges,
 import { scanInlineMathRanges } from "../inline-math.ts";
 import { sanitizeEmbeddedHtml } from "../sanitize-html.ts";
 import { renderMarkdownHTML } from "../render-html.ts";
+import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "./figure-layout-menu.ts";
 import { getKatexMacros } from "../katex-macros.ts";
 import { tableCellMathRanges, type TableCellCompletionDetail } from "./table-cell-assist.ts";
 import { scanEmojiShortcodes } from "../emoji-shortcodes.ts";
 import { writeSystemClipboard } from "../system-clipboard.ts";
+import { sortTableBodyRows, tableRowsToCSV } from "./table-model.ts";
 import {
   clearRectCells,
   rectCellSources,
@@ -1536,6 +1538,18 @@ class TableWidget extends MeasuredWidget {
       tableToolButton("L", "Align column left", () => apply((next) => { next.aligns[activeCol] = "left"; }, { row: activeRow, col: activeCol })),
       tableToolButton("C", "Align column center", () => apply((next) => { next.aligns[activeCol] = "center"; }, { row: activeRow, col: activeCol })),
       tableToolButton("R", "Align column right", () => apply((next) => { next.aligns[activeCol] = "right"; }, { row: activeRow, col: activeCol })),
+      tableToolButton("↑", "Sort body rows ascending by active column", () => apply((next) => {
+        if (next.rows.length > 100) return;
+        next.rows = sortTableBodyRows(next.rows, activeCol, 1, (row) => row);
+      }, { row: Math.max(1, activeRow), col: activeCol })),
+      tableToolButton("↓", "Sort body rows descending by active column", () => apply((next) => {
+        if (next.rows.length > 100) return;
+        next.rows = sortTableBodyRows(next.rows, activeCol, -1, (row) => row);
+      }, { row: Math.max(1, activeRow), col: activeCol })),
+      tableToolButton("CSV", "Copy table as CSV", () => {
+        const rows = tableRowsFromDOM(table);
+        if (rows.length <= 100) void writeSystemClipboard(tableRowsToCSV(rows));
+      }),
       tableSizePickerButton((rows, columns) => apply((next) => {
         const targetRows = Math.max(2, Math.min(8, rows));
         const targetColumns = Math.max(1, Math.min(8, columns));
@@ -1601,7 +1615,7 @@ class TableWidget extends MeasuredWidget {
       next.aligns.push("");
     }, (next) => ({ row: activeRow, col: (next.rows[0]?.length ?? 1) - 1, edit: true, select: true })));
     addColumnEdge.className = "cm-table-edge-add cm-table-edge-add-column";
-    if (editable) wrap.append(toolbar, table, addRowEdge, addColumnEdge);
+    if (editable) wrap.append(toolbar, table, addRowEdge, addColumnEdge, figureLayoutToolbar(view, wrap, this.layout), figureResizeHandle(view, wrap, "table"), figureHeightHandle(view, wrap, "table"));
     else wrap.append(table);
     return this.registerMeasured(wrap, view);
   }

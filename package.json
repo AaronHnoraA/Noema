@@ -61,6 +61,7 @@
     "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
   },
   "dependencies": {
+    "@chenglou/pretext": "0.0.9",
     "@codemirror/autocomplete": "^6.20.2",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-markdown": "^6.5.0",

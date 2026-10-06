@@ -83,6 +83,40 @@ export function splitTableCells(line: string): string[] {
   return cells;
 }
 
+/** Sort body rows only. A click creates one collator; no sorting work runs
+ * while typing, and equal keys keep their source order. */
+export function sortTableBodyRows<T>(
+  rows: readonly T[], column: number, direction: 1 | -1,
+  cells: (row: T) => readonly string[], bodyStart = 1,
+): T[] {
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  const number = (value: string): number | null => {
+    const text = value.trim();
+    return /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(text) ? Number(text) : null;
+  };
+  return [
+    ...rows.slice(0, bodyStart),
+    ...rows.slice(bodyStart).map((row, index) => ({ row, index })).sort((a, b) => {
+      const left = cells(a.row)[column] ?? "";
+      const right = cells(b.row)[column] ?? "";
+      const leftNumber = number(left);
+      const rightNumber = number(right);
+      const order = leftNumber !== null && rightNumber !== null
+        ? Math.sign(leftNumber - rightNumber) : collator.compare(left, right);
+      return direction * order || a.index - b.index;
+    }).map(({ row }) => row),
+  ];
+}
+
+/** RFC 4180 cells, with Markdown's escaped pipe restored for CSV consumers. */
+export function tableRowsToCSV(rows: readonly (readonly string[])[]): string {
+  const cell = (source: string): string => {
+    const text = source.replace(/\\\|/g, "|");
+    return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  return rows.map((row) => row.map(cell).join(",")).join("\r\n");
+}
+
 function parseSeparatorAlign(cell: string): TableAlign {
   const c = cell.trim();
   if (!c) return "none";

@@ -13,7 +13,7 @@ import { EditorView } from "@codemirror/view";
 import type { Text } from "@codemirror/state";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
-import { parseTableModel, formatTableLines, splitTableCells, tableTooLarge, type TableAlign } from "../table-model.ts";
+import { parseTableModel, formatTableLines, splitTableCells, sortTableBodyRows, tableRowsToCSV, tableTooLarge, type TableAlign } from "../table-model.ts";
 import { writeSystemClipboard } from "../../system-clipboard.ts";
 import type {
   EditorBlockContext,
@@ -1223,6 +1223,17 @@ function runTableCommandCM6(view: EditorView, command: EditorCommand): boolean {
     newLines = formatTableLines(model);
     newCursorRow = currentRowIdx;
     newCursorCol = currentColIdx;
+  } else if (command === "table-sort-ascending" || command === "table-sort-descending") {
+    const model = parseTableModel(lines, startLineNum, currentRowIdx, from - doc.line(startLineNum + currentRowIdx).from);
+    if (model.sepIdx < 0 || tableTooLarge(model) || model.sepIdx + 1 >= lines.length) return false;
+    newLines = sortTableBodyRows(lines, currentColIdx,
+      command === "table-sort-ascending" ? 1 : -1, splitCells, model.sepIdx + 1);
+    newCursorRow = model.sepIdx + 1;
+  } else if (command === "table-copy-csv") {
+    const model = parseTableModel(lines, startLineNum, currentRowIdx, from - doc.line(startLineNum + currentRowIdx).from);
+    if (model.sepIdx < 0 || tableTooLarge(model)) return false;
+    void writeSystemClipboard(tableRowsToCSV(model.rows.filter((_, index) => index !== model.sepIdx)));
+    return true;
   } else {
     return false;
   }
@@ -1540,6 +1551,29 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
     return true;
   }
 
+  if (command === "insert-layout") {
+    const mode = value === "flow" ? "flow" : "grid";
+    const open = `#+begin layout {cols=2 mode=${mode}}`;
+    const close = "#+end layout";
+    const { from, to } = view.state.selection.main;
+    if (from === to) {
+      insertBlock(view, `${open}\n\n${close}`, open.length + 1);
+      return true;
+    }
+    // Like the existing block commands, a selection claims every touched line.
+    // Read only those lines and commit the wrap as one undoable change.
+    const doc = view.state.doc;
+    const start = doc.lineAt(from).from;
+    const end = doc.lineAt(to - 1).to;
+    const body = doc.sliceString(start, end);
+    view.dispatch({
+      changes: { from: start, to: end, insert: `${open}\n${body}\n${close}` },
+      selection: { anchor: start + open.length + 1, head: start + open.length + 1 + body.length },
+      scrollIntoView: true,
+    });
+    return true;
+  }
+
   if (command === "jupyter-cell") {
     const args = nearestJupyterCellArgs(view);
     const text = `@@cell(${args})`;
@@ -1570,7 +1604,10 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
     command === "table-move-row-down" ||
     command === "table-move-column-left" ||
     command === "table-move-column-right" ||
-    command === "table-format"
+    command === "table-format" ||
+    command === "table-sort-ascending" ||
+    command === "table-sort-descending" ||
+    command === "table-copy-csv"
   ) return runTableCommandCM6(view, command);
 
   // ── Line prefix commands (heading / blockquote / lists) ──────────────────

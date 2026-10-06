@@ -33,7 +33,9 @@ import {
   type ImageAlign,
   type ImageLayoutAttrs,
 } from "../../../../image-attrs.ts";
-import { applyFigureLayout, figureLayoutTarget } from "../../../figure-layout-menu.ts";
+import { applyFigureLayout, arrangeWithNextFigure, figureHeightHandle, figureLayoutTarget, figureMoveGrip } from "../../../figure-layout-menu.ts";
+import { imageRowGrip, imageRowAt, imageRowSplitHandle, imageRowHeightHandle, joinNextImage, sizeImageRowItem } from "../../../image-row-layout.ts";
+import { openImageViewer } from "../../../image-viewer.ts";
 import { markdownLinkDestination } from "../../../../markdown-link.ts";
 import {
   VISUAL_ATTACHMENT_IFRAME_ALLOW,
@@ -119,8 +121,10 @@ class ImageWidget extends MeasuredWidget {
   baseTo: number;
   to: number;
   layout: ImageLayoutAttrs;
+  inRow: boolean;
+  joinable: boolean;
 
-  constructor(src: string, alt: string, from: number, baseTo: number, to: number, layout: ImageLayoutAttrs) {
+  constructor(src: string, alt: string, from: number, baseTo: number, to: number, layout: ImageLayoutAttrs, inRow = false, joinable = false) {
     super();
     this.src = src;
     const resolution = resolveImageSrc(src);
@@ -131,6 +135,8 @@ class ImageWidget extends MeasuredWidget {
     this.baseTo = baseTo;
     this.to = to;
     this.layout = layout;
+    this.inRow = inRow;
+    this.joinable = joinable;
   }
 
   protected get measuredBlock(): boolean { return !this.layout.wrap; }
@@ -139,13 +145,13 @@ class ImageWidget extends MeasuredWidget {
   protected measureKey(): string {
     // Intrinsic dimensions belong to a resource; rendered height belongs to
     // this layout and caption. Two sizes of the same picture cannot share it.
-    return "img:" + JSON.stringify([this.resolvedSrc, this.alt, this.layout]);
+    return "img:" + JSON.stringify([this.resolvedSrc, this.alt, this.layout, this.inRow]);
   }
 
   protected measureGroupKey(): string {
     const kind = visualAttachmentKind(this.src) || "image";
     const caption = this.alt.trim() ? "caption" : "plain";
-    return ["img", kind, this.layout.align, this.layout.wrap ? "wrap" : "block", caption,
+    return ["img", kind, this.layout.align, this.layout.wrap ? "wrap" : "block", this.inRow ? "row" : "single", caption,
       this.layout.width, this.layout.height].join(":");
   }
 
@@ -166,18 +172,21 @@ class ImageWidget extends MeasuredWidget {
 
   private sameContent(other: ImageWidget): boolean {
     return this.src === other.src && this.resolvedSrc === other.resolvedSrc && this.alt === other.alt &&
+      this.inRow === other.inRow &&
+      this.joinable === other.joinable &&
       this.layout.align === other.layout.align &&
       this.layout.wrap === other.layout.wrap &&
       this.layout.width === other.layout.width &&
       this.layout.height === other.layout.height;
   }
 
-  updateDOM(dom: HTMLElement, _view: EditorView, previous: ImageWidget): boolean {
+  updateDOM(dom: HTMLElement, view: EditorView, previous: ImageWidget): boolean {
     if (!this.sameContent(previous)) return false;
     // Moving source offsets must not reload an iframe, restart an animation,
     // or send a decoded image through a second lazy-load/layout cycle.
     setSourceRange(dom, this.from, this.to);
     dom.dataset.cmSourceBaseTo = String(this.baseTo);
+    syncImageRow(dom, view, this.from, this.layout);
     return true;
   }
 
@@ -256,6 +265,11 @@ class ImageWidget extends MeasuredWidget {
           wrap.title = `Image not found: ${this.src}`;
           view.requestMeasure();
         };
+        img.addEventListener("dblclick", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openImageViewer(wrap);
+        });
         wrap.append(img);
         resizableImage = img;
       }
@@ -278,18 +292,59 @@ class ImageWidget extends MeasuredWidget {
       const target = figureLayoutTarget(view, wrap);
       if (target) applyFigureLayout(view, target, next);
     };
-    wrap.append(buildImageToolbar(this.layout, applyLayout));
+    const toolbar = buildImageToolbar(this.layout, applyLayout, () => {
+      if (!joinNextImage(view, Number(wrap.dataset.cmSourceFrom))) arrangeWithNextFigure(view, wrap);
+    }, this.joinable ? "Place with next image" : "Place with next figure");
+    if (!this.inRow && !view.state.readOnly) toolbar.append(figureMoveGrip(view, wrap));
+    wrap.append(toolbar);
+    syncImageRow(wrap, view, this.from, this.layout, resizableImage);
     if (resizableImage) {
       wrap.append(buildImageResizeHandle(wrap, resizableImage, this.layout, applyLayout, view));
     }
+    if (!this.inRow && !view.state.readOnly) wrap.append(figureHeightHandle(view, wrap, "image"));
 
     return this.registerMeasured(wrap, view);
   }
 
   ignoreEvent(event: Event): boolean {
     const target = event.target as HTMLElement | null;
-    return Boolean(target?.closest(".cm-image-toolbar, .cm-image-resize-handle, .cm-media-player"));
+    return Boolean(target?.closest(".cm-image-toolbar, .cm-image-resize-handle, .cm-figure-height-handle, .cm-image-row-grip, .cm-image-row-split, .cm-image-row-height, .cm-media-player"));
   }
+}
+
+function syncImageRow(
+  figure: HTMLElement, view: EditorView, from: number, layout: ImageLayoutAttrs,
+  image: HTMLImageElement | null = figure.querySelector<HTMLImageElement>("img.cm-image-render"),
+): void {
+  const inRow = imageRowAt(view.state, from) !== null;
+  figure.classList.toggle("cm-image-row-item", inRow);
+  const existing = figure.querySelector<HTMLElement>(".cm-image-row-grip");
+  const splitter = figure.querySelector<HTMLElement>(".cm-image-row-split");
+  const heightHandle = figure.querySelector<HTMLElement>(".cm-image-row-height");
+  if (!inRow || view.state.readOnly) {
+    existing?.remove();
+    splitter?.remove();
+    heightHandle?.remove();
+    figure.style.removeProperty("--cm-image-row-weight");
+    return;
+  }
+  sizeImageRowItem(figure, image, layout);
+  if (!existing) {
+    const grip = imageRowGrip(view, figure);
+    if (grip) figure.append(grip);
+  }
+  const row = imageRowAt(view.state, from);
+  const index = row?.images.findIndex((span) => span.from === from) ?? -1;
+  if (index === 0 && !heightHandle) {
+    const handle = imageRowHeightHandle(view, figure);
+    if (handle) figure.append(handle);
+  } else if (index !== 0) heightHandle?.remove();
+  if (index >= 0 && row && index < row.images.length - 1) {
+    if (!splitter) {
+      const handle = imageRowSplitHandle(view, figure);
+      if (handle) figure.append(handle);
+    }
+  } else splitter?.remove();
 }
 
 function buildImageResizeHandle(
@@ -312,6 +367,8 @@ function buildImageResizeHandle(
     const startX = event.clientX;
     const originalWidth = wrap.style.getPropertyValue("--aaronnote-image-width");
     const originalMaxWidth = wrap.style.getPropertyValue("--aaronnote-image-max-width");
+    const rowItem = wrap.classList.contains("cm-image-row-item");
+    const originalRowWeight = wrap.style.getPropertyValue("--cm-image-row-weight");
     const fallbackWidth = Number.parseFloat(layout.width) || 320;
     const startWidth = image.getBoundingClientRect().width || fallbackWidth;
     const contentWidth = Math.max(160, view.contentDOM.clientWidth || wrap.parentElement?.clientWidth || 960);
@@ -335,6 +392,7 @@ function buildImageResizeHandle(
       if (!wrap.isConnected || finished) return;
       wrap.style.setProperty("--aaronnote-image-width", `${pendingWidth}px`);
       wrap.style.setProperty("--aaronnote-image-max-width", "none");
+      if (rowItem) wrap.style.setProperty("--cm-image-row-weight", String(Math.max(0.25, Math.min(4, pendingWidth / 220))));
       view.requestMeasure();
     };
     const move = (moveEvent: PointerEvent): void => {
@@ -360,6 +418,10 @@ function buildImageResizeHandle(
       else wrap.style.removeProperty("--aaronnote-image-width");
       if (originalMaxWidth) wrap.style.setProperty("--aaronnote-image-max-width", originalMaxWidth);
       else wrap.style.removeProperty("--aaronnote-image-max-width");
+      if (rowItem) {
+        if (originalRowWeight) wrap.style.setProperty("--cm-image-row-weight", originalRowWeight);
+        else wrap.style.removeProperty("--cm-image-row-weight");
+      }
       view.requestMeasure();
     };
 
@@ -401,6 +463,8 @@ function imageToolSeparator(): HTMLElement {
 function buildImageToolbar(
   layout: ImageLayoutAttrs,
   apply: (next: ImageLayoutAttrs) => void,
+  arrangeNext?: () => void,
+  arrangeTitle = "Place with next figure",
 ): HTMLElement {
   const bar = document.createElement("div");
   bar.className = "cm-image-toolbar";
@@ -422,6 +486,7 @@ function buildImageToolbar(
     imageToolButton("100%", "Width 100%", layout.width === "100%", () => apply(set({ width: "100%" }))),
     imageToolButton("Auto", "Reset width", !layout.width, () => apply(set({ width: "" }))),
   );
+  if (arrangeNext) bar.append(imageToolSeparator(), imageToolButton("↔", arrangeTitle, false, arrangeNext));
   return bar;
 }
 
@@ -499,7 +564,8 @@ function buildImageDecorations(view: EditorView): DecorationSet {
           if (!line.text.slice(0, node.from - line.from).trim() && !line.text.slice(fullTo - line.from).trim()) {
             decos.push(
               Decoration.widget({
-                widget: new ImageWidget(src, alt, node.from, node.to, fullTo, layout),
+                widget: new ImageWidget(src, alt, node.from, node.to, fullTo, layout,
+                  Boolean(imageRowAt(view.state, node.from)), joinNextImage(view, node.from, false)),
                 side: 1,
               }).range(fullTo),
             );
@@ -509,7 +575,8 @@ function buildImageDecorations(view: EditorView): DecorationSet {
 
         decos.push(
           Decoration.replace({
-            widget: new ImageWidget(src, alt, node.from, node.to, fullTo, layout),
+            widget: new ImageWidget(src, alt, node.from, node.to, fullTo, layout,
+              Boolean(imageRowAt(view.state, node.from)), joinNextImage(view, node.from, false)),
             vimAtomic: true,
           }).range(node.from, fullTo),
         );

@@ -33,6 +33,7 @@ import { writeSystemClipboard } from "../../../../system-clipboard.ts";
 import { getBlockMathRanges, rangeInsideAny, rangeOverlapsAny } from "../../../math-ranges.ts";
 import { applyLayoutAttrs, layoutFromAttrs, layoutIsDefault, readLayoutAttrsLine, type LayoutAttrs } from "../../../../layout-attrs.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import {
   persistentVisualStateField,
@@ -380,6 +381,7 @@ class MermaidWidget extends MeasuredWidget {
     div.className = "cm-mermaid-block";
     applyLayoutAttrs(div, "diagram", this.layout);
     wrap.append(div);
+    if (!view.state.readOnly) wrap.append(figureLayoutToolbar(view, wrap, this.layout), figureResizeHandle(view, wrap, "diagram", div), figureHeightHandle(view, wrap, "diagram", div));
     this.disposeRender = renderMermaidWidget(this.source, this.lang, div, wrap, this.estimatedHeight, view);
     return this.registerMeasured(wrap, view);
   }

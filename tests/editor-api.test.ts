@@ -453,6 +453,23 @@ describe("editor api commands and writing modes", () => {
     }
   });
 
+  test("offers both native layout modes through quick insert", () => {
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+    const editor = createEditor(mount, { initialContent: "" });
+    try {
+      const grid = editor.getQuickInsertItems("图文").find((item) => item.id === "layout-grid");
+      const flow = editor.getQuickInsertItems("分栏").find((item) => item.id === "layout-flow");
+      expect(grid?.command).toBe("insert-layout");
+      expect(flow?.value).toBe("flow");
+      expect(editor.runQuickInsert(grid!)).toBe(true);
+      expect(editor.getMarkdown()).toContain("#+begin layout {cols=2 mode=grid}");
+    } finally {
+      editor.destroy();
+      mount.remove();
+    }
+  });
+
   test("supports app-provided quick insert items", () => {
     const mount = document.createElement("div");
     document.body.appendChild(mount);
@@ -502,6 +519,9 @@ describe("editor api commands and writing modes", () => {
         "table-move-column-left",
         "table-move-column-right",
         "table-format",
+        "table-sort-ascending",
+        "table-sort-descending",
+        "table-copy-csv",
       ];
       expect(context.commands).toEqual(expectedTableCommands);
 

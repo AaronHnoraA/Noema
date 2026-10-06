@@ -50,7 +50,11 @@ import {
   type MetaSummary,
 } from "../../../../org-meta.ts";
 import { applyImageLayout, imageLayoutFromAttrs, type ImageLayoutAttrs } from "../../../../image-attrs.ts";
+import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
 import { readLayoutAttrSuffix } from "../../../../layout-attrs.ts";
+import { layoutGroupFromTitle, layoutGroupTracks, type LayoutGroup } from "../../../../layout-group.ts";
+import { balanceTextColumns, suggestTextColumns } from "../../../../text-layout-measure.ts";
+import { parseAttrArgs } from "../../../../attrs-syntax.ts";
 import { supportedDiagramLang } from "../../../../diagram-langs.ts";
 import { api } from "../../../../../aaronnote/api-client.ts";
 import { writeSystemClipboard } from "../../../../system-clipboard.ts";
@@ -60,7 +64,7 @@ import { tocIndexFromState, type MarkdownHeading } from "../../../toc-index.ts";
 import { scanInlineCommands } from "../../../../command-syntax.ts";
 import { semanticOutlineFromCommand, type SemanticOutline } from "../../../../semantic-outline.ts";
 import { highlightCodeForEditor } from "../../../../code-highlight-async.ts";
-import { parseOrgEnvIdentityTitle, shortBlockId } from "../../../../../shared/block-identity.mjs";
+import { BLOCK_ANCHOR_SOURCE, parseOrgEnvIdentityTitle, shortBlockId } from "../../../../../shared/block-identity.mjs";
 import type { JupyterWidgetKernelMessage } from "../../../../jupyter-widget-runtime.ts";
 import type { JupyterMarkdownParser, WidgetMountFn } from "../../../../jupyter-rendermime.ts";
 import { ceilCommandGeneratedId as sharedCeilCommandGeneratedId, ceilLanguageForKernel } from "./ceil-shared.ts";
@@ -3035,6 +3039,280 @@ class FoldWidget extends MeasuredWidget {
   ignoreEvent(): boolean { return false; }
 }
 
+function setLayoutGroup(view: EditorView, from: number, to: number, source: string, patch: Partial<LayoutGroup>): boolean {
+  const doc = view.state.doc;
+  if (view.state.readOnly || doc.sliceString(from, to) !== source) return false;
+  const line = doc.lineAt(from);
+  if (line.from !== from || !/^\s*#\+\s*begin\s+layout\b/i.test(line.text)) return false;
+  const anchor = new RegExp(`\\s+${BLOCK_ANCHOR_SOURCE}\\s*$`).exec(line.text);
+  const beforeAnchor = anchor ? line.text.slice(0, anchor.index) : line.text;
+  const suffix = /\s+\{([^{}]*)\}\s*$/.exec(beforeAnchor);
+  const attrs = suffix ? parseAttrArgs(suffix[0]) : {};
+  const current = layoutGroupFromTitle(suffix?.[0] ?? "");
+  const next = { ...current, ...patch };
+  attrs.cols = String(next.columns);
+  attrs.mode = next.mode;
+  if (patch.columns && patch.columns !== current.columns && !patch.widths) delete attrs.widths;
+  else if (patch.widths) attrs.widths = patch.widths.map((width) => String(Math.round(width * 1000) / 1000)).join("-");
+  const head = suffix ? beforeAnchor.slice(0, suffix.index).trimEnd() : beforeAnchor.trimEnd();
+  const attrSource = Object.entries(attrs).map(([key, value]) => `${key}=${/\s/.test(value) ? JSON.stringify(value) : value}`).join(" ");
+  const replacement = `${head} {${attrSource}}${anchor ? ` ${anchor[0].trim()}` : ""}`;
+  if (replacement === line.text) return false;
+  view.dispatch({
+    changes: { from: line.from, to: line.to, insert: replacement },
+    userEvent: "input.layout",
+    scrollIntoView: false,
+  });
+  return true;
+}
+
+function swapLayoutCells(
+  view: EditorView, groupFrom: number, groupTo: number, source: string,
+  spans: readonly { from: number; to: number }[], first: number, second: number,
+): boolean {
+  if (view.state.readOnly || first === second || first < 0 || second < 0 ||
+      first >= spans.length || second >= spans.length ||
+      view.state.doc.sliceString(groupFrom, groupTo) !== source) return false;
+  const doc = view.state.doc;
+  const [left, right] = first < second ? [spans[first]!, spans[second]!] : [spans[second]!, spans[first]!];
+  if (left.to > right.from || doc.sliceString(left.to, right.from).trim()) return false;
+  const gap = doc.sliceString(left.to, right.from);
+  view.dispatch({
+    changes: {
+      from: left.from,
+      to: right.to,
+      insert: doc.sliceString(right.from, right.to) + gap + doc.sliceString(left.from, left.to),
+    },
+    userEvent: "move.layout",
+    scrollIntoView: false,
+  });
+  return true;
+}
+
+/** A layout group reuses the Org environment scanner and keeps its cells as
+ * ordinary Markdown. Source opens on demand, so idle groups are one widget. */
+class LayoutGroupWidget extends MeasuredWidget {
+  readonly title: string;
+  readonly body: string;
+  readonly from: number;
+  readonly to: number;
+  readonly bodyFrom: number;
+  constructor(
+    title: string,
+    body: string,
+    from: number,
+    to: number,
+    bodyFrom: number,
+  ) {
+    super();
+    this.title = title;
+    this.body = body;
+    this.from = from;
+    this.to = to;
+    this.bodyFrom = bodyFrom;
+  }
+
+  protected measureKey(): string { return `layout:${shortHash(this.title + "\n" + this.body)}`; }
+  protected estimatedHeightFallback(): number { return 240; }
+  eq(other: LayoutGroupWidget): boolean {
+    return this.title === other.title && this.body === other.body && this.from === other.from && this.to === other.to;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const group = layoutGroupFromTitle(this.title);
+    const source = view.state.doc.sliceString(this.from, this.to);
+    const block = document.createElement("div");
+    block.className = `cm-layout-group-widget noema-layout-group noema-layout-${group.mode}`;
+    block.style.setProperty("--noema-layout-cols", String(group.columns));
+    block.style.setProperty("--noema-layout-tracks", layoutGroupTracks(group));
+    block.dataset.cols = String(group.columns);
+    block.dataset.cmOpenSource = "true";
+    setSourceRange(block, this.from, this.to);
+    const tools = document.createElement("div");
+    tools.className = "cm-layout-group-tools";
+    tools.setAttribute("role", "toolbar");
+    tools.setAttribute("aria-label", "Layout group");
+    const content = document.createElement("div");
+    content.className = "cm-layout-group-content";
+    const parsedBlocks: Array<{ from: number; to: number }> = [];
+    content.innerHTML = renderMarkdownHTML(this.body, undefined, parsedBlocks);
+    enhanceRenderedMarkdown(content);
+    const children = [...content.children];
+    if (children.length === parsedBlocks.length && !view.state.readOnly) {
+      const spans = parsedBlocks.map((span) => ({ from: this.bodyFrom + span.from, to: this.bodyFrom + span.to }));
+      let dragging = -1;
+      children.forEach((child, index) => {
+        const cell = document.createElement("div");
+        cell.className = "cm-layout-cell";
+        // Clicking a preview cell opens its own Markdown source, instead of
+        // guessing a position from the full group's horizontal pixel ratio.
+        setSourceRange(cell, spans[index]!.from, spans[index]!.to);
+        cell.dataset.cmSourceAnchor = String(spans[index]!.from);
+        cell.dataset.cmOpenSource = "true";
+        const grip = document.createElement("button");
+        grip.type = "button";
+        grip.className = "cm-layout-cell-grip";
+        grip.textContent = "⠿";
+        grip.draggable = true;
+        grip.title = "Drag to reorder; Alt+arrows move this cell";
+        grip.setAttribute("aria-label", grip.title);
+        grip.addEventListener("keydown", (event) => {
+          if (!event.altKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+          const step = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1
+            : event.key === "ArrowUp" ? -group.columns : group.columns;
+          if (swapLayoutCells(view, this.from, this.to, source, spans, index, index + step)) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        });
+        grip.addEventListener("dragstart", (event) => {
+          if (view.state.doc.sliceString(this.from, this.to) !== source) { event.preventDefault(); return; }
+          dragging = index;
+          event.dataTransfer?.setData("text/x-noema-layout-cell", String(index));
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+        });
+        grip.addEventListener("dragend", () => { dragging = -1; });
+        cell.addEventListener("dragover", (event) => {
+          if (dragging < 0) return;
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+        });
+        cell.addEventListener("drop", (event) => {
+          if (dragging < 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          swapLayoutCells(view, this.from, this.to, source, spans, dragging, index);
+          dragging = -1;
+        });
+        child.replaceWith(cell);
+        cell.append(grip, child);
+      });
+    }
+    const action = (label: string, title: string, run: () => void) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.title = title;
+      button.setAttribute("aria-label", title);
+      button.addEventListener("mousedown", stopEditorPropagation);
+      button.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); run(); });
+      tools.append(button);
+    };
+    for (const columns of [2, 3, 4] as const) {
+      action(String(columns), `${columns} columns`, () => setLayoutGroup(view, this.from, this.to, source, { columns }));
+    }
+    action("Flow", "Flow text between columns", () => setLayoutGroup(view, this.from, this.to, source, { mode: "flow" }));
+    action("Grid", "Arrange Markdown blocks in grid", () => setLayoutGroup(view, this.from, this.to, source, { mode: "grid" }));
+    action("Auto", "Suggest columns for this text", () => {
+      const style = getComputedStyle(content);
+      const font = style.font || `${style.fontSize || "16px"} ${style.fontFamily || "sans-serif"}`;
+      const width = content.getBoundingClientRect().width || view.contentDOM.clientWidth;
+      const height = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.5 || 24;
+      void suggestTextColumns(content.textContent ?? "", font, width, height).then((columns) => {
+        setLayoutGroup(view, this.from, this.to, source, { columns });
+      }, () => { setLayoutGroup(view, this.from, this.to, source, { columns: 2 }); });
+    });
+    action("Balance", "Balance text column widths", () => {
+      const style = getComputedStyle(content);
+      const font = style.font || `${style.fontSize || "16px"} ${style.fontFamily || "sans-serif"}`;
+      const width = content.getBoundingClientRect().width || view.contentDOM.clientWidth;
+      const height = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.5 || 24;
+      const texts = Array.from({ length: group.columns }, (_, column) =>
+        children.filter((_, index) => index % group.columns === column).map((child) => child.textContent?.trim() ?? "").join("\n\n"));
+      if (texts.some((value) => !value)) return;
+      void balanceTextColumns(texts, font, width, height).then((widths) => {
+        if (widths) setLayoutGroup(view, this.from, this.to, source, { widths });
+      });
+    });
+    action("Source", "Edit layout source", () => {
+      if (view.state.doc.sliceString(this.from, this.to) !== source) return;
+      view.dispatch({ selection: { anchor: this.bodyFrom }, scrollIntoView: true });
+      view.focus();
+    });
+    block.append(tools, content);
+    if (group.mode === "grid" && !view.state.readOnly) {
+      for (let index = 0; index < group.columns - 1; index++) {
+        const divider = document.createElement("button");
+        divider.type = "button";
+        divider.className = "cm-layout-column-divider";
+        divider.title = `Resize columns ${index + 1} and ${index + 2}; arrow keys adjust`;
+        divider.setAttribute("aria-label", divider.title);
+        const preceding = group.widths.slice(0, index + 1).reduce((sum, width) => sum + width, 0);
+        const total = group.widths.reduce((sum, width) => sum + width, 0);
+        divider.style.left = `${preceding / total * 100}%`;
+        divider.addEventListener("keydown", (event) => {
+          if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const widths = [...group.widths];
+          const step = (event.shiftKey ? 5 : 2) * (event.key === "ArrowRight" ? 1 : -1);
+          const pair = widths[index]! + widths[index + 1]!;
+          widths[index] = Math.max(10, Math.min(pair - 10, widths[index]! + step));
+          widths[index + 1] = pair - widths[index]!;
+          setLayoutGroup(view, this.from, this.to, source, { widths });
+        });
+        divider.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const rect = content.getBoundingClientRect();
+          if (!rect.width) return;
+          const startX = event.clientX;
+          const initial = [...group.widths];
+          const pair = initial[index]! + initial[index + 1]!;
+          let pending = initial;
+          let frame = 0;
+          divider.setPointerCapture?.(event.pointerId);
+          const cleanup = () => {
+            if (frame) window.cancelAnimationFrame(frame);
+            divider.removeEventListener("pointermove", move);
+            divider.removeEventListener("pointerup", finish);
+            divider.removeEventListener("pointercancel", cancel);
+            window.removeEventListener("keydown", escape, true);
+          };
+          const move = (pointer: PointerEvent) => {
+            pointer.preventDefault();
+            const delta = (pointer.clientX - startX) / rect.width * total;
+            const widths = [...initial];
+            widths[index] = Math.max(10, Math.min(pair - 10, initial[index]! + delta));
+            widths[index + 1] = pair - widths[index]!;
+            pending = widths;
+            if (!frame) frame = window.requestAnimationFrame(() => {
+              frame = 0;
+              if (!block.isConnected) return;
+              block.style.setProperty("--noema-layout-tracks", layoutGroupTracks({ ...group, widths: pending }));
+              divider.style.left = `${pending.slice(0, index + 1).reduce((sum, width) => sum + width, 0) / total * 100}%`;
+              view.requestMeasure();
+            });
+          };
+          const restore = () => {
+            block.style.setProperty("--noema-layout-tracks", layoutGroupTracks(group));
+            divider.style.left = `${preceding / total * 100}%`;
+            view.requestMeasure();
+          };
+          const finish = (pointer: PointerEvent) => {
+            pointer.preventDefault();
+            pointer.stopPropagation();
+            cleanup();
+            if (!setLayoutGroup(view, this.from, this.to, source, { widths: pending })) restore();
+          };
+          const cancel = () => { cleanup(); restore(); };
+          const escape = (key: KeyboardEvent) => { if (key.key === "Escape") { key.preventDefault(); cancel(); } };
+          divider.addEventListener("pointermove", move);
+          divider.addEventListener("pointerup", finish);
+          divider.addEventListener("pointercancel", cancel);
+          window.addEventListener("keydown", escape, true);
+        });
+        block.append(divider);
+      }
+    }
+    stopInteractiveWidgetEvents(block);
+    return this.registerMeasured(block, view);
+  }
+
+  ignoreEvent(): boolean { return false; }
+}
+
 class HtmlWidget extends MeasuredWidget {
   body: string;
   from: number;
@@ -3124,10 +3402,14 @@ class TikzWidget extends MeasuredWidget {
 
     const meta = completeTikzTitle(this.title);
     applyImageLayout(figure, meta.layout);
+    const resizeHandle = view.state.readOnly ? null : figureResizeHandle(view, figure, "tikz");
+    const heightHandle = view.state.readOnly ? null : figureHeightHandle(view, figure, "tikz");
+    const layoutToolbar = view.state.readOnly ? null : figureLayoutToolbar(view, figure, meta.layout);
     const file = currentNoteFile();
 
     if (meta.changed) {
       figure.append(tikzPlaceholder("Preparing TikZ…"));
+      if (resizeHandle && heightHandle && layoutToolbar) figure.append(layoutToolbar, resizeHandle, heightHandle);
       scheduleTikzIdAssignment(view, this.from, meta.id);
       stopInteractiveWidgetEvents(figure);
       return this.registerMeasured(figure, view);
@@ -3137,6 +3419,7 @@ class TikzWidget extends MeasuredWidget {
       figure.append(settled.ok && settled.svg
         ? tikzSvgElement(settled, view, figure)
         : tikzPlaceholder(settled.message || "TikZ render failed", true));
+      if (resizeHandle && heightHandle && layoutToolbar) figure.append(layoutToolbar, resizeHandle, heightHandle);
       stopInteractiveWidgetEvents(figure);
       return this.registerMeasured(figure, view);
     }
@@ -3160,10 +3443,12 @@ class TikzWidget extends MeasuredWidget {
         figure.replaceChildren(result.ok && result.svg
           ? tikzSvgElement(result, view, figure)
           : tikzPlaceholder(result.message || "TikZ render failed", true));
+        if (resizeHandle && heightHandle && layoutToolbar) figure.append(layoutToolbar, resizeHandle, heightHandle);
         view.requestMeasure();
       });
     }
 
+    if (resizeHandle && heightHandle && layoutToolbar) figure.append(layoutToolbar, resizeHandle, heightHandle);
     stopInteractiveWidgetEvents(figure);
     return this.registerMeasured(figure, view);
   }
@@ -4209,6 +4494,16 @@ function addOrgEnvBlockExtraDecos(
     occupied?.push([block.from, block.to]);
     return;
   }
+  if (block.kind === "layout" && !selectionTouchesRange(state, block.from, block.to)) {
+    decos.push(
+      Decoration.replace({
+        widget: new LayoutGroupWidget(block.title, block.body, block.from, block.to, block.bodyFrom),
+        block: true,
+      }).range(block.from, block.to),
+    );
+    occupied?.push([block.from, block.to]);
+    return;
+  }
   if (block.kind === "av" && !selectionTouchesRange(state, block.from, block.to)) {
     decos.push(
       Decoration.replace({
@@ -4423,7 +4718,7 @@ function activeBlockExtraKey(state: EditorState): string {
     if (sel.from >= range.from && sel.from <= range.to) parts.push(`hr:${range.from}:${range.to}`);
   }
   for (const block of blocks) {
-    if (((block.kind === "comment" || block.kind === "fold" || block.kind === "av" || block.kind === "embed") && selectionTouchesRange(state, block.from, block.to))
+    if (((block.kind === "comment" || block.kind === "fold" || block.kind === "av" || block.kind === "embed" || block.kind === "layout") && selectionTouchesRange(state, block.from, block.to))
         || (block.kind === "tikz" && tikzSourceActive(state, block))) {
       parts.push(`${block.kind}:${block.from}:${block.to}`);
       continue;
@@ -4569,7 +4864,7 @@ function patchBlockExtraDecosForOrgEnvTitleChange(
     || (block.kind === "tikz" && !tikzSourceActive(state, block))
     || (block.kind === "av" && !selectionTouchesRange(state, block.from, block.to))
     || (block.kind === "embed" && !selectionTouchesRange(state, block.from, block.to))
-    || ((block.kind === "comment" || block.kind === "fold") && !selectionTouchesRange(state, block.from, block.to));
+    || ((block.kind === "comment" || block.kind === "fold" || block.kind === "layout") && !selectionTouchesRange(state, block.from, block.to));
   let next = fullBlockWidgetActive
     ? mapped.update({ filterFrom: block.from, filterTo: block.to, filter: () => false })
     : mapped

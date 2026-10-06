@@ -47,7 +47,7 @@ export type EmacsSelectionReport = {
   file: string;
   lineStart: number;
   lineEnd: number;
-  action?: "agent" | "context" | "rewrite" | "compose" | "source";
+  action?: "agent" | "related" | "context" | "rewrite" | "compose" | "source";
   scope?: "selection" | "line" | "any" | "document";
   fromLine?: number;
   fromColumn?: number;

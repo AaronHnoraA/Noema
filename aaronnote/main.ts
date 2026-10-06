@@ -874,6 +874,7 @@ selectionTool.innerHTML = `
   <button type="button" data-selection-command="more" title="More actions">...</button>
   <div class="aaronnote-selection-more" data-selection-more hidden>
     <button type="button" data-selection-command="ai-context" data-emacs-only>Add to AI context (C-c A .)</button>
+    <button type="button" data-selection-command="ai-related" data-emacs-only>Find related notes with Emacs Agent</button>
     <button type="button" data-selection-command="ai-compose" data-emacs-only>Ask in a gptel compose buffer (C-c A c)</button>
     <button type="button" data-selection-command="emacs-source" data-emacs-only>Select in the Emacs source buffer (C-c A e)</button>
     <button type="button" data-selection-command="insert-roam-idlink">Insert roam idlink...</button>
@@ -1392,11 +1393,15 @@ const editorCommands = new Set<EditorCommand>([
   "insert-math-block",
   "insert-toc",
   "insert-org-env",
+  "insert-layout",
   "image-edit",
   "table-insert-row",
   "table-insert-column",
   "table-delete-row",
   "table-delete-column",
+  "table-sort-ascending",
+  "table-sort-descending",
+  "table-copy-csv",
   "heading-1",
   "heading-2",
   "heading-3",
@@ -5085,6 +5090,14 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
       label: "Layout",
       detail: layoutTarget.kind,
       submenu: figureLayoutMenuItems(editor.view, layoutTarget, currentReadOnly),
+    }, {
+      label: "Put in layout grid",
+      detail: "add text or figures beside it",
+      disabled: currentReadOnly,
+      run: () => {
+        editor.setMarkdownSelection(layoutTarget.from, layoutTarget.to);
+        runContextEditorCommand("insert-layout", "grid");
+      },
     }, { separator: true, label: "" });
   }
 
@@ -5223,10 +5236,15 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
       { label: "Superscript", detail: "^text^", disabled: currentReadOnly, run: () => runContextEditorCommand("superscript") },
       { label: "Subscript", detail: "~text~", disabled: currentReadOnly, run: () => runContextEditorCommand("subscript") },
       { label: "Footnote", detail: "[^1]", disabled: currentReadOnly, run: () => runContextEditorCommand("insert-footnote") },
+      { label: "Find related notes", detail: "Emacs Agent", run: () => void sendSelectionToEmacs("related", "selection") },
       { label: "Revision...", detail: "@@revision", disabled: currentReadOnly, run: () => {
         updateSelectionTool();
         runSelectionCommand("revision-form");
       } },
+      { label: "Arrange selection", detail: "grid / text columns", disabled: currentReadOnly, submenu: [
+        { label: "Grid", detail: "Markdown blocks", run: () => runContextEditorCommand("insert-layout", "grid") },
+        { label: "Flowing text", detail: "2 columns", run: () => runContextEditorCommand("insert-layout", "flow") },
+      ] },
     );
   } else {
     const block = editor.getBlockContext();
@@ -5241,6 +5259,11 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
         { label: "Copy Code", detail: "block", run: () => runContextEditorCommand("copy-code") },
       ] : []),
       { label: "Document Properties", detail: "org-env(meta)", disabled: currentReadOnly, run: () => runContextEditorCommand("edit-properties") },
+      { label: "Find related notes", detail: "Emacs Agent", run: () => void sendSelectionToEmacs("related", "any") },
+      { label: "Insert layout", detail: "grid / text columns", disabled: currentReadOnly, submenu: [
+        { label: "Grid", detail: "Markdown blocks", run: () => runContextEditorCommand("insert-layout", "grid") },
+        { label: "Flowing text", detail: "2 columns", run: () => runContextEditorCommand("insert-layout", "flow") },
+      ] },
       { label: "Paste", detail: primaryShortcut("V"), disabled: currentReadOnly, run: () => pasteIntoEditorFromContextMenu() },
       { label: "Find in Note", detail: primaryShortcut("F"), run: () => openFindPanel() },
       { label: "Save", detail: currentReadOnly ? "read-only" : primaryShortcut("S"), disabled: currentReadOnly || !currentFile, run: () => save() },
@@ -11396,9 +11419,9 @@ async function copyActiveSelection(): Promise<void> {
   closeSelectionTool();
 }
 
-type EmacsSelectionAction = "agent" | "context" | "rewrite" | "compose" | "source";
+type EmacsSelectionAction = "agent" | "related" | "context" | "rewrite" | "compose" | "source";
 type EmacsSelectionScope = "selection" | "line" | "any" | "document";
-const EMACS_SELECTION_ACTIONS = new Set<EmacsSelectionAction>(["agent", "context", "rewrite", "compose", "source"]);
+const EMACS_SELECTION_ACTIONS = new Set<EmacsSelectionAction>(["agent", "related", "context", "rewrite", "compose", "source"]);
 const EMACS_SELECTION_SCOPES = new Set<EmacsSelectionScope>(["selection", "line", "any", "document"]);
 
 /** Source range of the current selection, including a native DOM selection. */
@@ -11519,10 +11542,11 @@ function runSelectionCommand(command: string): void {
     void sendSelectionToAgent();
     return;
   }
-  if (command === "ai-rewrite" || command === "ai-context" || command === "ai-compose" || command === "emacs-source") {
+  if (command === "ai-rewrite" || command === "ai-context" || command === "ai-compose" || command === "ai-related" || command === "emacs-source") {
     const action: EmacsSelectionAction = command === "ai-rewrite" ? "rewrite"
       : command === "ai-context" ? "context"
-        : command === "ai-compose" ? "compose" : "source";
+        : command === "ai-compose" ? "compose"
+          : command === "ai-related" ? "related" : "source";
     void sendSelectionToEmacs(action, "selection");
     return;
   }

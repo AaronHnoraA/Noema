@@ -384,6 +384,12 @@ A region covering the whole buffer is a plain file reference."
   (lambda (root session)
     (list (noema-context--reference file root nil nil session))))
 
+(defconst noema-context-related-prompt
+  (concat "Find up to eight notes related to this passage in the current Noema project. "
+          "Use Noema semantic search when it is configured; otherwise search the project notes. "
+          "For each result, give the file path and the specific connection. Do not edit files.")
+  "Prompt shared by the Markdown pane and ordinary Emacs buffers.")
+
 
 ;;;; ── Commands ─────────────────────────────────────────────────────────────
 
@@ -418,6 +424,26 @@ selection is used.  PICK is as for `noema-context-send'."
                        (current-buffer) (region-beginning) (region-end))))
       (deactivate-mark)
       (noema-context--send :pick pick :references references))))
+
+;;;###autoload
+(defun noema-context-find-related (&optional pick)
+  "Ask an existing Emacs agent session to find related project notes.
+Use the active region when present, otherwise the current note.  A Noema
+Markdown pane reports its selection through the saved-range bridge."
+  (interactive "P")
+  (if (noema-md-bridge-pane-p)
+      (noema-md-bridge-request "related" "any")
+    (let* ((buffer (current-buffer))
+           (file (or (noema-context--buffer-file buffer)
+                     (user-error "Current buffer is not a saved note")))
+           (references (if (use-region-p)
+                           (noema-context--region-references
+                            buffer (region-beginning) (region-end))
+                         (noema-context--file-references file))))
+      (noema-context--send
+       :pick pick
+       :prompt noema-context-related-prompt
+       :references references))))
 
 (defun noema-context-send-noema-selection (file line-start line-end)
   "Send only FILE lines LINE-START through LINE-END to a chosen session."

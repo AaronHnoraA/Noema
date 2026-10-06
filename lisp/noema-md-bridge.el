@@ -45,6 +45,7 @@
 (declare-function noema-compose "noema-compose" (&optional name))
 (declare-function noema-context--send "noema-context" (&rest arguments))
 (declare-function noema-context--region-references "noema-context" (buffer begin end))
+(defvar noema-context-related-prompt)
 
 (defgroup noema-md-bridge nil
   "Running Emacs tools on the text of a Noema Markdown pane."
@@ -57,7 +58,7 @@ and leaves saving to you."
   :type '(choice (number :tag "Seconds") (const :tag "Never" nil))
   :group 'noema-md-bridge)
 
-(defconst noema-md-bridge-actions '("agent" "context" "rewrite" "compose" "source")
+(defconst noema-md-bridge-actions '("agent" "related" "context" "rewrite" "compose" "source")
   "Actions a pane may report a range for.")
 
 (defconst noema-md-bridge-scopes '("selection" "line" "any" "document")
@@ -361,6 +362,18 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
            (select-window window))
          (with-current-buffer session (goto-char (point-max))))
        ;; References name the file; the agent needs no Emacs buffer.
+       (noema-md-bridge--drop-hidden buffer)))
+    ("related"
+     (require 'noema-context)
+     (let ((session (with-current-buffer buffer
+                      (noema-context--send
+                       :prompt noema-context-related-prompt
+                       :references (noema-context--region-references buffer begin end)))))
+       (when-let* ((window (and (buffer-live-p session)
+                                (get-buffer-window session 'visible))))
+         (if (fboundp 'my/noema--select-emacs-window)
+             (my/noema--select-emacs-window window)
+           (select-window window)))
        (noema-md-bridge--drop-hidden buffer)))
     ("context"
      (noema-md-bridge--add-context buffer begin end))

@@ -777,8 +777,231 @@
   vertical-align: bottom;
 }
 
+/* Images on one native Markdown line form a row. The source stays ordinary
+ * adjacent image embeds, each with its existing layout attributes. */
+.cm-editor .cm-line:has(> .cm-image-row-item ~ .cm-image-row-item) {
+  display: flex;
+  align-items: stretch;
+  gap: 0.45em;
+  min-width: 0;
+  white-space: normal;
+}
+.cm-editor p.aaronnote-image-layout-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.45em;
+  margin: var(--note-figure-gap-top, 0.72em) 0 var(--note-figure-gap-bottom, 0.9em);
+}
+.cm-editor p.aaronnote-image-layout-row > :is(img, video) {
+  flex: var(--cm-image-row-weight, 1) 1 0;
+  min-width: 0;
+  width: 0;
+  height: var(--aaronnote-image-height, 220px);
+  max-width: none;
+  object-fit: contain;
+  margin: 0;
+}
+.cm-editor .cm-line:has(> .cm-image-row-item ~ .cm-image-row-item) > .cm-image-row-item {
+  flex: var(--cm-image-row-weight, 1) 1 0;
+  min-width: 0;
+  width: 0;
+  max-width: none;
+  margin: 0;
+}
+.cm-editor .cm-line:has(> .cm-image-row-item ~ .cm-image-row-item) > .cm-image-row-item .cm-image-render {
+  width: 100%;
+  max-width: 100%;
+  height: var(--aaronnote-image-height, 220px);
+  object-fit: contain;
+}
+.cm-editor .cm-image-row-grip {
+  position: absolute;
+  top: 0.4em;
+  left: 0.35em;
+  z-index: 7;
+  border: 0;
+  border-radius: 3px;
+  padding: 0.15em 0.3em;
+  background: var(--aaronnote-surface, rgba(32, 33, 36, 0.92));
+  color: var(--aaron-ink, white);
+  cursor: grab;
+  touch-action: none;
+  opacity: 0;
+}
+.cm-editor .cm-line:has(> .cm-image-row-item ~ .cm-image-row-item) > .cm-image-row-item:hover .cm-image-row-grip,
+.cm-editor .cm-line:has(> .cm-image-row-item ~ .cm-image-row-item) > .cm-image-row-item:focus-within .cm-image-row-grip,
+.cm-editor .cm-image-row-grip.is-dragging { opacity: 0.9; }
+.cm-editor .cm-image-row-grip.is-dragging { cursor: grabbing; }
+.cm-editor .cm-image-row-split {
+  position: absolute;
+  top: 25%;
+  right: -0.38em;
+  bottom: 25%;
+  z-index: 7;
+  width: 0.35em;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+.cm-editor .cm-image-row-split:hover,
+.cm-editor .cm-image-row-split:focus-visible,
+.cm-editor .cm-image-row-split.is-resizing {
+  background: var(--aaron-link, #6e9fff);
+}
+.cm-editor .cm-image-row-height {
+  position: absolute;
+  left: 25%;
+  right: 25%;
+  bottom: -0.25em;
+  z-index: 7;
+  height: 0.35em;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  cursor: row-resize;
+  touch-action: none;
+}
+.cm-editor .cm-image-row-height:hover,
+.cm-editor .cm-image-row-height:focus-visible,
+.cm-editor .cm-image-row-height.is-resizing { background: var(--aaron-link, #6e9fff); }
+.cm-image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(8, 10, 16, 0.94);
+  color: white;
+}
+.cm-image-viewer-stage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.cm-image-viewer-image {
+  display: block;
+  max-width: 92vw;
+  max-height: 90vh;
+  object-fit: contain;
+  cursor: grab;
+  touch-action: none;
+  transform-origin: center center;
+}
+.cm-image-viewer-image:active { cursor: grabbing; }
+.cm-image-viewer-close {
+  position: absolute;
+  top: 1em;
+  right: 1em;
+  z-index: 1;
+  border: 0;
+  border-radius: 50%;
+  width: 2.2em;
+  height: 2.2em;
+  background: rgba(255, 255, 255, 0.18);
+  color: inherit;
+  font-size: 1.2em;
+  cursor: pointer;
+}
+.cm-image-viewer-counter {
+  position: absolute;
+  bottom: 1em;
+  left: 50%;
+  transform: translateX(-50%);
+  font: 0.9em sans-serif;
+}
+
 /* Hover-reveal layout toolbar (align / wrap / width). */
-.cm-editor .cm-image-toolbar {
+.noema-layout-group {
+  --noema-layout-gap: 1rem;
+  min-width: 0;
+  clear: both;
+}
+.noema-layout-group.noema-layout-grid:not(.cm-layout-group-widget),
+.noema-layout-grid > .cm-layout-group-content {
+  display: grid;
+  grid-template-columns: var(--noema-layout-tracks, repeat(var(--noema-layout-cols, 2), minmax(0, 1fr)));
+  align-items: start;
+  gap: var(--noema-layout-gap);
+}
+.noema-layout-group.noema-layout-flow:not(.cm-layout-group-widget),
+.noema-layout-flow > .cm-layout-group-content {
+  column-count: var(--noema-layout-cols, 2);
+  column-gap: var(--noema-layout-gap);
+}
+.noema-layout-group > :is(p, figure, table, blockquote, pre),
+.cm-layout-group-content > :is(p, figure, table, blockquote, pre) { margin-block: 0; min-width: 0; }
+.noema-layout-flow > :is(figure, table, pre),
+.noema-layout-flow > .cm-layout-group-content > :is(figure, table, pre) { break-inside: avoid; }
+.cm-editor .cm-layout-group-widget { position: relative; padding-top: 1.6rem; }
+.cm-editor .cm-layout-cell { position: relative; min-width: 0; }
+.cm-editor .cm-layout-cell > :not(.cm-layout-cell-grip) { max-width: 100%; }
+.cm-editor .cm-layout-cell-grip {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 4;
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 5px;
+  background: var(--aaronnote-surface, #252a35);
+  color: var(--aaronnote-text, #e4e8f0);
+  cursor: grab;
+  opacity: 0;
+}
+.cm-editor .cm-layout-cell:hover > .cm-layout-cell-grip,
+.cm-editor .cm-layout-cell:focus-within > .cm-layout-cell-grip { opacity: 1; }
+.cm-editor .cm-layout-column-divider {
+  position: absolute;
+  top: 1.6rem;
+  bottom: 0;
+  z-index: 3;
+  width: 12px;
+  transform: translateX(-50%);
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+.cm-editor .cm-layout-column-divider:hover,
+.cm-editor .cm-layout-column-divider:focus-visible {
+  border-left-color: var(--aaron-link, #6e9fff);
+}
+.cm-editor .cm-layout-group-tools {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 6;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+.cm-editor .cm-layout-group-widget:hover > .cm-layout-group-tools,
+.cm-editor .cm-layout-group-widget:focus-within > .cm-layout-group-tools {
+  opacity: 1;
+  pointer-events: auto;
+}
+.cm-editor .cm-layout-group-tools button {
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 6px;
+  background: var(--aaronnote-surface, #252a35);
+  color: var(--aaronnote-text, #e4e8f0);
+  cursor: pointer;
+}
+@media (max-width: 640px) {
+  .noema-layout-group.noema-layout-grid:not(.cm-layout-group-widget),
+  .noema-layout-grid > .cm-layout-group-content { grid-template-columns: minmax(0, 1fr); }
+  .noema-layout-group.noema-layout-flow:not(.cm-layout-group-widget),
+  .noema-layout-flow > .cm-layout-group-content { column-count: 1; }
+  .cm-editor .cm-layout-column-divider { display: none; }
+}
+.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) {
   position: absolute;
   top: 0.5rem;
   left: 50%;
@@ -795,12 +1018,14 @@
   pointer-events: none;
 }
 .cm-editor .cm-image-widget:hover .cm-image-toolbar,
-.cm-editor .cm-image-widget:focus-within .cm-image-toolbar {
+.cm-editor .cm-image-widget:focus-within .cm-image-toolbar,
+.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget):hover > .cm-figure-layout-toolbar,
+.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget):focus-within > .cm-figure-layout-toolbar {
   opacity: 1;
   pointer-events: auto;
   transform: translateX(-50%) translateY(0);
 }
-.cm-editor .cm-image-tool-button {
+.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-image-tool-button {
   appearance: none;
   border: 0;
   background: transparent;
@@ -813,12 +1038,29 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.cm-editor .cm-image-tool-button:hover {
+.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-image-tool-button:hover {
   background: rgba(255, 255, 255, 0.16);
   color: #fff;
 }
-.cm-editor .cm-image-tool-button.is-active {
+.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-image-tool-button.is-active {
   background: rgba(120, 170, 255, 0.32);
+  color: #fff;
+}
+.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-figure-move-grip {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.82);
+  font: inherit;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 5px;
+  cursor: grab;
+}
+.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-figure-move-grip:active { cursor: grabbing; }
+.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-figure-move-grip:hover,
+.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-figure-move-grip:focus-visible {
+  background: rgba(255, 255, 255, 0.16);
   color: #fff;
 }
 .cm-editor .cm-image-tool-sep {
@@ -842,6 +1084,53 @@
   cursor: nwse-resize;
   opacity: 0;
   touch-action: none;
+}
+.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget) > .cm-figure-resize-handle {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  z-index: 7;
+  width: 17px;
+  height: 17px;
+  border: 0;
+  border-right: 2px solid var(--aaron-link, #6e9fff);
+  border-bottom: 2px solid var(--aaron-link, #6e9fff);
+  background: transparent;
+  cursor: nwse-resize;
+  touch-action: none;
+  opacity: 0;
+}
+.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget):hover > .cm-figure-resize-handle,
+.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget):focus-within > .cm-figure-resize-handle,
+.cm-editor .cm-figure-resize-handle.is-resizing { opacity: 0.9; }
+.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget).is-resizing { user-select: none; }
+.cm-editor :is(.cm-image-widget, .cm-table-editable-block, .cm-mermaid-widget) > .cm-figure-height-handle {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  transform: translateX(-50%);
+  z-index: 7;
+  width: 28px;
+  height: 9px;
+  padding: 0;
+  border: 0;
+  border-bottom: 2px solid var(--aaron-link, #6e9fff);
+  border-radius: 2px;
+  background: transparent;
+  cursor: ns-resize;
+  touch-action: none;
+  opacity: 0;
+}
+.cm-editor :is(.cm-image-widget, .cm-table-editable-block, .cm-mermaid-widget):hover > .cm-figure-height-handle,
+.cm-editor :is(.cm-image-widget, .cm-table-editable-block, .cm-mermaid-widget):focus-within > .cm-figure-height-handle,
+.cm-editor .cm-figure-height-handle.is-resizing { opacity: 0.9; }
+.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget).aaronnote-image-align-right > .cm-figure-resize-handle,
+.cm-editor .cm-table-editable-block.aaronnote-table-align-right > .cm-figure-resize-handle,
+.cm-editor .cm-mermaid-widget.aaronnote-diagram-align-right > .cm-figure-resize-handle {
+  right: auto;
+  left: 2px;
+  border-right: 0;
+  border-left: 2px solid var(--aaron-link, #6e9fff);
 }
 .cm-editor .cm-image-widget:hover .cm-image-resize-handle,
 .cm-editor .cm-image-widget:focus-within .cm-image-resize-handle,
@@ -2162,6 +2451,7 @@
 
 /* ─── CM6 mermaid / diagram widgets ─────────────────────────────── */
 .cm-editor .cm-mermaid-widget {
+  position: relative;
   display: flow-root;
   width: 100%;
   max-width: 100%;
@@ -4244,6 +4534,7 @@ body.has-diagram-fullscreen {
 }
 
 /* ─── Table layout (structural — always on; theme styles cells) ──── */
+.cm-editor .cm-table-editable-block { position: relative; }
 /* Tables default to full editor width with a fixed layout so columns
  * are predictable and the toolbar's anchor rect spans the editor.
  * The cell border / padding / header bg come from the theme. */

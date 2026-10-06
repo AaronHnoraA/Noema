@@ -11,6 +11,7 @@ import { supportedDiagramLang } from "./diagram-langs.ts";
 import { hydrateDiagramForeignObjectMarkup, sanitizeDiagramSvg } from "./diagram-sanitize.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
 import { layoutClasses, layoutFromAttrs, layoutStyle, readLayoutAttrSuffix, readLayoutAttrsLine, type LayoutAttrs } from "./layout-attrs.ts";
+import { layoutGroupFromTitle, layoutGroupTracks } from "./layout-group.ts";
 import { katexStylesheetHref, renderMathHTML } from "./math-render.ts";
 import { markdownLinkDestination } from "./markdown-link.ts";
 import { safeHref } from "./url-safety.ts";
@@ -1228,6 +1229,11 @@ function renderOrgEnv(
     const body = renderTikzFigureBody(meta.body, tikzTitleId(meta.title));
     return `<figure class="${escapeAttr(classes)}" data-aaronnote-image-align="${escapeAttr(layout.align)}" data-aaronnote-image-wrap="${layout.wrap ? "true" : "false"}"${styleAttr}>${body}</figure>`;
   }
+  if (kind.toLowerCase() === "layout") {
+    const group = layoutGroupFromTitle(meta.title);
+    const body = meta.body.trim() ? md.render(meta.body) : "";
+    return `<div class="noema-layout-group noema-layout-${group.mode}" style="--noema-layout-cols:${group.columns};--noema-layout-tracks:${layoutGroupTracks(group)}" data-cols="${group.columns}">${body}</div>`;
+  }
   const title = meta.title;
   const blockId = meta.blockId;
   const label = envLabel(kind);
@@ -1612,14 +1618,58 @@ function markdownItForRender(options?: RenderMarkdownHTMLOptions): MarkdownIt {
   return options ? createMarkdownIt(options) : (defaultMarkdownIt ??= createMarkdownIt({}));
 }
 
+/** Source spans for top-level rendered blocks, using the same Markdown parser
+ * as the reader. Layout-group drag handles reuse this instead of scanning a
+ * second grammar. Offsets are relative to the supplied Markdown string. */
+function topLevelBlocksFromTokens(markdown: string, tokens: readonly Token[]): Array<{ from: number; to: number }> {
+  const starts = [0];
+  for (let offset = markdown.indexOf("\n"); offset >= 0; offset = markdown.indexOf("\n", offset + 1)) starts.push(offset + 1);
+  const blocks: Array<{ from: number; to: number }> = [];
+  let lastLine = 0;
+  for (const token of tokens) {
+    if (token.level !== 0 || token.nesting < 0 || !token.map || token.map[0] < lastLine) continue;
+    const [startLine, endLine] = token.map;
+    if (startLine >= endLine || startLine >= starts.length) continue;
+    const from = starts[startLine]!;
+    const to = endLine < starts.length ? starts[endLine]! - 1 : markdown.length;
+    if (from >= to) continue;
+    blocks.push({ from, to });
+    lastLine = endLine;
+  }
+  return blocks;
+}
+
+export function markdownTopLevelBlocks(markdown: string): Array<{ from: number; to: number }> {
+  return topLevelBlocksFromTokens(markdown, markdownItForRender().parse(isolateBlockLayoutAttrLines(markdown), {}));
+}
+
 export function renderMarkdownHTML(
   markdown: string,
   options?: RenderMarkdownHTMLOptions,
+  topLevelBlocks?: Array<{ from: number; to: number }>,
 ): string {
   const md = markdownItForRender(options);
   const root = document.createElement("div");
-  const protectedHtml = protectIframeNavigationAttrsForDom(md.render(isolateBlockLayoutAttrLines(markdown)));
+  const env = {};
+  const tokens = md.parse(isolateBlockLayoutAttrLines(markdown), env);
+  if (topLevelBlocks) topLevelBlocks.push(...topLevelBlocksFromTokens(markdown, tokens));
+  const protectedHtml = protectIframeNavigationAttrsForDom(md.renderer.render(tokens, md.options, env));
   root.innerHTML = protectedHtml.html;
+  const firstImage = markdown.indexOf("![");
+  if (firstImage >= 0 && markdown.indexOf("![", firstImage + 2) >= 0) root.querySelectorAll<HTMLParagraphElement>("p").forEach((paragraph) => {
+    const elements = [...paragraph.childNodes].filter((node) => node.nodeType === Node.ELEMENT_NODE) as HTMLElement[];
+    if (elements.length < 2 || !elements.every((element) => ["IMG", "VIDEO"].includes(element.tagName))) return;
+    if ([...paragraph.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && Boolean(node.textContent?.trim()))) return;
+    paragraph.classList.add("aaronnote-image-layout-row");
+    elements.forEach((element) => {
+      const width = element.style.getPropertyValue("--aaronnote-image-width");
+      const size = Number.parseFloat(width);
+      if (Number.isFinite(size) && size > 0) {
+        const weight = width.endsWith("%") ? size / 100 : size / 220;
+        element.style.setProperty("--cm-image-row-weight", String(Math.max(0.25, Math.min(4, weight))));
+      }
+    });
+  });
   applyTaskCheckboxes(root);
   return restoreIframeNavigationAttrsFromDom(cleanEditorHTML(root), protectedHtml.attrs);
 }

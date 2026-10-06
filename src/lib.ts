@@ -5,6 +5,7 @@
 // hatch for advanced cases.
 
 export { createEditor } from "./editor-api.ts";
+export { measureTextBlock, suggestTextColumns, balanceTextColumns, measureVariableWidthText } from "./text-layout-measure.ts";
 export {
   createAaronnoteMarkdownExtensions,
   isAaronnoteMarkdownSource,

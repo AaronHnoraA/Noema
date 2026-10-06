@@ -34,6 +34,7 @@ import {
 } from "./markdown-link-events.ts";
 import { wikiLinkAt } from "../../shared/wiki-link.mjs";
 import { vscodeCloseBrackets } from "./close-brackets-vscode.ts";
+import { cjkTyping } from "./cjk-typing.ts";
 import { texSourceInput } from "./tex-source-input.ts";
 import { openLineAfterTrailingBlock, runEditorDelete, runEditorEnter, runEditorSoftBreak, runEditorTab } from "./input-commands.ts";
 import { isWordChar } from "./text-boundaries.ts";
@@ -1335,6 +1336,7 @@ function buildExtensions(
       standaloneHistory,
     ] : []),
     texSourceInput(),
+    cjkTyping(),
     pasteTargetExtension,
     vscodeCloseBrackets(),
     closeBrackets(),

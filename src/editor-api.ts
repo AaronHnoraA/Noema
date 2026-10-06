@@ -79,6 +79,7 @@ export type EditorCommand =
   | "insert-toc"
   | "insert-horizontal-rule"
   | "insert-org-env"
+  | "insert-layout"
   | "jupyter-cell"
   | "image-edit"
   | "table-insert-row"
@@ -93,6 +94,9 @@ export type EditorCommand =
   | "table-move-column-left"
   | "table-move-column-right"
   | "table-format"
+  | "table-sort-ascending"
+  | "table-sort-descending"
+  | "table-copy-csv"
   | "heading-1"
   | "heading-2"
   | "heading-3"
@@ -169,6 +173,9 @@ export function blockCommands(type: string): EditorCommand[] {
       "table-move-column-left",
       "table-move-column-right",
       "table-format",
+      "table-sort-ascending",
+      "table-sort-descending",
+      "table-copy-csv",
     ];
   }
   if (type === "code_block") return ["copy-code", "code-block"];
@@ -193,6 +200,7 @@ export function blockCommands(type: string): EditorCommand[] {
     "insert-toc",
     "insert-horizontal-rule",
     "insert-org-env",
+    "insert-layout",
     "jupyter-cell",
   ];
 }
@@ -446,6 +454,27 @@ const builtInQuickInsertItems: QuickInsertItem[] = [
     keywords: ["table", "format", "align"],
   },
   {
+    id: "table-sort-ascending",
+    label: "Sort table ascending",
+    detail: "Current column",
+    command: "table-sort-ascending",
+    keywords: ["table", "sort", "ascending", "表格", "排序"],
+  },
+  {
+    id: "table-sort-descending",
+    label: "Sort table descending",
+    detail: "Current column",
+    command: "table-sort-descending",
+    keywords: ["table", "sort", "descending", "表格", "排序"],
+  },
+  {
+    id: "table-copy-csv",
+    label: "Copy table as CSV",
+    detail: "Clipboard",
+    command: "table-copy-csv",
+    keywords: ["table", "csv", "export", "表格", "导出"],
+  },
+  {
     id: "math-block",
     label: "Math block",
     detail: "\\[ \\]",
@@ -489,6 +518,22 @@ const builtInQuickInsertItems: QuickInsertItem[] = [
     command: "insert-org-env",
     value: "note",
     keywords: ["org", "env"],
+  },
+  {
+    id: "layout-grid",
+    label: "Layout grid",
+    detail: "2–4 columns of Markdown blocks",
+    command: "insert-layout",
+    value: "grid",
+    keywords: ["layout", "columns", "image", "figure", "排版", "网格", "图文"],
+  },
+  {
+    id: "layout-flow",
+    label: "Flowing text columns",
+    detail: "2–4 columns of flowing text",
+    command: "insert-layout",
+    value: "flow",
+    keywords: ["layout", "columns", "text", "排版", "分栏", "多栏"],
   },
   {
     id: "image",
