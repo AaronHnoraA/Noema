@@ -37,6 +37,7 @@ func TestNoemaResearchRoutes(t *testing.T) {
 	engine.POST("/api/noema/research/run/prepare", noemaResearchRunPrepare)
 	engine.POST("/api/noema/research/run/list", noemaResearchRuns)
 	engine.POST("/api/noema/research/run/get", noemaResearchRunGet)
+	engine.POST("/api/noema/research/run/context-receipt", noemaResearchRunContextReceipt)
 	engine.POST("/api/noema/research/run/fail-preparing", noemaResearchRunFailPreparing)
 	engine.POST("/api/noema/research/artifact/get", noemaResearchArtifactGet)
 	engine.POST("/api/noema/research/artifact/read", noemaResearchArtifactRead)
@@ -241,6 +242,12 @@ func TestNoemaResearchRoutes(t *testing.T) {
 	storedSpec := map[string]any{}
 	if err := json.Unmarshal(bytes, &storedSpec); err != nil || !reflect.DeepEqual(storedSpec, frozenSpec) {
 		t.Fatalf("returned RunSpec must equal exact CAS bytes: stored=%v returned=%v (%v)", storedSpec, frozenSpec, err)
+	}
+	receiptResponse := call("/api/noema/research/run/context-receipt", map[string]any{"root": root, "id": runID})
+	receiptData, _ := receiptResponse["data"].(map[string]any)
+	if receiptResponse["code"] != float64(0) || receiptData["promptBytes"] != float64(len("Investigate")) ||
+		receiptData["specSha256"] != artifactData["artifact"].(map[string]any)["sha256"] {
+		t.Fatalf("Run context receipt did not use the frozen RunSpec: %v", receiptResponse)
 	}
 	runs := call("/api/noema/research/run/list", map[string]any{"root": root, "sessionId": sessionID})
 	runsData, _ := runs["data"].(map[string]any)

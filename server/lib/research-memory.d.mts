@@ -15,5 +15,5 @@ export function selectRunMemory(
   findings: RunMemoryFinding[],
   prompt: string,
   workstreamId: string,
-  options?: { maxResults?: number; maxChars?: number },
+  options?: { maxResults?: number; maxBytes?: number },
 ): Array<{ id: string; version: number; content: string }>;

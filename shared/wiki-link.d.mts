@@ -13,6 +13,7 @@ export type WikiLinkMatch = {
 };
 
 export function wikiHrefForTarget(value: unknown): string;
+export function isStableWikiHref(value: unknown): boolean;
 export function scanWikiLinks(value: unknown, offset?: number): WikiLinkMatch[];
 export function wikiLinkAt(value: unknown, position: number, offset?: number): WikiLinkMatch | null;
 export function stableWikiTarget(pageId: unknown, fragment?: unknown): string;

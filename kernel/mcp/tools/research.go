@@ -12,9 +12,9 @@ import (
 )
 
 var ResearchCellTool = &Tool{
-	Name: "research_cell", Description: "Read a Noema research cell, its explicit lineage/dependency neighbors, or whether the files its Runs touched have changed since. local_only cells are never returned.",
+	Name: "research_cell", Description: "Outline a Noema research cell and its DAG neighbors without source/output text; read a cell or its full neighbors on demand, or check whether its Run files changed. local_only cells are never returned.",
 	InputSchema: ToolSchema{Type: "object", Properties: map[string]Property{
-		"action":     {Type: "string", Description: "Operation", Enum: []string{"read", "neighbors", "changes"}},
+		"action":     {Type: "string", Description: "Operation", Enum: []string{"outline", "read", "neighbors", "changes"}},
 		"root":       {Type: "string", Description: "Absolute Noema repository root"},
 		"notebookId": {Type: "string", Description: "Research notebook id"},
 		"cellId":     {Type: "string", Description: "Research cell id"},
@@ -22,15 +22,15 @@ var ResearchCellTool = &Tool{
 	}, Required: []string{"action", "root", "notebookId"}},
 	Surface:       SurfaceResearch,
 	Handler:       researchCellHandler,
-	ActionEffects: map[string]ToolEffects{"read": {LocalRead: true}, "neighbors": {LocalRead: true}, "changes": {LocalRead: true}},
+	ActionEffects: map[string]ToolEffects{"outline": {LocalRead: true}, "read": {LocalRead: true}, "neighbors": {LocalRead: true}, "changes": {LocalRead: true}},
 }
 
 var ResearchRunTool = &Tool{
-	Name: "research_run", Description: "List or read durable Noema Runs and their immutable output artifacts.",
+	Name: "research_run", Description: "List or read durable Noema Runs, their immutable output artifacts, or a compact receipt of the context selected for one Run.",
 	InputSchema: ToolSchema{Type: "object", Properties: map[string]Property{
-		"action":            {Type: "string", Description: "Operation", Enum: []string{"list", "get", "output"}},
+		"action":            {Type: "string", Description: "Operation", Enum: []string{"list", "get", "output", "context"}},
 		"root":              {Type: "string", Description: "Absolute Noema repository root"},
-		"id":                {Type: "string", Description: "Run id for get/output"},
+		"id":                {Type: "string", Description: "Run id for get/output/context"},
 		"workstreamId":      {Type: "string", Description: "Optional Workstream filter for list"},
 		"sessionId":         {Type: "string", Description: "Optional Session filter for list"},
 		"limit":             {Type: "number", Description: "Maximum Runs for list (1-1000)"},
@@ -38,7 +38,7 @@ var ResearchRunTool = &Tool{
 	}, Required: []string{"action", "root"}},
 	Surface:       SurfaceResearch,
 	Handler:       researchRunHandler,
-	ActionEffects: map[string]ToolEffects{"list": {LocalRead: true}, "get": {LocalRead: true}, "output": {LocalRead: true}},
+	ActionEffects: map[string]ToolEffects{"list": {LocalRead: true}, "get": {LocalRead: true}, "output": {LocalRead: true}, "context": {LocalRead: true}},
 }
 
 var ArtifactTool = &Tool{
@@ -281,6 +281,42 @@ func researchChangesHandler(args map[string]any) (CallToolResult, error) {
 	})
 }
 
+// researchCellOutline keeps graph navigation small.  The full Cell remains
+// available through read/neighbors; this projection never copies its source,
+// output, or outcome prose into a model-facing tool result.
+type researchCellOutline struct {
+	ID                string `json:"id"`
+	WorkNodeID        string `json:"workNodeId,omitempty"`
+	Kind              string `json:"kind"`
+	Title             string `json:"title"`
+	State             string `json:"state,omitempty"`
+	HasOutcome        bool   `json:"hasOutcome"`
+	SourceSHA256      string `json:"sourceSha256"`
+	SourceBytes       int    `json:"sourceBytes"`
+	OutputsSHA256     string `json:"outputsSha256,omitempty"`
+	LatestOutputBytes int    `json:"latestOutputBytes,omitempty"`
+	LatestRunID       string `json:"latestRunId,omitempty"`
+	OutputStatus      string `json:"outputStatus,omitempty"`
+}
+
+func outlineResearchCell(cell research.Cell) researchCellOutline {
+	return researchCellOutline{
+		ID: cell.ID, WorkNodeID: cell.WorkNodeID, Kind: cell.Kind,
+		Title: cell.Title, State: cell.State, HasOutcome: strings.TrimSpace(cell.Outcome) != "",
+		SourceSHA256: cell.SourceSHA256, SourceBytes: len(cell.Source),
+		OutputsSHA256: cell.OutputsSHA256, LatestOutputBytes: len(cell.LatestOutput),
+		LatestRunID: cell.LatestRunID, OutputStatus: cell.OutputStatus,
+	}
+}
+
+func outlineResearchCells(cells []research.Cell) []researchCellOutline {
+	outline := make([]researchCellOutline, 0, len(cells))
+	for _, cell := range cells {
+		outline = append(outline, outlineResearchCell(cell))
+	}
+	return outline
+}
+
 func researchCellHandler(args map[string]any) (CallToolResult, error) {
 	if stringArg(args, "action") == "changes" {
 		return researchChangesHandler(args)
@@ -296,10 +332,18 @@ func researchCellHandler(args map[string]any) (CallToolResult, error) {
 	if stringArg(args, "action") == "read" {
 		return historyResearchJSON(map[string]any{"notebookId": view.NotebookID, "workstreamId": view.WorkstreamID, "cell": view.Cell})
 	}
+	if stringArg(args, "action") == "outline" {
+		return historyResearchJSON(map[string]any{
+			"notebookId": view.NotebookID, "workstreamId": view.WorkstreamID,
+			"cell":    outlineResearchCell(view.Cell),
+			"parents": outlineResearchCells(view.Parents), "children": outlineResearchCells(view.Children),
+			"dependencies": outlineResearchCells(view.Dependencies), "dependents": outlineResearchCells(view.Dependents),
+		})
+	}
 	if stringArg(args, "action") == "neighbors" {
 		return historyResearchJSON(view)
 	}
-	return researchUnknownAction("research_cell", stringArg(args, "action"), "read, neighbors, changes"), nil
+	return researchUnknownAction("research_cell", stringArg(args, "action"), "outline, read, neighbors, changes"), nil
 }
 
 func researchRunHandler(args map[string]any) (CallToolResult, error) {
@@ -322,6 +366,12 @@ func researchRunHandler(args map[string]any) (CallToolResult, error) {
 			return historyResearchError(err), nil
 		}
 		return historyResearchJSON(run)
+	case "context":
+		receipt, err := store.RunContextReceipt(stringArg(args, "id"))
+		if err != nil {
+			return historyResearchError(err), nil
+		}
+		return historyResearchJSON(receipt)
 	case "output":
 		output, err := store.ReadRunOutput(stringArg(args, "id"), boolArg(args, "includeTranscript"))
 		if err != nil {
@@ -329,7 +379,7 @@ func researchRunHandler(args map[string]any) (CallToolResult, error) {
 		}
 		return historyResearchJSON(output)
 	default:
-		return researchUnknownAction("research_run", stringArg(args, "action"), "list, get, output"), nil
+		return researchUnknownAction("research_run", stringArg(args, "action"), "list, get, output, context"), nil
 	}
 }
 

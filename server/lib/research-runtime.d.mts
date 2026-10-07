@@ -34,6 +34,7 @@ export type ResearchRuntimeService = {
   runProjectFile: RuntimeMethod;
   runs: RuntimeMethod;
   run: RuntimeMethod;
+  runContextReceipt: RuntimeMethod;
   liveRun: RuntimeMethod;
   cancelRun: RuntimeMethod;
   checkRunCompletion: RuntimeMethod;

@@ -233,8 +233,76 @@
   text-underline-offset: 0.18em;
   border-radius: 0.18em;
 }
-.cm-editor .cm-roam-link-text:hover,
-.cm-editor .cm-internal-link-text:hover {
+
+/* CodeMirror can split a link label at prose diagnostics and other inline
+   marks. Keep the title as continuous text, with one diamond at its start;
+   boxes around each DOM fragment make one page look like several links. */
+:is(
+  .cm-editor .cm-link-text.cm-roam-link-text,
+  .cm-editor a.aaronnote-roam-link.noema-internal-link,
+  .cm-editor a.noema-wiki-link.noema-internal-link,
+  .aaronnote-link-preview-rendered a.aaronnote-roam-link.noema-internal-link,
+  .aaronnote-link-preview-rendered a.noema-wiki-link.noema-internal-link
+) {
+  --roam-link-color: var(--aaron-link, #7ee7ff);
+  color: var(--roam-link-color);
+  text-decoration-line: underline;
+  text-decoration-style: solid;
+  text-decoration-color: color-mix(in srgb, var(--roam-link-color), transparent 48%);
+  text-decoration-thickness: .06em;
+  text-underline-offset: .2em;
+  font-weight: 580;
+  transition: color 140ms ease, text-decoration-color 140ms ease;
+}
+
+:is(
+  .cm-editor .cm-roam-link-glyph,
+  .cm-editor a.aaronnote-roam-link.noema-internal-link,
+  .cm-editor a.noema-wiki-link.noema-internal-link,
+  .aaronnote-link-preview-rendered a.aaronnote-roam-link.noema-internal-link,
+  .aaronnote-link-preview-rendered a.noema-wiki-link.noema-internal-link
+)::before {
+  content: "";
+  display: inline-block;
+  width: .33em;
+  height: .33em;
+  margin: 0 .44em 0 .08em;
+  vertical-align: .12em;
+  border: 1.5px solid currentColor;
+  border-radius: .07em;
+  transform: rotate(45deg);
+  opacity: .88;
+}
+
+:is(.cm-editor .cm-roam-link-glyph.cm-roam-link-stable,
+  .cm-editor [data-roam-stable="true"],
+  .aaronnote-link-preview-rendered [data-roam-stable="true"])::before {
+  background: currentColor;
+}
+
+:is(
+  .cm-editor .cm-link-text.cm-roam-link-text,
+  .cm-editor a.aaronnote-roam-link.noema-internal-link,
+  .cm-editor a.noema-wiki-link.noema-internal-link,
+  .aaronnote-link-preview-rendered a.aaronnote-roam-link.noema-internal-link,
+  .aaronnote-link-preview-rendered a.noema-wiki-link.noema-internal-link
+):hover {
+  color: var(--roam-link-color);
+  text-decoration-color: var(--roam-link-color);
+}
+
+:is(.cm-editor, .aaronnote-link-preview-rendered) a:is(.aaronnote-roam-link, .noema-wiki-link):focus-visible {
+  outline: 2px solid var(--aaron-link, #7ee7ff);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.cm-editor .cm-roam-link-text, .cm-editor a.aaronnote-roam-link, .cm-editor a.noema-wiki-link,
+    .aaronnote-link-preview-rendered a.aaronnote-roam-link, .aaronnote-link-preview-rendered a.noema-wiki-link) {
+    transition: none;
+  }
+}
+.cm-editor .cm-internal-link-text:not(.cm-roam-link-text):hover {
   color: color-mix(in srgb, var(--aaron-link, #2563eb), var(--aaron-ink, #111827) 24%);
   background: color-mix(in srgb, var(--aaron-link, #2563eb), transparent 91%);
   text-decoration-color: currentColor;
@@ -268,6 +336,10 @@
   text-decoration-style: wavy;
   text-decoration-color: var(--aaron-callout-danger, #ff96b4);
   text-underline-offset: 3px;
+}
+
+.cm-editor .cm-link-text.cm-roam-link-text:has(.cm-roam-link-broken) {
+  --roam-link-color: var(--aaron-callout-danger, #ff96b4);
 }
 
 .cm-editor .cm-prose-diagnostic {

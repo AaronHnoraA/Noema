@@ -349,7 +349,7 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
     expect(event.defaultPrevented).toBe(true);
     // The stable `[[roam://<id>|Label]]` form is already canonical; it must
     // reach the opener untouched rather than re-wrapped as a wiki title.
-    expect(events[0]?.detail).toEqual({ href: "roam://page-id", newWindow: false });
+    expect(events[0]?.detail).toEqual({ href: "roam://page-id", newWindow: false, sourcePos: md.indexOf("Note Title") });
     document.removeEventListener("aaronnote:open-url", listener);
     if (originalDescriptor) Object.defineProperty(view, "posAtCoords", originalDescriptor);
     else delete (view as { posAtCoords?: unknown }).posAtCoords;
@@ -1073,7 +1073,7 @@ y^2
     view.contentDOM.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(events[0]?.detail).toEqual({ href: "target.md#eq-x", newWindow: false });
+    expect(events[0]?.detail).toEqual({ href: "target.md#eq-x", newWindow: false, sourcePos: md.indexOf("there") });
 
     document.removeEventListener("aaronnote:open-url", listener);
     if (originalDescriptor) Object.defineProperty(view, "posAtCoords", originalDescriptor);
@@ -1150,7 +1150,7 @@ y^2
     cleanup();
   });
 
-  test("cmd-middle-click on a markdown link dispatches open-url for a new window", () => {
+  test("middle-click on a markdown link dispatches open-url for a new window", () => {
     const md = "Go [there](target.md@heading)";
     const { editor, cleanup } = mountCM6(md);
     const events: CustomEvent[] = [];
@@ -1173,13 +1173,40 @@ y^2
       button: 1,
       clientX: 1,
       clientY: 1,
-      metaKey: true,
     });
     view.contentDOM.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
-    expect(events[0]?.detail).toEqual({ href: "target.md@heading", newWindow: true });
+    expect(events[0]?.detail).toEqual({ href: "target.md@heading", newWindow: true, sourcePos: md.indexOf("there") });
 
+    document.removeEventListener("aaronnote:open-url", listener);
+    if (originalDescriptor) Object.defineProperty(view, "posAtCoords", originalDescriptor);
+    else delete (view as { posAtCoords?: unknown }).posAtCoords;
+    cleanup();
+  });
+
+  test("cmd-shift-click on a markdown link opens a new window", () => {
+    const md = "Go [there](target.md)";
+    const { editor, cleanup } = mountCM6(md);
+    const events: CustomEvent[] = [];
+    const listener = (event: Event) => events.push(event as CustomEvent);
+    const view = editor.view as typeof editor.view & {
+      contentDOM: HTMLElement;
+      posAtCoords: (coords: { x: number; y: number }) => number | null;
+    };
+    const originalDescriptor = Object.getOwnPropertyDescriptor(view, "posAtCoords");
+    document.addEventListener("aaronnote:open-url", listener);
+    Object.defineProperty(view, "posAtCoords", {
+      configurable: true,
+      value: () => md.indexOf("there"),
+    });
+    const event = new MouseEvent("mousedown", {
+      bubbles: true, cancelable: true, button: 0, clientX: 1, clientY: 1,
+      metaKey: true, shiftKey: true,
+    });
+    view.contentDOM.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(events[0]?.detail).toEqual({ href: "target.md", newWindow: true, sourcePos: md.indexOf("there") });
     document.removeEventListener("aaronnote:open-url", listener);
     if (originalDescriptor) Object.defineProperty(view, "posAtCoords", originalDescriptor);
     else delete (view as { posAtCoords?: unknown }).posAtCoords;

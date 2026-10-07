@@ -181,6 +181,8 @@ import {
   copyWikiPage,
   createWikiPage,
   deleteWikiPage,
+  listTrashedWikiPages,
+  restoreTrashedWikiPage,
   discoverWikiRepositories,
   exportWiki,
   initWikiRepository,
@@ -433,6 +435,16 @@ function wikiIndexStatusPayload() {
 }
 
 async function wikiCreatePage(body = {}) {
+  if (body.existingPageId) {
+    const index = await wikiIndexPayload();
+    const note = index.notes.find((item) => item.id === String(body.existingPageId));
+    if (!note || note.repositoryId !== String(body.repositoryId || "")
+      || note.namespace !== String(body.namespace || "")
+      || ![note.title, ...note.aliases].some((value) => value.toLocaleLowerCase() === String(body.title || "").trim().toLocaleLowerCase())) {
+      throw new Error("The selected existing Wiki page no longer matches this destination");
+    }
+    return { ok: true, existing: true, id: note.id, file: note.file, title: note.title, repositoryId: note.repositoryId };
+  }
   const config = (await currentAppConfigPayload()).config;
   const profiles = config?.wiki?.creation?.profiles || [];
   const profile = profiles.find((item) => item.id === config?.wiki?.creation?.activeProfile) || profiles[0] || {};
@@ -1912,10 +1924,17 @@ async function openDirectory(body) {
   return { ...result, file: target };
 }
 
-async function apiOpenInEmacs(file, line = 1, col = 0, tag = "") {
+async function apiOpenInEmacs(file, line = 1, col = 0, tag = "", options = {}) {
   const target = resolveShellPath(file);
   const payload = { file: target, line, col };
   if (tag) payload.tag = String(tag);
+  if (options?.newWindow === true) {
+    payload.newWindow = true;
+    for (const key of ["client", "hash", "dom"]) {
+      const value = String(options[key] || "").trim();
+      if (value) payload[key] = value.slice(0, 1024);
+    }
+  }
   gatewayNotify("aaronnote.event", { type: "open", payload });
   return { ok: true, ...payload };
 }
@@ -1939,7 +1958,11 @@ async function apiOpenSurface(body) {
     throw err;
   }
   const path = `${url.pathname}${url.search}`;
-  const queued = gatewayNotify("aaronnote.event", { type: "surface", payload: { path } });
+  const client = typeof body?.client === "string" ? body.client : "";
+  const queued = gatewayNotify("aaronnote.event", {
+    type: "surface",
+    payload: client ? { path, client } : { path },
+  });
   return queued
     ? { ok: true, queued: true, path }
     : { ok: false, queued: false, path, message: "Emacs gateway is not connected" };
@@ -2195,9 +2218,25 @@ const apiRouter = new ApiRouter().register({
     const result = await runWikiGitAction(noteRoot, body?.action, body || {});
     return body?.action === "pull" ? applyWikiSyncResult(repositoryId, result) : result;
   },
-  "aaronnote:api:wiki:create-page": async (body) => applyWikiMutationResult(await wikiCreatePage(body || {})),
+  "aaronnote:api:wiki:create-page": async (body) => {
+    const selected = await wikiCreatePage(body || {});
+    const result = selected.existing ? selected : applyWikiMutationResult(selected);
+    if (body?.sourceFile && body?.sourceRaw && Number.isSafeInteger(Number(body?.sourceFrom))) {
+      broadcast("command", {
+        command: "wiki-link-created",
+        sourceFile: String(body.sourceFile),
+        sourceClientId: String(body.sourceClientId || ""),
+        sourceFrom: Number(body.sourceFrom),
+        sourceRaw: String(body.sourceRaw),
+        pageId: result.id,
+      });
+    }
+    return result;
+  },
   "aaronnote:api:wiki:move-page": async (body) => applyWikiMutationResult(await moveWikiPage(noteRoot, body || {})),
   "aaronnote:api:wiki:delete-page": async (body) => applyWikiMutationResult(await deleteWikiPage(noteRoot, body || {})),
+  "aaronnote:api:wiki:trash-pages": () => listTrashedWikiPages(noteRoot),
+  "aaronnote:api:wiki:restore-trash-page": async (body) => applyWikiMutationResult(await restoreTrashedWikiPage(noteRoot, body || {})),
   "aaronnote:api:wiki:copy-page": async (body) => applyWikiMutationResult(await copyWikiPage(noteRoot, body || {})),
   "aaronnote:api:wiki:merge-pages": async (body) => applyWikiMutationResult(await mergeWikiPages(noteRoot, body || {})),
   "aaronnote:api:wiki:tags": async () => ({
@@ -3371,6 +3410,8 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       createPage: function(body) { return call("aaronnote:api:wiki:create-page", [body || {}]); },
       movePage: function(body) { return call("aaronnote:api:wiki:move-page", [body || {}]); },
       deletePage: function(body) { return call("aaronnote:api:wiki:delete-page", [body || {}]); },
+      trashPages: function() { return call("aaronnote:api:wiki:trash-pages", []); },
+      restoreTrashPage: function(body) { return call("aaronnote:api:wiki:restore-trash-page", [body || {}]); },
       copyPage: function(body) { return call("aaronnote:api:wiki:copy-page", [body || {}]); },
       mergePages: function(body) { return call("aaronnote:api:wiki:merge-pages", [body || {}]); },
       tags: function() { return call("aaronnote:api:wiki:tags", []); },

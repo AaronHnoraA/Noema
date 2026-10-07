@@ -176,6 +176,81 @@ func TestEquivalentContextManifestHasStableArtifactIdentity(t *testing.T) {
 	}
 }
 
+func TestRunContextReceiptKeepsFrozenInputsAndTerminalSessionUsage(t *testing.T) {
+	store, root := openTestStore(t)
+	session := promoteRuntimeSession(t, store, root)
+	makeRun := func() Run {
+		t.Helper()
+		run, err := store.PrepareRun(PrepareRunInput{
+			WorkstreamID: session.WorkstreamID, SessionID: session.ID,
+			NotebookID: "nb_receipt", CellID: "c_receipt", WorkNodeID: "wn_receipt",
+			SourceKind: "work-cell", ExecutionTarget: root,
+			Spec: map[string]any{
+				"schema": "noema.run-spec/1", "prompt": "验证证据", "context_limit_bytes": 65536,
+				"context": []map[string]any{{"ref": "finding:fact", "resolved_uri": "noema://finding/fact/2",
+					"bytes": 12, "automatic": true, "truncated": false}},
+				"context_omitted": []map[string]any{{"ref": "result:old", "reason": "context budget"}},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+	first := makeRun()
+	before, err := store.RunContextReceipt(first.ID)
+	if err != nil || before.PromptBytes != len([]byte("验证证据")) || len(before.Context) != 1 ||
+		len(before.Omitted) != 1 || before.SessionUsageAtFinish != nil {
+		t.Fatalf("pre-dispatch receipt must describe frozen input only: %+v (%v)", before, err)
+	}
+	finish := func(run Run, usage *SessionUsage) {
+		t.Helper()
+		lease, err := store.AcquireLease(AcquireLeaseInput{SessionID: session.ID, Owner: "emacs:receipt"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = store.StartRun(StartRunInput{SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID}); err != nil {
+			t.Fatal(err)
+		}
+		_, err = store.ReportWorkerEvents(ReportWorkerEventsInput{
+			SessionID: session.ID, Owner: lease.Owner, Epoch: lease.Epoch, RunID: run.ID,
+			SessionUsage: usage,
+			Events:       []WorkerEvent{{Type: "run.status.changed", Payload: map[string]any{"status": "completed"}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	finish(first, &SessionUsage{TotalTokens: 500, InputTokens: 400,
+		OutputTokens: 100, ContextUsed: 400, ContextSize: 1000})
+	old, err := store.RunContextReceipt(first.ID)
+	if err != nil || old.SessionUsageAtFinish == nil || old.SessionUsageAtFinish.ContextUsed != 400 ||
+		old.SessionUsageAtFinish.SessionID != session.ID || old.SessionUsageAtFinish.UpdatedAt == "" {
+		t.Fatalf("terminal session snapshot missing from Run receipt: %+v (%v)", old, err)
+	}
+	second := makeRun()
+	finish(second, &SessionUsage{TotalTokens: 900, InputTokens: 800,
+		OutputTokens: 100, ContextUsed: 800, ContextSize: 1000})
+	old, err = store.RunContextReceipt(first.ID)
+	if err != nil || old.SessionUsageAtFinish == nil || old.SessionUsageAtFinish.ContextUsed != 400 {
+		t.Fatalf("later Session usage rewrote an older Run receipt: %+v (%v)", old, err)
+	}
+	third := makeRun()
+	finish(third, &SessionUsage{}) // Older workers sent agent-shell's all-zero placeholder.
+	unknown, err := store.RunContextReceipt(third.ID)
+	if err != nil || unknown.SessionUsageAtFinish != nil {
+		t.Fatalf("an unreported Session must not fabricate a Run usage snapshot: %+v (%v)", unknown, err)
+	}
+	context, err := store.GetSessionContext(session.ID)
+	if err != nil || context.Usage.UpdatedAt != "" || context.Usage.ContextSize != 0 {
+		t.Fatalf("unreported terminal usage must clear stale context pressure: %+v (%v)", context, err)
+	}
+	old, err = store.RunContextReceipt(second.ID)
+	if err != nil || old.SessionUsageAtFinish == nil || old.SessionUsageAtFinish.ContextUsed != 800 {
+		t.Fatalf("clearing current pressure changed an older Run receipt: %+v (%v)", old, err)
+	}
+}
+
 func TestRunLifecycleUsesCASLeaseAndVersionedPermissions(t *testing.T) {
 	store, root := openTestStore(t)
 	session := promoteRuntimeSession(t, store, root)

@@ -376,10 +376,10 @@ normal result rather than a gateway error."
          (my/noema--record-interrupted-operation "xwidget focus handoff"))))))
 
 (defun my/noema--focus-xwidget-buffer (buffer)
-  "Asynchronously arm the visible Noema xwidget BUFFER for page input."
-  (when-let* ((window (and (buffer-live-p buffer)
-                           (get-buffer-window buffer 'visible))))
-    (my/noema--focus-xwidget-window window)))
+  "Arm BUFFER for page input only if it still owns the selected pane."
+  (when (and (buffer-live-p buffer)
+             (eq buffer (window-buffer (selected-window))))
+    (my/noema--focus-xwidget-window (selected-window))))
 
 (defun my/noema--focus-xwidget-window-if-still-selected (window buffer)
   "Focus WINDOW's xwidget if WINDOW still displays BUFFER and is selected."

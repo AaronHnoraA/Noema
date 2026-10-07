@@ -92,7 +92,7 @@ import {
   isPointerSelecting,
   updateHasPointerSelectionEffect,
 } from "./extensions/visual/selection.ts";
-import { scanWikiLinks } from "../../shared/wiki-link.mjs";
+import { isStableWikiHref, scanWikiLinks } from "../../shared/wiki-link.mjs";
 import {
   isCoalescedVisualTyping,
   isCoalescedVisualTypingTransaction,
@@ -201,7 +201,7 @@ function isJupyterHref(href: string): boolean {
 type LivePreviewToken =
   | { kind: "span"; from: number; to: number; spanFrom: number; spanTo: number; cls: string }
   | { kind: "delimiter"; from: number; to: number; spanFrom: number; spanTo: number }
-  | { kind: "link-delimiter"; from: number; to: number; spanFrom: number; spanTo: number; linkClass: string }
+  | { kind: "link-delimiter"; from: number; to: number; spanFrom: number; spanTo: number; labelFrom: number; labelTo: number; linkClass: string }
   | { kind: "block-mark"; from: number; to: number; line: number }
   | { kind: "autolink"; from: number; to: number }
   | { kind: "static"; from: number; to: number; cls: string }
@@ -216,11 +216,14 @@ function mapLivePreviewTokens(tokens: readonly LivePreviewToken[], changes: Chan
       to: changes.mapPos(token.to, 1),
     };
     if (token.kind === "span" || token.kind === "delimiter" || token.kind === "link-delimiter") {
-      return {
+      const span = {
         ...mapped,
         spanFrom: changes.mapPos(token.spanFrom, -1),
         spanTo: changes.mapPos(token.spanTo, 1),
-      } as LivePreviewToken;
+      };
+      return token.kind === "link-delimiter"
+        ? { ...span, labelFrom: changes.mapPos(token.labelFrom, -1), labelTo: changes.mapPos(token.labelTo, 1) }
+        : span as LivePreviewToken;
     }
     return mapped as LivePreviewToken;
   });
@@ -413,6 +416,21 @@ function collectLivePreviewTokens(
             return false;
           }
           const href = p.name === "Link" ? linkHrefFromSpan(view.state, spanFrom, spanTo) : "";
+          const roamLink = isRoamCoreHref(href);
+          let labelFrom = spanFrom;
+          let labelTo = spanTo;
+          if (roamLink) {
+            // Only the visible label belongs to the node's visual identity.
+            // A mark over the whole Markdown source also styles the hidden
+            // brackets and URL, producing empty capsules beside the title.
+            labelFrom = spanFrom + 1;
+            for (let child = p.firstChild; child; child = child.nextSibling) {
+              if (child.name === "LinkMark" && doc.sliceString(child.from, child.to) === "]") {
+                labelTo = child.from;
+                break;
+              }
+            }
+          }
 
           // Empty-text anchor link [](#slug) — show the URL token as clickable text
           // instead of hiding it, so the link is visible and clickable.
@@ -428,10 +446,20 @@ function collectLivePreviewTokens(
             to: node.to,
             spanFrom,
             spanTo,
+            labelFrom,
+            labelTo,
             linkClass: isJupyterHref(href)
               ? "cm-link-text cm-jupyter-link-text"
-              : isRoamCoreHref(href) ? "cm-link-text cm-roam-link-text" : "cm-link-text",
+              : roamLink
+                ? `cm-link-text cm-roam-link-text${isStableWikiHref(href) ? " cm-roam-link-stable" : ""}`
+                : "cm-link-text",
           });
+          if (roamLink && node.from === spanFrom && labelFrom < labelTo) {
+            tokens.push({
+              kind: "span", from: labelFrom, to: labelFrom + 1, spanFrom, spanTo,
+              cls: `cm-roam-link-glyph${isStableWikiHref(href) ? " cm-roam-link-stable" : ""}`,
+            });
+          }
           return false;
         }
 
@@ -556,8 +584,12 @@ function addWikiLinkTokens(
       const line = doc.line(lineNumber);
       for (const link of scanWikiLinks(line.text, line.from)) {
         if (rangeOverlapsAny(link.from, link.to, excludedRanges)) continue;
-        const linkClass = "cm-link-text cm-internal-link-text cm-roam-link-text";
+        const linkClass = `cm-link-text cm-internal-link-text cm-roam-link-text${isStableWikiHref(link.target) ? " cm-roam-link-stable" : ""}`;
         tokens.push({ kind: "span", from: link.labelFrom, to: link.labelTo, spanFrom: link.from, spanTo: link.to, cls: linkClass });
+        tokens.push({
+          kind: "span", from: link.labelFrom, to: link.labelFrom + 1, spanFrom: link.from, spanTo: link.to,
+          cls: `cm-roam-link-glyph${isStableWikiHref(link.target) ? " cm-roam-link-stable" : ""}`,
+        });
         tokens.push({ kind: "delimiter", from: link.from, to: link.from + 2, spanFrom: link.from, spanTo: link.to });
         tokens.push({ kind: "delimiter", from: link.to - 2, to: link.to, spanFrom: link.from, spanTo: link.to });
         if (link.explicitLabel) {
@@ -574,7 +606,7 @@ function buildDecorations(view: EditorView, tokens = collectLivePreviewTokens(vi
   const doc = view.state.doc;
   const cursorLine = doc.lineAt(sel.from).number;
   // Every delimiter of a link (`[`, `]`, `(`, the URL, `)`) carries the same
-  // whole-span class, so styling the span per delimiter wrapped each link in
+  // link class, so styling the link per delimiter wrapped each link in
   // five identical nested spans. Harmless for `color`, but the translucent
   // hover background of an internal link stacked five deep — and it is five
   // times the decoration and DOM work on every selection change.
@@ -599,7 +631,7 @@ function buildDecorations(view: EditorView, tokens = collectLivePreviewTokens(vi
           const span = `${token.spanFrom}:${token.spanTo}:${token.linkClass}`;
           if (!styledLinkSpans.has(span)) {
             styledLinkSpans.add(span);
-            pushMark(decos, token.spanFrom, token.spanTo, token.linkClass);
+            pushMark(decos, token.labelFrom, token.labelTo, token.linkClass);
           }
         }
         break;
@@ -687,9 +719,9 @@ function addJupyterLinkTokens(
       const labelTo = from + 1 + (match[1] || "").length;
       const hrefFrom = labelTo + 2;
       const linkClass = "cm-link-text cm-jupyter-link-text";
-      tokens.push({ kind: "link-delimiter", from, to: from + 1, spanFrom: from, spanTo: to, linkClass });
-      tokens.push({ kind: "link-delimiter", from: labelTo, to: hrefFrom, spanFrom: from, spanTo: to, linkClass });
-      tokens.push({ kind: "link-delimiter", from: hrefFrom, to, spanFrom: from, spanTo: to, linkClass });
+      tokens.push({ kind: "link-delimiter", from, to: from + 1, spanFrom: from, spanTo: to, labelFrom: from, labelTo: to, linkClass });
+      tokens.push({ kind: "link-delimiter", from: labelTo, to: hrefFrom, spanFrom: from, spanTo: to, labelFrom: from, labelTo: to, linkClass });
+      tokens.push({ kind: "link-delimiter", from: hrefFrom, to, spanFrom: from, spanTo: to, labelFrom: from, labelTo: to, linkClass });
     }
   }
 }

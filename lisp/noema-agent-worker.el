@@ -191,7 +191,7 @@ it back to zero.  Notify listeners of WORKER when provided."
 
 (cl-defstruct (noema-agent-worker
                (:constructor noema-agent-worker--create))
-  run-id session-id root target agent spec context-items routing buffer epoch
+  run-id session-id root target agent spec context-items routing buffer epoch usage-baseline
   renew-timer segment-timer cancel-timer segments result-parts result-bytes
   result-truncated subscriptions kill-hook pending-permissions pending-inputs started terminal
   l1-mode preflight-failure ledger ledger-turn-id ledger-message-item action-items
@@ -563,21 +563,31 @@ Workers that still hold THREAD keep using it until they finish."
             entries)))
 
 (defun noema-agent-worker--session-usage (worker)
-  "Return normalized ACP usage for WORKER's physical Session, if known."
+  "Return reported ACP usage for WORKER's physical Session, if known.
+agent-shell initializes every usage count to zero before its first report."
   (when-let* ((usage (noema-agent-acp-usage (noema-agent-worker-buffer worker))))
-    `((totalTokens . ,(plist-get usage :total))
-      (inputTokens . ,(plist-get usage :input))
-      (outputTokens . ,(plist-get usage :output))
-      (thoughtTokens . ,(plist-get usage :thought))
-      (cachedTokens . ,(+ (plist-get usage :cached-read)
-                          (plist-get usage :cached-write)))
-      (contextUsed . ,(plist-get usage :context-used))
-      (contextSize . ,(plist-get usage :context-size)))))
+    (when (and (noema-agent-worker-started worker)
+               (> (or (plist-get usage :report-seq) 0)
+                  (or (noema-agent-worker-usage-baseline worker) 0))
+               (cl-some (lambda (key) (> (plist-get usage key) 0))
+                        '(:total :input :output :thought :cached-read :cached-write
+                          :context-used :context-size)))
+      `((totalTokens . ,(plist-get usage :total))
+        (inputTokens . ,(plist-get usage :input))
+        (outputTokens . ,(plist-get usage :output))
+        (thoughtTokens . ,(plist-get usage :thought))
+        (cachedTokens . ,(+ (plist-get usage :cached-read)
+                            (plist-get usage :cached-write)))
+        (contextUsed . ,(plist-get usage :context-used))
+        (contextSize . ,(plist-get usage :context-size))))))
 
 (defun noema-agent-worker--check-context-pressure (worker event)
   "Warn once when the ACP usage in turn-complete EVENT is near its limit."
   (when-let* ((buffer (noema-agent-worker-buffer worker))
 		  ((buffer-live-p buffer))
+		  (reported (noema-agent-acp-usage buffer))
+		  ((> (or (plist-get reported :report-seq) 0)
+		      (or (noema-agent-worker-usage-baseline worker) 0)))
 		  (usage (map-elt (map-elt event :data) :usage))
 		  (used (map-elt usage :context-used))
 		  (size (map-elt usage :context-size))
@@ -1473,8 +1483,12 @@ The kernel already recorded the cancellation, so this is not a failure."
              (noema-agent-worker--finish-cancelled-before-start worker)
            (noema-agent-worker--fail-prepared
             worker (format "worker start failed: %s" (noema-agent-worker--error error-object))))
-       (setf (noema-agent-worker-started worker) t)
-       (setf (noema-agent-worker-queue-state worker) 'running)
+       (setf (noema-agent-worker-started worker) t
+             (noema-agent-worker-usage-baseline worker)
+             (or (plist-get (noema-agent-acp-usage (noema-agent-worker-buffer worker))
+                            :report-seq)
+                 0)
+             (noema-agent-worker-queue-state worker) 'running)
        (noema-agent-worker--ledger-start worker)
        (noema-agent-worker--start-renewal worker)
        (noema-agent-worker--best-effort #'noema-agent-worker--refresh-run-views worker)

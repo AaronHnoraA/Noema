@@ -13,6 +13,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import { createEditor } from "../src/editor-api.ts";
+import { setProseDiagnostics } from "../src/cm6/prose-diagnostics.ts";
 
 function render(markdown: string, caret = 0) {
   const host = document.createElement("div");
@@ -80,6 +81,39 @@ describe("link span styling is emitted once", () => {
     const r = render("[[Target]] tail");
     expect(r.deepest("cm-link-text")).toBe(1);
     expect(r.html).toContain("cm-internal-link-text");
+  });
+
+  test("stable and title-based node links have distinct visual classes without changing their text", () => {
+    const id = "019a1234-5678-7abc-8123-abcdefabcdef";
+    const stable = render(`[[roam://${id}|Graph Theory]] tail`);
+    const title = render("[[Graph Theory]] tail");
+    expect(stable.html).toContain("cm-roam-link-stable");
+    expect(title.html).not.toContain("cm-roam-link-stable");
+    expect(stable.text).toBe(`[[roam://${id}|Graph Theory]] tail`);
+    expect(title.text).toBe("[[Graph Theory]] tail");
+    expect(stable.count("cm-roam-link-glyph")).toBe(1);
+    expect(title.count("cm-roam-link-glyph")).toBe(1);
+    expect(render("[Legacy](roam://20261006T121400-search-counting-to-decision)").html)
+      .toContain("cm-roam-link-stable");
+  });
+
+  test("a multiword Markdown node link marks only its label and has one glyph despite diagnostics", () => {
+    const markdown = "[search and counting to decision](roam://20261006T121400-search-counting-to-decision) tail";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: markdown });
+    const wordFrom = markdown.indexOf("decision");
+    setProseDiagnostics(editor.view, [{ source: "languagetool", from: wordFrom, to: wordFrom + 8, message: "Check word" }]);
+    const content = host.querySelector(".cm-content") as HTMLElement;
+    expect(content.querySelectorAll(".cm-roam-link-glyph")).toHaveLength(1);
+    expect(content.querySelector(".cm-roam-link-glyph")?.classList.contains("cm-roam-link-stable")).toBe(true);
+    expect(content.querySelectorAll(".cm-roam-link-text .syntax-hidden")).toHaveLength(0);
+    expect([...content.querySelectorAll(".cm-roam-link-text")]
+      .filter((node) => !node.parentElement?.closest(".cm-roam-link-text"))
+      .map((node) => node.textContent).join("")).toBe("search and counting to decision");
+    expect(content.textContent).toBe(markdown);
+    editor.destroy();
+    host.remove();
   });
 });
 

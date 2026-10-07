@@ -3,6 +3,25 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { createEmacsApiHandlers } from "../server/Features/Emacs/api.mjs";
 
 describe("Emacs host API", () => {
+  test("forwards a note window request with its source pane and anchor", () => {
+    const calls: unknown[][] = [];
+    const handlers = createEmacsApiHandlers({
+      apiOpenInEmacs: (...args: unknown[]) => { calls.push(args); return { ok: true }; },
+      apiOpenSurface: () => undefined,
+      apiSelectJupyterCell: () => undefined,
+      apiCurrentFile: () => undefined,
+      apiEmacsInputFocus: () => undefined,
+      apiEmacsUiState: () => undefined,
+      apiEmacsKey: () => undefined,
+      apiSystemOpen: () => undefined,
+      apiEmacsZotero: () => undefined,
+      apiChooseNotePath: () => undefined,
+    });
+    const body = { file: "/notes/b.md", client: "pane-a", newWindow: true, hash: "result" };
+    handlers["aaronnote:api:emacs:open"](body);
+    expect(calls).toEqual([[body.file, undefined, undefined, undefined, body]]);
+  });
+
   test("routes selected note lines to the shared Emacs context bridge", async () => {
     const received: unknown[] = [];
     const handlers = createEmacsApiHandlers({
@@ -134,10 +153,10 @@ describe("Emacs host API", () => {
       apiChooseNotePath: () => undefined,
     });
 
-    await expect(handlers["aaronnote:api:emacs:surface"]({ path: "/config" })).resolves.toEqual({
+    await expect(handlers["aaronnote:api:emacs:surface"]({ path: "/config", client: "pane-a" })).resolves.toEqual({
       ok: true,
       path: "/config",
     });
-    expect(received).toEqual([{ path: "/config" }]);
+    expect(received).toEqual([{ path: "/config", client: "pane-a" }]);
   });
 });

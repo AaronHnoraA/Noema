@@ -1142,6 +1142,9 @@ func (s *Store) ReportWorkerEvents(input ReportWorkerEventsInput) ([]Event, erro
 	if len(input.Events) > 200 {
 		return nil, errors.New("worker event batch exceeds 200 events")
 	}
+	if input.SessionUsage != nil && !sessionUsageReported(*input.SessionUsage) {
+		input.SessionUsage = nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tx, err := s.db.Begin()
@@ -1169,6 +1172,7 @@ func (s *Store) ReportWorkerEvents(input ReportWorkerEventsInput) ([]Event, erro
 		return nil, fmt.Errorf("run %q is already %s", run.ID, run.Status)
 	}
 	result := make([]Event, 0, len(input.Events))
+	terminalReported := false
 	for _, draft := range input.Events {
 		draft.Type = strings.TrimSpace(draft.Type)
 		if !strings.HasPrefix(draft.Type, "run.") || draft.Type == "run.permission.requested" {
@@ -1188,11 +1192,18 @@ func (s *Store) ReportWorkerEvents(input ReportWorkerEventsInput) ([]Event, erro
 				return nil, err
 			}
 			if terminalRunStatuses[next] {
+				terminalReported = true
 				normalized := make(map[string]any, len(payload))
 				for key, value := range payload {
 					if key != "result_text" && key != "transcript_text" {
 						normalized[key] = value
 					}
+				}
+				// This is a snapshot of the entire ACP Session at Run finish,
+				// not token consumption attributable to this Run alone.  Keep it
+				// with the Run event so a later turn cannot replace its receipt.
+				if input.SessionUsage != nil {
+					normalized["session_usage_at_finish"] = *input.SessionUsage
 				}
 				artifacts := []struct {
 					field, kind, mediaType, resultField string
@@ -1258,6 +1269,13 @@ func (s *Store) ReportWorkerEvents(input ReportWorkerEventsInput) ([]Event, erro
 	}
 	if input.SessionUsage != nil {
 		if err := recordSessionUsageTx(tx, input.SessionID, *input.SessionUsage, nowMs); err != nil {
+			return nil, err
+		}
+	} else if terminalReported {
+		// The last Run had no ACP usage report. An older Session reading no
+		// longer describes the context after this turn and must not drive
+		// automatic rollover or appear as the latest measurement.
+		if _, err := tx.Exec(`DELETE FROM session_usage WHERE session_id = ?`, input.SessionID); err != nil {
 			return nil, err
 		}
 	}

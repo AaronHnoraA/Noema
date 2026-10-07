@@ -7,11 +7,16 @@ This surface is deliberately narrow. It is not the knowledge base: notes,
 search, tags and blocks live on the ordinary Noema endpoint, and nothing here
 edits a `.noema` document directly.
 
-- Read before you declare. `research_cell {action: "neighbors"}` gives a
-  block's explicit lineage and dependency neighbours, which is how you find
-  what rests on what. Attaching new work to the wrong parent is the one
-  mistake these tools cannot catch for you: they refuse cycles, not bad
-  judgement.
+- Read before you declare. `research_cell {action: "outline"}` gives a
+  compact map of a block's lineage and dependency neighbours, their states,
+  latest Run ids and content sizes. It omits source and output text; use
+  `read` for one cell or `neighbors` when full neighbour content is needed.
+  Attaching new work to the wrong parent is the one mistake these tools cannot
+  catch for you: they refuse cycles, not bad judgement.
+- `research_run {action: "context", id: RUN_ID}` reads the frozen Run context
+  receipt: selected references, omissions, digests and any ACP Session usage
+  snapshot at finish. The usage is cumulative for the Session, not a per-Run
+  charge. The receipt never contains the Run prompt or context bytes.
 - Structure changes are Proposals. `proposal.create` submits an untrusted
   candidate; a person accepts it. `graph.declare` carries a whole plan — its
   blocks may reference each other by id — and is accepted or rejected as one

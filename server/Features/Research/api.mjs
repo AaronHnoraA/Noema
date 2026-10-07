@@ -42,6 +42,7 @@ const METHODS = Object.freeze({
 	"run:project-file": "runProjectFile",
   "run:list": "runs",
   "run:get": "run",
+  "run:context-receipt": "runContextReceipt",
   "run:cancel": "cancelRun",
   "run:check-completion": "checkRunCompletion",
   "run:fail-preparing": "failPreparingRun",

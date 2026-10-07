@@ -17,7 +17,7 @@ import {
 } from "../../shared/wiki-link.mjs";
 import { parseGitPorcelainStatus } from "./git-status.mjs";
 import { diffRoamFile, fileHistory, restoreFileFromCommit } from "./roam-git.mjs";
-import { createWindowsZip, moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
+import { createWindowsZip } from "./windows-shell.mjs";
 
 const execFileAsync = promisify(execFile);
 const PARTITIONS = Object.freeze(["public", "private"]);
@@ -415,7 +415,21 @@ function titleCandidates(notes, byTitle, targetValue, source = null) {
     return notes.filter((note) => resolve(note.file) === file);
   }
   const stable = target.match(/^roam:\/\/(?:id\/)?(.+)$/i)?.[1];
-  if (stable) return notes.filter((note) => canonicalTitle(note.id) === canonicalTitle(stable));
+  if (stable) {
+    const matched = notes.filter((note) => canonicalTitle(note.id) === canonicalTitle(stable));
+    return matched.map((note) => {
+      const seen = new Set();
+      let current = note;
+      while (current.kind === "redirect" && current.redirectTo && !seen.has(current.id)) {
+        seen.add(current.id);
+        const nextId = current.redirectTo.match(/^roam:\/\/(?:id\/)?(.+)$/i)?.[1];
+        const next = notes.find((candidate) => canonicalTitle(candidate.id) === canonicalTitle(nextId));
+        if (!next) break;
+        current = next;
+      }
+      return current;
+    });
+  }
   const knownNamespaces = notes.flatMap((note) => [note.namespace, note.qualifiedNamespace, ...(note.namespaceAliases || [])]);
   const parsed = splitQualifiedWikiTarget(target, knownNamespaces);
   const candidates = byTitle.get(canonicalTitle(parsed.title)) || [];
@@ -459,7 +473,7 @@ export function resolveWikiRelationships(notes) {
       });
       else byId.set(key, note);
     }
-    for (const value of [note.title, ...note.aliases]) {
+    for (const value of note.kind === "redirect" ? [] : [note.title, ...note.aliases]) {
       const key = canonicalTitle(value);
       if (!key) continue;
       const bucket = byTitle.get(key) || [];
@@ -520,7 +534,7 @@ export function resolveWikiRelationships(notes) {
   for (const note of notes) note.backlinks = [...new Set(note.backlinks)];
   const byQualifiedTitle = new Map();
   for (const note of notes) {
-    for (const value of [note.title, ...note.aliases]) {
+    for (const value of note.kind === "redirect" ? [] : [note.title, ...note.aliases]) {
       const key = canonicalTitle(qualifiedWikiTitle(note.qualifiedNamespace, value));
       const bucket = byQualifiedTitle.get(key) || [];
       bucket.push(note);
@@ -1328,7 +1342,7 @@ export function resolveWikiLink(index, targetValue, options = {}) {
   const source = options.sourceFile ? index.notes.find((note) => note.file === options.sourceFile) : null;
   const byTitle = new Map();
   for (const note of index.notes) {
-    for (const value of [note.title, ...(note.aliases || [])]) {
+    for (const value of note.kind === "redirect" ? [] : [note.title, ...(note.aliases || [])]) {
       const key = canonicalTitle(value);
       const bucket = byTitle.get(key) || [];
       bucket.push(note);
@@ -1865,6 +1879,14 @@ export async function createWikiPage(rootValue, layoutValue, body = {}) {
   const id = String(body.id || newNoemaId("page"));
   const tags = Array.isArray(body.tags) ? body.tags.map(String).filter(Boolean) : parseList(body.tags);
   const namespace = cleanWikiNamespace(body.namespace, repository.namespace || repository.name);
+  if (layout === "wiki") {
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    if (index.notes.some((note) => note.repositoryId === repository.id
+      && canonicalTitle(note.namespace) === canonicalTitle(namespace)
+      && [note.title, ...note.aliases].some((value) => canonicalTitle(value) === canonicalTitle(title)))) {
+      throw apiError("A page with this title or alias already exists in the selected repository and namespace", 409, "ERR_WIKI_TITLE_CONFLICT");
+    }
+  }
   const content = [
     "#+begin meta",
     `id: ${id}`,
@@ -1953,13 +1975,26 @@ export async function restoreWikiPageVersion(rootValue, body = {}) {
   return { ok: true, type: "wiki-page-restored", pageId: note.id, file: note.file, sha, source: "node-vaultgit" };
 }
 
-function destinationFile(repository, body, fallbackName) {
+function destinationFile(repository, body, fallbackName, sourceFile = "") {
   const directory = cleanRelativePath(body.directory || "");
   const filename = cleanRelativePath(body.filename || fallbackName);
   const target = resolve(repository.path, directory, filename);
   if (!inside(repository.path, target)) throw apiError("Destination must stay inside its repository");
-  if (existsSync(target)) throw apiError(`Destination already exists: ${relative(repository.path, target)}`, 409);
+  if (existsSync(target) && target !== sourceFile) throw apiError(`Destination already exists: ${relative(repository.path, target)}`, 409);
   return target;
+}
+
+function pageVisibilityContent(content, sourceNote, targetRepository, body) {
+  if (targetRepository.partition === "private") return replaceMetaField(content, "private", "true");
+  if (sourceNote.partition === "private") return replaceMetaField(content, "private", body.publish === true ? "false" : "true");
+  return content;
+}
+
+function requirePublicTransfer(sourceNote, targetRepository, body, verb) {
+  if (sourceNote.partition === "private" && targetRepository.partition === "public"
+    && body.confirm !== `${verb} PRIVATE TO PUBLIC`) {
+    throw apiError(`Type ${verb} PRIVATE TO PUBLIC after reviewing the page and dependencies`, 409, "ERR_WIKI_PRIVACY_CONFIRM");
+  }
 }
 
 function ownedAssetDirectories(note, pageId = note.id) {
@@ -1967,6 +2002,16 @@ function ownedAssetDirectories(note, pageId = note.id) {
     kind,
     path: join(dirname(note.file), kind, pageId),
   })).filter((entry) => existsSync(entry.path));
+}
+
+function unsafeRelocatedDependencies(note, sourceRepositoryPath, targetFile, targetRepositoryId) {
+  if (dirname(targetFile) === dirname(note.file) && targetRepositoryId === note.repositoryId) return [];
+  const owned = ownedAssetDirectories(note).map((item) => item.path);
+  return (note.dependencies || []).filter((dependency) => {
+    if (!dependency.path || dependency.status !== "resolved") return false;
+    const path = resolve(sourceRepositoryPath, dependency.path);
+    return !owned.some((directory) => inside(directory, path));
+  });
 }
 
 async function writeOperationJournal(root, operation) {
@@ -1979,29 +2024,42 @@ async function writeOperationJournal(root, operation) {
 
 async function copyOwnedAssets(note, targetFile, sourceId, targetId) {
   const copied = [];
-  for (const source of ownedAssetDirectories(note, sourceId)) {
-    const target = join(dirname(targetFile), source.kind, targetId);
-    await mkdir(dirname(target), { recursive: true });
-    await cp(source.path, target, { recursive: true, errorOnExist: true });
-    copied.push({ source: source.path, target });
+  try {
+    for (const source of ownedAssetDirectories(note, sourceId)) {
+      const target = join(dirname(targetFile), source.kind, targetId);
+      await mkdir(dirname(target), { recursive: true });
+      if (existsSync(target)) throw apiError(`Owned asset path already exists: ${target}`, 409, "ERR_WIKI_ASSET_CONFLICT");
+      copied.push({ source: source.path, target });
+      await cp(source.path, target, { recursive: true, errorOnExist: true });
+    }
+  } catch (error) {
+    for (const item of copied.reverse()) await rm(item.target, { recursive: true, force: true }).catch(() => {});
+    throw error;
   }
   return copied;
 }
 
 export async function moveWikiPage(rootValue, body = {}) {
   const root = expandNoemaPath(rootValue);
-  const { note } = await wikiNoteById(root, body.pageId);
+  const { index, note } = await wikiNoteById(root, body.pageId);
   const sourceRepository = await repositoryFromId(root, note.repositoryId);
   const targetRepository = await repositoryFromId(root, body.repositoryId || note.repositoryId);
-  if (
-    sourceRepository.partition === "private"
-    && targetRepository.partition === "public"
-    && body.confirm !== "MOVE PRIVATE TO PUBLIC"
-  ) {
-    throw apiError("Type MOVE PRIVATE TO PUBLIC after reviewing the page and dependency list", 409, "ERR_WIKI_PRIVACY_CONFIRM");
-  }
-  const target = destinationFile(targetRepository, body, basename(note.file));
+  requirePublicTransfer(note, targetRepository, body, "MOVE");
+  const target = destinationFile(targetRepository, body, basename(note.file), note.file);
+  const unsafeDependencies = unsafeRelocatedDependencies(note, sourceRepository.path, target, targetRepository.id);
+  if (unsafeDependencies.length) throw apiError(
+    `Move would break relative references: ${unsafeDependencies.slice(0, 5).map((item) => item.raw).join(", ")}. Convert or move those references first.`,
+    409, "ERR_WIKI_DEPENDENCIES",
+  );
   const namespace = cleanWikiNamespace(body.namespace, note.namespace || targetRepository.namespace || targetRepository.name);
+  const title = String(body.title || note.title).trim();
+  if (!title) throw apiError("Page title is required");
+  if (index.notes.some((candidate) => candidate.id !== note.id
+    && candidate.repositoryId === targetRepository.id
+    && canonicalTitle(candidate.namespace) === canonicalTitle(namespace)
+    && [candidate.title, ...candidate.aliases].some((value) => canonicalTitle(value) === canonicalTitle(title)))) {
+    throw apiError("A page with this title or alias already exists at the destination", 409, "ERR_WIKI_TITLE_CONFLICT");
+  }
   const operation = {
     id: newNoemaId("block"),
     type: "move-page",
@@ -2018,7 +2076,9 @@ export async function moveWikiPage(rootValue, body = {}) {
   const movedAssets = [];
   try {
     await mkdir(dirname(target), { recursive: true });
-    if (sourceRepository.id === targetRepository.id) {
+    if (target === note.file) {
+      // Metadata-only title or namespace rename.
+    } else if (sourceRepository.id === targetRepository.id) {
       await rename(note.file, target);
       for (const asset of ownedAssetDirectories(note)) {
         const destination = join(dirname(target), asset.kind, note.id);
@@ -2032,8 +2092,16 @@ export async function moveWikiPage(rootValue, body = {}) {
       await rm(note.file);
       for (const asset of ownedAssetDirectories(note)) await rm(asset.path, { recursive: true });
     }
-    const movedContent = await readFile(target, "utf8");
-    await writeFile(target, replaceMetaField(movedContent, "namespace", namespace), "utf8");
+    let movedContent = await readFile(target, "utf8");
+    movedContent = pageVisibilityContent(movedContent, note, targetRepository, body);
+    movedContent = replaceMetaField(movedContent, "namespace", namespace);
+    if (title !== note.title) {
+      const aliases = [...new Set([...note.aliases, note.title])];
+      movedContent = replaceMetaField(replaceMetaField(movedContent, "title", title), "aliases", aliases.join(", "));
+      const oldHeading = `# ${note.title}`;
+      if (movedContent.includes(`\n${oldHeading}\n`)) movedContent = movedContent.replace(`\n${oldHeading}\n`, `\n# ${title}\n`);
+    }
+    await writeFile(target, movedContent, "utf8");
     await rm(journal, { force: true });
     return {
       ok: true,
@@ -2043,7 +2111,7 @@ export async function moveWikiPage(rootValue, body = {}) {
       file: target,
       assets: movedAssets,
       repositoryId: targetRepository.id,
-      namespace,
+      namespace, title, oldTitle: note.title,
     };
   } catch (error) {
     await writeFile(journal, `${JSON.stringify({ ...operation, phase: "failed", error: String(error?.message || error) }, null, 2)}\n`, "utf8").catch(() => {});
@@ -2054,6 +2122,8 @@ export async function moveWikiPage(rootValue, body = {}) {
 export async function deleteWikiPage(rootValue, body = {}, options = {}) {
   const root = expandNoemaPath(rootValue);
   const { note } = await wikiNoteById(root, body.pageId);
+  const recordFile = wikiTrashRecordFile(root, note.id);
+  if (existsSync(recordFile)) throw apiError("This page already has a Trash recovery record", 409, "ERR_WIKI_TRASH_CONFLICT");
   if (note.backlinks.length > 0 && body.confirm !== "DELETE") {
     throw apiError(
       `${note.backlinks.length} page${note.backlinks.length === 1 ? "" : "s"} link to this page. Type DELETE to move it to Trash.`,
@@ -2061,11 +2131,10 @@ export async function deleteWikiPage(rootValue, body = {}, options = {}) {
       "ERR_WIKI_BACKLINK_CONFIRM",
     );
   }
-  const useSystemRecycleBin = process.platform === "win32" && !options.trashRoot;
   const trashRoot = options.trashRoot
     ? resolve(String(options.trashRoot))
-    : useSystemRecycleBin
-      ? join(root, ".noema", "trash-staging")
+    : process.platform === "win32"
+      ? join(root, ".noema", "wiki-trash", "bundles")
       : join(homedir(), ".Trash");
   await mkdir(trashRoot, { recursive: true });
   const base = `Noema-${slugify(note.title)}-${String(note.id).slice(0, 8)}`;
@@ -2083,16 +2152,27 @@ export async function deleteWikiPage(rootValue, body = {}, options = {}) {
     createdAt: new Date().toISOString(),
   };
   const journal = await writeOperationJournal(root, operation);
+  const trashedFile = join(bundle, basename(note.file));
+  const assets = [];
   try {
-    const trashedFile = join(bundle, basename(note.file));
     await rename(note.file, trashedFile);
-    const assets = [];
     for (const asset of ownedAssetDirectories(note)) {
       const target = join(bundle, `${asset.kind}-${note.id}`);
       await rename(asset.path, target);
       assets.push({ source: asset.path, target });
     }
-    if (useSystemRecycleBin) await moveWindowsPathToRecycleBin(bundle, { kind: "directory" });
+    const recordDir = join(root, ".noema", "wiki-trash");
+    await mkdir(recordDir, { recursive: true });
+    await writeFile(recordFile, `${JSON.stringify({
+      pageId: note.id,
+      title: note.title,
+      repositoryId: note.repositoryId,
+      file: note.file,
+      trashedFile,
+      trashedTo: bundle,
+      assets,
+      deletedAt: new Date().toISOString(),
+    }, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
     await rm(journal, { force: true });
     return {
       ok: true,
@@ -2100,26 +2180,103 @@ export async function deleteWikiPage(rootValue, body = {}, options = {}) {
       pageId: note.id,
       file: note.file,
       trashedFile,
-      trashedTo: useSystemRecycleBin ? "system-recycle-bin" : bundle,
+      trashedTo: bundle,
       backlinks: note.backlinks,
       assets,
     };
   } catch (error) {
+    for (const asset of assets.reverse()) await rename(asset.target, asset.source).catch(() => {});
+    if (existsSync(trashedFile)) await rename(trashedFile, note.file).catch(() => {});
+    await rm(bundle, { recursive: true, force: true }).catch(() => {});
     await writeFile(journal, `${JSON.stringify({ ...operation, phase: "failed", error: String(error?.message || error) }, null, 2)}\n`, "utf8").catch(() => {});
     throw error;
   }
 }
 
+function wikiTrashRecordFile(root, pageId) {
+  const digest = createHash("sha256").update(String(pageId)).digest("hex");
+  return join(root, ".noema", "wiki-trash", `${digest}.json`);
+}
+
+export async function listTrashedWikiPages(rootValue) {
+  const root = expandNoemaPath(rootValue);
+  const directory = join(root, ".noema", "wiki-trash");
+  if (!existsSync(directory)) return { ok: true, type: "wiki-trash", pages: [] };
+  const pages = [];
+  for (const name of await readdir(directory)) {
+    if (!/^[0-9a-f]{64}\.json$/i.test(name)) continue;
+    try {
+      const record = JSON.parse(await readFile(join(directory, name), "utf8"));
+      pages.push({ ...record, available: existsSync(record.trashedFile) });
+    } catch { /* A damaged record cannot be offered as a restore action. */ }
+  }
+  pages.sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
+  return { ok: true, type: "wiki-trash", pages };
+}
+
+export async function restoreTrashedWikiPage(rootValue, body = {}) {
+  const root = expandNoemaPath(rootValue);
+  const pageId = String(body.pageId || "");
+  if (!pageId || pageId.length > 240) throw apiError("Invalid trashed page ID");
+  const recordFile = wikiTrashRecordFile(root, pageId);
+  if (!existsSync(recordFile)) throw apiError("Unknown trashed Wiki page", 404, "ERR_WIKI_TRASH_NOT_FOUND");
+  const record = JSON.parse(await readFile(recordFile, "utf8"));
+  if (record.pageId !== pageId) throw apiError("Trash record identity mismatch", 409);
+  const repository = await repositoryFromId(root, record.repositoryId);
+  if (!inside(repository.path, record.file) || !inside(record.trashedTo, record.trashedFile)) {
+    throw apiError("Trash record paths are invalid", 409);
+  }
+  if (!existsSync(record.trashedFile)) throw apiError("Page is no longer present in Trash", 404, "ERR_WIKI_TRASH_MISSING");
+  if (existsSync(record.file)) throw apiError("Original page path is occupied", 409, "ERR_WIKI_RESTORE_CONFLICT");
+  const index = await buildWikiIndex(root, { layout: "wiki" });
+  if (index.notes.some((note) => note.id === pageId)) throw apiError("Page ID is already in use", 409, "ERR_WIKI_RESTORE_CONFLICT");
+  for (const asset of record.assets || []) {
+    if (!inside(repository.path, asset.source) || !inside(record.trashedTo, asset.target) || existsSync(asset.source)) {
+      throw apiError("An original asset path is occupied or invalid", 409, "ERR_WIKI_RESTORE_CONFLICT");
+    }
+  }
+  await mkdir(dirname(record.file), { recursive: true });
+  await rename(record.trashedFile, record.file);
+  const restoredAssets = [];
+  try {
+    for (const asset of record.assets || []) {
+      await mkdir(dirname(asset.source), { recursive: true });
+      await rename(asset.target, asset.source);
+      restoredAssets.push(asset);
+    }
+  } catch (error) {
+    for (const asset of restoredAssets.reverse()) await rename(asset.source, asset.target).catch(() => {});
+    await rename(record.file, record.trashedFile).catch(() => {});
+    throw error;
+  }
+  await rm(recordFile);
+  return { ok: true, type: "wiki-page-trash-restored", pageId, file: record.file, repositoryId: record.repositoryId };
+}
+
 export async function copyWikiPage(rootValue, body = {}) {
   const root = expandNoemaPath(rootValue);
-  const { note } = await wikiNoteById(root, body.pageId);
+  const { index, note } = await wikiNoteById(root, body.pageId);
   const targetRepository = await repositoryFromId(root, body.repositoryId || note.repositoryId);
+  requirePublicTransfer(note, targetRepository, body, "COPY");
   const target = destinationFile(targetRepository, body, basename(note.file));
+  const unsafeDependencies = unsafeRelocatedDependencies(note, (await repositoryFromId(root, note.repositoryId)).path, target, targetRepository.id);
+  if (unsafeDependencies.length) throw apiError(
+    `Copy would break relative references: ${unsafeDependencies.slice(0, 5).map((item) => item.raw).join(", ")}. Convert or copy those references first.`,
+    409, "ERR_WIKI_DEPENDENCIES",
+  );
   const id = newNoemaId("page");
   const title = String(body.title || `${note.title} copy`).trim();
   const namespace = cleanWikiNamespace(body.namespace, note.namespace || targetRepository.namespace || targetRepository.name);
+  if (!title) throw apiError("Page title is required");
+  if (index.notes.some((candidate) => candidate.repositoryId === targetRepository.id
+    && canonicalTitle(candidate.namespace) === canonicalTitle(namespace)
+    && [candidate.title, ...candidate.aliases].some((value) => canonicalTitle(value) === canonicalTitle(title)))) {
+    throw apiError("A page with this title or alias already exists at the destination", 409, "ERR_WIKI_TITLE_CONFLICT");
+  }
   let content = await readFile(note.file, "utf8");
   content = replaceMetaField(replaceMetaField(replaceMetaField(content, "id", id), "title", title), "namespace", namespace);
+  content = pageVisibilityContent(content, note, targetRepository, body);
+  if (title !== note.title && content.includes(`\n# ${note.title}\n`)) content = content.replace(`\n# ${note.title}\n`, `\n# ${title}\n`);
   content = content
     .replaceAll(`images/${note.id}/`, `images/${id}/`)
     .replaceAll(`attachments/${note.id}/`, `attachments/${id}/`);
@@ -2141,16 +2298,30 @@ export async function mergeWikiPages(rootValue, body = {}) {
   const duplicate = (await wikiNoteById(root, body.duplicateId)).note;
   if (survivor.id === duplicate.id) throw apiError("Survivor and duplicate must be different pages");
   if (body.confirm !== "MERGE") throw apiError("Type MERGE to preserve the duplicate as a redirect", 409);
+  if (survivor.repositoryId !== duplicate.repositoryId
+    || dirname(survivor.file) !== dirname(duplicate.file)
+    || canonicalTitle(survivor.namespace) !== canonicalTitle(duplicate.namespace)) {
+    throw apiError("Merge requires pages in the same repository, directory, and namespace so relative links remain valid", 409, "ERR_WIKI_MERGE_SCOPE");
+  }
   let survivorContent = typeof body.content === "string" ? body.content : await readFile(survivor.file, "utf8");
+  const originalSurvivor = await readFile(survivor.file, "utf8");
+  const duplicateContent = await readFile(duplicate.file, "utf8");
   const survivorMeta = metadata(survivorContent);
-  const aliases = [...new Set([...parseList(survivorMeta.aliases), duplicate.title])];
+  const aliases = [...new Set([...parseList(survivorMeta.aliases), ...(canonicalTitle(duplicate.title) === canonicalTitle(survivor.title) ? [] : [duplicate.title])])];
   survivorContent = replaceMetaField(survivorContent, "aliases", aliases.join(", "));
+  const duplicateBody = duplicateContent
+    .replace(/^\s*#\+begin\s+meta\s*\r?\n[\s\S]*?\r?\n\s*#\+end\s+meta\s*/im, "")
+    .replace(new RegExp(`^#\\s+${duplicate.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*(?:\\r?\\n|$)`), "")
+    .trim();
+  if (duplicateBody) survivorContent = `${survivorContent.trimEnd()}\n\n## From ${duplicate.title}\n\n${duplicateBody}\n`;
   const redirect = [
     "#+begin meta",
     `id: ${duplicate.id}`,
     `title: ${duplicate.title}`,
+    `namespace: ${duplicate.namespace}`,
     "kind: redirect",
     `redirect_to: roam://${survivor.id}`,
+    ...(duplicate.private ? ["private: true"] : []),
     "#+end meta",
     "",
     `# ${duplicate.title}`,
@@ -2158,8 +2329,19 @@ export async function mergeWikiPages(rootValue, body = {}) {
     `Redirected to [${survivor.title}](roam://${survivor.id}).`,
     "",
   ].join("\n");
-  await writeFile(survivor.file, survivorContent, "utf8");
-  await writeFile(duplicate.file, redirect, "utf8");
+  const archiveDir = join(root, ".noema", "recovery", "wiki-merge");
+  await mkdir(archiveDir, { recursive: true });
+  const archiveKey = createHash("sha256").update(String(duplicate.id)).digest("hex").slice(0, 16);
+  const archiveFile = join(archiveDir, `${archiveKey}-${Date.now()}.md`);
+  await writeFile(archiveFile, duplicateContent, { encoding: "utf8", flag: "wx" });
+  try {
+    await writeFile(survivor.file, survivorContent, "utf8");
+    await writeFile(duplicate.file, redirect, "utf8");
+  } catch (error) {
+    await writeFile(survivor.file, originalSurvivor, "utf8").catch(() => {});
+    await writeFile(duplicate.file, duplicateContent, "utf8").catch(() => {});
+    throw error;
+  }
   return {
     ok: true,
     type: "wiki-pages-merged",
@@ -2167,6 +2349,7 @@ export async function mergeWikiPages(rootValue, body = {}) {
     redirectId: duplicate.id,
     survivorFile: survivor.file,
     redirectFile: duplicate.file,
+    archiveFile,
   };
 }
 

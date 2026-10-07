@@ -32,6 +32,7 @@ document.body.dataset.hostMode = serverReaderMode ? "server" : "emacs";
 root.innerHTML = `
   <header class="noema-wiki-site-header">
     <button type="button" class="noema-wiki-panel-toggle" aria-label="Toggle navigation" aria-expanded="false" data-toggle-nav>☰</button>
+    <button type="button" class="noema-wiki-panel-toggle" aria-label="Toggle Wiki tools" aria-expanded="false" data-toggle-tools>Tools</button>
     <button type="button" class="noema-wiki-site-brand" data-view="home" aria-label="Open the Noema Wiki main page">
       <img class="noema-wiki-site-mark" src="/Noema.svg" alt="">
       <span><strong>Noema</strong><small>${serverReaderMode ? "Public knowledge commons" : "Private knowledge commons"}</small></span>
@@ -53,7 +54,7 @@ root.innerHTML = `
       <nav>
         <button type="button" class="is-active" data-view="home">Main page</button>
         <button type="button" data-view="pages">All pages <b data-count-pages>0</b></button>
-        <button type="button" data-view="recent">Recent</button>
+        <button type="button" data-view="recent">Recently modified pages</button>
         <button type="button" data-view="graph">Graph</button>
         <button type="button" data-view="folders">Folders <b data-count-folders>0</b></button>
         <button type="button" data-view="namespaces">Namespaces <b data-count-namespaces>0</b></button>
@@ -61,6 +62,7 @@ root.innerHTML = `
         <button type="button" data-view="tags">Tags</button>
         <button type="button" data-view="dependencies">Dependencies</button>
         <button type="button" data-view="wanted">Wanted <b data-count-wanted>0</b></button>
+        <button type="button" data-view="trash" ${serverReaderMode ? "hidden" : ""}>Trash</button>
         <button type="button" data-view="reports">Reports <b data-count-reports>0</b></button>
         <button type="button" data-view="sync">Version control <b data-count-repos>0</b></button>
       </nav>
@@ -83,13 +85,12 @@ root.innerHTML = `
       <nav class="noema-wiki-page-tabs" aria-label="Page views">
         <div>
           <button type="button" class="is-active" data-view="home">Main page</button>
-          <button type="button" data-view="pages">Discussion</button>
+          <button type="button" data-view="pages">All pages</button>
           <button type="button" data-view="graph">Graph</button>
         </div>
         <div>
-          <button type="button" class="is-current" data-view="home">Read</button>
-          <button type="button" data-new-page>Edit</button>
-          <button type="button" data-view="recent">View history</button>
+          <button type="button" data-view="wanted">Wanted links</button>
+          <button type="button" data-view="recent">Recently modified</button>
         </div>
       </nav>
       <div class="noema-wiki-status" data-status role="status" aria-live="polite"></div>
@@ -125,7 +126,7 @@ root.innerHTML = `
       <section>
         <h2>Page tools</h2>
         <button type="button" data-new-page>New page</button>
-        <button type="button" data-view="recent">Recent changes</button>
+        <button type="button" data-view="recent">Recently modified pages</button>
         <button type="button" data-view="reports">Special reports</button>
       </section>
       <section>
@@ -151,6 +152,8 @@ root.innerHTML = `
         <label><span>Kind</span><input name="kind" value="page"></label>
       </div>
       <label><span>Tags</span><input name="tags" placeholder="wiki, subject"></label>
+      <p data-create-context></p>
+      <button type="button" data-use-existing hidden>Open existing page and use its stable link</button>
       <datalist id="noema-wiki-directories"></datalist>
       <footer><button type="button" data-new-cancel>Cancel</button><button type="submit" value="default" class="is-primary">Create and open</button></footer>
     </form>
@@ -171,18 +174,22 @@ root.innerHTML = `
   <dialog class="noema-wiki-dialog" data-page-dialog>
     <form data-page-form>
       <header><div><p>Page management</p><h2 data-page-title>Manage page</h2></div><button type="button" data-page-cancel aria-label="Close">×</button></header>
-      <label><span>Operation</span><select name="action"><option value="move">Move or rename</option><option value="copy">Create independent copy</option><option value="merge">Merge duplicate</option><option value="history">Page history</option><option value="delete">Move to ${platformLabels.trash}</option></select></label>
+      <label><span>Operation</span><select name="action"><option value="move">Move or rename page</option><option value="copy">Create independent copy</option><option value="merge">Merge duplicate</option><option value="history">Git checkpoint history</option><option value="delete">Move to Wiki Trash</option></select></label>
       <section data-page-destination>
         <div class="noema-wiki-form-grid">
           <label><span>Repository</span><select name="repositoryId" required></select></label>
           <label><span>Namespace</span><input name="namespace" required></label>
           <label><span>Directory</span><span class="noema-wiki-path-input"><input name="directory" list="noema-page-directories" placeholder="repository root"><button type="button" data-page-choose-directory>Choose…</button></span></label>
           <label><span>Filename</span><input name="filename" required></label>
+          <label data-move-title><span>Page title</span><input name="moveTitle" required></label>
           <label data-copy-title hidden><span>Copy title</span><input name="copyTitle"></label>
         </div>
+        <label data-publication hidden><input type="checkbox" name="publish"> Publish this page in the public Wiki catalog (its content enters the public Git repository either way)</label>
         <datalist id="noema-page-directories"></datalist>
       </section>
       <label data-merge-target hidden><span>Duplicate page</span><select name="duplicateId"></select></label>
+      <section class="noema-wiki-merge-preview" data-merge-preview hidden></section>
+      <section data-page-backlinks></section>
       <section class="noema-wiki-page-history" data-page-history hidden></section>
       <p data-page-warning></p>
       <footer><button type="button" data-page-cancel>Cancel</button><button type="submit" class="is-primary" data-page-apply>Move page</button></footer>
@@ -265,6 +272,8 @@ type WikiConflictSummary = {
 };
 const pendingConflicts = new Map<string, WikiConflictSummary[]>();
 let activeManagedNote: WikiNote | null = null;
+let initialManageHandled = false;
+let activeCreationFromLink = false;
 let pageSearch: { query: string; items: WikiNote[]; total: number; nextCursor: number | null; generation: string } = {
   query: "", items: [], total: 0, nextCursor: null, generation: "",
 };
@@ -354,15 +363,24 @@ function setStatus(message: string, error = false): void {
   statusEl.classList.toggle("is-error", error);
 }
 
-function openNote(note: Pick<WikiNote, "file">, options: { newWindow?: boolean } = {}): void {
+function openNote(note: Pick<WikiNote, "file"> & Partial<Pick<WikiNote, "redirectTo">>, options: { newWindow?: boolean } = {}): void {
+  let target = note;
+  const visited = new Set<string>();
+  while (target.redirectTo && !visited.has(target.file)) {
+    visited.add(target.file);
+    const redirectId = target.redirectTo.match(/^roam:\/\/(?:id\/)?([^#/?]+)/i)?.[1];
+    const next = redirectId ? index?.notes.find((item) => item.id === redirectId) : null;
+    if (!next) break;
+    target = next;
+  }
   if (!serverReaderMode) {
-    void api.emacs.open({ file: note.file }).catch((error) => {
+    void api.emacs.open({ file: target.file, newWindow: options.newWindow, client: pageClientFromLocation() }).catch((error) => {
       setStatus(error instanceof Error ? error.message : "Open in Emacs failed", true);
     });
     return;
   }
   const url = new URL("/", location.origin);
-  url.searchParams.set("file", note.file);
+  url.searchParams.set("file", target.file);
   if (options.newWindow) window.open(url.toString(), "_blank", "noopener");
   else location.assign(url.toString());
 }
@@ -404,7 +422,7 @@ function routeForView(view: string): string {
 
 function navigateTo(view: string, query = "", options: { history?: boolean } = {}): void {
   const previous = activeView;
-  activeView = serverReaderMode && (view === "sync" || view === "repositories") ? "home" : view;
+  activeView = serverReaderMode && (view === "sync" || view === "repositories" || view === "trash") ? "home" : view;
   if (view === "home") searchEl.value = "";
   else if (query) searchEl.value = query;
   closePanels();
@@ -635,7 +653,7 @@ function renderHome(): void {
   const recentHead = document.createElement("header");
   const recentTitle = document.createElement("h2");
   recentTitle.textContent = "Recently updated";
-  const allRecent = button("View history");
+  const allRecent = button("Recently modified pages");
   allRecent.addEventListener("click", () => navigateTo("recent"));
   recentHead.append(recentTitle, allRecent);
   const recentList = document.createElement("div");
@@ -733,7 +751,7 @@ function noteCard(note: WikiNote): HTMLElement {
   if (!serverReaderMode) card.append(actions);
   card.addEventListener("click", () => openNote(note));
   card.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") openNote(note);
+    if (event.target === card && event.key === "Enter") openNote(note);
   });
   return card;
 }
@@ -754,9 +772,15 @@ function managePage(note: WikiNote): void {
     ? note.repositoryPath.slice(0, note.repositoryPath.lastIndexOf("/"))
     : "";
   (pageForm.elements.namedItem("filename") as HTMLInputElement).value = note.repositoryPath.split("/").at(-1) || "";
+  (pageForm.elements.namedItem("moveTitle") as HTMLInputElement).value = note.title;
   (pageForm.elements.namedItem("copyTitle") as HTMLInputElement).value = `${note.title} copy`;
   const duplicates = pageForm.elements.namedItem("duplicateId") as HTMLSelectElement;
-  duplicates.replaceChildren(...(index?.notes || []).filter((item) => item.id !== note.id).map((item) => {
+  const sourceDirectory = note.repositoryPath.includes("/") ? note.repositoryPath.slice(0, note.repositoryPath.lastIndexOf("/")) : "";
+  duplicates.replaceChildren(...(index?.notes || []).filter((item) => item.id !== note.id
+    && item.kind !== "redirect"
+    && item.repositoryId === note.repositoryId
+    && item.namespace === note.namespace
+    && (item.repositoryPath.includes("/") ? item.repositoryPath.slice(0, item.repositoryPath.lastIndexOf("/")) : "") === sourceDirectory).map((item) => {
     const option = document.createElement("option");
     option.value = item.id;
     option.textContent = `${item.title} · ${item.repositoryId}/${item.repositoryPath}`;
@@ -814,6 +838,11 @@ function renderPages(): void {
     : filteredNotes().slice(0, 80);
   if (!notes.length) {
     viewEl.append(emptyState("No matching pages", "Try another search or create a page from the workbench."));
+    if (query && !serverReaderMode) {
+      const create = button(`Create “${query}”`, "is-primary");
+      create.addEventListener("click", () => showNewPage(query));
+      viewEl.append(create);
+    }
     return;
   }
   const grid = document.createElement("div");
@@ -1188,6 +1217,50 @@ function renderReports(): void {
   }
 }
 
+async function renderTrash(): Promise<void> {
+  if (serverReaderMode) return;
+  const marker = activeView;
+  viewEl.replaceChildren(emptyState("Loading Trash…", "Reading recoverable Wiki pages."));
+  try {
+    const result = await api.wiki.trashPages();
+    if (activeView !== marker) return;
+    viewEl.replaceChildren();
+    if (!result.pages.length) {
+      viewEl.append(emptyState("Trash is empty", "Pages moved to Trash will appear here for recovery."));
+      return;
+    }
+    const list = document.createElement("div");
+    list.className = "noema-wiki-report-list";
+    for (const page of result.pages) {
+      const row = document.createElement("article");
+      const copy = document.createElement("div");
+      const title = document.createElement("h2");
+      title.textContent = String(page.title || page.pageId || "Deleted page");
+      const detail = document.createElement("p");
+      detail.textContent = `${String(page.repositoryId || "")} · ${String(page.file || "")} · ${String(page.deletedAt || "")}`;
+      copy.append(title, detail);
+      row.append(copy);
+      const restore = button("Restore page and assets", "is-primary");
+      restore.disabled = page.available !== true;
+      restore.addEventListener("click", async () => {
+        try {
+          const restored = await api.wiki.restoreTrashPage(String(page.pageId || ""));
+          await load(true);
+          setStatus(`Restored ${title.textContent} to ${String(restored.file || "original location")}`);
+          if (restored.file) openNote({ file: String(restored.file) });
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : String(error), true);
+        }
+      });
+      row.append(restore);
+      list.append(row);
+    }
+    viewEl.append(list);
+  } catch (error) {
+    viewEl.replaceChildren(emptyState("Trash unavailable", error instanceof Error ? error.message : String(error)));
+  }
+}
+
 const versionControl = createVersionControlView({
   api: api.wiki,
   repositories: () => index?.repositories || [],
@@ -1388,6 +1461,7 @@ function renderVersionControl(): void {
 
 function render(): void {
   if (!index) return;
+  selectActiveNav();
   activeGraph?.destroy();
   activeGraph = null;
   versionControl.destroy();
@@ -1412,7 +1486,7 @@ function render(): void {
   const labels: Record<string, string> = {
     home: "A private, Git-backed knowledge commons.",
     pages: "All pages",
-    recent: "Recent pages",
+    recent: "Recently modified pages",
     folders: "Physical folders",
     namespaces: "Namespaces",
     files: "All files",
@@ -1421,6 +1495,7 @@ function render(): void {
     graph: "Knowledge graph",
     sync: "Version control",
     wanted: "Wanted pages",
+    trash: "Wiki Trash",
     reports: "Reports",
     repositories: "Version control",
   };
@@ -1430,6 +1505,7 @@ function render(): void {
   if (activeView === "home") renderHome();
   else if (activeView === "graph") renderGraph();
   else if (activeView === "wanted") renderWanted();
+  else if (activeView === "trash") void renderTrash();
   else if (activeView === "reports") renderReports();
   else if (activeView === "repositories" || activeView === "sync") renderVersionControl();
   else if (activeView === "folders") renderFolders();
@@ -1482,6 +1558,19 @@ async function load(refresh = false, options: { silent?: boolean } = {}): Promis
     render();
     void refreshConflictAlerts();
     await runPageSearch();
+    if (!initialManageHandled) {
+      const query = new URLSearchParams(location.search);
+      const managed = query.get("manage") || "";
+      const note = managed && index.notes.find((item) => item.id === managed || item.file === managed);
+      if (note) {
+        initialManageHandled = true;
+        managePage(note);
+        const requestedOperation = query.get("operation") || "move";
+        const action = pageForm.elements.namedItem("action") as HTMLSelectElement;
+        if ([...action.options].some((option) => option.value === requestedOperation)) action.value = requestedOperation;
+        updatePageOperation();
+      }
+    }
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), true);
     viewEl.replaceChildren(emptyState("Wiki unavailable", "Check the workspace root and layout in Configuration."));
@@ -1491,8 +1580,9 @@ async function load(refresh = false, options: { silent?: boolean } = {}): Promis
   }
 }
 
-function showNewPage(title = "", requestedNamespace = ""): void {
+function showNewPage(title = "", requestedNamespace = "", fromLink = false): void {
   if (serverReaderMode) return;
+  activeCreationFromLink = fromLink;
   if (!index?.repositories.length) {
     activeView = "sync";
     render();
@@ -1503,17 +1593,31 @@ function showNewPage(title = "", requestedNamespace = ""): void {
   const parsed = splitQualifiedWikiTarget(title, namespaces);
   (newForm.elements.namedItem("title") as HTMLInputElement).value = parsed.qualified ? parsed.title : title;
   const requested = requestedNamespace || (parsed.qualified ? parsed.namespace : "");
+  const sourceFile = fromLink ? new URLSearchParams(location.search).get("source") || "" : "";
+  const source = index.notes.find((note) => note.file === sourceFile);
+  newForm.dataset.chooseRepository = "";
+  newForm.dataset.requestedPartition = "";
+  newForm.dataset.requestedNamespace = requested;
   if (requested) {
-    const repository = index.repositories.find((item) => [item.namespace, item.qualifiedNamespace, item.name, item.id]
+    const candidates = index.repositories.filter((item) => [item.namespace, item.qualifiedNamespace, item.name, item.id]
       .filter(Boolean).some((value) => String(value).toLocaleLowerCase() === requested.toLocaleLowerCase()));
+    const explicitPartition = requested.match(/^(public|private)\//i)?.[1]?.toLowerCase() || "";
+    newForm.dataset.requestedPartition = explicitPartition;
+    const partitionCandidates = explicitPartition ? index.repositories.filter((item) => item.partition === explicitPartition) : [];
+    const repository = candidates.find((item) => item.id === source?.repositoryId)
+      || (candidates.length === 1 ? candidates[0] : null)
+      || (candidates.length === 0 && partitionCandidates.length === 1 ? partitionCandidates[0] : null)
+      || (candidates.length === 0 && !explicitPartition ? index.repositories.find((item) => item.id === source?.repositoryId) : null);
     if (repository) (newForm.elements.namedItem("repositoryId") as HTMLSelectElement).value = repository.id;
+    if (!repository && (candidates.length > 1 || explicitPartition)) {
+      newForm.dataset.chooseRepository = "true";
+      setStatus(`Choose a ${explicitPartition || "matching"} repository for ${requested}`, true);
+    }
     const parts = requested.split("/");
     (newForm.elements.namedItem("namespace") as HTMLInputElement).value = ["public", "private"].includes(parts[0]?.toLocaleLowerCase())
       ? parts.slice(1).join("/")
       : requested;
   } else updateNewPageNamespace(false);
-  const sourceFile = new URLSearchParams(location.search).get("source") || "";
-  const source = index.notes.find((note) => note.file === sourceFile);
   if (source && !requested) {
     (newForm.elements.namedItem("repositoryId") as HTMLSelectElement).value = source.repositoryId;
     (newForm.elements.namedItem("directory") as HTMLInputElement).value = source.repositoryPath.includes("/")
@@ -1522,7 +1626,26 @@ function showNewPage(title = "", requestedNamespace = ""): void {
     (newForm.elements.namedItem("namespace") as HTMLInputElement).value = source.namespace || source.repository;
   }
   updateNewPageDirectories();
+  updateCreateContext();
   newDialog.showModal();
+}
+
+function updateCreateContext(): void {
+  const repositoryId = (newForm.elements.namedItem("repositoryId") as HTMLSelectElement).value;
+  const repository = index?.repositories.find((item) => item.id === repositoryId);
+  const title = (newForm.elements.namedItem("title") as HTMLInputElement).value.trim();
+  const namespace = (newForm.elements.namedItem("namespace") as HTMLInputElement).value.trim();
+  const directory = (newForm.elements.namedItem("directory") as HTMLInputElement).value.trim();
+  const filename = (newForm.elements.namedItem("filename") as HTMLInputElement).value.trim() || "generated from title";
+  const existing = index?.notes.filter((note) => note.repositoryId === repositoryId
+    && note.namespace?.toLocaleLowerCase() === namespace.toLocaleLowerCase()
+    && [note.title, ...note.aliases].some((value) => value.toLocaleLowerCase() === title.toLocaleLowerCase())) || [];
+  root.querySelector<HTMLElement>("[data-create-context]")!.textContent = repository
+    ? `${newForm.dataset.chooseRepository ? "Confirm repository: " : ""}${repository.partition} · ${repository.path}/${directory ? `${directory}/` : ""}${filename}${existing.length ? ` · ${existing.length} existing page or alias matches this title` : ""}`
+    : "Choose a repository";
+  const useExisting = root.querySelector<HTMLButtonElement>("[data-use-existing]")!;
+  useExisting.hidden = existing.length !== 1;
+  useExisting.dataset.pageId = existing.length === 1 ? existing[0]!.id : "";
 }
 
 function updateNewPageNamespace(force: boolean): void {
@@ -1563,25 +1686,81 @@ function updatePageDirectories(): void {
 function updatePageOperation(): void {
   const action = (pageForm.elements.namedItem("action") as HTMLSelectElement).value;
   root.querySelector<HTMLElement>("[data-page-destination]")!.hidden = action === "merge" || action === "delete" || action === "history";
+  root.querySelector<HTMLElement>("[data-move-title]")!.hidden = action !== "move";
   root.querySelector<HTMLElement>("[data-copy-title]")!.hidden = action !== "copy";
   root.querySelector<HTMLElement>("[data-merge-target]")!.hidden = action !== "merge";
+  root.querySelector<HTMLElement>("[data-merge-preview]")!.hidden = action !== "merge";
   root.querySelector<HTMLElement>("[data-page-history]")!.hidden = action !== "history";
+  const targetRepository = index?.repositories.find((repository) => repository.id === (pageForm.elements.namedItem("repositoryId") as HTMLSelectElement).value);
+  const crossing = activeManagedNote?.partition === "private" && targetRepository?.partition === "public";
+  root.querySelector<HTMLElement>("[data-publication]")!.hidden = !crossing || (action !== "move" && action !== "copy");
+  const backlinkSection = root.querySelector<HTMLElement>("[data-page-backlinks]")!;
+  backlinkSection.replaceChildren();
+  const backlinkHeading = document.createElement("strong");
+  backlinkHeading.textContent = `What links here · ${activeManagedNote?.backlinks.length || 0}`;
+  backlinkSection.append(backlinkHeading);
+  for (const id of activeManagedNote?.backlinks || []) {
+    const source = index?.notes.find((note) => note.id === id);
+    if (!source) continue;
+    const link = button(`${source.title} · ${source.repositoryId}`);
+    link.type = "button";
+    link.addEventListener("click", () => { pageDialog.close(); openNote(source); });
+    backlinkSection.append(link);
+  }
   const warning = root.querySelector<HTMLElement>("[data-page-warning]")!;
   const apply = root.querySelector<HTMLButtonElement>("[data-page-apply]")!;
-  const verbs: Record<string, string> = { move: "Move page", copy: "Create copy", merge: "Merge pages", history: "Close", delete: `Move to ${platformLabels.trash}` };
+  const verbs: Record<string, string> = { move: "Move page", copy: "Create copy", merge: "Merge pages", history: "Close", delete: "Move to Wiki Trash" };
   apply.textContent = verbs[action] || "Apply";
   apply.hidden = action === "history";
+  apply.disabled = action === "merge";
   apply.classList.toggle("is-danger", action === "delete");
   warning.textContent = action === "delete"
-    ? `${activeManagedNote?.backlinks.length || 0} backlinks will become wanted links. The page and its owned assets remain recoverable from ${platformLabels.trash}.`
+    ? `${activeManagedNote?.backlinks.length || 0} backlinks will become wanted links. The page and its owned assets remain recoverable from Wiki Trash.`
     : action === "merge"
-      ? "The selected duplicate remains at its path as a redirect, so existing links keep working."
+      ? "The duplicate body will be appended to this page, and the duplicate becomes a redirect. Only pages in the same repository, directory, and namespace can merge."
       : action === "move"
-        ? "The stable page ID is preserved. Title-based Wiki links continue to resolve after reindexing."
-        : "The copy receives a new stable page ID.";
+        ? `The stable page ID is preserved. Relative dependencies: ${(activeManagedNote?.dependencies || []).map((item) => item.raw).join(", ") || "none"}. Unowned resources must be fixed before changing folder or repository.`
+        : `The copy receives a new stable page ID. Relative dependencies: ${(activeManagedNote?.dependencies || []).map((item) => item.raw).join(", ") || "none"}. Review its content before sharing a public repository.`;
   if (action === "history") {
     warning.textContent = "Git commits are the page version history. Restoring creates a working-tree change for review before the next checkpoint.";
     void renderPageHistory();
+  }
+  if (action === "merge") void renderMergePreview();
+}
+
+async function renderMergePreview(): Promise<void> {
+  const container = root.querySelector<HTMLElement>("[data-merge-preview]")!;
+  const apply = root.querySelector<HTMLButtonElement>("[data-page-apply]")!;
+  apply.disabled = true;
+  const survivor = activeManagedNote;
+  const duplicateId = (pageForm.elements.namedItem("duplicateId") as HTMLSelectElement).value;
+  const duplicate = index?.notes.find((note) => note.id === duplicateId);
+  container.replaceChildren();
+  if (!survivor || !duplicate) {
+    container.textContent = "Choose a duplicate page in this namespace and folder.";
+    return;
+  }
+  container.textContent = "Loading both Markdown files for review…";
+  try {
+    const [survivorFile, duplicateFile] = await Promise.all([api.notes.open(survivor.file), api.notes.open(duplicate.file)]);
+    if (activeManagedNote?.id !== survivor.id || (pageForm.elements.namedItem("duplicateId") as HTMLSelectElement).value !== duplicateId) return;
+    container.replaceChildren();
+    const description = document.createElement("p");
+    description.textContent = `“${duplicate.title}” will append to “${survivor.title}” and keep its stable ID as a redirect. Original Markdown is also archived for recovery. ${duplicate.dependencies?.length || 0} relative dependencies remain in this folder.`;
+    container.append(description);
+    for (const [title, content] of [[`Keep: ${survivor.title}`, survivorFile.content], [`Append: ${duplicate.title}`, duplicateFile.content]] as const) {
+      const details = document.createElement("details");
+      details.open = title.startsWith("Append:");
+      const summary = document.createElement("summary");
+      summary.textContent = title;
+      const pre = document.createElement("pre");
+      pre.textContent = content || "(empty)";
+      details.append(summary, pre);
+      container.append(details);
+    }
+    apply.disabled = false;
+  } catch (error) {
+    container.textContent = error instanceof Error ? error.message : String(error);
   }
 }
 
@@ -1593,6 +1772,18 @@ async function renderPageHistory(): Promise<void> {
   try {
     const result = await api.wiki.pageHistory(note.id);
     container.replaceChildren();
+    const working = button("Show uncommitted changes");
+    working.addEventListener("click", async () => {
+      try {
+        const diff = await api.wiki.repositoryDiff(note.repositoryId, note.repositoryPath);
+        let pre = container.querySelector<HTMLPreElement>("[data-working-diff]");
+        if (!pre) { pre = document.createElement("pre"); pre.dataset.workingDiff = ""; container.prepend(pre); }
+        pre.textContent = diff.diff || "No uncommitted changes for this page.";
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : String(error), true);
+      }
+    });
+    container.append(working);
     if (!result.commits.length) {
       container.append(emptyState("No committed versions", "Create a checkpoint to add the first Git version."));
       return;
@@ -1606,7 +1797,7 @@ async function renderPageHistory(): Promise<void> {
       meta.textContent = `${commit.author || "Unknown author"} · ${new Date(commit.date).toLocaleString()} · ${commit.sha.slice(0, 8)}`;
       copy.append(subject, meta);
       const actions = document.createElement("div");
-      const diff = button("Diff");
+      const diff = button("Changes in commit");
       const restore = button("Restore");
       diff.addEventListener("click", async () => {
         const result = await api.wiki.pageDiff(note.id, commit.sha);
@@ -1615,10 +1806,20 @@ async function renderPageHistory(): Promise<void> {
         pre.textContent = result.diff || "No textual diff for this commit.";
       });
       restore.addEventListener("click", async () => {
-        if (!window.confirm(`Restore “${note.title}” from ${commit.sha.slice(0, 8)} as an uncommitted change?`)) return;
-        await api.wiki.restorePage(note.id, commit.sha);
-        pageDialog.close();
-        openNote(note);
+        try {
+          const working = await api.wiki.repositoryDiff(note.repositoryId, note.repositoryPath);
+          if (working.diff) {
+            let pre = container.querySelector<HTMLPreElement>("[data-working-diff]");
+            if (!pre) { pre = document.createElement("pre"); pre.dataset.workingDiff = ""; container.prepend(pre); }
+            pre.textContent = working.diff;
+            if (window.prompt(`Current uncommitted changes to “${note.title}” are shown above and will be overwritten. Type RESTORE to use ${commit.sha.slice(0, 8)}.`) !== "RESTORE") return;
+          } else if (!window.confirm(`Restore “${note.title}” from ${commit.sha.slice(0, 8)} as an uncommitted change?`)) return;
+          await api.wiki.restorePage(note.id, commit.sha);
+          pageDialog.close();
+          openNote(note);
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : String(error), true);
+        }
       });
       actions.append(diff, restore);
       row.append(copy, actions);
@@ -1664,41 +1865,54 @@ async function applyPageOperation(): Promise<void> {
   const action = String(values.get("action") || "");
   if (action === "history") { pageDialog.close(); return; }
   try {
+    let result: Record<string, unknown> = {};
     if (action === "delete") {
-      if (!window.confirm(`Move “${note.title}” and its page-owned assets to the ${platformLabels.trash}?`)) return;
+      if (!window.confirm(`Move “${note.title}” and its page-owned assets to Wiki Trash?`)) return;
       const confirm = note.backlinks.length ? window.prompt("Type DELETE to confirm after reviewing the backlinks") : "";
       if (note.backlinks.length && confirm !== "DELETE") return;
-      const result = await api.wiki.deletePage({ pageId: note.id, confirm });
-      setStatus(`Moved ${note.title} to ${platformLabels.trash} · ${String(result.trashedTo || "recoverable")}`);
+      result = await api.wiki.deletePage({ pageId: note.id, confirm });
     } else if (action === "merge") {
       const duplicateId = String(values.get("duplicateId") || "");
-      if (!duplicateId || window.prompt("Type MERGE to preserve the duplicate as a redirect") !== "MERGE") return;
-      await api.wiki.mergePages({ survivorId: note.id, duplicateId, confirm: "MERGE" });
+      if (!duplicateId || window.prompt("The duplicate body will be appended here and its page replaced by a redirect. Type MERGE") !== "MERGE") return;
+      result = await api.wiki.mergePages({ survivorId: note.id, duplicateId, confirm: "MERGE" });
     } else {
       const repositoryId = String(values.get("repositoryId") || "");
       const directory = String(values.get("directory") || "");
       const filename = String(values.get("filename") || "");
       const namespace = String(values.get("namespace") || "");
+      const target = index?.repositories.find((repository) => repository.id === repositoryId);
+      const crossing = note.partition === "private" && target?.partition === "public";
+      const publish = values.get("publish") === "on";
       if (action === "move") {
-        const target = index?.repositories.find((repository) => repository.id === repositoryId);
-        const confirm = note.partition === "private" && target?.partition === "public"
-          ? window.prompt("This crosses the privacy boundary. Type MOVE PRIVATE TO PUBLIC")
+        const confirm = crossing
+          ? window.prompt(`This moves the full file into a public Git repository. ${note.dependencies?.length || 0} relative dependencies need review. Type MOVE PRIVATE TO PUBLIC`)
           : "";
-        await api.wiki.movePage({ pageId: note.id, repositoryId, namespace, directory, filename, confirm });
+        if (crossing && confirm !== "MOVE PRIVATE TO PUBLIC") return;
+        result = await api.wiki.movePage({ pageId: note.id, repositoryId, namespace, directory, filename, title: String(values.get("moveTitle") || ""), publish, confirm });
       } else {
-        await api.wiki.copyPage({
+        const confirm = crossing
+          ? window.prompt("This copies the full private file into a public Git repository. Type COPY PRIVATE TO PUBLIC")
+          : "";
+        if (crossing && confirm !== "COPY PRIVATE TO PUBLIC") return;
+        result = await api.wiki.copyPage({
           pageId: note.id,
           repositoryId,
           namespace,
           directory,
           filename,
           title: String(values.get("copyTitle") || ""),
+          publish, confirm,
         });
       }
     }
     pageDialog.close();
     activeManagedNote = null;
+    if (action === "delete") activeView = "trash";
     await load(true);
+    setStatus(action === "delete"
+      ? `Moved ${note.title} to Wiki Trash; restore it there.`
+      : `${action === "copy" ? "Copied" : action === "merge" ? "Merged" : "Moved"} ${note.title} · ${String(result.file || result.survivorFile || "saved")}`);
+    if (action !== "delete" && (result.file || result.survivorFile)) openNote({ file: String(result.file || result.survivorFile) });
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), true);
   }
@@ -1736,9 +1950,11 @@ root.querySelectorAll<HTMLButtonElement>("[data-page-cancel]").forEach((control)
   control.addEventListener("click", () => pageDialog.close("cancel"));
 });
 (pageForm.elements.namedItem("action") as HTMLSelectElement).addEventListener("change", updatePageOperation);
+(pageForm.elements.namedItem("duplicateId") as HTMLSelectElement).addEventListener("change", () => void renderMergePreview());
 (pageForm.elements.namedItem("repositoryId") as HTMLSelectElement).addEventListener("change", () => {
   (pageForm.elements.namedItem("directory") as HTMLInputElement).value = "";
   updatePageDirectories();
+  updatePageOperation();
 });
 root.querySelector<HTMLButtonElement>("[data-page-choose-directory]")?.addEventListener("click", () => void choosePageDirectory());
 pageForm.addEventListener("submit", (event) => {
@@ -1746,10 +1962,15 @@ pageForm.addEventListener("submit", (event) => {
   void applyPageOperation();
 });
 (newForm.elements.namedItem("repositoryId") as HTMLSelectElement).addEventListener("change", () => {
+  newForm.dataset.chooseRepository = "";
   (newForm.elements.namedItem("directory") as HTMLInputElement).value = "";
-  updateNewPageNamespace(true);
+  if (!newForm.dataset.requestedNamespace) updateNewPageNamespace(true);
   updateNewPageDirectories();
+  updateCreateContext();
 });
+for (const name of ["title", "namespace", "directory", "filename"]) {
+  (newForm.elements.namedItem(name) as HTMLInputElement).addEventListener("input", updateCreateContext);
+}
 root.querySelector<HTMLButtonElement>("[data-choose-directory]")?.addEventListener("click", async () => {
   const repositoryId = (newForm.elements.namedItem("repositoryId") as HTMLSelectElement).value;
   const repository = index?.repositories.find((item) => item.id === repositoryId);
@@ -1871,11 +2092,22 @@ gitDialog.addEventListener("close", () => {
   gitFrame.src = "about:blank";
 });
 
-newForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  if ((event.submitter as HTMLButtonElement | null)?.value === "cancel") return;
+function submitNewPage(existingPageId = ""): void {
+  if (newForm.dataset.chooseRepository) {
+    setStatus("Choose the destination repository explicitly before creating this page", true);
+    (newForm.elements.namedItem("repositoryId") as HTMLSelectElement).focus();
+    return;
+  }
+  const selectedRepository = index?.repositories.find((item) => item.id === (newForm.elements.namedItem("repositoryId") as HTMLSelectElement).value);
+  if (newForm.dataset.requestedPartition && selectedRepository?.partition !== newForm.dataset.requestedPartition) {
+    setStatus(`This link requests ${newForm.dataset.requestedPartition}; choose a repository in that partition`, true);
+    return;
+  }
   const values = new FormData(newForm);
+  const creationQuery = new URLSearchParams(location.search);
+  const sourceRaw = activeCreationFromLink ? creationQuery.get("sourceRaw") || "" : "";
   void api.wiki.createPage({
+    existingPageId,
     title: values.get("title"),
     namespace: values.get("namespace"),
     repositoryId: values.get("repositoryId"),
@@ -1883,11 +2115,27 @@ newForm.addEventListener("submit", (event) => {
     filename: values.get("filename"),
     kind: values.get("kind"),
     tags: values.get("tags"),
+    sourceFile: activeCreationFromLink ? creationQuery.get("source") || "" : "",
+    sourceFrom: activeCreationFromLink ? creationQuery.get("sourceFrom") || "" : "",
+    sourceRaw,
+    sourceClientId: activeCreationFromLink ? creationQuery.get("sourceClientId") || "" : "",
   }).then((result) => {
     newDialog.close();
-    if (result.file) openNote({ file: result.file });
-    void load(true);
+    activeCreationFromLink = false;
+    setStatus(`${result.existing ? "Opened existing" : "Created"} ${String(result.title || "page")} in ${String(values.get("repositoryId") || "repository")}${sourceRaw ? "; source link update requested" : ""}`);
+    if (result.file) openNote({ file: result.file }, { newWindow: Boolean(sourceRaw) });
+    if (!result.existing) void load(true);
   }).catch((error) => setStatus(error instanceof Error ? error.message : String(error), true));
+}
+
+newForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if ((event.submitter as HTMLButtonElement | null)?.value === "cancel") return;
+  submitNewPage();
+});
+root.querySelector<HTMLButtonElement>("[data-use-existing]")?.addEventListener("click", (event) => {
+  const pageId = (event.currentTarget as HTMLButtonElement).dataset.pageId || "";
+  if (pageId) submitNewPage(pageId);
 });
 
 const repoAction = repoForm.elements.namedItem("action") as HTMLSelectElement;
@@ -1916,7 +2164,7 @@ window.addEventListener("beforeunload", () => {
 const initialQuery = new URLSearchParams(location.search);
 searchEl.value = initialQuery.get("q") || "";
 const initialView = initialQuery.get("view") || "home";
-if (["home", "pages", "recent", "folders", "namespaces", "files", "tags", "dependencies", "graph", "sync", "wanted", "reports", "repositories"].includes(initialView)
+  if (["home", "pages", "recent", "folders", "namespaces", "files", "tags", "dependencies", "graph", "sync", "wanted", "trash", "reports", "repositories"].includes(initialView)
     && !(serverReaderMode && (initialView === "sync" || initialView === "repositories"))) {
   activeView = initialView;
 }
@@ -1925,7 +2173,7 @@ window.addEventListener("popstate", () => {
   navigateTo(view, "", { history: false });
 });
 if (!serverReaderMode && initialQuery.get("new") === "1") {
-  void load().then(() => showNewPage(initialQuery.get("title") || ""));
+  void load().then(() => showNewPage(initialQuery.get("title") || "", "", true));
 } else {
   void load();
 }

@@ -49,6 +49,9 @@
 (defvar my/auto-revert-agent-refresh-function)
 (defvar noema-research-graph--source)
 
+(defvar-local noema-research--inspector-run-id nil
+  "Run whose context receipt the current Inspector is showing.")
+
 (autoload 'noema-research-graph-open "noema-research-graph" nil t)
 (autoload 'noema-research-graph-buffer "noema-research-graph" nil nil)
 (autoload 'noema-research-attention "noema-research-inspector" nil t)
@@ -1556,6 +1559,7 @@ own.  Focus stays in JuText."
 Return the preview buffer."
   (let* ((field #'noema-research--route-field)
          (routing (funcall field result "routing"))
+         (pressure (funcall field routing "contextPressure"))
          (items (append (funcall field result "context") nil))
          (omitted (append (funcall field result "omitted") nil))
          (buffer (get-buffer-create "*Noema Context*")))
@@ -1573,23 +1577,38 @@ Return the preview buffer."
                         (if (funcall field routing "rollover")
                             "  (rolls over to its latest Handoff)"
                           "")))
+        (when pressure
+          (let ((threshold (* 100 (funcall field pressure "threshold"))))
+            (if (equal (funcall field pressure "state") "reported")
+                (insert (format "Context  ACP %s/%s tokens (%.0f%%; rollover at %.0f%%)%s\n"
+                                (funcall field pressure "used")
+                                (funcall field pressure "size")
+                                (* 100 (funcall field pressure "ratio")) threshold
+                                (if-let* ((updated (funcall field pressure "updatedAt")))
+                                    (format " · reported %s" updated) "")))
+              (insert (format "Context  ACP usage unavailable (rollover at %.0f%%)\n"
+                              threshold)))))
         (insert (format "Route    %s — %s\n\n"
                         (or (funcall field routing "rule") "")
                         (or (funcall field routing "reason") "")))
         (insert (format "%-10s %9s  %s\n" "" "bytes" "reference"))
         (dolist (item items)
-          (insert (format "%-10s %9d  %s\n"
+          (insert (format "%-10s %9d  %s%s\n"
                           (string-join
                            (delq nil (list (and (funcall field item "automatic") "auto")
                                            (and (funcall field item "truncated") "cut")))
                            ",")
                           (or (funcall field item "bytes") 0)
-                          (funcall field item "ref"))))
+                          (funcall field item "ref")
+                          (if-let* ((original (funcall field item "sourceBytes")))
+                              (format " (from %d bytes)" original) ""))))
         (when omitted
           (insert "\nOmitted by the context budget\n")
           (dolist (item omitted)
-            (insert (format "%-10s %9d  %s\n" ""
-                            (or (funcall field item "bytes") 0) (funcall field item "ref")))))
+            (insert (format "%-10s %9d  %s%s\n" ""
+                            (or (funcall field item "bytes") 0) (funcall field item "ref")
+                            (if-let* ((reason (funcall field item "reason")))
+                                (format " · %s" reason) "")))))
         (insert (format "\nTotal %d of %d bytes (prompt %d bytes)\n"
                         (or (funcall field result "totalBytes") 0)
                         (or (funcall field result "limitBytes") 0)
@@ -2579,6 +2598,114 @@ It only reports: what a changed foundation means is the person\='s judgement."
                        (noema-research--insert-artifact-link link root))
                    (insert "No Run-produced artifacts recorded for this WorkNode.\n"))))))))))))
 
+(defun noema-research--insert-run-context-receipt (receipt &optional upstream)
+  "Insert immutable Run context RECEIPT and a read-only UPSTREAM comparison."
+  (let* ((run (noema-research--get receipt "run"))
+         (run-id (noema-research--string (noema-research--get run "id")))
+         (status (or (noema-research--string (noema-research--get run "status")) "unknown"))
+         (items (append (or (noema-research--get receipt "context") []) nil))
+         (omitted (append (or (noema-research--get receipt "omitted") []) nil))
+         (usage (noema-research--get receipt "sessionUsageAtFinish"))
+         (limit (noema-research--get receipt "contextLimitBytes"))
+         (bytes (cl-loop for item in items sum (or (noema-research--get item "bytes") 0))))
+    (insert (format "Run %s · %s\n" (or run-id "?") status))
+    (insert "Frozen RunSpec input; the ACP agent may add context Noema cannot inspect.\n")
+    (insert (format "Prompt %d bytes · selected context %d%s bytes · RunSpec %.12s\n"
+                    (or (noema-research--get receipt "promptBytes") 0)
+                    bytes (if (and (numberp limit) (> limit 0)) (format "/%d" limit) "")
+                    (or (noema-research--string (noema-research--get receipt "specSha256")) "")))
+    (if items
+        (dolist (item items)
+          (let* ((ref (or (noema-research--string (noema-research--get item "ref")) "?"))
+                 (uri (noema-research--string (noema-research--get item "resolved_uri")))
+                 (automatic (noema-research--get item "automatic" 'unknown))
+                 (origin (cond ((eq automatic 'unknown) "origin unrecorded")
+                               ((eq automatic t) "auto") (t "selected")))
+                 (cut (eq (noema-research--get item "truncated") t))
+                 (reason (noema-research--string (noema-research--get item "truncation_reason")))
+                 (digest (noema-research--string (noema-research--get item "sha256"))))
+            (insert (format "  %-17s %6d bytes  %s%s%s\n" origin
+                            (or (noema-research--get item "bytes") 0) ref
+                            (if cut " [truncated]" "")
+                            (if digest (format " · sha256 %.12s" digest) "")))
+            (when (and uri (string-prefix-p "finding:" ref))
+              (insert (format "    Finding version %s\n" (car (last (split-string uri "/" t))))))
+            (when reason (insert (format "    %s\n" reason)))))
+      (insert "  No context references were selected.\n"))
+    (when omitted
+      (insert "Omitted:\n")
+      (dolist (item omitted)
+        (insert (format "  %s · %s (%d bytes)\n"
+                        (or (noema-research--string (noema-research--get item "ref")) "?")
+                        (or (noema-research--string (noema-research--get item "reason")) "reason unavailable")
+                        (or (noema-research--get item "bytes") 0)))))
+    (if (hash-table-p usage)
+        (insert (format "ACP Session cumulative at Run finish%s: context %d/%d, input %d, output %d tokens.\n"
+                        (if-let* ((at (noema-research--string (noema-research--get usage "updatedAt"))))
+                            (format " (%s)" at) "")
+                        (or (noema-research--get usage "contextUsed") 0)
+                        (or (noema-research--get usage "contextSize") 0)
+                        (or (noema-research--get usage "inputTokens") 0)
+                        (or (noema-research--get usage "outputTokens") 0)))
+      (insert "ACP usage unavailable for this Run.\n"))
+    (insert "\nUpstream now (saved document; read-only):\n")
+    (pcase (noema-research--get upstream "state")
+      ("checked"
+       (dolist (item (append (or (noema-research--get upstream "items") []) nil))
+         (let* ((ref (or (noema-research--string (noema-research--get item "ref")) "?"))
+                (state (noema-research--get item "state"))
+                (frozen (noema-research--string (noema-research--get item "frozenRunId")))
+                (current (noema-research--string (noema-research--get item "currentRunId")))
+                (current-status (noema-research--string (noema-research--get item "currentStatus")))
+                (reason (noema-research--string (noema-research--get item "reason")))
+                (label (pcase state
+                         ("unchanged" "unchanged")
+                         ("superseded" "different Run output")
+                         ("changed" "output changed")
+                         ("missing" "output missing")
+                         (_ "cannot verify"))))
+           (insert (format "  %s · %s%s%s%s\n" ref label
+                           (if frozen (format " · frozen %s" frozen) "")
+                           (if current (format " · current %s%s" current
+                                               (if current-status (format " (%s)" current-status) "")) "")
+                           (if reason (format " · %s" reason) ""))))))
+      ("not_applicable" (insert "  No upstream result was selected for this Run.\n"))
+      (_ (insert (format "  Comparison unavailable%s.\n"
+                         (if-let* ((reason (noema-research--string
+                                            (noema-research--get upstream "reason"))))
+                             (format ": %s" reason) "")))))))
+
+(defun noema-research--load-inspector-run-context
+    (buffer start-marker end-marker root run-id)
+  "Load RUN-ID's frozen context receipt into BUFFER between two markers."
+  (if (not (and (fboundp 'my/noema-api-call)
+                (bound-and-true-p my/noema--ready)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (let ((inhibit-read-only t))
+            (goto-char start-marker)
+            (delete-region start-marker end-marker)
+            (insert "Runtime index unavailable.\n"))))
+    (my/noema-api-call
+     "aaronnote:api:research:run:context-receipt"
+     (vector (noema-research--table "cwd" root "runId" run-id))
+     (lambda (result error-object)
+       (when (and (buffer-live-p buffer)
+                  (equal (buffer-local-value 'noema-research--inspector-run-id buffer) run-id))
+         (with-current-buffer buffer
+           (let ((inhibit-read-only t))
+             (goto-char start-marker)
+             (delete-region start-marker end-marker)
+             (if error-object
+                 (insert (format "Run context unavailable: %s\n"
+                                 (or (noema-research--string
+                                      (noema-research--get error-object "message"))
+                                     "request failed")))
+               (noema-research--insert-run-context-receipt
+                (noema-research--get result "receipt")
+                (noema-research--get result "upstream")))))))
+     20)))
+
 (defun noema-research-inspect ()
   "Show the research metadata of the cell at point."
   (interactive)
@@ -2596,10 +2723,12 @@ It only reports: what a changed foundation means is the person\='s judgement."
          (validation (noema-research-validate document))
          (root (noema-research-repository-root buffer-file-name))
          (notebook-id (noema-research-notebook-id document))
+         (run-id (plist-get (noema-research-cell-latest-run cell) :id))
          (buffer (get-buffer-create "*Noema Inspector*")))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (erase-buffer)
+        (setq-local noema-research--inspector-run-id run-id)
         (insert (propertize (noema-research-cell-label cell document) 'face 'bold) "\n\n")
         (dolist (field `(("Kind" . ,(noema-research-cell-kind cell document))
                          ("WorkNode" . ,id)
@@ -2631,6 +2760,14 @@ It only reports: what a changed foundation means is the person\='s judgement."
           (let ((end (copy-marker (point) t)))
             (noema-research--load-inspector-artifacts
              buffer start end root notebook-id id)))
+        (insert "\n" (propertize "Run context" 'face 'bold) "\n\n")
+        (if run-id
+            (let ((start (copy-marker (point) nil)))
+              (insert "Loading frozen Run context…\n")
+              (let ((end (copy-marker (point) t)))
+                (noema-research--load-inspector-run-context
+                 buffer start end root run-id)))
+          (insert "No persisted Run output for this block.\n"))
         (goto-char (point-min))
         (special-mode)))
     (display-buffer buffer)))

@@ -376,7 +376,7 @@ function openMarkdownLinkFromEvent(view: EditorView, event: MouseEvent): boolean
   const customEvent = new CustomEvent("aaronnote:open-url", {
     bubbles: true,
     cancelable: true,
-    detail: { href, newWindow: markdownLinkOpensNewWindow(href, event) },
+    detail: { href, newWindow: markdownLinkOpensNewWindow(href, event), sourcePos: pos },
   });
   const handled = !view.dom.dispatchEvent(customEvent);
   if (!handled && href.startsWith("#")) {

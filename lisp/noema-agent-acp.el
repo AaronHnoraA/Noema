@@ -492,6 +492,10 @@ removal); Noema only reads its length so lists can show queued intent."
   "Context tokens this session's agent reported last.")
 (put 'noema-agent-acp--context-last 'permanent-local t)
 
+(defvar-local noema-agent-acp--usage-report-seq 0
+  "Count token or context usage reports received for this ACP buffer.")
+(put 'noema-agent-acp--usage-report-seq 'permanent-local t)
+
 (defvar-local noema-agent-acp--context-peak 0
   "Most context tokens this session's agent has reported.")
 (put 'noema-agent-acp--context-peak 'permanent-local t)
@@ -751,6 +755,13 @@ context size and, from claude-agent-acp, rate-limit metadata."
          (buffer (map-elt state :buffer)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
+        (when (or (seq-some (lambda (key) (map-elt (plist-get args :acp-update) key))
+                            '(used size))
+                  (seq-some (lambda (key) (map-elt (plist-get args :acp-usage) key))
+                            '(totalTokens inputTokens outputTokens thoughtTokens
+                              cachedReadTokens cachedWriteTokens)))
+          (setq-local noema-agent-acp--usage-report-seq
+                      (1+ noema-agent-acp--usage-report-seq)))
         (when-let* ((update (plist-get args :acp-update)))
           (noema-agent-acp--note-context (map-elt update 'used))
           (when-let* ((info (map-nested-elt update '(_meta _claude/rateLimit))))
@@ -766,7 +777,7 @@ context size and, from claude-agent-acp, rate-limit metadata."
   "Return what agent BUFFER's ACP connection reported about its usage.
 A plist with :model, :model-id, :context-used, :context-size, :context-peak,
 :compactions, :input, :output, :thought, :cached-read, :cached-write, :total,
-:cost, :currency and :turns.  Counts are non-negative integers, zero when
+:cost, :currency, :turns and :report-seq. Counts are non-negative integers, zero when
 never reported; :cost is nil until the agent reports one.
 
 agent-shell already records these from `usage_update' notifications and
@@ -780,6 +791,7 @@ request, no timer.  It is the one place Noema reads agent-shell's usage."
                       (if (numberp value) (max 0 (truncate value)) 0)))))
       (list :model (ignore-errors (agent-shell-get-model-name state))
             :model-id (map-nested-elt state '(:session :model-id))
+			:report-seq (buffer-local-value 'noema-agent-acp--usage-report-seq buffer)
             :context-used (funcall count :context-used)
             :context-size (funcall count :context-size)
             :context-peak (buffer-local-value 'noema-agent-acp--context-peak buffer)

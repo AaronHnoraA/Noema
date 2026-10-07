@@ -734,8 +734,8 @@ type NativeApi = {
     activateRoam?: (body: Record<string, unknown>) => Promise<unknown>;
   };
   emacs?: {
-    open?: (body: { file: string; tag?: string; line?: number; col?: number }) => Promise<unknown>;
-    openSurface?: (body: { path: string }) => Promise<unknown>;
+    open?: (body: { file: string; tag?: string; line?: number; col?: number; newWindow?: boolean; client?: string; hash?: string; dom?: string }) => Promise<unknown>;
+    openSurface?: (body: { path: string; client?: string }) => Promise<unknown>;
     selectJupyterCell?: (body: { scriptFile: string; cellId: string }) => Promise<unknown>;
     openResearchSession?: (body: Record<string, unknown>) => Promise<unknown>;
     currentFile?: (body: string | { file: string; client?: string }) => Promise<unknown>;
@@ -813,6 +813,8 @@ type NativeApi = {
     createPage?: (body: Record<string, unknown>) => Promise<unknown>;
     movePage?: (body: Record<string, unknown>) => Promise<unknown>;
     deletePage?: (body: Record<string, unknown>) => Promise<unknown>;
+    trashPages?: () => Promise<unknown>;
+    restoreTrashPage?: (body: Record<string, unknown>) => Promise<unknown>;
     copyPage?: (body: Record<string, unknown>) => Promise<unknown>;
     mergePages?: (body: Record<string, unknown>) => Promise<unknown>;
     tags?: () => Promise<unknown>;
@@ -1596,7 +1598,7 @@ export const api = {
     },
   },
   emacs: {
-    async openSurface(body: { path: string }): Promise<void> {
+    async openSurface(body: { path: string; client?: string }): Promise<void> {
       const call = window.aaronnoteApi?.emacs?.openSurface;
       const result = call
         ? await call(body)
@@ -1622,7 +1624,7 @@ export const api = {
         message?: string;
       };
     },
-    async open(body: { file: string; tag?: string; line?: number; col?: number }): Promise<void> {
+    async open(body: { file: string; tag?: string; line?: number; col?: number; newWindow?: boolean; client?: string; hash?: string; dom?: string }): Promise<void> {
       const call = window.aaronnoteApi?.emacs?.open;
       const result = call
         ? await call(body)
@@ -1986,9 +1988,9 @@ export const api = {
       const call = requireMethod(nativeApi().wiki?.git, "Wiki Git action");
       return ensureOk(await call(body) as Record<string, unknown>, `Git ${body.action} failed`);
     },
-    async createPage(body: Record<string, unknown>): Promise<{ ok?: boolean; file?: string; title?: string }> {
+    async createPage(body: Record<string, unknown>): Promise<{ ok?: boolean; file?: string; title?: string; id?: string; existing?: boolean }> {
       const call = requireMethod(nativeApi().wiki?.createPage, "New Wiki page");
-      return ensureOk(await call(body) as { ok?: boolean; file?: string; title?: string }, "Creating Wiki page failed");
+      return ensureOk(await call(body) as { ok?: boolean; file?: string; title?: string; id?: string; existing?: boolean }, "Creating Wiki page failed");
     },
     async movePage(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().wiki?.movePage, "Move Wiki page");
@@ -1997,6 +1999,14 @@ export const api = {
     async deletePage(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().wiki?.deletePage, "Delete Wiki page");
       return ensureOk(await call(body) as Record<string, unknown>, "Deleting Wiki page failed");
+    },
+    async trashPages(): Promise<{ pages: Array<Record<string, unknown>> }> {
+      const call = requireMethod(nativeApi().wiki?.trashPages, "Wiki Trash");
+      return ensureOk(await call() as { pages: Array<Record<string, unknown>> }, "Loading Wiki Trash failed");
+    },
+    async restoreTrashPage(pageId: string): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().wiki?.restoreTrashPage, "Restore trashed Wiki page");
+      return ensureOk(await call({ pageId }) as Record<string, unknown>, "Restoring trashed Wiki page failed");
     },
     async copyPage(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().wiki?.copyPage, "Copy Wiki page");

@@ -11,22 +11,28 @@ const COMMON_TERMS = new Set([
 export function memoryTerms(text) {
   const normalized = String(text || "").normalize("NFKC").toLowerCase();
   const terms = [];
-  for (const match of normalized.matchAll(/[a-z][a-z0-9_.:/-]{2,}|[0-9][a-z0-9_.:/-]{2,}/gu)) {
-    if (!COMMON_TERMS.has(match[0])) terms.push(match[0]);
-  }
-  for (const match of normalized.matchAll(/\p{Script=Han}+/gu)) {
-    const chars = [...match[0]];
-    for (let index = 0; index + 1 < chars.length; index++) {
-      const term = chars[index] + chars[index + 1];
-      if (!COMMON_TERMS.has(term)) terms.push(term);
+  // Keep the source order across scripts. Collecting Latin before Han makes
+  // the query cap silently discard a Chinese task after many file identifiers.
+  for (const match of normalized.matchAll(/[a-z][a-z0-9_.:/-]{2,}|[0-9][a-z0-9_.:/-]{2,}|\p{Script=Han}+/gu)) {
+    if (/^\p{Script=Han}/u.test(match[0])) {
+      const chars = [...match[0]];
+      for (let index = 0; index + 1 < chars.length; index++) {
+        const term = chars[index] + chars[index + 1];
+        if (!COMMON_TERMS.has(term)) terms.push(term);
+      }
+    } else if (!COMMON_TERMS.has(match[0])) {
+      terms.push(match[0]);
     }
   }
   return [...new Set(terms)];
 }
 
 /** Return a small set of current, evidence-backed Findings relevant to PROMPT. */
-export function selectRunMemory(findings, prompt, workstreamId, { maxResults = 3, maxChars = 3600 } = {}) {
-  const query = memoryTerms(prompt).slice(0, 32);
+export function selectRunMemory(findings, prompt, workstreamId, { maxResults = 3, maxBytes = 3600 } = {}) {
+  const terms = memoryTerms(prompt);
+  // Keep a bounded query while retaining the current request when a work
+  // block begins with a long list of background identifiers or references.
+  const query = terms.length <= 32 ? terms : [...terms.slice(0, 16), ...terms.slice(-16)];
   if (!workstreamId || query.length < 2) return [];
   const querySet = new Set(query);
   const ranked = [];
@@ -57,8 +63,8 @@ export function selectRunMemory(findings, prompt, workstreamId, { maxResults = 3
       `Evidence: ${finding.evidence.map((span) => `${span.artifactId}:${span.byteStart}-${span.byteEnd}`).join(", ")}`,
       "Reference data only. Check the cited evidence before relying on this Finding.",
     ].join("\n");
-    const size = [...content].length;
-    if (used + size > maxChars) continue;
+    const size = Buffer.byteLength(content);
+    if (used + size > maxBytes) continue;
     selected.push({ id: finding.id, version: finding.version, content });
     used += size;
     if (selected.length >= maxResults) break;

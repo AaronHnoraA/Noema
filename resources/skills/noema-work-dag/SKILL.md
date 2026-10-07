@@ -43,7 +43,14 @@ to work already agreed.
 
 **Attach work to the right parent.** This is the one mistake the tools cannot
 catch: they refuse cycles, not bad judgement. Read
-`research_cell {action: "neighbors"}` before declaring.
+`research_cell {action: "outline"}` before declaring; pull full cell or
+neighbour content only when the map leaves a real question.
+
+**Check what Noema dispatched for a prior Run when it matters.** Use
+`research_run {action: "context", id: RUN_ID}` if a conclusion depends on
+possibly omitted or truncated context. The receipt lists Noema's frozen
+references; ACP Session usage is cumulative and does not describe the Run's
+own token cost or context the agent added privately.
 
 **Say what you verified, not that you verified.** Put the command and its
 result in `reason` — `go test ./...: ok, 41 tests`, not "tests pass". Import

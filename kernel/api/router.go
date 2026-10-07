@@ -195,6 +195,7 @@ func ServeAPI(ginServer *gin.Engine) {
 	ginServer.Handle("POST", "/api/noema/research/run/prepare", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchRunPrepare)
 	ginServer.Handle("POST", "/api/noema/research/run/list", model.CheckAuth, noemaResearchRuns)
 	ginServer.Handle("POST", "/api/noema/research/run/get", model.CheckAuth, noemaResearchRunGet)
+	ginServer.Handle("POST", "/api/noema/research/run/context-receipt", model.CheckAuth, noemaResearchRunContextReceipt)
 	ginServer.Handle("POST", "/api/noema/research/run/handoff", model.CheckAuth, noemaResearchRunHandoff)
 	ginServer.Handle("POST", "/api/noema/research/run/live", model.CheckAuth, noemaResearchRunLive)
 	ginServer.Handle("POST", "/api/noema/research/run/cancel", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchRunCancel)

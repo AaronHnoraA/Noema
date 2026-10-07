@@ -372,9 +372,12 @@ describe("diagram render helpers", () => {
       "</svg>",
     ].join("");
     let opened = "";
+    let newWindow = false;
     div.addEventListener("aaronnote:open-url", (event) => {
       event.preventDefault();
-      opened = (event as CustomEvent<{ href: string }>).detail.href;
+      const detail = (event as CustomEvent<{ href: string; newWindow: boolean }>).detail;
+      opened = detail.href;
+      newWindow = detail.newWindow;
     });
 
     presentDiagramFigure(div);
@@ -383,5 +386,10 @@ describe("diagram render helpers", () => {
     expect(div.querySelector("#ok")?.getAttribute("target")).toBe("_blank");
     expect(div.querySelector("#bad")?.hasAttribute("href")).toBe(false);
     expect(opened).toBe("https://example.com");
+    expect(newWindow).toBe(false);
+    div.querySelector("#ok text")?.dispatchEvent(new MouseEvent("auxclick", {
+      bubbles: true, cancelable: true, button: 1,
+    }));
+    expect(newWindow).toBe(true);
   });
 });

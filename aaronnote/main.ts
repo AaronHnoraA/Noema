@@ -246,6 +246,8 @@ import {
   loadNoemaAppConfig,
 } from "./theme-runtime.ts";
 import { wikiCompletionSnippets, wikiLinkCompletionContext } from "./wiki-completion.ts";
+import { createdWikiLinkChange, wikiCreationSource } from "./wiki-create-intent.ts";
+import { reviewedWikiLinkChange, scanWikiLinkSuggestions } from "./wiki-link-review.ts";
 import { createLinkPreviewController } from "./link-preview.ts";
 import { createKnowledgeSearch } from "./knowledge-search.ts";
 import {
@@ -1184,6 +1186,15 @@ let navigationBackStack: CursorPosition[] = [];
 let navigationForwardStack: CursorPosition[] = [];
 let restoringNavigationBack = false;
 let restoringNavigationForward = false;
+let navigationHistoryIndex = 0;
+let navigationHistoryReady = false;
+let navigationRestoreTail: Promise<void> = Promise.resolve();
+try {
+  window.history.replaceState({ ...window.history.state, noemaNavigationIndex: 0 }, "", window.location.href);
+  navigationHistoryReady = true;
+} catch {
+  // The editor's in-memory navigation still works when WebKit refuses History API writes.
+}
 let snippets: SnippetSummary[] = [];
 let notes: NoteSummary[] = [];
 let notesIndexLoaded = false;
@@ -1269,17 +1280,95 @@ function openHostedSurface(path: string): void {
     window.location.href = path;
     return;
   }
-  void api.emacs.openSurface({ path }).catch((error) => {
+  void api.emacs.openSurface({ path, client: clientId }).catch((error) => {
     setStatus(error instanceof Error ? error.message : "Could not open hosted surface", true);
   });
 }
 
-function openWikiPageCreation(title: string): void {
+function openWikiPageCreation(title: string, sourcePos = editor.getMarkdownSelection().from, originalTarget = title): void {
   const url = new URL("/wiki", location.origin);
   url.searchParams.set("new", "1");
   url.searchParams.set("title", title);
   if (currentFile) url.searchParams.set("source", currentFile);
+  const source = currentFile ? wikiCreationSource(editor.getMarkdown(), originalTarget, sourcePos) : null;
+  if (source) {
+    url.searchParams.set("sourceFrom", String(source.from));
+    url.searchParams.set("sourceRaw", source.raw);
+    url.searchParams.set("sourceClientId", clientId);
+  }
   openHostedSurface(`${url.pathname}${url.search}`);
+}
+
+function openCurrentWikiManagement(operation = "move"): void {
+  const note = currentNote();
+  if (!note?.id || !currentFile) {
+    setStatus("Save or index this Wiki page before managing it", true);
+    return;
+  }
+  const url = new URL("/wiki", location.origin);
+  url.searchParams.set("manage", note.id);
+  url.searchParams.set("operation", operation);
+  openHostedSurface(`${url.pathname}${url.search}`);
+}
+
+async function reviewWikiLinksInCurrentPage(): Promise<void> {
+  if (!currentFile || currentReadOnly) {
+    setStatus("Open an editable Wiki page to review link suggestions", true);
+    return;
+  }
+  const sourceFile = currentFile;
+  const markdown = editor.getMarkdown();
+  try {
+    const index = await loadWikiCompletionIndex(true);
+    if (sourceFile !== currentFile || markdown !== editor.getMarkdown()) {
+      setStatus("The page changed during the scan. Run the review again.", true);
+      return;
+    }
+    const source = index.notes.find((note) => note.file === sourceFile);
+    const suggestions = scanWikiLinkSuggestions(markdown, index.notes, {
+      sourceFile,
+      sourcePartition: source?.partition,
+    });
+    if (!suggestions.length) {
+      setStatus("No unlinked Wiki page titles found in prose");
+      return;
+    }
+    const accepted: Array<{ from: number; to: number; insert: string }> = [];
+    for (const [position, suggestion] of suggestions.entries()) {
+      if (currentFile !== sourceFile || editor.getMarkdown() !== markdown) {
+        setStatus("The page changed during review. No suggested links were applied.", true);
+        return;
+      }
+      const options = [
+        { value: "skip", label: "Skip this occurrence" },
+        ...[...suggestion.targets].sort((a, b) => Number(b.repositoryId === source?.repositoryId) - Number(a.repositoryId === source?.repositoryId))
+          .map((page) => ({ value: page.id, label: `${page.title} · ${page.partition}/${page.namespace || page.repositoryId} · ${page.repositoryId}` })),
+        { value: "stop", label: "Finish review now" },
+      ];
+      const choice = await openFormModal(`Review Wiki link ${position + 1} of ${suggestions.length}`, [{
+        id: "target",
+        label: `“${suggestion.text}” in this page`,
+        type: "select",
+        options,
+        description: suggestion.context,
+      }], position === suggestions.length - 1 ? "Finish" : "Next");
+      if (!choice) { setStatus("Wiki link review canceled; no changes applied"); return; }
+      if (choice.target === "stop") break;
+      if (choice.target === "skip") continue;
+      const change = reviewedWikiLinkChange(markdown, suggestion, choice.target);
+      if (change) accepted.push(change);
+    }
+    if (currentFile !== sourceFile || editor.getMarkdown() !== markdown) {
+      setStatus("The page changed during review. No suggested links were applied.", true);
+      return;
+    }
+    if (!accepted.length) { setStatus("Wiki link review finished with no changes"); return; }
+    editor.view.dispatch({ changes: accepted });
+    await save();
+    setStatus(`Added ${accepted.length} reviewed Wiki ${accepted.length === 1 ? "link" : "links"}; one Undo reverts the edit`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error), true);
+  }
 }
 
 const BUILTIN_SNIPPET_SOURCE = "aaronnote:builtin";
@@ -5619,17 +5708,41 @@ function pushNavigationBackLocation(location = trackCursorPosition()): void {
   if (!location || restoringNavigationBack || restoringNavigationForward) return;
   navigationForwardStack = [];
   pushNavigationLocation(navigationBackStack, location);
-  try {
-    window.history.pushState({ aaronnoteNavigation: true }, "", window.location.href);
-  } catch {
-    // Browser history is an optional convenience; the in-memory stack remains valid.
+  if (navigationHistoryReady) {
+    try {
+      const next = navigationHistoryIndex + 1;
+      window.history.pushState({ ...window.history.state, noemaNavigationIndex: next }, "", window.location.href);
+      navigationHistoryIndex = next;
+    } catch {
+      navigationHistoryReady = false;
+    }
   }
 }
 
+function navigateBack(): void {
+  if (!navigationBackStack.length) return;
+  if (navigationHistoryReady && navigationHistoryIndex > 0) window.history.back();
+  else queueNavigationRestore("back");
+}
+
+function navigateForward(): void {
+  if (!navigationForwardStack.length) return;
+  if (navigationHistoryReady) window.history.forward();
+  else queueNavigationRestore("forward");
+}
+
+function queueNavigationRestore(direction: "back" | "forward", steps = 1): void {
+  navigationRestoreTail = navigationRestoreTail.then(async () => {
+    for (let step = 0; step < steps; step += 1) {
+      const restored = direction === "back"
+        ? await restoreNavigationBack()
+        : await restoreNavigationForward();
+      if (!restored) break;
+    }
+  }).catch((error) => setStatus(error instanceof Error ? error.message : "Navigation failed"));
+}
+
 function pushNavigationLocation(stack: CursorPosition[], location: CursorPosition): void {
-  const key = cursorPositionKey(location);
-  const top = stack[stack.length - 1];
-  if (top && cursorPositionKey(top) === key) return;
   stack.push({ ...location, updatedAt: Date.now() });
   if (stack.length > NAVIGATION_BACK_STACK_MAX) {
     stack.splice(0, stack.length - NAVIGATION_BACK_STACK_MAX);
@@ -5653,13 +5766,15 @@ function restoreCursorPosition(location: CursorPosition): void {
 }
 
 async function restoreNavigationBack(): Promise<boolean> {
-  const location = navigationBackStack.pop();
+  const location = navigationBackStack.at(-1);
   if (!location) return false;
   const current = trackCursorPosition();
-  if (current) pushNavigationLocation(navigationForwardStack, current);
   restoringNavigationBack = true;
   try {
     if (location.file !== currentFile) await openFile(location.file);
+    if (location.file !== currentFile) return false;
+    navigationBackStack.pop();
+    if (current) pushNavigationLocation(navigationForwardStack, current);
     restoreCursorPosition(location);
     return true;
   } finally {
@@ -5668,13 +5783,15 @@ async function restoreNavigationBack(): Promise<boolean> {
 }
 
 async function restoreNavigationForward(): Promise<boolean> {
-  const location = navigationForwardStack.pop();
+  const location = navigationForwardStack.at(-1);
   if (!location) return false;
   const current = trackCursorPosition();
-  if (current) pushNavigationLocation(navigationBackStack, current);
   restoringNavigationForward = true;
   try {
     if (location.file !== currentFile) await openFile(location.file);
+    if (location.file !== currentFile) return false;
+    navigationForwardStack.pop();
+    if (current) pushNavigationLocation(navigationBackStack, current);
     restoreCursorPosition(location);
     return true;
   } finally {
@@ -5816,6 +5933,20 @@ function applyOpenedNote(
   pendingOpenHash = "";
   pendingOpenDomTarget = "";
   pendingTodoTarget = null;
+  if (navigationHistoryReady) {
+    try {
+      const url = new URL(window.location.href);
+      if (currentFile) url.searchParams.set("file", currentFile);
+      else url.searchParams.delete("file");
+      if (targetHash) url.searchParams.set("hash", targetHash);
+      else url.searchParams.delete("hash");
+      if (targetDom) url.searchParams.set("dom", targetDom);
+      else url.searchParams.delete("dom");
+      window.history.replaceState(window.history.state, "", url);
+    } catch {
+      navigationHistoryReady = false;
+    }
+  }
   if (targetHash || targetDom || targetTodo) {
     window.requestAnimationFrame(() => {
       if (targetTodo && jumpToTodoTarget(targetTodo)) return;
@@ -6746,6 +6877,16 @@ function openNote(
   const before = trackCursorPosition();
   noteCursorPositionEvent();
   if (options.newWindow) {
+    if (!serverReaderMode) {
+      void api.emacs.open({
+        file: note.file,
+        newWindow: true,
+        client: currentClient,
+        hash: options.hash,
+        dom: options.domTarget,
+      }).catch((error) => setStatus(error instanceof Error ? error.message : "Could not open note window"));
+      return;
+    }
     const url = new URL(window.location.href);
     url.searchParams.set("file", note.file);
     if (options.hash) url.searchParams.set("hash", options.hash);
@@ -6764,6 +6905,7 @@ function openNote(
     }
     if (jumped) pushNavigationBackLocation(before);
     if (options.domTarget || options.hash) return;
+    return;
   }
   pushNavigationBackLocation(before);
   pendingOpenHash = options.hash || "";
@@ -7025,7 +7167,7 @@ function jumpToHash(hash: string): boolean {
   return false;
 }
 
-function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): void {
+function openExternalUrl(href: string, options: { newWindow?: boolean; sourcePos?: number } = {}): void {
   const raw = cleanHref(href);
   if (!raw) return;
   const wikiTarget = raw.match(/^roam:\/\/wiki\/(.+)$/i)?.[1];
@@ -7055,15 +7197,14 @@ function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): v
         if (serverReaderMode) {
           url.searchParams.set("q", missingTitle);
         } else {
-          url.searchParams.set("new", "1");
-          url.searchParams.set("title", missingTitle);
-          if (currentFile) url.searchParams.set("source", currentFile);
+          openWikiPageCreation(missingTitle.split("#")[0] || missingTitle, options.sourcePos, missingTitle);
+          return;
         }
       } else {
         url.searchParams.set("q", missingTitle);
       }
-      if (options.newWindow) window.open(url, "_blank", "noopener");
-      else window.location.assign(url);
+      if (serverReaderMode && options.newWindow) window.open(url, "_blank", "noopener");
+      else openHostedSurface(`${url.pathname}${url.search}`);
     }).catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
     return;
   }
@@ -7079,13 +7220,13 @@ function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): v
   const targetHash = target.hash || hash;
   const targetDom = target.domTarget;
   if (note?.file) {
-    if (note.file === currentFile && targetDom) {
+    if (!options.newWindow && note.file === currentFile && targetDom) {
       const jumped = jumpToDomTarget(targetDom);
       if (jumped) pushNavigationBackLocation(before);
       else setStatus(`DOM target not found: ${targetDom}`);
       return;
     }
-    if (note.file === currentFile && targetHash) {
+    if (!options.newWindow && note.file === currentFile && targetHash) {
       const jumped = jumpToHash(targetHash);
       if (jumped) pushNavigationBackLocation(before);
       else setStatus(`Anchor not found: ${targetHash}`);
@@ -7099,6 +7240,11 @@ function openExternalUrl(href: string, options: { newWindow?: boolean } = {}): v
     return;
   }
   if (raw.startsWith("#")) {
+    if (options.newWindow) {
+      const current = currentNote();
+      if (current) openNote(current, { newWindow: true, hash: hash || raw.slice(1) });
+      return;
+    }
     const jumped = jumpToHash(hash || raw.slice(1));
     if (jumped) pushNavigationBackLocation(before);
     else setStatus(`Anchor not found: ${hash || raw.slice(1)}`);
@@ -9601,6 +9747,9 @@ function toolActions(): ToolAction[] {
     { id: "tag-manager", group: "knowledge", title: "Tag management", detail: "Search, create, and remove tags on the current note", run: () => void manageCurrentNoteTags() },
     { id: "add-tag", group: "knowledge", title: "Add tags", detail: "Append tags to the current document", run: () => void addTag() },
     { id: "manage-tags", group: "knowledge", title: "Manage metadata", detail: "Edit project and tags", run: () => void manageNoteTags() },
+    { id: "manage-wiki-page", group: "knowledge", title: "Manage this Wiki page", detail: "Rename, move, copy, merge or move to Trash", disabled: window.__noemaAppConfig?.config.workspace.layout !== "wiki" || !currentFile, run: () => openCurrentWikiManagement() },
+    { id: "wiki-page-history", group: "knowledge", title: "Wiki page Git history", detail: "Review committed versions of this page", disabled: window.__noemaAppConfig?.config.workspace.layout !== "wiki" || !currentFile, run: () => openCurrentWikiManagement("history") },
+    { id: "review-wiki-links", group: "knowledge", title: "Review suggested Wiki links", detail: "Scan this page and approve title matches one by one", disabled: window.__noemaAppConfig?.config.workspace.layout !== "wiki" || !currentFile || currentReadOnly, run: () => void reviewWikiLinksInCurrentPage() },
     { id: "insert-roam-idlink", group: "knowledge", title: "Insert knowledge link", detail: "Search notes and insert an ID link", run: () => void insertRoamIdLink() },
     { id: "rename-tag", group: "knowledge", title: "Rename tag across notes", detail: "Bulk rename a knowledge-base tag", run: () => void renameRoamTagTool() },
     { id: "delete-tag", group: "knowledge", title: "Delete tag across notes", detail: "Bulk remove a knowledge-base tag", run: () => void deleteRoamTagTool() },
@@ -11868,11 +12017,30 @@ function runHostCommand(detail: unknown): boolean {
     message?: string;
     notifyError?: boolean;
     files?: unknown[];
+    sourceFile?: string;
+    sourceClientId?: string;
+    sourceFrom?: number;
+    sourceRaw?: string;
+    pageId?: string;
   };
   const command = String(body.command || "").trim().toLowerCase();
   if (!command) return false;
 
   switch (command) {
+    case "wiki-link-created": {
+      if (body.sourceFile !== currentFile || body.sourceClientId !== clientId || currentReadOnly) return true;
+      const change = createdWikiLinkChange(editor.getMarkdown(), {
+        from: Number(body.sourceFrom), raw: String(body.sourceRaw || ""),
+      }, String(body.pageId || ""));
+      if (!change) {
+        setStatus("Page created; source link changed before it could be upgraded. Insert the stable link manually.", true);
+        return true;
+      }
+      editor.view.dispatch({ changes: change });
+      void save();
+      setStatus("Created page and upgraded its source link to a stable ID");
+      return true;
+    }
     case "window-hint":
       windowHint.textContent = String(body.label || "").slice(0, 8);
       windowHint.hidden = !windowHint.textContent;
@@ -12062,12 +12230,12 @@ function runHostCommand(detail: unknown): boolean {
     case "back":
     case "nav-back":
     case "navigation-back":
-      void restoreNavigationBack();
+      navigateBack();
       return true;
     case "forward":
     case "nav-forward":
     case "navigation-forward":
-      void restoreNavigationForward();
+      navigateForward();
       return true;
     case "find":
       openFindPanel();
@@ -12883,11 +13051,11 @@ findReplacementInput.addEventListener("keydown", (event) => {
   }
 });
 document.addEventListener("aaronnote:open-url", (event) => {
-  const custom = event as CustomEvent<{ href?: string; newWindow?: boolean }>;
+  const custom = event as CustomEvent<{ href?: string; newWindow?: boolean; sourcePos?: number }>;
   const href = custom.detail?.href;
   if (!href) return;
   event.preventDefault();
-  openExternalUrl(href, { newWindow: custom.detail?.newWindow === true });
+  openExternalUrl(href, { newWindow: custom.detail?.newWindow === true, sourcePos: custom.detail?.sourcePos });
 });
 document.addEventListener("aaronnote:preview-url", (event) => {
   const custom = event as CustomEvent<{ href?: string; x?: number; y?: number; persistent?: boolean }>;
@@ -12915,9 +13083,7 @@ window.addEventListener("aaronnote:open-file", (event) => {
 root.querySelectorAll<HTMLButtonElement>("[data-server-command]").forEach((button) => {
   button.addEventListener("click", () => {
     const command = String(button.dataset.serverCommand || "");
-    if (command === "back") history.back();
-    else if (command === "forward") history.forward();
-    else runHostCommand({ command });
+    runHostCommand({ command });
   });
 });
 
@@ -12956,8 +13122,13 @@ window.addEventListener("beforeunload", () => {
   flushCursorPositionKeepalive();
   notifyClientClosedKeepalive();
 });
-window.addEventListener("popstate", () => {
-  void restoreNavigationBack();
+window.addEventListener("popstate", (event) => {
+  const next = (event.state as { noemaNavigationIndex?: unknown } | null)?.noemaNavigationIndex;
+  if (typeof next !== "number" || !Number.isInteger(next)) return;
+  const previous = navigationHistoryIndex;
+  navigationHistoryIndex = next;
+  if (next < previous) queueNavigationRestore("back", previous - next);
+  else if (next > previous) queueNavigationRestore("forward", next - previous);
 });
 
 // Fetch the note/snippets, renderer config and KaTeX macros concurrently.  The

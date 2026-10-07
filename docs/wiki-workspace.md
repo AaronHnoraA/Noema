@@ -89,10 +89,50 @@ page to `[[roam://id|Label]]`, so moves and renames do not break the link. A
 title-only link first prefers a unique page in the source repository, then
 falls back to the global index. Duplicate matches are shown with partition,
 repository, and repository-relative path. Missing targets open the New Page
-workbench. `roam://id` remains the stable exact-link form.
+workbench in an Emacs-hosted window. The form pre-fills the source repository,
+directory, and namespace; an explicitly qualified target such as
+`[[Research:Page]]` or `[[public/Research:Page]]` pre-fills that namespace and
+requires a repository in the requested partition. The author can change the
+repository, namespace, directory, and filename before creating the page.
+After creation, the clicked source link is upgraded to `[[roam://id|Label]]`
+if its original source text is still present in the source editor. An existing
+page or alias in the chosen repository and namespace can be selected instead.
+`roam://id` remains the stable exact-link form.
+
+In the Emacs editor, each Roam title stays one continuous text link with a
+single node marker at its start, even when spelling annotations divide the
+editor's internal spans. A filled
+diamond identifies a stable ID target; an outlined diamond identifies a title
+target that still resolves through the Wiki index. Hovering opens a node
+preview, while moving the caret into the link reveals its original Markdown
+source for editing. The visual treatment does not alter the stored link text.
+
+The editor's **Review suggested Wiki links** tool scans the current page only
+when invoked. It proposes title and alias matches in plain prose one at a
+time, lists repository and namespace for ambiguous matches, and applies only
+approved links in one undoable edit. A public page never suggests a private
+target. It skips existing links, metadata, headings, code, formulas, and URLs.
+There is no automatic link insertion on save or render.
 
 File location is not identity. New page profiles configure partition,
 repository, directory, filename pattern, and note kind.
+
+Page management is available from the editor's **Manage this Wiki page** tool.
+Rename and move preserve the stable page ID; an old title becomes an alias.
+Copy creates a new ID. Merge previews both Markdown bodies, appends the
+duplicate body to the survivor, archives the original duplicate Markdown,
+and leaves a redirect at the duplicate ID. Private-to-public moves and copies
+require an explicit confirmation because the full file enters a public Git
+repository even if the page remains hidden from the published catalog.
+Deletion lists backlinks and keeps a Wiki Trash record so the page and its
+owned assets can be restored to their original paths and ID. Relative
+dependencies outside the page-owned asset directories block relocation until
+the author fixes them.
+Git history exposes committed changes and the current uncommitted diff.
+Restoring a commit warns when it would overwrite current working changes and
+requires an explicit typed confirmation in that case. Moving between Git
+repositories preserves the page ID, but the destination repository does not
+inherit the source repository's commit history.
 
 ## Namespaces
 
@@ -182,6 +222,9 @@ history, and storage-adapter separation were reviewed against Wiki.js. The wide
 two-sidebar information architecture and responsive drawer behavior were
 reviewed against MediaWiki's Vector skin. Noema keeps its existing CM6 editor
 and physical Git repositories rather than importing either upstream runtime.
+The follow-up [MediaWiki × Roam interaction audit](mediawiki-roam-ux-audit-2026-10.md)
+tracks the link-to-page creation flow, multi-repository choices, page actions,
+and history semantics against MediaWiki's source and user-facing behavior.
 Exact third-party components used by the product are declared dependencies,
 including ungit for visual Git maintenance and MisMerge for three-way conflict
 resolution.

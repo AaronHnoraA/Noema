@@ -44,6 +44,20 @@ func decodeToolJSON(t *testing.T, result CallToolResult, target any) {
 
 func TestResearchCellToolReadsNeighborsButNeverLocalOnly(t *testing.T) {
 	root, _ := researchToolFixture(t)
+	outlined, err := researchCellHandler(map[string]any{"action": "outline", "root": root, "notebookId": "nb_tools", "cellId": "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outline struct {
+		Cell    researchCellOutline   `json:"cell"`
+		Parents []researchCellOutline `json:"parents"`
+	}
+	decodeToolJSON(t, outlined, &outline)
+	if outline.Cell.SourceBytes != len("Public work") || len(outline.Parents) != 1 || outline.Parents[0].ID != "q" ||
+		outline.Cell.SourceSHA256 == "" || strings.Contains(outlined.Content[0].Text, "Public question") ||
+		strings.Contains(outlined.Content[0].Text, "private canary") || strings.Contains(outlined.Content[0].Text, `"secret"`) {
+		t.Fatalf("outline disclosed source text or private graph neighbors: %+v", outlined)
+	}
 	result, err := researchCellHandler(map[string]any{"action": "neighbors", "root": root, "notebookId": "nb_tools", "cellId": "work"})
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +115,9 @@ func TestResearchRunToolReturnsDurableOutput(t *testing.T) {
 	}
 	run, err := store.PrepareRun(research.PrepareRunInput{WorkstreamID: "ws_tools", SessionID: session.ID,
 		NotebookID: "nb_tools", CellID: "work", WorkNodeID: "wn_tools_work", SourceKind: "work-cell", ExecutionTarget: root,
-		Spec: map[string]any{"schema": "noema.run-spec/1", "prompt": "Work"}})
+		Spec: map[string]any{"schema": "noema.run-spec/1", "prompt": "private run prompt canary",
+			"context":         []map[string]any{{"ref": "cell:q", "bytes": 15, "automatic": false}},
+			"context_omitted": []map[string]any{{"ref": "result:older", "reason": "context budget"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +142,17 @@ func TestResearchRunToolReturnsDurableOutput(t *testing.T) {
 	decodeToolJSON(t, result, &output)
 	if output.Run.Status != "completed" || output.HandoffText != "Handoff" || output.TranscriptText != "Full transcript" {
 		t.Fatalf("unexpected Run output: %+v", output)
+	}
+	context, err := researchRunHandler(map[string]any{"action": "context", "root": root, "id": run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt research.RunContextReceipt
+	decodeToolJSON(t, context, &receipt)
+	if receipt.Run.ID != run.ID || receipt.PromptBytes != len("private run prompt canary") ||
+		len(receipt.Context) != 1 || receipt.Context[0]["ref"] != "cell:q" || len(receipt.Omitted) != 1 ||
+		strings.Contains(context.Content[0].Text, "private run prompt canary") {
+		t.Fatalf("Run context receipt did not stay compact and frozen: %+v", context)
 	}
 }
 

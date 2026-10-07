@@ -219,6 +219,8 @@ export function createWikiPage(root: string, layout: WikiLayout, body?: Record<s
 export function publicWikiNotes(index: WikiIndex): WikiNote[];
 export function moveWikiPage(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
 export function deleteWikiPage(root: string, body?: Record<string, unknown>, options?: { trashRoot?: string }): Promise<Record<string, any>>;
+export function listTrashedWikiPages(root: string): Promise<Record<string, any>>;
+export function restoreTrashedWikiPage(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
 export function copyWikiPage(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
 export function mergeWikiPages(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
 export function wikiTagIndex(index: WikiIndex): Array<{

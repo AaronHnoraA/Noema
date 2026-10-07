@@ -125,6 +125,9 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
     run({ root, id }) {
       return post("run/get", { root, id });
     },
+    runContextReceipt({ root, id }) {
+      return post("run/context-receipt", { root, id });
+    },
     runHandoff({ root, id }) {
       return post("run/handoff", { root, id });
     },

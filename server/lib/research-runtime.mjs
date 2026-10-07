@@ -429,15 +429,26 @@ const AUTO_CONTEXT_MIN_TRUNCATED_BYTES = 1024;
 function boundedContextItem(item, maxBytes, note = "compacted checkpoint truncated at 16 KiB") {
   const bytes = Buffer.from(item.contentBase64, "base64");
   if (bytes.byteLength <= maxBytes) return item;
-  const marker = Buffer.from(`\n\n[Noema: ${note}]\n`);
-  const prefixLimit = Math.max(0, maxBytes - marker.byteLength);
-  let prefix = bytes.subarray(0, prefixLimit).toString("utf8").replace(/\uFFFD$/, "");
-  while (Buffer.byteLength(prefix) > prefixLimit) prefix = prefix.slice(0, -1);
-  const bounded = Buffer.concat([Buffer.from(prefix), marker]);
+  const preserveTail = item.ref.startsWith("result:") || item.ref.startsWith("handoff:");
+  const marker = Buffer.from(`\n\n[Noema: ${note}${preserveTail ? "; middle omitted" : ""}]\n`);
+  const payloadBytes = Math.max(0, maxBytes - marker.byteLength);
+  const prefixBudget = preserveTail ? Math.ceil(payloadBytes / 2) : payloadBytes;
+  let prefixEnd = Math.min(bytes.byteLength, prefixBudget);
+  while (prefixEnd > 0 && prefixEnd < bytes.byteLength && (bytes[prefixEnd] & 0xc0) === 0x80) prefixEnd--;
+  const parts = [bytes.subarray(0, prefixEnd), marker];
+  if (preserveTail) {
+    let suffixStart = Math.max(prefixEnd, bytes.byteLength - (payloadBytes - prefixBudget));
+    while (suffixStart < bytes.byteLength && (bytes[suffixStart] & 0xc0) === 0x80) suffixStart++;
+    parts.push(bytes.subarray(suffixStart));
+  }
+  const bounded = Buffer.concat(parts);
   return {
     ...item,
     contentBase64: bounded.toString("base64"),
     truncated: true,
+    truncationReason: preserveTail ? `${note}; beginning and end retained` : note,
+    sourceSha256: item.sourceSha256 || sha256(bytes),
+    sourceBytes: item.sourceBytes || bytes.byteLength,
   };
 }
 
@@ -449,6 +460,8 @@ function publicContextItem(item) {
     sha256: sha256(bytes),
     bytes: bytes.byteLength,
     truncated: item.truncated,
+    ...(item.truncationReason ? { truncation_reason: item.truncationReason } : {}),
+    ...(item.sourceSha256 ? { source_sha256: item.sourceSha256, source_bytes: item.sourceBytes } : {}),
   };
 }
 
@@ -503,6 +516,56 @@ function latestOutputForWork(notebook, workId) {
   } : null;
 }
 
+function contextualWorkOutput(output) {
+  const status = output.status || "unknown";
+  return status === "completed" ? output.text
+    : "# Noema upstream Run output (" + status + ")\n\n"
+      + "Source Run: " + (output.runId || "unknown")
+      + ". This is partial or unverified output; check the upstream Run before treating it as a completed result.\n\n"
+      + output.text;
+}
+
+function currentUpstreamItems(receipt, notebook) {
+  const notebookId = valueString(receipt.run?.notebookId);
+  return values(receipt.context).filter((item) => valueString(item?.ref).startsWith("result:"))
+    .map((item) => {
+      const ref = valueString(item.ref);
+      const workId = ref.slice("result:".length);
+      const uri = valueString(item.resolved_uri);
+      let frozenRunId = "";
+      if (uri) {
+        try {
+          const parsed = new URL(uri);
+          const parts = parsed.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+          if (parsed.protocol !== "noema:" || parsed.hostname !== "work-output"
+              || parts.length < 2 || parts.length > 3 || parts[0] !== notebookId || parts[1] !== workId) {
+            return { ref, state: "unverified", reason: "frozen output identity cannot be matched" };
+          }
+          frozenRunId = parts[2] || "";
+        } catch {
+          return { ref, state: "unverified", reason: "frozen output identity cannot be matched" };
+        }
+      }
+      if (!researchWorkNodeId(notebook, workId)) return { ref, state: "missing", frozenRunId };
+      const current = latestOutputForWork(notebook, workId);
+      if (!current) return { ref, state: "missing", frozenRunId };
+      try {
+        checkDisclosure(current.cell, notebook);
+      } catch {
+        return { ref, frozenRunId, state: "unverified", reason: "current output is local_only" };
+      }
+      const currentRunId = current.runId || "";
+      const details = { ref, frozenRunId, currentRunId, currentStatus: current.status || "unknown" };
+      if (frozenRunId && currentRunId && frozenRunId !== currentRunId) {
+        return { ...details, state: "superseded" };
+      }
+      const fullDigest = valueString(item.source_sha256)
+        || (item.truncated === true ? "" : valueString(item.sha256));
+      if (!fullDigest) return { ...details, state: "unverified", reason: "full source digest absent from RunSpec" };
+      return { ...details, state: sha256(contextualWorkOutput(current)) === fullDigest ? "unchanged" : "changed" };
+    });
+}
+
 function cellById(notebook, id) {
   return (notebook.cells || []).find((cell) => cell?.id === id) || null;
 }
@@ -551,32 +614,70 @@ function contextRef(entry) {
  * not are truncated into a useful remainder or omitted and reported, instead of
  * failing a Run nobody configured (D-036).
  */
-function fitAutomaticContext(items, limit = CONTEXT_LIMIT_BYTES) {
+function fitAutomaticContext(items, limit = CONTEXT_LIMIT_BYTES, fanInRefs = new Set()) {
   const size = (item) => Buffer.from(item.contentBase64, "base64").byteLength;
-  const required = items.filter((item) => !item.auto).reduce((sum, item) => sum + size(item), 0);
+  const sizes = items.map(size);
+  const required = items.reduce((sum, item, index) => sum + (item.auto ? 0 : sizes[index]), 0);
   if (required > limit) {
     throw researchError("Declared Run context exceeds 64 KiB; narrow the explicit references", 422, "ERR_RESEARCH_CONTEXT_LIMIT");
   }
   let remaining = limit - required;
   const plain = items.map(({ auto: _auto, ...item }) => item);
   const chosen = items.map((item, index) => (item.auto ? undefined : plain[index]));
+  const fanIn = items.map((item) => Boolean(item.auto && fanInRefs.has(item.ref)));
+  const balancedFanIn = fanIn.filter(Boolean).length > 1;
+  const fanInReserve = fanIn.map((enabled, index) => enabled
+    ? Math.min(sizes[index], AUTO_CONTEXT_MIN_TRUNCATED_BYTES) : 0);
+  let pendingFanInReserve = fanInReserve.reduce((sum, bytes) => sum + bytes, 0);
   // Whole items first, in priority order, so one large output cannot push out
-  // every small item after it; then cut what still waits into the remainder.
+  // every small item after it. At a DAG merge, keep at least a useful excerpt
+  // for each direct parent before spending the entire budget on one branch.
   items.forEach((item, index) => {
-    if (item.auto && size(plain[index]) <= remaining) {
-      remaining -= size(plain[index]);
+    if (!item.auto) return;
+    const reserved = balancedFanIn ? pendingFanInReserve - fanInReserve[index] : 0;
+    if (sizes[index] <= remaining - reserved) {
+      remaining -= sizes[index];
       chosen[index] = plain[index];
+      pendingFanInReserve -= fanInReserve[index];
     }
   });
   const omitted = [];
+  if (balancedFanIn) {
+    const pending = items.map((item, index) => (fanIn[index] && !chosen[index] ? index : -1)).filter((index) => index >= 0);
+    // A short parent needs its actual size, not a whole 1 KiB reservation.
+    // When every minimum cannot fit, cover as many branches as possible:
+    // smaller minima first, then the document's parent order for ties.
+    const byMinimum = [...pending].sort((left, right) => fanInReserve[left] - fanInReserve[right] || left - right);
+    const included = new Set();
+    let minimumBudget = remaining;
+    for (const index of byMinimum) {
+      if (fanInReserve[index] > minimumBudget) break;
+      included.add(index);
+      minimumBudget -= fanInReserve[index];
+    }
+    const selected = pending.filter((index) => included.has(index));
+    let futureMinimum = selected.reduce((sum, index) => sum + fanInReserve[index], 0);
+    selected.forEach((index, position) => {
+      futureMinimum -= fanInReserve[index];
+      const equalShare = Math.floor(remaining / (selected.length - position));
+      const share = Math.min(remaining - futureMinimum, Math.max(fanInReserve[index], equalShare));
+      chosen[index] = boundedContextItem(plain[index], share,
+        "DAG parent output truncated to share the Run context budget across branches");
+      remaining -= size(chosen[index]);
+    });
+    pending.filter((index) => !included.has(index)).forEach((index) => {
+      omitted.push({ ref: plain[index].ref, resolved_uri: plain[index].resolvedUri,
+        bytes: sizes[index], reason: "context budget; too little room for a DAG parent excerpt" });
+    });
+  }
   items.forEach((item, index) => {
-    if (!item.auto || chosen[index]) return;
+    if (!item.auto || chosen[index] || (balancedFanIn && fanIn[index])) return;
     if (remaining >= AUTO_CONTEXT_MIN_TRUNCATED_BYTES) {
       chosen[index] = boundedContextItem(plain[index], remaining, "automatic context truncated to fit the Run context budget");
       remaining -= size(chosen[index]);
     } else {
       chosen[index] = null;
-      omitted.push({ ref: plain[index].ref, resolved_uri: plain[index].resolvedUri, bytes: size(plain[index]), reason: "context budget" });
+      omitted.push({ ref: plain[index].ref, resolved_uri: plain[index].resolvedUri, bytes: sizes[index], reason: "context budget" });
     }
   });
   return { items: chosen.filter(Boolean), omitted };
@@ -624,16 +725,10 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
     checkDisclosure(output.cell, notebook);
     // A non-completed Run can leave useful partial output on the Work
     // cell. Keep it available, but never present it as a completed result.
-    const status = output.status || "unknown";
-    const bytes = status === "completed" ? output.text
-      : "# Noema upstream Run output (" + status + ")\n\n"
-        + "Source Run: " + (output.runId || "unknown")
-        + ". This is partial or unverified output; check the upstream Run before treating it as a completed result.\n\n"
-        + output.text;
     return asContextItem({
       ref,
       resolvedUri: `noema://work-output/${encodeURIComponent(notebookId)}/${encodeURIComponent(researchWorkNodeId(notebook, workId) || workId)}${output.runId ? `/${encodeURIComponent(output.runId)}` : ""}`,
-      bytes,
+      bytes: contextualWorkOutput(output),
       mediaType: "text/markdown; charset=utf-8",
     });
   };
@@ -1023,14 +1118,26 @@ export function createResearchRuntimeService({
 	async function compactRouteIfNeeded(root, route, body = {}, { dryRun = false } = {}) {
 	  const runtimeProvider = provider();
 	  const sessionId = valueString(route.sessionId);
-	  if (!sessionId || !["continued", "selected"].includes(valueString(route.mode))
-		  || typeof runtimeProvider.sessionContext !== "function") return route;
+	  if (!sessionId || !["continued", "selected"].includes(valueString(route.mode))) return route;
+	  const threshold = rolloverRatio(body);
+	  const unavailable = { state: "unavailable", threshold };
+	  if (typeof runtimeProvider.sessionContext !== "function") {
+		return { ...route, contextPressure: unavailable };
+	  }
 	  const context = await runtimeProvider.sessionContext({ root, sessionId });
 	  const usage = object(context.usage);
-	  const size = Number(usage.contextSize) || 0;
-	  const ratio = size > 0 ? (Number(usage.contextUsed) || 0) / size : 0;
+	  const used = usage.contextUsed;
+	  const size = usage.contextSize;
+	  const reported = typeof used === "number" && Number.isFinite(used) && used >= 0
+		&& typeof size === "number" && Number.isFinite(size) && size > 0;
+	  const ratio = reported ? used / size : null;
+	  const contextPressure = reported
+		? { state: "reported", used, size, ratio, threshold, overThreshold: ratio >= threshold,
+			...(valueString(usage.updatedAt) ? { updatedAt: valueString(usage.updatedAt) } : {}) }
+		: unavailable;
 	  let compaction = object(context.compaction);
-	  if (!valueString(compaction.id) && ratio >= rolloverRatio(body)) {
+	  const alreadyPending = Boolean(valueString(compaction.id));
+	  if (!alreadyPending && reported && ratio >= threshold) {
 		// A preview reports the rollover the next Run would request without
 		// creating a pending compaction.
 		if (dryRun) compaction = { id: "preview", status: "preview" };
@@ -1038,16 +1145,19 @@ export function createResearchRuntimeService({
 		  compaction = object(await runtimeProvider.requestSessionCompaction({ root, sessionId }));
 		}
 	  }
-	  if (!valueString(compaction.id)) return route;
+	  if (!valueString(compaction.id)) return { ...route, contextPressure };
 	  return {
 		...route,
+		contextPressure,
 		policy: "fork",
 		sessionId: "",
 		mode: "fork-reconstructed",
 		parentSessionId: sessionId,
 		parent: route.session,
 		compaction,
-		reason: `context rollover from ${Math.round(ratio * 100)}%; rebuilt from the latest durable handoff`,
+		reason: alreadyPending
+		  ? "context rollover already pending; rebuilt from the latest durable handoff"
+		  : `context rollover from ${Math.round(ratio * 100)}%; rebuilt from the latest durable handoff`,
 	  };
 	}
 
@@ -1769,23 +1879,32 @@ export function createResearchRuntimeService({
       // upstream was asked (D-036).  Everything here is automatic context and
       // yields to the declared context budget.
       const automaticRefs = [];
-      if (automaticContext && values(route.autoContext).length && source.notebook && source.workNodeId) {
+      const fallbackLineage = source.notebook && source.workNodeId
+        && ["fresh", "fork-reconstructed"].includes(route.mode)
+        && researchWorkNodeSummary(source.notebook, source.workNodeId).lineage.length
+        ? ["lineage"] : [];
+      const lineageRefs = values(route.autoContext).length ? values(route.autoContext) : fallbackLineage;
+      const directParentOutputRefs = new Set();
+      if (automaticContext && lineageRefs.length && source.notebook && source.workNodeId) {
         for (const parentId of researchWorkNodeSummary(source.notebook, source.workNodeId).lineage) {
-          if (latestOutputForWork(source.notebook, parentId)) automaticRefs.push({ ref: `result:${parentId}`, auto: true });
+          if (latestOutputForWork(source.notebook, parentId)) {
+            const ref = `result:${parentId}`;
+            automaticRefs.push({ ref, auto: true });
+            directParentOutputRefs.add(ref);
+          }
         }
-        for (const ref of values(route.autoContext)) automaticRefs.push({ ref, auto: true });
+        for (const ref of lineageRefs) automaticRefs.push({ ref, auto: true });
       }
       let reconstruction = null;
-      if (route.mode === "fork-reconstructed") {
+      if (automaticContext && route.mode === "fork-reconstructed") {
         reconstruction = await latestParentHandoff(provider(), root, route.parentSessionId,
           valueString(route.reconstructFromWorkNode));
       }
       const parentOutput = reconstruction?.run && source.notebook
         && valueString(reconstruction.run.notebookId) === source.notebookId
         && latestOutputForWork(source.notebook, valueString(reconstruction.run.workNodeId || reconstruction.run.cellId));
-      // The reconstructed parent's output substitutes for the conversation a
-      // fork does not inherit, so `@@ctx(none)` keeps it; it still yields to
-      // declared context when the budget is short.
+      // A reconstructed fork may attach its parent's output and Handoff as
+      // automatic context. Both yield to declared context and @@ctx(none).
       const reconstructedForkContext = parentOutput && !valueString(route.compaction?.id)
         ? [{ ref: `result:${valueString(reconstruction.run.workNodeId || reconstruction.run.cellId)}`, auto: true }]
         : [];
@@ -1798,9 +1917,9 @@ export function createResearchRuntimeService({
           root, target: (await realpath(root)) === target ? "" : target, source }));
       }
       if (reconstruction?.item) {
-        candidateContext.push(valueString(route.compaction?.id)
+        candidateContext.push({ ...(valueString(route.compaction?.id)
           ? boundedContextItem(reconstruction.item, COMPACTION_CHECKPOINT_MAX_BYTES)
-          : reconstruction.item);
+          : reconstruction.item), auto: true });
       }
       const skillIds = [...values(source.executor.skills), ...values(body.skills)].map(valueString).filter(Boolean);
       const packIds = [...values(source.executor.packs), ...values(body.packs)].map(valueString).filter(Boolean);
@@ -1834,7 +1953,8 @@ export function createResearchRuntimeService({
         }
       }
       const automaticContextRefs = new Set(candidateContext.filter((item) => item.auto).map((item) => item.ref));
-      const { items: contextItems, omitted: omittedContext } = fitAutomaticContext(candidateContext);
+      const { items: contextItems, omitted: omittedContext } = fitAutomaticContext(
+        candidateContext, CONTEXT_LIMIT_BYTES, directParentOutputRefs);
       if (memoryUnavailable) omittedContext.push({ ref: "finding:*", reason: "memory index unavailable", bytes: 0 });
       const capabilities = normalizeCapabilities(source.executor.capabilities, body.capabilities);
       assertCapabilityEnvelope(route.agent, capabilities, body, source.executor);
@@ -1884,7 +2004,10 @@ export function createResearchRuntimeService({
         ...(resolvedPacks.packs.length ? { packs: resolvedPacks.packs } : {}),
         capabilities,
         external_sandbox: externalSandbox,
-        context: contextItems.map(publicContextItem),
+        context_limit_bytes: CONTEXT_LIMIT_BYTES,
+        context: contextItems.map((item) => ({
+          ...publicContextItem(item), automatic: automaticContextRefs.has(item.ref),
+        })),
         ...(omittedContext.length ? { context_omitted: omittedContext } : {}),
         mcp_servers: mcpServers,
         capability_environment: capabilitySnapshot,
@@ -1895,7 +2018,7 @@ export function createResearchRuntimeService({
       if (route.mode === "fork") spec.fork_mode = "native";
       if (route.mode === "fork-reconstructed") {
         spec.fork_mode = "reconstructed";
-        spec.fork_notice = "No hidden parent conversation was inherited; only frozen source, declared context, an available parent work output, and Handoff were provided.";
+        spec.fork_notice = "No hidden parent conversation was inherited; inspect the frozen context for any selected parent output and Handoff.";
       }
       if (dryRun) {
         const size = (item) => Buffer.from(item.contentBase64, "base64").byteLength;
@@ -1904,8 +2027,10 @@ export function createResearchRuntimeService({
           routing: {
             agent: route.agent, mode: route.mode, policy: route.policy,
             name: valueString(route.sessionName?.name), parentName: valueString(route.sessionName?.parentName),
-            rule: valueString(route.derivation?.rule), reason: valueString(route.derivation?.reason || route.reason),
+            rule: valueString(route.derivation?.rule),
+			reason: valueString(route.compaction?.id ? route.reason : route.derivation?.reason || route.reason),
             busy: Boolean(route.busy), rollover: valueString(route.compaction?.id) !== "",
+			...(route.contextPressure ? { contextPressure: route.contextPressure } : {}),
             // What the DAG says about starting this block now. Advisory: the
             // Run is not blocked by any of it.
             readiness: source.readiness || null,
@@ -1913,6 +2038,8 @@ export function createResearchRuntimeService({
           context: contextItems.map((item) => ({
             ref: item.ref, resolvedUri: item.resolvedUri, mediaType: item.mediaType,
             bytes: size(item), truncated: Boolean(item.truncated), automatic: automaticContextRefs.has(item.ref),
+            ...(item.truncated ? { sourceBytes: item.sourceBytes || size(item),
+              truncationReason: item.truncationReason || "" } : {}),
           })),
           omitted: omittedContext,
           totalBytes: contextItems.reduce((sum, item) => sum + size(item), 0),
@@ -2109,6 +2236,38 @@ export function createResearchRuntimeService({
       const root = await rootFor(body);
       await refreshExpiredLeases(root);
       return { root, run: await provider().run({ root, id: valueString(body.id || body.runId || body.run_id) }) };
+    },
+
+    async runContextReceipt(body = {}) {
+      const root = await rootFor(body);
+      const id = valueString(body.id || body.runId || body.run_id);
+      const receipt = await provider().runContextReceipt({ root, id });
+      const results = values(receipt.context).filter((item) => valueString(item?.ref).startsWith("result:"));
+      if (!results.length) return { root, receipt, upstream: { state: "not_applicable", items: [] } };
+      const run = object(receipt.run);
+      const notebookId = valueString(run.notebookId);
+      const cellId = valueString(run.cellId);
+      if (!notebookId.startsWith("nb_") || !cellId) {
+        return { root, receipt, upstream: { state: "unavailable", items: [], reason: "Run has no work document identity" } };
+      }
+      try {
+        const location = await provider().resolveCell({ root, notebookId, cellId });
+        const file = await projectFile(root, valueString(location?.path));
+        if (!isResearchDocumentPath(file.path)) throw new Error("indexed path is not a .noema document");
+        const loaded = await readResearchNotebookFile(file.path);
+        const currentNotebookId = valueString(researchMeta({ metadata: loaded.notebook.metadata }).notebook_id);
+        if (currentNotebookId !== notebookId || !cellById(loaded.notebook, cellId)) {
+          throw new Error("indexed Run cell is no longer in the saved document");
+        }
+        return { root, receipt, upstream: {
+          state: "checked", documentRevision: loaded.revision,
+          items: currentUpstreamItems(receipt, loaded.notebook),
+        } };
+      } catch (error) {
+        return { root, receipt, upstream: {
+          state: "unavailable", items: [], reason: String(error?.message || error),
+        } };
+      }
     },
 
     async liveRun(body = {}) {

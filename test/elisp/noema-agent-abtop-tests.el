@@ -59,6 +59,7 @@
         ;; 120k -> 30k is a compaction; 36k -> 5k is too.  50k -> 120k is growth.
         (should (= 2 (plist-get (noema-agent-acp-usage session) :compactions)))
         (should (= 120000 (plist-get (noema-agent-acp-usage session) :context-peak)))
+        (should (= 5 (plist-get (noema-agent-acp-usage session) :report-seq)))
         (should (= 5 (length reported)))
         (agent-shell--update-usage-from-notification
          :state state

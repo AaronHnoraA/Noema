@@ -13,7 +13,7 @@ export function createEmacsApiHandlers({
   apiChooseNotePath,
 }) {
   return {
-    "aaronnote:api:emacs:open": (body) => apiOpenInEmacs(body?.file ?? body, body?.line, body?.col, body?.tag),
+    "aaronnote:api:emacs:open": (body) => apiOpenInEmacs(body?.file ?? body, body?.line, body?.col, body?.tag, body),
     "aaronnote:api:emacs:surface": (body) => apiOpenSurface(body),
     "aaronnote:api:emacs:jupyter-cell": (body) => apiSelectJupyterCell(body),
     "aaronnote:api:emacs:research-session": (body) => apiOpenResearchSession(body),

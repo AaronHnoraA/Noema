@@ -111,7 +111,7 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
     });
   }
 
-  function renderChrome(title: string, subtitle: string, body: string, onOpen: () => void, renderOptions: { html?: boolean } = {}): void {
+  function renderChrome(title: string, subtitle: string, body: string, onOpen: () => void, renderOptions: { html?: boolean; openLabel?: string } = {}): void {
     element.replaceChildren();
     const head = document.createElement("header");
     head.className = "aaronnote-link-preview-head";
@@ -139,7 +139,7 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
     actions.className = "aaronnote-link-preview-actions";
     const openButton = document.createElement("button");
     openButton.type = "button";
-    openButton.textContent = "Open";
+    openButton.textContent = renderOptions.openLabel || "Open";
     openButton.addEventListener("click", onOpen);
     const closeButton = document.createElement("button");
     closeButton.type = "button";
@@ -151,6 +151,8 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
 
   function show(href: string, x: number, y: number, showOptions: { persistent?: boolean } = {}): void {
     const target = options.resolveTarget(href);
+    const roamLink = /^roam:\/\//i.test(href);
+    element.dataset.linkKind = roamLink ? "roam" : "standard";
     const run = showEpoch.begin();
     moved = false;
     setPersistent(showOptions.persistent === true);
@@ -160,14 +162,17 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
     place(x, y);
 
     if (!target.note?.file) {
-      const internal = /^roam:\/\//i.test(href);
+      const internal = roamLink;
       const safe = options.isSafeHref(href);
+      const rawTitle = internal ? href.replace(/^roam:\/\/wiki\//i, "") : "";
+      let linkTitle = rawTitle;
+      try { linkTitle = decodeURIComponent(rawTitle); } catch {}
       setPersistent(showOptions.persistent === true);
-      renderChrome(internal ? "Wiki page" : safe ? "External link" : "Blocked link", href, internal ? "Open or create this page" : safe ? href : "Unsafe URL", () => {
+      renderChrome(internal ? linkTitle || "Wiki page" : safe ? "External link" : "Blocked link", internal ? "Wiki link · target needs resolution" : href, internal ? "Open this link to find or create its page." : safe ? href : "Unsafe URL", () => {
         if (internal) options.openExternalUrl(href, { newWindow: false });
         else if (safe) options.openExternalUrl(href, { newWindow: true });
         else options.setStatus?.("Blocked unsafe link");
-      });
+      }, { openLabel: internal ? "Open or create" : "Open" });
       place(x, y);
       return;
     }
@@ -191,7 +196,7 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
             recordJump: true,
           });
           hide();
-        }, { html: true });
+        }, { html: true, openLabel: roamLink ? "Open node" : "Open" });
         if (!moved) place(x, y);
       })
       .catch((err) => {

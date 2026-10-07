@@ -11,7 +11,7 @@ import {
   manualTUICommand,
   parseResearchPrompt,
 } from "../server/lib/research-runtime.mjs";
-import { selectRunMemory } from "../server/lib/research-memory.mjs";
+import { memoryTerms, selectRunMemory } from "../server/lib/research-memory.mjs";
 import {
   createResearchCell,
   createResearchNotebook,
@@ -67,6 +67,10 @@ describe("research runtime service", () => {
     const memory = prepared.contextItems.find((item: any) => item.ref === "finding:finding_storage");
     expect(Buffer.from(memory.contentBase64, "base64").toString()).toContain("art_source:0-32");
     expect(prepared.spec.context).toContainEqual(expect.objectContaining({ ref: "finding:finding_storage" }));
+    expect(prepared.spec.context).toContainEqual(expect.objectContaining({
+      ref: "finding:finding_storage", resolved_uri: "noema://finding/finding_storage/2", automatic: true,
+    }));
+    expect(prepared.spec.context_limit_bytes).toBe(65536);
     expect(findings).toHaveBeenCalledWith({ root, workstreamId, limit: 1000, includeLocal: false });
 
     const unsaved = structuredClone(created.notebook);
@@ -83,6 +87,86 @@ describe("research runtime service", () => {
     });
   }));
 
+  test("exposes the stored Run context receipt through its read-only channel", async () => withProject(async (root) => {
+    const receipt = { run: { id: "run_frozen", status: "completed" },
+      context: [{ ref: "finding:fact", resolved_uri: "noema://finding/fact/2", automatic: true }],
+      omitted: [{ ref: "result:old", reason: "context budget" }],
+      sessionUsageAtFinish: { contextUsed: 400, contextSize: 1000 } };
+    const runContextReceipt = vi.fn(async () => receipt);
+    const service = createResearchRuntimeService({ getProvider: () => ({ runContextReceipt }) as any });
+    const handlers = createResearchApiHandlers(service);
+    await expect(handlers["aaronnote:api:research:run:context-receipt"]({ root, runId: "run_frozen" }))
+      .resolves.toMatchObject({ receipt, upstream: { state: "not_applicable", items: [] } });
+    expect(runContextReceipt).toHaveBeenCalledExactlyOnceWith({ root, id: "run_frozen" });
+  }));
+
+  test("compares frozen parent context with the saved Work output without changing the receipt", async () => withProject(async (root) => {
+    let notebook = createResearchNotebook({ title: "Upstream changes", defaultAgent: "codex" });
+    const parent = createResearchCell(notebook, { kind: "work", title: "Parent", source: "Research." });
+    const original = `Beginning\n${"中".repeat(30_000)}\nConclusion`;
+    notebook = upsertResearchRunOutput(parent.notebook, {
+      workId: parent.workNode.id, runId: "run_parent_old", agent: "codex", status: "completed", content: original,
+    }).notebook;
+    const child = createResearchCell(notebook, {
+      kind: "work", title: "Child", source: "Use the parent result.", lineageParent: parent.workNode.id,
+    });
+    notebook = child.notebook;
+    const file = join(root, "upstream.noema");
+    await writeResearchNotebookFile(file, notebook, { create: true });
+    let receipt: any;
+    const provider = {
+      runs: vi.fn(async () => []),
+      prepareRun: vi.fn(async ({ run }: any) => ({ id: "run_child", ...run })),
+      runContextReceipt: vi.fn(async () => receipt),
+      resolveCell: vi.fn(async () => ({ path: file })),
+    };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const prepared = await service.prepareRun({ root, file, cellId: child.cell.id });
+    const frozen = prepared.spec.context.find((item: any) => item.ref === `result:${parent.workNode.id}`);
+    expect(frozen).toMatchObject({ truncated: true, source_sha256: createHash("sha256").update(original).digest("hex") });
+    receipt = { run: { id: "run_child", notebookId: notebook.metadata.noema_research.notebook_id,
+      cellId: child.cell.id }, context: prepared.spec.context };
+    const frozenCopy = structuredClone(receipt);
+    const inspect = async () => (await service.runContextReceipt({ root, id: "run_child" })).upstream.items[0];
+    expect(await inspect()).toMatchObject({ state: "unchanged", frozenRunId: "run_parent_old" });
+
+    notebook = upsertResearchRunOutput(notebook, {
+      workId: parent.workNode.id, runId: "run_parent_old", agent: "codex", status: "completed",
+      content: original.replace("Conclusion", "Changed conclusion"),
+    }).notebook;
+    await writeResearchNotebookFile(file, notebook);
+    expect(await inspect()).toMatchObject({ state: "changed", frozenRunId: "run_parent_old" });
+
+    notebook = upsertResearchRunOutput(notebook, {
+      workId: parent.workNode.id, runId: "run_parent_new", agent: "codex", status: "completed", content: original,
+    }).notebook;
+    await writeResearchNotebookFile(file, notebook);
+    expect(await inspect()).toMatchObject({ state: "superseded", currentRunId: "run_parent_new" });
+
+    notebook.cells.find((cell: any) => cell.id === parent.cell.id)!.outputs = [];
+    await writeResearchNotebookFile(file, notebook);
+    expect(await inspect()).toMatchObject({ state: "missing" });
+    expect(receipt).toEqual(frozenCopy);
+
+    notebook = upsertResearchRunOutput(notebook, {
+      workId: parent.workNode.id, runId: "run_parent_old", agent: "codex", status: "completed", content: original,
+    }).notebook;
+    await writeResearchNotebookFile(file, notebook);
+    receipt = structuredClone(frozenCopy);
+    delete receipt.context.find((item: any) => item.ref === frozen.ref).source_sha256;
+    expect(await inspect()).toMatchObject({ state: "unverified" });
+
+    receipt = frozenCopy;
+    notebook.metadata.noema_research.work_nodes.find((node: any) => node.id === parent.workNode.id)!.disclosure = "local_only";
+    await writeResearchNotebookFile(file, notebook);
+    expect(await inspect()).toMatchObject({ state: "unverified", reason: "current output is local_only" });
+    expect(await inspect()).not.toHaveProperty("currentRunId");
+
+    provider.resolveCell.mockRejectedValueOnce(new Error("index offline"));
+    const unavailable = await service.runContextReceipt({ root, id: "run_child" });
+    expect(unavailable).toMatchObject({ receipt, upstream: { state: "unavailable" } });
+  }));
+
   test("memory prefetch rejects weak matches and stays within its own budget", () => {
     const base = { workstreamId: "ws", kind: "decision", status: "supported",
       verificationLevel: "human_reviewed", disclosure: "project", version: 1,
@@ -90,7 +174,37 @@ describe("research runtime service", () => {
     expect(selectRunMemory([{ ...base, id: "f_weak", statement: "SQLite 用于完全不同的任务调度。" }],
       "SQLite 存储研究索引", "ws")).toEqual([]);
     expect(selectRunMemory([{ ...base, id: "f_full", statement: "SQLite 存储研究索引" }],
-      "SQLite 存储研究索引", "ws", { maxChars: 20 })).toEqual([]);
+      "SQLite 存储研究索引", "ws", { maxBytes: 20 })).toEqual([]);
+  });
+
+  test("memory recall preserves mixed-script order and a long prompt's current task", () => {
+    expect(memoryTerms("研究索引 SQLite 存储"))
+      .toEqual(["研究", "究索", "索引", "sqlite", "存储"]);
+    const finding = {
+      id: "f_sqlite", workstreamId: "ws", kind: "decision", status: "supported",
+      verificationLevel: "human_reviewed", disclosure: "project", version: 1,
+      statement: "采用 SQLite 存储研究索引。",
+      evidence: [{ artifactId: "art_sqlite", byteStart: 0, byteEnd: 10 }],
+    };
+    const identifiers = Array.from({ length: 40 }, (_, index) => `identifier${index}`).join(" ");
+    const task = "研究索引采用 SQLite 存储。";
+    for (const prompt of [`${task} ${identifiers}`, `${identifiers} ${task}`]) {
+      expect(selectRunMemory([finding], prompt, "ws").map((item) => item.id)).toEqual(["f_sqlite"]);
+    }
+    expect(selectRunMemory([finding], `${identifiers} 处理无关图像任务。`, "ws")).toEqual([]);
+  });
+
+  test("reviewed memory uses the same UTF-8 byte units as the Run context budget", () => {
+    const finding = {
+      workstreamId: "ws", kind: "decision", status: "supported",
+      verificationLevel: "human_reviewed", disclosure: "project", version: 1,
+      statement: "研究索引采用 SQLite 存储。".repeat(80),
+      evidence: [{ artifactId: "art_cn", byteStart: 0, byteEnd: 10 }],
+    };
+    const recalled = selectRunMemory([{ ...finding, id: "f_cn_a" }, { ...finding, id: "f_cn_b" }],
+      "研究索引采用 SQLite 存储。", "ws");
+    expect(recalled.map((item) => item.id)).toEqual(["f_cn_a"]);
+    expect(recalled.reduce((total, item) => total + Buffer.byteLength(item.content), 0)).toBeLessThanOrEqual(3600);
   });
 
   test("proposes a decision only from an exact completed Run Handoff span", async () => withProject(async (root) => {
@@ -340,7 +454,10 @@ describe("research runtime service", () => {
 		id: "run_previous", sessionId: "ses_warm", workNodeId: work.workNode.id,
 		status: "completed", notebookId: notebook.metadata.noema_research.notebook_id,
 	  }]),
-	  sessionContext: vi.fn(async () => ({ usage: { contextUsed: 900, contextSize: 1000 } })),
+	  sessionContext: vi.fn(async (): Promise<{
+	    usage: { contextUsed: number; contextSize: number; updatedAt?: string };
+	    compaction?: { id: string; status: string };
+	  }> => ({ usage: { contextUsed: 900, contextSize: 1000 } })),
 	  requestSessionCompaction: vi.fn(async () => ({ id: "compact_auto", status: "pending" })),
 	  liveRun: vi.fn(async () => ({ events: [{
 		seq: 5, type: "run.status.changed", payload: { handoff_artifact_id: "art_handoff" },
@@ -351,6 +468,38 @@ describe("research runtime service", () => {
 	  })),
 	};
 	const rolloverService = createResearchRuntimeService({ getProvider: () => rolloverProvider as any });
+	rolloverProvider.sessionContext.mockResolvedValueOnce({
+	  usage: { contextUsed: 850, contextSize: 1000, updatedAt: "2026-10-07T00:00:00Z" },
+	});
+	const atThreshold = await rolloverService.previewRunContext({ file, cellId: work.cell.id, cwd: root });
+	expect(atThreshold.routing).toMatchObject({
+	  mode: "fork-reconstructed", rollover: true,
+	  contextPressure: { state: "reported", used: 850, size: 1000, ratio: 0.85,
+	    threshold: 0.85, overThreshold: true, updatedAt: "2026-10-07T00:00:00Z" },
+	});
+	rolloverProvider.sessionContext.mockResolvedValueOnce({ usage: { contextUsed: 849, contextSize: 1000 } });
+	const belowThreshold = await rolloverService.previewRunContext({ file, cellId: work.cell.id, cwd: root });
+	expect(belowThreshold.routing).toMatchObject({
+	  mode: "continued", rollover: false,
+	  contextPressure: { state: "reported", ratio: 0.849, threshold: 0.85, overThreshold: false },
+	});
+	rolloverProvider.sessionContext.mockResolvedValueOnce({ usage: { contextUsed: 0, contextSize: 0 } });
+	const unknownUsage = await rolloverService.previewRunContext({ file, cellId: work.cell.id, cwd: root });
+	expect(unknownUsage.routing).toMatchObject({
+	  mode: "continued", rollover: false,
+	  contextPressure: { state: "unavailable", threshold: 0.85 },
+	});
+	expect(unknownUsage.routing.contextPressure).not.toHaveProperty("ratio");
+	rolloverProvider.sessionContext.mockResolvedValueOnce({
+	  usage: { contextUsed: 0, contextSize: 0 }, compaction: { id: "compact_pending", status: "pending" },
+	});
+	const pending = await rolloverService.previewRunContext({ file, cellId: work.cell.id, cwd: root });
+	expect(pending.routing).toMatchObject({
+	  mode: "fork-reconstructed", rollover: true,
+	  reason: "context rollover already pending; rebuilt from the latest durable handoff",
+	  contextPressure: { state: "unavailable", threshold: 0.85 },
+	});
+	expect(rolloverProvider.requestSessionCompaction).not.toHaveBeenCalled();
 	const rolled = await rolloverService.prepareRun({ file, cellId: work.cell.id, cwd: root });
 	expect(rolled.routing).toMatchObject({
 	  mode: "fork-reconstructed", sessionId: "", parentSessionId: "ses_warm",
@@ -360,6 +509,17 @@ describe("research runtime service", () => {
 	const checkpoint = rolled.contextItems.find((item: any) => item.ref === "handoff:run_previous");
 	expect(checkpoint?.truncated).toBe(true);
 	expect(Buffer.from(checkpoint.contentBase64, "base64").byteLength).toBeLessThanOrEqual(16 * 1024);
+	expect(rolled.spec.context).toContainEqual(expect.objectContaining({
+	  ref: "handoff:run_previous", automatic: true,
+	}));
+	const artifactReads = rolloverProvider.readArtifact.mock.calls.length;
+	const workSourceCell = notebook.cells.find((cell: any) => cell.id === work.cell.id)!;
+	workSourceCell.source = String(workSourceCell.source).replace("@@ctx(lineage)", "@@ctx(none)");
+	await writeFile(file, `${JSON.stringify(notebook, null, 2)}\n`);
+	const rolledQuiet = await rolloverService.prepareRun({ file, cellId: work.cell.id, cwd: root });
+	expect(rolledQuiet.routing.mode).toBe("fork-reconstructed");
+	expect(rolledQuiet.contextItems.some((item: any) => item.ref === "handoff:run_previous")).toBe(false);
+	expect(rolloverProvider.readArtifact).toHaveBeenCalledTimes(artifactReads);
   }));
 
   test("builds an agent RunSpec from multi-scope Skills, project patches, @@skill, and MCPs", async () => withProject(async (root) => {
@@ -571,13 +731,20 @@ describe("research runtime service", () => {
     notebook = left.notebook;
     const right = createResearchCell(notebook, { kind: "work", title: "Right", source: "Try right.", lineageParent: origin.workNode.id });
     notebook = right.notebook;
-    for (const [node, text] of [[left.workNode.id, "L".repeat(30_000)], [right.workNode.id, "R".repeat(30_000)]]) {
+    const leftOutcome = "LEFT_CONCLUSION";
+    const rightOutcome = "终点";
+    for (const [node, text] of [
+      [left.workNode.id, "L".repeat(30_000 - leftOutcome.length) + leftOutcome],
+      [right.workNode.id, "界".repeat(9_998) + rightOutcome],
+    ]) {
       notebook = upsertResearchRunOutput(notebook, { workId: node, runId: `run_${node}`, agent: "codex", status: "completed", content: text }).notebook;
     }
     const merge = createResearchCell(notebook, { kind: "work", title: "Merge", source: "@@ctx(file:brief.md)\n\nMerge both routes.", lineageParent: left.workNode.id });
     notebook = setResearchRelation(merge.notebook, merge.workNode.id, "lineage", [left.workNode.id, right.workNode.id]).notebook;
     const quiet = createResearchCell(notebook, { kind: "work", title: "Quiet", source: "@@ctx(none)\n@@ctx(lineage:2)\n\nOnly what I ask for.", lineageParent: left.workNode.id });
     notebook = quiet.notebook;
+    const fresh = createResearchCell(notebook, { kind: "work", title: "Fresh", source: "@@session(fresh)\n\nUse the parent result.", lineageParent: left.workNode.id });
+    notebook = fresh.notebook;
     const file = join(root, "research", "merge.noema");
     await writeResearchNotebookFile(file, notebook, { create: true });
     await writeFile(join(root, "brief.md"), "b".repeat(20_000));
@@ -599,12 +766,28 @@ describe("research runtime service", () => {
     expect(merged.contextItems.reduce((sum: number, item: any) => sum + size(item), 0)).toBeLessThanOrEqual(64 * 1024);
     expect(merged.spec.context_omitted).toBeUndefined();
 
-    // With almost no room left, the output that cannot be cut usefully is
-    // omitted and reported in the frozen RunSpec.
+    // When both parent results exceed the remainder, each branch gets a
+    // useful excerpt instead of the first branch consuming all of it.
     await writeFile(join(root, "brief.md"), "b".repeat(60_000));
+    const balanced = await service.prepareRun({ file, cellId: merge.cell.id, cwd: root });
+    const balancedParents = balanced.spec.context.filter((item: any) => item.ref === `result:${left.workNode.id}`
+      || item.ref === `result:${right.workNode.id}`);
+    expect(balancedParents).toHaveLength(2);
+    expect(balancedParents.every((item: any) => item.truncated && item.bytes >= 1024
+      && item.truncation_reason.includes("across branches"))).toBe(true);
+    const excerpt = (ref: string) => Buffer.from(balanced.contextItems.find((item: any) => item.ref === ref).contentBase64, "base64").toString("utf8");
+    expect(excerpt(`result:${left.workNode.id}`)).toMatch(/^L[\s\S]*middle omitted[\s\S]*LEFT_CONCLUSION$/);
+    expect(excerpt(`result:${right.workNode.id}`)).toMatch(/^界[\s\S]*middle omitted[\s\S]*终点$/);
+    expect(excerpt(`result:${right.workNode.id}`)).not.toContain("\uFFFD");
+    expect(balanced.contextItems.reduce((sum: number, item: any) => sum + size(item), 0)).toBeLessThanOrEqual(64 * 1024);
+
+    // If the remaining budget cannot hold two useful excerpts, say which
+    // parent was omitted rather than silently attaching a tiny fragment.
+    await writeFile(join(root, "brief.md"), "b".repeat(64 * 1024 - size(byRef.get("project")) - 1500));
     const tight = await service.prepareRun({ file, cellId: merge.cell.id, cwd: root });
-    expect(tight.spec.context_omitted).toEqual([expect.objectContaining({
-      ref: `result:${right.workNode.id}`, bytes: 30_000, reason: "context budget" })]);
+    expect(tight.spec.context_omitted).toContainEqual(expect.objectContaining({
+      ref: `result:${right.workNode.id}`, bytes: 30_000,
+      reason: "context budget; too little room for a DAG parent excerpt" }));
     expect(tight.contextItems.reduce((sum: number, item: any) => sum + size(item), 0)).toBeLessThanOrEqual(64 * 1024);
 
     // Declared context is still a hard contract.
@@ -615,6 +798,78 @@ describe("research runtime service", () => {
     // @@ctx(none) drops automatic lineage and outputs; lineage:2 widens the walk.
     const quietRun = await service.prepareRun({ file, cellId: quiet.cell.id, cwd: root });
     expect(quietRun.contextItems.map((item: any) => item.ref)).toEqual(["project", `cell:${left.cell.id}`, `cell:${origin.cell.id}`]);
+
+    // A fresh conversation still needs its DAG parent; @@ctx(none) above is
+    // the explicit way to opt out of automatic context.
+    const freshRun = await service.prepareRun({ file, cellId: fresh.cell.id, cwd: root });
+    expect(freshRun.routing.mode).toBe("fresh");
+    expect(freshRun.contextItems.map((item: any) => item.ref)).toContain(`result:${left.workNode.id}`);
+  }));
+
+  test("uses actual short parent sizes to cover more DAG branches under a tight budget", async () => withProject(async (root) => {
+    let notebook = createResearchNotebook({ title: "Three-way merge", defaultAgent: "codex" });
+    const parents: Array<{ workNode: { id: string } }> = [];
+    for (const label of ["First", "Second", "Third"]) {
+      const created = createResearchCell(notebook, { kind: "work", title: label, source: `Investigate ${label}.` });
+      parents.push(created);
+      notebook = upsertResearchRunOutput(created.notebook, {
+        workId: created.workNode.id, runId: `run_${label.toLowerCase()}`,
+        agent: "codex", status: "completed", content: label[0].repeat(500),
+      }).notebook;
+    }
+    const merge = createResearchCell(notebook, {
+      kind: "work", title: "Merge", source: "@@ctx(file:brief.md)\n\nCombine the results.",
+    });
+    notebook = setResearchRelation(merge.notebook, merge.workNode.id, "lineage",
+      parents.map((parent) => parent.workNode.id)).notebook;
+    const file = join(root, "merge-small.noema");
+    const brief = join(root, "brief.md");
+    await writeResearchNotebookFile(file, notebook, { create: true });
+    await writeFile(brief, "b");
+    const provider = { runs: vi.fn(async () => []),
+      prepareRun: vi.fn(async ({ run }: any) => ({ id: "run_merge", ...run })) };
+    const service = createResearchRuntimeService({ getProvider: () => provider as any });
+    const preview = await service.previewRunContext({ root, file, cellId: merge.cell.id });
+    const projectBytes = preview.context.find((item: any) => item.ref === "project").bytes;
+    const setRemaining = async (bytes: number) => writeFile(brief, "b".repeat(64 * 1024 - projectBytes - bytes));
+    const selectedParents = (prepared: any) => prepared.spec.context.filter((item: any) => item.ref.startsWith("result:"));
+
+    await setRemaining(1200);
+    const partial = await service.prepareRun({ root, file, cellId: merge.cell.id });
+    expect(selectedParents(partial).map((item: any) => item.ref))
+      .toEqual(parents.slice(0, 2).map((parent) => `result:${parent.workNode.id}`));
+    expect(selectedParents(partial).every((item: any) => item.bytes === 500 && !item.truncated)).toBe(true);
+    expect(partial.spec.context_omitted).toContainEqual(expect.objectContaining({
+      ref: `result:${parents[2].workNode.id}`,
+    }));
+
+    await setRemaining(1500);
+    const complete = await service.prepareRun({ root, file, cellId: merge.cell.id });
+    expect(selectedParents(complete)).toHaveLength(3);
+    expect(complete.spec.context_omitted?.some((item: any) => item.ref.startsWith("result:"))).toBeFalsy();
+
+    for (const [index, parent] of parents.entries()) {
+      notebook = upsertResearchRunOutput(notebook, {
+        workId: parent.workNode.id, runId: `run_${["first", "second", "third"][index]}`,
+        agent: "codex", status: "completed", content: "X".repeat(index === 1 ? 300 : 30_000),
+      }).notebook;
+    }
+    await writeResearchNotebookFile(file, notebook);
+    const mixedPreview = await service.previewRunContext({ root, file, cellId: merge.cell.id });
+    expect(mixedPreview.context.find((item: any) => item.ref === `result:${parents[0].workNode.id}`))
+      .toMatchObject({ truncated: true, sourceBytes: 30_000 });
+    expect(mixedPreview.omitted).toContainEqual(expect.objectContaining({
+      ref: `result:${parents[2].workNode.id}`,
+      reason: "context budget; too little room for a DAG parent excerpt",
+    }));
+    const mixed = await service.prepareRun({ root, file, cellId: merge.cell.id });
+    expect(selectedParents(mixed).map((item: any) => item.ref))
+      .toEqual(parents.slice(0, 2).map((parent) => `result:${parent.workNode.id}`));
+    expect(selectedParents(mixed).find((item: any) => item.ref === `result:${parents[1].workNode.id}`))
+      .toMatchObject({ bytes: 300, truncated: false });
+    expect(mixed.spec.context_omitted).toContainEqual(expect.objectContaining({
+      ref: `result:${parents[2].workNode.id}`,
+    }));
   }));
 
   test("previews route and context from the unsaved document without freezing, compacting or dispatching", async () => withProject(async (root) => {
@@ -915,6 +1170,40 @@ describe("research runtime service", () => {
       `result:${work.workNode.id}`, "handoff:run_parent",
     ]);
     expect(Buffer.from(prepared.contextItems[1].contentBase64, "base64").toString()).toBe("Parent handoff.");
+
+    // A large Handoff is automatic context: an explicit file keeps its full
+    // budget, and the Handoff is cut instead of failing the Run.
+    await writeFile(join(root, "brief.md"), "b".repeat(60_000));
+    notebook.cells.find((cell: any) => cell.id === work.cell.id)!.source = "@@ctx(file:brief.md)\n\nTry another route.";
+    await writeFile(file, `${JSON.stringify(notebook, null, 2)}\n`);
+    const handoffOutcome = "FINAL_DECISION";
+    provider.readArtifact.mockResolvedValue({
+      artifact: { id: "art_handoff", mediaType: "text/markdown; charset=utf-8" },
+      dataBase64: Buffer.from("H".repeat(70_000 - handoffOutcome.length) + handoffOutcome).toString("base64"),
+    });
+    const budgeted = await service.prepareRun({
+      file, cellId: work.cell.id, cwd: root, sessionPolicy: "fork", parentSessionId: "ses_parent",
+    });
+    const brief = budgeted.contextItems.find((item: any) => item.ref === "file:brief.md");
+    const handoff = budgeted.spec.context.find((item: any) => item.ref === "handoff:run_parent");
+    expect(Buffer.from(brief.contentBase64, "base64")).toHaveLength(60_000);
+    expect(handoff).toMatchObject({ automatic: true, truncated: true,
+      truncation_reason: expect.stringContaining("beginning and end retained") });
+    expect(Buffer.from(budgeted.contextItems.find((item: any) => item.ref === "handoff:run_parent").contentBase64, "base64")
+      .toString("utf8")).toMatch(/^H[\s\S]*middle omitted[\s\S]*FINAL_DECISION$/);
+    expect(budgeted.contextItems.reduce((sum: number, item: any) =>
+      sum + Buffer.from(item.contentBase64, "base64").byteLength, 0)).toBeLessThanOrEqual(64 * 1024);
+
+    // The explicit opt-out suppresses both reconstructed sources and avoids
+    // loading the Handoff artifact merely to discard it.
+    notebook.cells.find((cell: any) => cell.id === work.cell.id)!.source = "@@ctx(none)\n@@ctx(file:brief.md)\n\nTry another route.";
+    await writeFile(file, `${JSON.stringify(notebook, null, 2)}\n`);
+    const reads = provider.readArtifact.mock.calls.length;
+    const quiet = await service.prepareRun({
+      file, cellId: work.cell.id, cwd: root, sessionPolicy: "fork", parentSessionId: "ses_parent",
+    });
+    expect(quiet.contextItems.map((item: any) => item.ref)).toEqual(["project", "file:brief.md"]);
+    expect(provider.readArtifact).toHaveBeenCalledTimes(reads);
   }));
 
   test("routes corpus reconciliation, bounded updates, search, and exact block reads", async () => withProject(async (root) => {

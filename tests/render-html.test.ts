@@ -27,6 +27,12 @@ describe("shared markdown HTML renderer", () => {
     expect(html).toContain("<code>[[code]]</code>");
   });
 
+  test("marks older ID-directed links as stable while title links remain title-directed", () => {
+    const html = renderMarkdownHTML("[Old](roam://20261006T121400-search-counting-to-decision) [[New Page]]");
+    expect(html).toContain('data-roam-stable="true">Old</a>');
+    expect(html).not.toContain('data-roam-stable="true">New Page</a>');
+  });
+
   test("keeps Jupyter commands hidden by default and emits slide hydration slots on request", () => {
     const markdown = "Before\n\n@@cell(python, python3) [demo-cell]\n\nAfter";
     expect(renderMarkdownHTML(markdown)).not.toContain("demo-cell");
@@ -250,6 +256,13 @@ y^2
     expect(html).toContain('class="aaronnote-roam-link noema-internal-link"');
     expect(html).toContain('data-roam-link="true"');
     expect(html).toContain('data-internal-link="true"');
+  });
+
+  test("marks stable Wiki links for the filled node marker", () => {
+    const id = "019a1234-5678-7abc-8123-abcdefabcdef";
+    const html = renderMarkdownHTML(`[[roam://${id}|Graph Theory]] and [[Graph Theory]]`);
+    expect(html).toContain('data-roam-stable="true"');
+    expect(html.match(/data-roam-stable="true"/g)).toHaveLength(1);
   });
 
   test("renders a local heading fragment containing spaces as one link", () => {

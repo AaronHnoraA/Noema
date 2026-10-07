@@ -11,6 +11,11 @@ export function wikiHrefForTarget(value) {
   return `roam://wiki/${encodeURIComponent(target)}`;
 }
 
+/** ID-directed Roam links include both current UUIDs and earlier page IDs. */
+export function isStableWikiHref(value) {
+  return /^roam:\/\/(?!wiki(?:\/|$))(?:id\/)?[^?#@\s]+(?:[?#@]|$)/i.test(String(value || "").trim());
+}
+
 export function scanWikiLinks(value, offset = 0) {
   const source = String(value || "");
   const links = [];

@@ -41,6 +41,13 @@ type SessionContext struct {
 	Compaction *SessionCompaction `json:"compaction,omitempty"`
 }
 
+// An all-zero record is agent-shell's pre-report placeholder, not an ACP
+// measurement. A reported context window or any token count makes it real.
+func sessionUsageReported(usage SessionUsage) bool {
+	return usage.TotalTokens != 0 || usage.InputTokens != 0 || usage.OutputTokens != 0 ||
+		usage.ThoughtTokens != 0 || usage.CachedTokens != 0 || usage.ContextUsed != 0 || usage.ContextSize != 0
+}
+
 func validateSessionUsage(usage SessionUsage) error {
 	values := []int64{usage.TotalTokens, usage.InputTokens, usage.OutputTokens, usage.ThoughtTokens,
 		usage.CachedTokens, usage.ContextUsed, usage.ContextSize}

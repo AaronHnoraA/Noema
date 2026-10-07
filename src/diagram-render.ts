@@ -661,6 +661,13 @@ function bindDiagramInteraction(element: HTMLElement): DiagramInteractionState {
     });
     node.classList.add("cm-diagram-selected");
   });
+  element.addEventListener("auxclick", (event) => {
+    if (event.button !== 1) return;
+    const anchor = (event.target as Element | null)?.closest<SVGElement>("a");
+    if (!anchor) return;
+    const href = diagramHrefFromAnchor(anchor);
+    if (href) dispatchDiagramLink(element, event, href);
+  });
   element.addEventListener("dblclick", (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -832,6 +839,13 @@ export function presentDiagramFigure(element: HTMLElement): void {
   if (element.dataset.diagramLinksBound !== "true") {
     element.dataset.diagramLinksBound = "true";
     element.addEventListener("click", (event) => {
+      const anchor = (event.target as Element | null)?.closest<SVGElement>("a");
+      if (!anchor) return;
+      const href = diagramHrefFromAnchor(anchor);
+      if (href) dispatchDiagramLink(element, event, href);
+    });
+    element.addEventListener("auxclick", (event) => {
+      if (event.button !== 1) return;
       const anchor = (event.target as Element | null)?.closest<SVGElement>("a");
       if (!anchor) return;
       const href = diagramHrefFromAnchor(anchor);

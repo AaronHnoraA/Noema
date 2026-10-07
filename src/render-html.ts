@@ -24,7 +24,7 @@ import {
   parseOrgEnvIdentityTitle,
   shortBlockId,
 } from "../shared/block-identity.mjs";
-import { wikiHrefForTarget } from "../shared/wiki-link.mjs";
+import { isStableWikiHref, wikiHrefForTarget } from "../shared/wiki-link.mjs";
 import { renderTikzFigureBody } from "./tikz-render.ts";
 import "./tikz-browser.ts";
 import {
@@ -1082,6 +1082,7 @@ function wikiLinkRule(state: StateInline, silent: boolean): boolean {
   if (silent) return true;
   const open = state.push("link_open", "a", 1);
   open.attrs = [["href", wikiHrefForTarget(target)], ["class", "noema-wiki-link noema-internal-link"], ["data-wiki-target", target], ["data-internal-link", "true"]];
+  if (isStableWikiHref(target)) open.attrSet("data-roam-stable", "true");
   const text = state.push("text", "", 0);
   text.content = label;
   state.push("link_close", "a", -1);
@@ -1556,6 +1557,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
       joinNewClasses(token, "aaronnote-roam-link", "noema-internal-link");
       token.attrSet("data-roam-link", "true");
       token.attrSet("data-internal-link", "true");
+      if (isStableWikiHref(href)) token.attrSet("data-roam-stable", "true");
     } else if (href && isJupyterHref(href)) {
       token.attrJoin("class", "aaronnote-jupyter-link");
       token.attrSet("data-jupyter-link", "true");

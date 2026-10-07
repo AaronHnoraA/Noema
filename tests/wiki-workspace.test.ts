@@ -14,9 +14,12 @@ import {
   copyWikiPage,
   createWikiPage,
   deleteWikiPage,
+  listTrashedWikiPages,
+  restoreTrashedWikiPage,
   discoverWikiRepositories,
   exportWiki,
   initWikiRepository,
+  mergeWikiPages,
   moveWikiPage,
   publicWikiNotes,
   repositoryFromId,
@@ -655,6 +658,69 @@ describe("Wiki workspace", () => {
     const deleted = await deleteWikiPage(root, { pageId: target.id, confirm: "DELETE" }, { trashRoot });
     await expect(stat(target.file)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await stat(String(deleted.trashedFile))).isFile()).toBe(true);
+  });
+
+  test("renames a page title in place while preserving its ID and old title alias", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "notes");
+    const page = await createWikiPage(root, "wiki", { title: "Old title", repositoryId: "private/notes" });
+    const moved = await moveWikiPage(root, { pageId: page.id, title: "New title", repositoryId: "private/notes", filename: "old-title.md" });
+    expect(moved.file).toBe(page.file);
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    expect(index.notes.find((item) => item.id === page.id)).toMatchObject({ title: "New title", aliases: ["Old title"] });
+    expect(resolveWikiLink(index, "Old title")).toMatchObject({ status: "resolved" });
+    await expect(createWikiPage(root, "wiki", { title: "Old title", repositoryId: "private/notes", filename: "another.md" }))
+      .rejects.toMatchObject({ code: "ERR_WIKI_TITLE_CONFLICT" });
+  });
+
+  test("privacy-gates copies into public Git and distinguishes repository placement from publishing", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "notes");
+    await initWikiRepository(root, "public", "shared");
+    const page = await createWikiPage(root, "wiki", { title: "Private source", repositoryId: "private/notes" });
+    await expect(copyWikiPage(root, { pageId: page.id, repositoryId: "public/shared", filename: "copy.md" }))
+      .rejects.toMatchObject({ code: "ERR_WIKI_PRIVACY_CONFIRM" });
+    const hidden = await copyWikiPage(root, { pageId: page.id, repositoryId: "public/shared", filename: "hidden.md", title: "Hidden copy", confirm: "COPY PRIVATE TO PUBLIC" });
+    const published = await copyWikiPage(root, { pageId: page.id, repositoryId: "public/shared", filename: "published.md", title: "Published copy", confirm: "COPY PRIVATE TO PUBLIC", publish: true });
+    const moved = await moveWikiPage(root, { pageId: page.id, repositoryId: "public/shared", filename: "moved.md", confirm: "MOVE PRIVATE TO PUBLIC", publish: true });
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    const publicIds = publicWikiNotes(index).map((item) => item.id);
+    expect(publicIds).not.toContain(hidden.id);
+    expect(publicIds).toContain(published.id);
+    expect(publicIds).toContain(moved.pageId);
+    expect(await readFile(moved.file, "utf8")).toContain("private: false");
+  });
+
+  test("refuses relocation that would strand ordinary relative resources", async () => {
+    const root = await tempRoot();
+    const repository = await initWikiRepository(root, "private", "notes");
+    const page = await createWikiPage(root, "wiki", { title: "With resource", repositoryId: "private/notes" });
+    await writeFile(join(repository.repository.path, "figure.png"), "image");
+    await writeFile(page.file, `${await readFile(page.file, "utf8")}\n![figure](figure.png)\n`);
+    await expect(moveWikiPage(root, { pageId: page.id, repositoryId: "private/notes", directory: "moved", filename: "with-resource.md" }))
+      .rejects.toMatchObject({ code: "ERR_WIKI_DEPENDENCIES" });
+    expect(await readFile(page.file, "utf8")).toContain("figure.png");
+  });
+
+  test("merges body without title ambiguity and restores a trashed page with its original ID", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "notes");
+    const survivor = await createWikiPage(root, "wiki", { title: "Survivor", repositoryId: "private/notes" });
+    const duplicate = await createWikiPage(root, "wiki", { title: "Duplicate", repositoryId: "private/notes" });
+    await writeFile(duplicate.file, `${await readFile(duplicate.file, "utf8")}\nUnique duplicate body.\n`);
+    const merged = await mergeWikiPages(root, { survivorId: survivor.id, duplicateId: duplicate.id, confirm: "MERGE" });
+    expect(await readFile(merged.survivorFile, "utf8")).toContain("Unique duplicate body.");
+    expect(await readFile(merged.archiveFile, "utf8")).toContain("Unique duplicate body.");
+    let index = await buildWikiIndex(root, { layout: "wiki" });
+    expect(resolveWikiLink(index, "Duplicate")).toMatchObject({ status: "resolved", candidates: [expect.objectContaining({ id: survivor.id })] });
+    expect(resolveWikiLink(index, `roam://${duplicate.id}`)).toMatchObject({ status: "resolved", candidates: [expect.objectContaining({ id: survivor.id })] });
+    await deleteWikiPage(root, { pageId: survivor.id, confirm: "DELETE" }, { trashRoot: join(root, "test-trash") });
+    expect((await listTrashedWikiPages(root)).pages).toEqual([expect.objectContaining({ pageId: survivor.id, available: true })]);
+    const restored = await restoreTrashedWikiPage(root, { pageId: survivor.id });
+    expect(restored.file).toBe(survivor.file);
+    index = await buildWikiIndex(root, { layout: "wiki" });
+    expect(index.notes.some((item) => item.id === survivor.id)).toBe(true);
+    expect((await listTrashedWikiPages(root)).pages).toEqual([]);
   });
 
   test("reports branch, upstream, ahead/behind and per-file state as structured status", async () => {
