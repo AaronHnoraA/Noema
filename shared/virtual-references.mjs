@@ -1,4 +1,13 @@
 const WORD_RE = /[\p{L}\p{N}_]/u;
+// Han and kana are written without spaces, so a neighbouring character is no
+// evidence that the keyword is part of a longer word.  The Go scanner
+// (`virtualreference.validBoundary`) and the editor's link review apply the
+// same rule.
+const UNSPACED_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
+
+function joined(left, right) {
+  return WORD_RE.test(left) && WORD_RE.test(right) && !UNSPACED_RE.test(left) && !UNSPACED_RE.test(right);
+}
 
 function normalize(value, caseSensitive) {
   const text = String(value || "").normalize("NFC");
@@ -130,8 +139,8 @@ function validBoundary(text, match) {
   const last = match.pattern.at(-1) || "";
   const before = match.from > 0 ? text[match.from - 1] : "";
   const after = match.to < text.length ? text[match.to] : "";
-  if (WORD_RE.test(first) && before && WORD_RE.test(before)) return false;
-  if (WORD_RE.test(last) && after && WORD_RE.test(after)) return false;
+  if (before && joined(before, first)) return false;
+  if (after && joined(last, after)) return false;
   return true;
 }
 

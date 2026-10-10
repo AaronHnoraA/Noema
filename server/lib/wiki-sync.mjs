@@ -1415,6 +1415,21 @@ export function syncWikiRepository(rootValue, repositoryId, options = {}) {
   return tracked;
 }
 
+// A conflict path names a file of the integration worktree and nothing else.
+function conflictTarget(worktree, pathValue) {
+  const path = String(pathValue || "");
+  const target = resolve(worktree, path);
+  const targetRelative = relative(resolve(worktree), target);
+  if (
+    !path
+    || targetRelative === ""
+    || targetRelative === ".."
+    || targetRelative.startsWith(`..${sep}`)
+    || targetRelative.split(sep)[0] === ".git"
+  ) throw apiError("Invalid conflict path");
+  return target;
+}
+
 function contentKind(buffer) {
   return buffer.includes(0) ? "binary" : "text";
 }
@@ -1433,6 +1448,7 @@ export async function readWikiConflict(rootValue, body = {}) {
   const worktree = integrationPath(root, repository);
   const path = String(body.path || "");
   if (!path || !await mergeInProgress(worktree)) throw apiError("No active merge conflict", 404);
+  const target = conflictTarget(worktree, path);
   const state = await storedWikiSyncState(root, repository) || {};
   const summary = (state.conflicts || []).find((conflict) => conflict.path === path) || conflictContextFromState(state);
   const oursStage = Number(summary.oursStage) === 3 ? 3 : 2;
@@ -1449,7 +1465,7 @@ export async function readWikiConflict(rootValue, body = {}) {
   // point for the editor; seeding from the merge base would silently discard
   // both sides' non-conflicting work.
   const merged = kind === "text"
-    ? await readFile(resolve(worktree, path), "utf8").catch(() => "")
+    ? await readFile(target, "utf8").catch(() => "")
     : "";
   return {
     ok: true,
@@ -1484,15 +1500,7 @@ async function resolveWikiConflictUnlocked(root, repository, body = {}, recovere
   const transportProvider = originMainTransportProvider(repository);
   const headBefore = await currentHeadSha(repository);
   const path = String(body.path || "");
-  const target = resolve(worktree, path);
-  const targetRelative = relative(resolve(worktree), target);
-  if (
-    !path
-    || targetRelative === ""
-    || targetRelative === "."
-    || targetRelative === ".."
-    || targetRelative.startsWith(`..${sep}`)
-  ) throw apiError("Invalid conflict path");
+  const target = conflictTarget(worktree, path);
   const choice = String(body.choice || "result");
   const summary = (previousState.conflicts || []).find((conflict) => conflict.path === path)
     || conflictContextFromState(previousState);

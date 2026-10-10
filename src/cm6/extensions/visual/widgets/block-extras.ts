@@ -294,6 +294,9 @@ export function applyCeilLiveEvent(
   return outputs;
 }
 
+// Text that could add or remove a block boundary. Both spellings are in use:
+// `#+begin kind` and `#+ begin kind`.
+const ORG_ENV_BOUNDARY_TEXT_RE = /^\s*#\+\s*(?:begin|end)\b/im;
 const ORG_ENV_OPEN_LINE_RE = /^([ \t]*#\+\s*begin\s+)(\S+)(?:([ \t]+)([^\n]*?))?[ \t]*$/i;
 const ORG_ENV_SCAN_OPEN_RE = /^[ \t]*#\+\s*begin\s+(\S+)(?:[ \t]+([^\n]*))?[ \t]*$/i;
 
@@ -1197,7 +1200,13 @@ function scheduleTikzIdAssignment(view: EditorView, from: number, id: string): v
     if (!current.changed) return;
     const title = current.attrsRaw ? `${id} ${current.attrsRaw}` : id;
     view.dispatch({
-      changes: { from: line.from, to: line.to, insert: `#+ begin tikz ${title}` },
+      // Keep the line's own indentation and spelling of the opener; only the
+      // title is being completed.
+      changes: {
+        from: line.from,
+        to: line.to,
+        insert: `${/^[ \t]*#\+\s*begin\s+\S+/i.exec(line.text)?.[0] ?? "#+ begin tikz"} ${title}`,
+      },
     });
   });
 }
@@ -4132,7 +4141,7 @@ function canMapOrgEnvBlocks(doc: Text, blocks: readonly OrgEnvBlock[], changes: 
     if (!canMap) return;
     const removed = doc.sliceString(fromA, toA);
     const added = inserted.toString();
-    if (/^\s*#\+(?:begin|end)\b/im.test(removed) || /^\s*#\+(?:begin|end)\b/im.test(added)) {
+    if (ORG_ENV_BOUNDARY_TEXT_RE.test(removed) || ORG_ENV_BOUNDARY_TEXT_RE.test(added)) {
       canMap = false;
       return;
     }
@@ -4204,7 +4213,7 @@ function patchOrgEnvBlocksForTitleChange(
 
   const removed = oldDoc.sliceString(fromA, toA);
   if (removed.includes("\n") || insertedText.includes("\n")) return null;
-  if (/^\s*#\+(?:begin|end)\b/im.test(removed) || /^\s*#\+(?:begin|end)\b/im.test(insertedText)) {
+  if (ORG_ENV_BOUNDARY_TEXT_RE.test(removed) || ORG_ENV_BOUNDARY_TEXT_RE.test(insertedText)) {
     return null;
   }
 

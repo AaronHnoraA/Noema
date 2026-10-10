@@ -99,6 +99,60 @@ if its original source text is still present in the source editor. An existing
 page or alias in the chosen repository and namespace can be selected instead.
 `roam://id` remains the stable exact-link form.
 
+A colon is read as a namespace separator only when a page answers to that
+reading. `[[Chapter 1: Scope]]` and `[[定理：存在性]]` therefore link the page
+with that title when no namespace `Chapter 1` or `定理` holds a matching page.
+A redirect page answers for its ID only; its old title resolves through the
+alias the merge left on the surviving page.
+
+In the editor, a link is resolved against the note index by identity first
+(ID, key, title, alias, path) and then by location: the path with or without
+its note extension, or either as a whole trailing run of directories, so
+`topic/page` finds `…/topic/page.md` (`shared/note-refs.mjs`). A reference is
+never matched inside a path segment or a title, and a tag never names a page:
+`[x](src)` or `roam://set` resolves to nothing unless a note answers to
+exactly that, instead of opening the first note whose path or tags happened
+to contain the text. A file reported under two spellings is the same note when
+one path is the other's whole tail; two notes that only share a file name
+(`README.md` in two namespaces) are never treated as one.
+
+The `date` a new page or note is stamped with, the `{date}` filename pattern
+and the Agenda's Today and Overdue filters use the author's calendar date,
+not the UTC date.
+
+Unlinked-mention detection (the link review tool, the Knowledge Dock and the
+Server reader) requires a word boundary around Latin-script titles. Han and
+kana titles match inside running text, because those scripts have no spaces
+to bound a word.
+
+## Search
+
+Structured Knowledge queries run against `wiki.db`. A query combines free text
+with `field:value` filters; a leading `-` negates a filter and quotes keep a
+phrase together.
+
+| Filter | Matches |
+| --- | --- |
+| `title:` (`intitle:`) | title or alias |
+| `tag:` (`category:`) | tag |
+| `repo:` (`repository:`), `namespace:`, `path:`, `kind:` | location and page kind |
+| `linksto:` | a page linking to the given ID or title |
+| `is:orphan`, `is:missing` | no resolved links in or out; has an unresolved link |
+| `after:` (`since:`), `before:` (`until:`) | modification time |
+| `created:` | the period of the page's `date` metadata |
+
+`after:` and `before:` take a calendar date (`2026`, `2026-10`, `2026-10-09`)
+or an age (`7d`, `2w`, `3m`, `1y`). The bound is the local start of that day:
+`after:2026-10-09` includes the 9th, `before:2026-10-09` ends with the 8th.
+`created:` takes the same forms and names a period instead of a bound:
+`created:2026-10` is pages dated that month, `created:7d` pages dated within
+the last week. A page without a `date` matches no `created:` filter.
+
+Free text uses the Unicode index, or the trigram index when it contains CJK.
+A trigram index cannot answer a term shorter than three characters, so a query
+with a one- or two-character CJK term (`群论`) scans the indexed title,
+aliases, tags and body instead and cuts the excerpt around the first hit.
+
 In the Emacs editor, each Roam title stays one continuous text link with a
 single node marker at its start, even when spelling annotations divide the
 editor's internal spans. A filled
@@ -128,6 +182,13 @@ Deletion lists backlinks and keeps a Wiki Trash record so the page and its
 owned assets can be restored to their original paths and ID. Relative
 dependencies outside the page-owned asset directories block relocation until
 the author fixes them.
+A title, ID, kind or tag is one line of text; a value with a line break is
+rejected, since it would start another metadata field. A move that fails part
+way (an occupied asset directory, a filesystem error) is undone and leaves the
+page and its assets where they were; the operation journal records
+`rolled-back`. Copying requires the page's ID to live in its `#+begin meta`
+block, and tag edits report pages whose tags live in YAML front matter as
+`skipped` instead of changed.
 Git history exposes committed changes and the current uncommitted diff.
 Restoring a commit warns when it would overwrite current working changes and
 requires an explicit typed confirmation in that case. Moving between Git
@@ -222,6 +283,21 @@ history, and storage-adapter separation were reviewed against Wiki.js. The wide
 two-sidebar information architecture and responsive drawer behavior were
 reviewed against MediaWiki's Vector skin. Noema keeps its existing CM6 editor
 and physical Git repositories rather than importing either upstream runtime.
+Alexandrie was compared line by line for its node tree, search and editor.
+Noema keeps Markdown files in Git as the only source of truth, so Alexandrie's
+database-owned node table, numeric `#id` links, per-user permissions and
+object storage were not adopted. Three things were: its pre-indexed collection
+(one pass builds the title, ID and file maps that every link resolution
+reads), its excerpt cut around the first match for searches the full-text
+index cannot serve, and its date-range search filter, expressed here as
+`after:`/`before:` query fields rather than a filter panel.
+Its date filter can also be turned from "modified" to "created"; here that is
+the `created:` field, read from the `date` a page's metadata already carries
+rather than from a database timestamp. Its editor shows a numeric `#id` link
+under the target document's current name; Noema does the same for a stable
+link written without a label, `[[roam://<id>]]`, and marks a stable ID that no
+page answers to. The source keeps the ID and shows it while the selection
+touches the link, and title links are left to the index to resolve.
 The follow-up [MediaWiki × Roam interaction audit](mediawiki-roam-ux-audit-2026-10.md)
 tracks the link-to-page creation flow, multi-repository choices, page actions,
 and history semantics against MediaWiki's source and user-facing behavior.
@@ -234,6 +310,26 @@ resolution.
 The publisher scans only repositories below `public/` in Wiki layout. It never
 walks `private/`. A public-repository page with `private: true`, `hidden: true`,
 or another existing no-export marker is omitted.
+
+### Reading order and pinned pages
+
+The Server reader, and only it, offers a reading order. A page's previous and
+next page are its neighbours among the public pages of the same repository
+folder; redirects and hidden pages are neither offered nor passed through.
+Order comes from the page's own metadata, so it travels with the Markdown:
+
+```text
+#+begin meta
+order: 2
+pinned: true
+#+end meta
+```
+
+Pages with an `order` come first, by that number; the rest follow by title in
+natural order (`Lecture 2` before `Lecture 10`). `pinned: true` puts the page
+on a Pinned shelf at the top of the public Wiki home. Both fields are read
+when the public catalog is built. The local index, its cache and the Emacs
+surfaces ignore them, where the same pages are reached through Emacs.
 
 ## Deferred Legacy migration
 

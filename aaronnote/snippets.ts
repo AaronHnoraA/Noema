@@ -1150,7 +1150,7 @@ export function matchingSnippetsForPrefix(
   const activeKind = (options.kind || "").toLowerCase();
   const limit = Math.max(1, options.limit ?? 10);
   const now = options.now ?? Date.now();
-  type RankedSnippet = { snippet: SnippetSummary; match: number; secondary: number };
+  type RankedSnippet = { snippet: SnippetSummary; match: number; secondary: number; identity: string };
   const compare = (a: RankedSnippet, b: RankedSnippet): number => {
     if (a.match !== b.match) return a.match - b.match;
     if (a.secondary !== b.secondary) return b.secondary - a.secondary;
@@ -1173,23 +1173,21 @@ export function matchingSnippetsForPrefix(
     const usage = options.usage?.get(snippet);
     const recentDays = usage ? Math.max(0, (now - usage.lastUsed) / 86_400_000) : Number.POSITIVE_INFINITY;
     const adaptive = (usage?.count ?? 0) * 8 + (Number.isFinite(recentDays) ? Math.max(0, 24 - recentDays) : 0);
-    const item = {
+    const item: RankedSnippet = {
       snippet,
       match,
       secondary: providerPriority(snippet) * 100
         + Math.log2(1 + Math.max(0, frequency)) * 80
         + Math.max(0, Number(snippet.weight) || 0)
         + adaptive,
+      identity: snippetCompletionIdentity(snippet),
     };
 
     // Keep only the highest-ranked provider for a byte-equivalent expansion.
     // This makes the popup one coherent Noema snippet/company surface instead
     // of showing personal, current-note and imported copies of `\cup` as
     // separate rows.
-    const identity = snippetCompletionIdentity(snippet);
-    const duplicate = best.findIndex((candidate) => (
-      snippetCompletionIdentity(candidate.snippet) === identity
-    ));
+    const duplicate = best.findIndex((candidate) => candidate.identity === item.identity);
     if (duplicate >= 0) {
       if (compare(item, best[duplicate]!) >= 0) continue;
       best.splice(duplicate, 1);

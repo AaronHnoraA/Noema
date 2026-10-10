@@ -107,3 +107,23 @@ export function splitQualifiedWikiTarget(value, knownNamespaces = []) {
     ? { target, namespace, title, qualified: true }
     : { target, namespace: "", title: target, qualified: false };
 }
+
+/**
+ * Split the target of a link to a page that does not exist yet.
+ *
+ * `[[Research:Page]]` names a namespace, also a new one.  `[[Chapter 1: Scope]]`
+ * and `[[定理：存在性]]` are titles: a colon followed by a space, or a
+ * full-width colon, is punctuation unless the text before it is a namespace
+ * that already exists.
+ */
+export function splitWantedWikiTarget(value, knownNamespaces = []) {
+  const raw = String(value || "").trim();
+  const parsed = splitQualifiedWikiTarget(raw, knownNamespaces);
+  if (!parsed.qualified) return parsed;
+  const fold = (item) => normalizeWikiNamespace(item).toLocaleLowerCase().replace(/^(?:public|private)\//u, "");
+  const scope = fold(parsed.namespace);
+  if ([...knownNamespaces].some((item) => fold(item) === scope)) return parsed;
+  const colon = raw.search(/[:\uff1a]/u);
+  const prose = raw[colon] === "\uff1a" || /\s/u.test(raw[colon + 1] || "");
+  return prose ? { target: raw, namespace: "", title: raw, qualified: false } : parsed;
+}

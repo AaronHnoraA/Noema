@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "@voidzero-dev/vite-plus-test";
 import { EditorSelection } from "@codemirror/state";
 import { createEditorCM6 } from "../../src/cm6/editor-cm6.ts";
 import { runEditorDelete, runEditorEnter } from "../../src/cm6/input-commands.ts";
+import { indentMarkdownBlock } from "../../src/cm6/commands/index.ts";
 import { activeInlineFormats, inlineFormatsAvailable } from "../../src/cm6/inline-format.ts";
 import type { Editor } from "../../src/editor-api.ts";
 
@@ -253,6 +254,157 @@ describe("block format toggles", () => {
     const ed = open("* item", 3);
     ed.runCommand("task-list");
     expect(ed.getMarkdown()).toBe("* [ ] item");
+  });
+});
+
+// Found by running every command at random selections with one invariant:
+// a command is one undo step and never throws.
+describe("command invariants", () => {
+  it("making a list ordered, with the renumbering it causes, is one undo step", () => {
+    const doc = "- a\n- b\n1. one\n2. two";
+    const ed = open(doc, 1);
+    expect(ed.runCommand("ordered-list")).toBe(true);
+    expect(ed.getMarkdown()).not.toBe(doc);
+    ed.undo();
+    expect(ed.getMarkdown()).toBe(doc);
+  });
+
+  it("continuing an ordered list in the middle is one undo step", () => {
+    const doc = "1. one\n2. two\n3. three";
+    const ed = open(doc, 6);
+    runEditorEnter(ed.view);
+    expect(ed.getMarkdown()).toBe("1. one\n2. \n3. two\n4. three");
+    ed.undo();
+    expect(ed.getMarkdown()).toBe(doc);
+  });
+
+  it("indents a selection that runs past the end of its list", () => {
+    const doc = "- a\n  - b\n\n| x | y |\n| --- | --- |\n| 1 | 2 |\n\ntext";
+    const ed = open(doc, 6, doc.length - 2);
+    expect(() => indentMarkdownBlock(ed.view, 1)).not.toThrow();
+    expect(() => indentMarkdownBlock(ed.view, -1)).not.toThrow();
+    expect(ed.getMarkdown()).toContain("| x | y |");
+  });
+
+  it("renders an environment block typed in either opener spelling", () => {
+    for (const [begin, end] of [["#+begin theorem T", "#+end theorem"], ["#+ begin theorem T", "#+ end theorem"]]) {
+      const ed = open("intro\n\nplain\n\noutro", 0);
+      ed.view.dispatch({ changes: { from: 7, to: 12, insert: `${begin}\nbody\n${end}` } });
+      expect(ed.view.dom.querySelectorAll(".cm-org-env-heading-widget")).toHaveLength(1);
+      expect(ed.view.dom.querySelectorAll(".cm-org-env-body-line")).toHaveLength(1);
+      // Removing the closer dissolves the block again.
+      const doc = ed.getMarkdown();
+      ed.view.dispatch({ changes: { from: doc.indexOf(end), to: doc.indexOf(end) + end.length, insert: "" } });
+      expect(ed.view.dom.querySelectorAll(".cm-org-env-heading-widget")).toHaveLength(0);
+    }
+  });
+
+  it("opens documents whose image or tag is broken across lines", () => {
+    for (const doc of ["intro\n\n![alt\ntext](a.png)\n\nend", "[a](<u\nv>) and <span\nclass=\"x\">y</span>", "| a |\n| - |\n| ![i\n](x.png) |"]) {
+      const ed = open(doc, 0);
+      ed.setSelection(doc.length, doc.length);
+      ed.setSelection(0, 0);
+      expect(ed.getMarkdown()).toBe(doc);
+    }
+  });
+});
+
+describe("code block toggle", () => {
+  it("fences the selected lines in place instead of copying them", () => {
+    const ed = open("intro\nline one\nline two\noutro", 9, 20);
+    expect(ed.runCommand("code-block", "ts")).toBe(true);
+    expect(ed.getMarkdown()).toBe("intro\n```ts\nline one\nline two\n```\noutro");
+    const selection = ed.getSelection();
+    expect(ed.getMarkdown().slice(selection.from, selection.to)).toBe("line one\nline two");
+    ed.undo();
+    expect(ed.getMarkdown()).toBe("intro\nline one\nline two\noutro");
+  });
+
+  it("removes the fence around the caret and keeps the code", () => {
+    const ed = open("a\n\n```js\nconst x = 1;\nx;\n```\n\nb", 12);
+    ed.runCommand("code-block");
+    expect(ed.getMarkdown()).toBe("a\n\nconst x = 1;\nx;\n\nb");
+    const selection = ed.getSelection();
+    expect(ed.getMarkdown().slice(selection.from, selection.to)).toBe("const x = 1;\nx;");
+  });
+
+  it("uses a fence longer than any backtick run it wraps", () => {
+    const doc = "show:\n```\ninner\n```";
+    const ed = open("x", 0, 1);
+    ed.setMarkdown(doc);
+    ed.setSelection(0, 5);
+    ed.runCommand("code-block");
+    expect(ed.getMarkdown()).toBe("```\nshow:\n```\n```\ninner\n```");
+    const literal = open("a ``` b\nc", 0, 9);
+    literal.runCommand("code-block");
+    expect(literal.getMarkdown()).toBe("````\na ``` b\nc\n````");
+  });
+
+  it("unwraps an empty and an unterminated fence without losing text", () => {
+    const empty = open("```\n```", 1);
+    empty.runCommand("code-block");
+    expect(empty.getMarkdown()).toBe("");
+    const open_ = open("```py\nprint(1)", 8);
+    open_.runCommand("code-block");
+    expect(open_.getMarkdown()).toBe("print(1)");
+  });
+});
+
+describe("inline math toggle", () => {
+  it("wraps the selection, keeping edge whitespace outside the delimiters", () => {
+    const ed = open("let  x^2 + 1  hold", 4, 13);
+    expect(ed.runCommand("inline-math")).toBe(true);
+    expect(ed.getMarkdown()).toBe("let  \\(x^2 + 1\\)  hold");
+    expect(ed.getSelection()).toMatchObject({ from: 7, to: 14 });
+  });
+
+  it("unwraps the formula around the caret and leaves its neighbours alone", () => {
+    const ed = open("\\(a\\) and \\(b_1\\) end", 14);
+    ed.runCommand("inline-math");
+    expect(ed.getMarkdown()).toBe("\\(a\\) and b_1 end");
+    expect(ed.getSelection()).toMatchObject({ from: 10, to: 13 });
+  });
+
+  it("gives a bare caret an empty pair to type into", () => {
+    const ed = open("so  holds", 3);
+    ed.runCommand("inline-math");
+    expect(ed.getMarkdown()).toBe("so \\(\\) holds");
+    expect(ed.getSelection()).toMatchObject({ from: 5, to: 5 });
+  });
+
+  it("refuses a selection across lines or inside code", () => {
+    const lines = open("a\nb", 0, 3);
+    expect(lines.runCommand("inline-math")).toBe(false);
+    const code = open("`x + y`", 3);
+    expect(code.runCommand("inline-math")).toBe(false);
+    expect(code.getMarkdown()).toBe("`x + y`");
+  });
+});
+
+describe("task checkbox toggle", () => {
+  it("checks and unchecks the task under the caret, whatever its marker", () => {
+    const ed = open("> 1. [ ] quoted task", 12);
+    expect(ed.runCommand("toggle-task")).toBe(true);
+    expect(ed.getMarkdown()).toBe("> 1. [x] quoted task");
+    ed.runCommand("toggle-task");
+    expect(ed.getMarkdown()).toBe("> 1. [ ] quoted task");
+  });
+
+  it("settles a mixed selection as all checked, then all unchecked, in one undo step each", () => {
+    const doc = "- [x] done\n  * [ ] nested [link](a)\n- plain\n+ [X] upper";
+    const ed = open(doc, 0, doc.length);
+    ed.runCommand("toggle-task");
+    expect(ed.getMarkdown()).toBe("- [x] done\n  * [x] nested [link](a)\n- plain\n+ [X] upper");
+    ed.runCommand("toggle-task");
+    expect(ed.getMarkdown()).toBe("- [ ] done\n  * [ ] nested [link](a)\n- plain\n+ [ ] upper");
+    ed.undo();
+    expect(ed.getMarkdown()).toBe("- [x] done\n  * [x] nested [link](a)\n- plain\n+ [X] upper");
+  });
+
+  it("leaves a line that is not a task alone", () => {
+    const ed = open("- plain [ ] text", 4);
+    expect(ed.runCommand("toggle-task")).toBe(false);
+    expect(ed.getMarkdown()).toBe("- plain [ ] text");
   });
 });
 

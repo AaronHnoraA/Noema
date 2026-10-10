@@ -487,6 +487,11 @@ describe("Wiki Git synchronization", () => {
     const second = await syncWikiRepository(item.root, "private/research", { configDir: item.configDir });
     expect(second.phase).toBe("conflicted");
     const conflict = await readWikiConflict(item.root, { repositoryId: "private/research", path: "sync.md" });
+    await writeFile(join(item.root, "outside.txt"), "not a conflict file");
+    for (const path of ["../../../outside.txt", "..", ".git/config"]) {
+      await expect(readWikiConflict(item.root, { repositoryId: "private/research", path }))
+        .rejects.toThrow(/Invalid conflict path/);
+    }
     expect(conflict.ours).toContain("Newer local edit");
     expect(conflict.theirs).toContain("Remote published content");
     expect(conflict.oursLabel).toBe("Your latest local contribution");

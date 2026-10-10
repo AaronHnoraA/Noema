@@ -14,6 +14,7 @@ export interface MetaSummarySourceRange {
 
 export interface MetaSummaryOptions { isExcluded?: (offset: number) => boolean; }
 
+export function orgMetaOpenLineNumber(doc: LineDocument, options?: MetaSummaryOptions): number;
 export function orgMetaSummaryRangeFromLines(doc: LineDocument, options?: MetaSummaryOptions): MetaSummarySourceRange | null;
 export function orgMetaSummaryRange(markdown: string, options?: MetaSummaryOptions): MetaSummarySourceRange | null;
 export function maskMetaSummaryContent(markdown: string): string;

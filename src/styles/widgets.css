@@ -338,6 +338,11 @@
   text-underline-offset: 3px;
 }
 
+/* A stable link shown under its page's current title; the source holds the ID. */
+.cm-editor .cm-roam-link-title {
+  cursor: pointer;
+}
+
 .cm-editor .cm-link-text.cm-roam-link-text:has(.cm-roam-link-broken) {
   --roam-link-color: var(--aaron-callout-danger, #ff96b4);
 }

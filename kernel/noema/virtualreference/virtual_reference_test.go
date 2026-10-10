@@ -52,6 +52,17 @@ func TestFindHonorsCaseAndUnicodeWordBoundaries(t *testing.T) {
 	}
 }
 
+func TestFindMatchesUnspacedScriptsInsideProse(t *testing.T) {
+	documents := []Document{
+		{ID: "target", Title: "图论", Aliases: []string{"Graph"}, File: "/target.md"},
+		{ID: "source", Title: "Source", File: "/source.md", Text: "我们研究图论的基本方法。Graphを学ぶ。Subgraphs are not it."},
+	}
+	got := Find(documents, "target", false)
+	if len(got) != 1 || got[0].Count != 2 {
+		t.Fatalf("unspaced-script mentions = %#v", got)
+	}
+}
+
 func BenchmarkFindTarget(b *testing.B) {
 	documents := make([]Document, 500)
 	for index := range documents {

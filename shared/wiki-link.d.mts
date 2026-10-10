@@ -27,3 +27,9 @@ export function splitQualifiedWikiTarget(value: unknown, knownNamespaces?: unkno
   title: string;
   qualified: boolean;
 };
+export function splitWantedWikiTarget(value: unknown, knownNamespaces?: unknown[]): {
+  target: string;
+  namespace: string;
+  title: string;
+  qualified: boolean;
+};

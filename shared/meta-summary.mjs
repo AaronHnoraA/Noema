@@ -7,16 +7,24 @@ const META_CLOSE_RE = /^[ \t]*#\+\s*end\s+meta[ \t]*$/i;
 const SUMMARY_OPEN_RE = /^[ \t]*#\+\s*begin\s+summary(?:[ \t]+[^\r\n]*)?[ \t]*$/i;
 const SUMMARY_CLOSE_RE = /^[ \t]*#\+\s*end\s+summary[ \t]*$/i;
 
-export function orgMetaSummaryRangeFromLines(doc, { isExcluded = () => false } = {}) {
-  let metaLine = 0;
+/**
+ * The line that opens the note's metadata block, or 0 when the note has none.
+ * Only the opening lines of a note can hold it; a `#+begin meta` further down
+ * is an example in the text.
+ */
+export function orgMetaOpenLineNumber(doc, { isExcluded = () => false } = {}) {
   const preambleEnd = Math.min(doc.lines, ORG_META_PREAMBLE_LINE_LIMIT);
   for (let lineNumber = 1; lineNumber <= preambleEnd; lineNumber++) {
     const line = doc.line(lineNumber);
     if (!isExcluded(line.from + line.text.search(/\S|$/)) && META_OPEN_RE.test(line.text)) {
-      metaLine = lineNumber;
-      break;
+      return lineNumber;
     }
   }
+  return 0;
+}
+
+export function orgMetaSummaryRangeFromLines(doc, { isExcluded = () => false } = {}) {
+  const metaLine = orgMetaOpenLineNumber(doc, { isExcluded });
   if (metaLine === 0) return null;
 
   let summaryDepth = 0;

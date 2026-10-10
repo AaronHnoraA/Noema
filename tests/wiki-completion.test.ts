@@ -2,7 +2,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import { wikiCompletionSnippets, wikiLinkCompletionContext } from "../aaronnote/wiki-completion.ts";
 import type { WikiNote } from "../aaronnote/api-client.ts";
-import { qualifiedWikiTitle, splitQualifiedWikiTarget } from "../shared/wiki-link.mjs";
+import { qualifiedWikiTitle, splitQualifiedWikiTarget, splitWantedWikiTarget } from "../shared/wiki-link.mjs";
 
 const note: WikiNote = {
   id: "page-id",
@@ -40,6 +40,19 @@ describe("Wiki editor completion", () => {
     });
     expect(splitQualifiedWikiTarget("public/Math:Tensor").namespace).toBe("public/Math");
     expect(qualifiedWikiTitle("Research / Physics", "Hilbert Space")).toBe("Research/Physics:Hilbert Space");
+  });
+
+  test("reads a prose colon in a wanted title as part of the title", () => {
+    const known = ["Math", "public/Math", "定理"];
+    expect(splitWantedWikiTarget("Research:Page", known)).toMatchObject({ qualified: true, namespace: "Research", title: "Page" });
+    expect(splitWantedWikiTarget("Chapter 1: Scope", known)).toEqual({
+      target: "Chapter 1: Scope", namespace: "", title: "Chapter 1: Scope", qualified: false,
+    });
+    expect(splitWantedWikiTarget("引理：存在性", known)).toMatchObject({ qualified: false, title: "引理：存在性" });
+    // A namespace that exists keeps its meaning whatever follows the colon.
+    expect(splitWantedWikiTarget("math: Tensor", known)).toMatchObject({ qualified: true, namespace: "math", title: "Tensor" });
+    expect(splitWantedWikiTarget("定理：存在性", known)).toMatchObject({ qualified: true, namespace: "定理", title: "存在性" });
+    expect(splitWantedWikiTarget("Plain", known)).toMatchObject({ qualified: false, title: "Plain" });
   });
 
   test("recognizes an unfinished Wiki link", () => {
@@ -85,5 +98,37 @@ describe("Wiki editor completion", () => {
       kind: "theorem",
       body: "roam://page-id#0198fbac-0780-7c99-85e6-333333333333|theorem · Fixed point",
     });
+  });
+
+  test("with nothing typed, lists the most recent pages and leaves blocks out", () => {
+    const pages: WikiNote[] = Array.from({ length: 40 }, (_, index) => ({
+      ...note,
+      id: `page-${index}`,
+      title: `Page ${index}`,
+      qualifiedTitle: `Tools:Page ${index}`,
+      fullTitle: `public/Tools:Page ${index}`,
+      aliases: [],
+      mtimeMs: index,
+      blocks: [{ ...note.blocks![0]!, id: `block-${index}`, label: `theorem ${index}` }],
+    }));
+    const suggestions = wikiCompletionSnippets(pages, { prefix: "", hasClosingDelimiter: false }, 5);
+    expect(suggestions.map((item) => item.name)).toEqual(["Page 39", "Page 38", "Page 37", "Page 36", "Page 35"]);
+    expect(suggestions.every((item) => item.group === "Wiki pages")).toBe(true);
+  });
+
+  test("with fewer pages than rows, blocks fill the remaining rows", () => {
+    const suggestions = wikiCompletionSnippets([note], { prefix: "", hasClosingDelimiter: false }, 5);
+    expect(suggestions.map((item) => item.group)).toEqual(["Wiki pages", "Wiki blocks"]);
+  });
+
+  test("ranks an exact title over a prefix, a substring, and a block", () => {
+    const pages: WikiNote[] = [
+      { ...note, id: "a", title: "Set theory", qualifiedTitle: "Math:Set theory", aliases: [], blocks: [], mtimeMs: 9 },
+      { ...note, id: "b", title: "Reset", qualifiedTitle: "Ops:Reset", aliases: [], blocks: [], mtimeMs: 8 },
+      { ...note, id: "c", title: "Set", qualifiedTitle: "Math:Set", aliases: [], mtimeMs: 1,
+        blocks: [{ ...note.blocks![0]!, id: "blk", label: "definition · Set" }] },
+    ];
+    const suggestions = wikiCompletionSnippets(pages, { prefix: "set", hasClosingDelimiter: true });
+    expect(suggestions.map((item) => item.name)).toEqual(["Set", "Set theory", "Reset", "definition · Set"]);
   });
 });

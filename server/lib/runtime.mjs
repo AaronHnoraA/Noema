@@ -65,6 +65,7 @@ import {
   parseLeadTime,
   parseRepeater,
   shiftDate,
+  todayDateValue,
   todoArgKeyForCanonical,
 } from "../../shared/planning-values.mjs";
 
@@ -1346,7 +1347,7 @@ function hasNoteMetadata(content) {
 }
 
 function ensureDate(value = "") {
-  return String(value || new Date().toISOString().slice(0, 10));
+  return String(value || todayDateValue());
 }
 
 function buildMetaBlock(fields, options = {}) {
@@ -5290,7 +5291,7 @@ export function initialTodoFileContent(file) {
     buildMetaBlock({
       id: `${timestampId()}-${slugifyTitle(title)}`,
       title,
-      date: new Date().toISOString().slice(0, 10),
+      date: todayDateValue(),
       kind: defaultNoteKind,
       tags: [],
       refs: [],
@@ -6028,7 +6029,7 @@ export async function scanTemplates(options = {}) {
 
 function templateVarsForNode({ title, id, tags, kind, path }) {
   const now = new Date();
-  const date = now.toISOString().slice(0, 10);
+  const date = todayDateValue(now.getTime());
   const time = now.toTimeString().slice(0, 5);
   const folder = groupKeyFor(resolveInputPath(path, noteScanRoot), noteScanRoot);
   return {
@@ -6805,7 +6806,7 @@ export async function exportLatex(body = {}) {
     const vars = {
       ...extraVars,
       title: escapeLatexTitle(String(titleOverride || docTitle)),
-      date: escapeLatexTitle(documentMeta.date || converted.meta.date || new Date().toISOString().slice(0, 10)),
+      date: escapeLatexTitle(documentMeta.date || converted.meta.date || todayDateValue()),
       source: escapeLatexTitle(sourceFile ? displayPathForFile(sourceFile) : ""),
       body: bodyLatex,
     };
@@ -8156,7 +8157,7 @@ export async function createNode(body) {
       const meta = buildMetaBlock({
         id: roam ? id : "",
         title,
-        date: new Date().toISOString().slice(0, 10),
+        date: todayDateValue(),
         kind,
         roam: roam ? "" : "off",
         tags,
@@ -8185,7 +8186,7 @@ export async function createNode(body) {
       buildMetaBlock({
         id: roam ? id : "",
         title,
-        date: new Date().toISOString().slice(0, 10),
+        date: todayDateValue(),
         kind,
         roam: roam ? "" : "off",
         tags,

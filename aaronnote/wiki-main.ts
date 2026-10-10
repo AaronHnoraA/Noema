@@ -8,7 +8,8 @@ import "@mismerge/core/web";
 import { api, type WikiDirectory, type WikiIndex, type WikiNote, type WikiRepository, type WikiSyncState } from "./api-client.ts";
 import { serverMode } from "./host-mode.ts";
 import { installNoemaThemeRuntime } from "./theme-runtime.ts";
-import { splitQualifiedWikiTarget } from "../shared/wiki-link.mjs";
+import { splitWantedWikiTarget } from "../shared/wiki-link.mjs";
+import { renderSearchExcerpt } from "./search-excerpt.ts";
 import { createWorkspaceGraph, type WorkspaceGraph, type WorkspaceGraphSettings } from "./workspace-graph.ts";
 import type { GraphNode, GraphPayload } from "./types.ts";
 import { createKnowledgeSearch } from "./knowledge-search.ts";
@@ -39,7 +40,7 @@ root.innerHTML = `
     </button>
     <div class="noema-wiki-search">
       <span aria-hidden="true">⌕</span>
-      <input type="search" data-search placeholder="Search Noema Wiki" aria-label="Search Noema Wiki" autocomplete="off">
+      <input type="search" data-search placeholder="Search Noema Wiki" aria-label="Search Noema Wiki" autocomplete="off" title="Filters: title: tag: repo: namespace: path: kind: linksto: is:orphan is:missing after:7d before:2026-10-09 created:2026-10 — prefix - to exclude, quote a phrase">
       <button type="button" data-search-submit>Search</button>
       <kbd>${platformLabels.primaryModifier} K</kbd>
     </div>
@@ -673,6 +674,29 @@ function renderHome(): void {
     serverReaderMode ? "No public repository pages are available yet." : "Create the first page to begin the knowledge graph.",
   ));
   recent.append(recentHead, recentList);
+  // The public reader leads with the pages their author pinned.  Locally the
+  // same notes are reached through Emacs, so there is no pinned shelf here.
+  const pinnedNotes = serverReaderMode
+    ? index.notes.filter((note) => note.pinned === true)
+      .sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity) || a.title.localeCompare(b.title, undefined, { numeric: true }))
+    : [];
+  if (pinnedNotes.length) {
+    const pinned = document.createElement("section");
+    pinned.className = "noema-wiki-home-section";
+    const pinnedHead = document.createElement("header");
+    pinnedHead.append(Object.assign(document.createElement("h2"), { textContent: "Pinned" }));
+    const pinnedList = document.createElement("div");
+    pinnedList.className = "noema-wiki-home-recent";
+    for (const note of pinnedNotes) {
+      const row = button(note.title);
+      row.prepend(Object.assign(document.createElement("span"), { textContent: "★" }));
+      row.append(Object.assign(document.createElement("small"), { textContent: note.repositoryId }));
+      row.addEventListener("click", () => openNote(note));
+      pinnedList.append(row);
+    }
+    pinned.append(pinnedHead, pinnedList);
+    columns.append(pinned);
+  }
 
   const browse = document.createElement("section");
   browse.className = "noema-wiki-home-section";
@@ -737,7 +761,7 @@ function noteCard(note: WikiNote): HTMLElement {
   if (note.excerpt) {
     const excerpt = document.createElement("p");
     excerpt.className = "noema-wiki-search-excerpt";
-    excerpt.textContent = note.excerpt.replaceAll("[[", "").replaceAll("]]", "");
+    renderSearchExcerpt(excerpt, note.excerpt, searchEl.value);
     copy.appendChild(excerpt);
   }
   const actions = button("•••");
@@ -1088,16 +1112,26 @@ async function renderTags(): Promise<void> {
           selectActiveNav();
           render();
         });
-        rename.addEventListener("click", async () => {
+        // Tags kept in YAML front matter are left alone by the host; say so
+        // instead of reporting a rename that did not reach every page.
+        const applyTagEdit = async (body: Record<string, unknown>, done: string): Promise<void> => {
+          try {
+            const result = await api.wiki.updateTag(body) as { changed?: unknown[]; skipped?: unknown[] };
+            await load(true);
+            const skipped = result.skipped?.length || 0;
+            setStatus(`${done} on ${result.changed?.length || 0} page${result.changed?.length === 1 ? "" : "s"}`
+              + (skipped ? ` · ${skipped} skipped (tags in YAML front matter)` : ""), skipped > 0);
+          } catch (error) {
+            setStatus(error instanceof Error ? error.message : String(error), true);
+          }
+        };
+        rename.addEventListener("click", () => {
           const to = window.prompt(`Rename #${tag.name} to`);
-          if (!to) return;
-          await api.wiki.updateTag({ action: "rename", from: tag.name, to });
-          await load(true);
+          if (to) void applyTagEdit({ action: "rename", from: tag.name, to }, `Renamed #${tag.name} to #${to}`);
         });
-        remove.addEventListener("click", async () => {
+        remove.addEventListener("click", () => {
           if (!window.confirm(`Remove #${tag.name} from ${tag.count || 0} pages?`)) return;
-          await api.wiki.updateTag({ action: "delete", from: tag.name });
-          await load(true);
+          void applyTagEdit({ action: "delete", from: tag.name }, `Removed #${tag.name}`);
         });
         actions.append(filter);
         if (!serverReaderMode) actions.append(rename, remove);
@@ -1589,8 +1623,11 @@ function showNewPage(title = "", requestedNamespace = "", fromLink = false): voi
     setStatus("Create or clone a repository before creating a page", true);
     return;
   }
-  const namespaces = index.notes.flatMap((note) => [note.namespace || "", note.qualifiedNamespace || ""]);
-  const parsed = splitQualifiedWikiTarget(title, namespaces);
+  const namespaces = [
+    ...index.notes.flatMap((note) => [note.namespace || "", note.qualifiedNamespace || ""]),
+    ...index.repositories.flatMap((item) => [item.namespace || "", item.qualifiedNamespace || "", item.name, item.id]),
+  ];
+  const parsed = splitWantedWikiTarget(title, namespaces);
   (newForm.elements.namedItem("title") as HTMLInputElement).value = parsed.qualified ? parsed.title : title;
   const requested = requestedNamespace || (parsed.qualified ? parsed.namespace : "");
   const sourceFile = fromLink ? new URLSearchParams(location.search).get("source") || "" : "";
@@ -1800,10 +1837,14 @@ async function renderPageHistory(): Promise<void> {
       const diff = button("Changes in commit");
       const restore = button("Restore");
       diff.addEventListener("click", async () => {
-        const result = await api.wiki.pageDiff(note.id, commit.sha);
-        let pre = row.querySelector<HTMLPreElement>("pre");
-        if (!pre) { pre = document.createElement("pre"); row.append(pre); }
-        pre.textContent = result.diff || "No textual diff for this commit.";
+        try {
+          const result = await api.wiki.pageDiff(note.id, commit.sha);
+          let pre = row.querySelector<HTMLPreElement>("pre");
+          if (!pre) { pre = document.createElement("pre"); row.append(pre); }
+          pre.textContent = result.diff || "No textual diff for this commit.";
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : String(error), true);
+        }
       });
       restore.addEventListener("click", async () => {
         try {

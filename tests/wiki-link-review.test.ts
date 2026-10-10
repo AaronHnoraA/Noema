@@ -34,4 +34,11 @@ describe("manual Wiki link review", () => {
     expect(suggestions[0]?.targets.map((page) => page.repositoryId)).toEqual(["public"]);
     expect(reviewedWikiLinkChange(markdown, suggestions[0]!, id)).toBeNull();
   });
+
+  test("finds a Han title inside unspaced prose but keeps Latin word boundaries", () => {
+    const markdown = "我们研究图论的基本方法，Graph Theoryを学ぶ。Subgraph Theory is not it.";
+    const suggestions = scanWikiLinkSuggestions(markdown, pages);
+    expect(suggestions.map((item) => item.text)).toEqual(["图论", "Graph Theory"]);
+    expect(suggestions.every((item) => markdown.slice(item.from, item.to) === item.text)).toBe(true);
+  });
 });

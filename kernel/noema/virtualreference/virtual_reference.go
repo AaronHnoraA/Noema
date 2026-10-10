@@ -203,14 +203,25 @@ func wordRune(r rune) bool {
 	return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
+// Han and kana are written without spaces, so a neighbouring character is no
+// evidence that the pattern is part of a longer word. The editor's link review
+// (aaronnote/wiki-link-review.ts) applies the same rule.
+func unspacedRune(r rune) bool {
+	return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana)
+}
+
+func joinedRunes(left, right rune) bool {
+	return wordRune(left) && wordRune(right) && !unspacedRune(left) && !unspacedRune(right)
+}
+
 func validBoundary(text []rune, item match, pattern []rune) bool {
 	if len(pattern) == 0 {
 		return false
 	}
-	if wordRune(pattern[0]) && item.from > 0 && wordRune(text[item.from-1]) {
+	if item.from > 0 && joinedRunes(text[item.from-1], pattern[0]) {
 		return false
 	}
-	if wordRune(pattern[len(pattern)-1]) && item.to < len(text) && wordRune(text[item.to]) {
+	if item.to < len(text) && joinedRunes(pattern[len(pattern)-1], text[item.to]) {
 		return false
 	}
 	return true

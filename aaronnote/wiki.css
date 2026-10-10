@@ -144,6 +144,8 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
 .noema-wiki-page h2, .noema-wiki-report-list h2 { margin: 0; font-size: 16px; }
 .noema-wiki-page p, .noema-wiki-report-list p { margin: 5px 0; color: var(--aaron-muted); font: 11px/1.45 var(--aaron-font-mono, monospace); }
 .noema-wiki-page .noema-wiki-search-excerpt { display: -webkit-box; overflow: hidden; color: var(--aaron-ink); font: 12px/1.55 var(--aaron-font-sans); -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.noema-wiki-page .noema-wiki-search-excerpt mark,
+.noema-knowledge-search-results mark { border-radius: 2px; background: var(--aaron-accent-soft); color: inherit; font-weight: 650; }
 .noema-wiki-page small { color: var(--aaron-faint); }
 .noema-wiki-page-actions { min-width: 34px; min-height: 30px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
 .noema-wiki-page-actions:hover { background: var(--aaron-accent-soft); }

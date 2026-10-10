@@ -152,6 +152,8 @@ button:disabled {
   gap: 4px;
 }
 .noema-server-leading { min-width: 0; gap: 14px; }
+.noema-server-header nav[hidden], .noema-server-header button[hidden] { display: none; }
+.noema-server-reading button { padding: 0 8px; white-space: nowrap; }
 .noema-server-actions { min-width: 0; justify-content: flex-end; }
 
 .noema-server-header button {

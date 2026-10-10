@@ -60,9 +60,17 @@ function maskedMarkdown(markdown: string): string {
 }
 
 const wordCharacter = /[\p{L}\p{N}_]/u;
+// Han and kana are written without spaces, so a neighbouring character is no
+// evidence that the phrase is part of a longer word.  The Go mention scanner
+// (`virtualreference.validBoundary`) applies the same rule.
+const unspacedScript = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
+function joined(left: string, right: string): boolean {
+  return wordCharacter.test(left) && wordCharacter.test(right)
+    && !unspacedScript.test(left) && !unspacedScript.test(right);
+}
 function bounded(source: string, from: number, to: number, phrase: string): boolean {
-  return (!wordCharacter.test(phrase[0]!) || from === 0 || !wordCharacter.test(source[from - 1]!))
-    && (!wordCharacter.test(phrase.at(-1)!) || to === source.length || !wordCharacter.test(source[to]!));
+  return (from === 0 || !joined(source[from - 1]!, phrase[0]!))
+    && (to === source.length || !joined(phrase.at(-1)!, source[to]!));
 }
 
 /** Scan prose only. Every suggestion remains a proposed source edit until accepted. */

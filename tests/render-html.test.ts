@@ -9,6 +9,56 @@ import {
 } from "../src/render-html.ts";
 
 describe("shared markdown HTML renderer", () => {
+  test("renders highlight, superscript and subscript as the editor does", () => {
+    const html = renderMarkdownHTML("==key **idea**== x^2^ H~2~O ~~gone~~");
+    expect(html).toContain("<mark>key <strong>idea</strong></mark>");
+    expect(html).toContain("x<sup>2</sup>");
+    expect(html).toContain("H<sub>2</sub>O");
+    expect(html).toContain("<s>gone</s>");
+  });
+
+  test("leaves marks that are not pairs as text", () => {
+    const html = renderMarkdownHTML("a === b === c, 2^10 only, ~ 5 ~ apart, \\==not==, `==code==`, a == b\nc == d");
+    for (const tag of ["<mark>", "<sup>", "<sub>"]) expect(html).not.toContain(tag);
+    expect(html).toContain("<code>==code==</code>");
+    expect(renderMarkdownHTML("\\(x^2 + y^2\\) and \\(a_1 ~ b\\)")).not.toContain("<sup>");
+  });
+
+  test("renders Noema inline syntax inside link text and emphasis without throwing", () => {
+    // markdown-it validates link text by running every inline rule in its
+    // no-output mode; a rule that matches there without advancing aborts the
+    // whole render.
+    const cases: Array<[string, string]> = [
+      ["[\\(x^2\\)](http://a)", "aaronnote-math-inline"],
+      ["[==hi== x^2^ H~2~O](http://a)", "<mark>hi</mark>"],
+      ["[see[^1]](http://a)\n\n[^1]: note", "aaronnote-footnote-reference"],
+      ["*[\\(a\\)](u)* and **[[Wiki]] \\(b\\)**", "aaronnote-math-inline"],
+      ["[![i](a.png) \\(y\\)](u)", "aaronnote-math-inline"],
+      ["| a |\n| --- |\n| [\\(x\\)](u) |", "<table>"],
+    ];
+    for (const [markdown, expected] of cases) {
+      const html = renderMarkdownHTML(markdown);
+      expect(html).toContain(expected);
+      expect(html).toContain("<a ");
+    }
+  });
+
+  test("keeps a callout's body out of its title", () => {
+    const html = renderMarkdownHTML("> [!NOTE]\n> first **body** line\n> second line\n\n> [!warning] Mind *this*\n> careful\n>\n> more");
+    const root = document.createElement("div");
+    root.innerHTML = html;
+    const [note, warning] = [...root.querySelectorAll("blockquote.callout")];
+    expect(note?.querySelector(".callout-title")?.textContent?.trim()).toBe("");
+    expect(note?.querySelector("p")?.innerHTML).toContain("first <strong>body</strong> line");
+    expect(note?.querySelector("p")?.textContent).toContain("second line");
+    expect(warning?.querySelector(".callout-title")?.innerHTML.trim()).toBe("Mind <em>this</em>");
+    expect([...warning!.querySelectorAll("p")].map((p) => p.textContent?.trim())).toEqual(["careful", "more"]);
+    const titled = document.createElement("div");
+    titled.innerHTML = renderMarkdownHTML("> [!tip] Only a title");
+    expect(titled.querySelectorAll("p")).toHaveLength(0);
+    expect(titled.querySelector(".callout-title")?.textContent?.trim()).toBe("Only a title");
+  });
+
   test("shared default parser keeps each render's references and options independent", () => {
     const source = "A claim[^proof].\n\n[^proof]: proof";
     const first = renderMarkdownHTML(source);

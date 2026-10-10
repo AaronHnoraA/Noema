@@ -8,11 +8,12 @@
 
 import {
   ORG_META_PREAMBLE_LINE_LIMIT,
+  orgMetaOpenLineNumber,
   orgMetaSummaryRangeFromLines,
 } from "../shared/meta-summary.mjs";
 import type { LineDocument, MetaSummarySourceRange } from "../shared/meta-summary.mjs";
 
-export { ORG_META_PREAMBLE_LINE_LIMIT, orgMetaSummaryRangeFromLines };
+export { ORG_META_PREAMBLE_LINE_LIMIT, orgMetaOpenLineNumber, orgMetaSummaryRangeFromLines };
 export type { LineDocument, MetaSummarySourceRange };
 
 export interface MetaEntry {

@@ -15,6 +15,7 @@ export {
   parseDuration,
   parseLeadTime,
   parseRepeater,
+  todayDateValue,
   todoArgKeyForCanonical,
 } from "../shared/planning-values.mjs";
 

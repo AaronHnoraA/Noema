@@ -496,7 +496,7 @@ function footnoteReferenceRule(state: StateInline, silent: boolean): boolean {
   const env = state.env as Record<string, unknown>;
   const footnotes = ensureFootnoteEnvironment(env);
   if (!footnotes.numbers[label]) return false;
-  if (silent) return true;
+  if (silent) { state.pos = close + 1; return true; }
   const token = state.push("footnote_reference", "", 0);
   token.meta = { label, number: footnoteNumber(env, label) } satisfies FootnoteTokenMeta;
   state.pos = close + 1;
@@ -507,6 +507,52 @@ function footnoteDomId(label: string): string {
   return encodeURIComponent(label).replace(/%/g, "-");
 }
 
+/**
+ * `==highlight==`, `^superscript^` and `~subscript~`, by the rules the editor
+ * renders (`highlightSpansInLine` and the Lezer Superscript/Subscript nodes):
+ * the pair sits on one line, a highlight is not part of a longer run of `=`,
+ * and a superscript or subscript holds no whitespace. Without these an
+ * exported or published note showed the raw markers.
+ */
+function pairedMarkRule(
+  name: string,
+  tag: string,
+  marker: string,
+  allowSpaces: boolean,
+): (state: StateInline, silent: boolean) => boolean {
+  return (state, silent) => {
+    const start = state.pos;
+    const { src } = state;
+    if (!src.startsWith(marker, start)) return false;
+    const contentFrom = start + marker.length;
+    // `===` is not a highlight, and `~~` belongs to strikethrough.
+    if (src[contentFrom] === marker[0] || src[start - 1] === marker[0]) return false;
+    let close = -1;
+    for (let pos = contentFrom; pos < state.posMax; pos++) {
+      const ch = src[pos]!;
+      // A pair never reaches across inline code, where the marker is literal.
+      if (ch === "\n" || ch === "`" || (!allowSpaces && /\s/u.test(ch))) return false;
+      if (ch === "\\") { pos++; continue; }
+      if (src.startsWith(marker, pos)) {
+        if (src[pos + marker.length] === marker[0]) return false;
+        close = pos;
+        break;
+      }
+    }
+    if (close <= contentFrom) return false;
+    if (silent) { state.pos = close + marker.length; return true; }
+    const max = state.posMax;
+    state.pos = contentFrom;
+    state.posMax = close;
+    state.push(`${name}_open`, tag, 1).markup = marker;
+    state.md.inline.tokenize(state);
+    state.push(`${name}_close`, tag, -1).markup = marker;
+    state.pos = close + marker.length;
+    state.posMax = max;
+    return true;
+  };
+}
+
 function mathInlineRule(state: StateInline, silent: boolean): boolean {
   const start = state.pos;
   // Inline math opens with the literal LaTeX delimiter `\(` and closes with `\)`.
@@ -515,7 +561,7 @@ function mathInlineRule(state: StateInline, silent: boolean): boolean {
   if (end < 0 || end === start + 2) return false;
   const tex = state.src.slice(start + 2, end);
   if (tex.includes("\n")) return false;
-  if (silent) return true;
+  if (silent) { state.pos = end + 2; return true; }
   const token = state.push("math_inline", "span", 0);
   token.content = tex;
   state.pos = end + 2;
@@ -541,7 +587,7 @@ function citeInlineRule(state: StateInline, silent: boolean): boolean {
   const slice = state.src.slice(start, lineEnd < 0 ? state.src.length : lineEnd);
   const command = scanInlineCommands(slice, "cite")[0];
   if (!command || command.fullFrom !== 0) return false;
-  if (silent) return true;
+  if (silent) { state.pos = start + command.fullTo; return true; }
   const token = state.push("cite_inline", "span", 0);
   token.meta = {
     namespace: command.switchValue.trim(),
@@ -567,7 +613,7 @@ function commentInlineRule(state: StateInline, silent: boolean): boolean {
   const slice = state.src.slice(start, lineEnd < 0 ? state.src.length : lineEnd);
   const cmd = scanInlineCommands(slice, "comment")[0];
   if (!cmd || cmd.fullFrom !== 0) return false;
-  if (silent) return true;
+  if (silent) { state.pos = start + cmd.fullTo; return true; }
   const token = state.push("comment_inline", "span", 0);
   token.content = cmd.context.trim();
   token.meta = { display: cmd.switchValue.trim().toLowerCase() === "true" };
@@ -582,7 +628,7 @@ function sideCommentInlineRule(state: StateInline, silent: boolean): boolean {
   const slice = state.src.slice(start, lineEnd < 0 ? state.src.length : lineEnd);
   const cmd = scanInlineCommands(slice, "scomment")[0];
   if (!cmd || cmd.fullFrom !== 0) return false;
-  if (silent) return true;
+  if (silent) { state.pos = start + cmd.fullTo; return true; }
   const token = state.push("side_comment_inline", "span", 0);
   token.content = cmd.context.trim();
   state.pos = start + cmd.fullTo;
@@ -597,7 +643,7 @@ function revisionInlineRule(state: StateInline, silent: boolean): boolean {
   const slice = state.src.slice(start, lineEnd < 0 ? state.src.length : lineEnd);
   const cmd = scanInlineCommands(slice, "revision")[0];
   if (!cmd || cmd.fullFrom !== 0) return false;
-  if (silent) return true;
+  if (silent) { state.pos = start + cmd.fullTo; return true; }
   const token = state.push("revision_inline", "span", 0);
   token.content = cmd.context.trim().replace(/\\\]/g, "]").replace(/\\\\/g, "\\");
   token.meta = {
@@ -616,7 +662,7 @@ function privateInlineRule(state: StateInline, silent: boolean): boolean {
   const slice = state.src.slice(start, lineEnd < 0 ? state.src.length : lineEnd);
   const cmd = scanInlineCommands(slice)[0];
   if (!cmd || cmd.fullFrom !== 0 || !["todo", "itodo"].includes(cmd.name)) return false;
-  if (silent) return true;
+  if (silent) { state.pos = start + cmd.fullTo; return true; }
   const token = state.push("private_inline", "", 0);
   token.hidden = true;
   state.pos = start + cmd.fullTo;
@@ -982,7 +1028,7 @@ function spacedFragmentLinkRule(state: StateInline, silent: boolean): boolean {
 
   const href = state.src.slice(hrefFrom, closeHref).trim();
   if (!href.startsWith("#") || !/\s/u.test(href)) return false;
-  if (silent) return true;
+  if (silent) { state.pos = closeHref + 1; return true; }
 
   const open = state.push("link_open", "a", 1);
   open.attrs = [["href", href.replace(/[ \t]+/g, (space) => encodeURIComponent(space))]];
@@ -1014,7 +1060,7 @@ function spacedLocalLinkRule(state: StateInline, silent: boolean): boolean {
       if (!href || !/\s/u.test(href) || /["'<>]/u.test(href)
           || /^[a-z][\w+.-]*:/iu.test(href) || href.startsWith("#")
           || !safeHref(href)) return false;
-      if (silent) return true;
+      if (silent) { state.pos = pos + 1; return true; }
       const open = state.push("link_open", "a", 1);
       open.attrs = [["href", href.replace(/[ \t]+/g, (space) => encodeURIComponent(space))]];
       state.md.inline.parse(state.src.slice(start + 1, closeLabel), state.md, state.env, state.tokens);
@@ -1058,7 +1104,7 @@ function jupyterLinkRule(state: StateInline, silent: boolean): boolean {
   const label = state.src.slice(start + 1, closeLabel);
   const href = markdownLinkDestination(state.src.slice(closeLabel + 2, closeHref));
   if (!label || label.includes("\n") || href.includes("\n") || !isJupyterHref(href) || !safeHref(href)) return false;
-  if (silent) return true;
+  if (silent) { state.pos = closeHref + 1; return true; }
   const open = state.push("link_open", "a", 1);
   open.attrs = [["href", href]];
   const text = state.push("text", "", 0);
@@ -1079,7 +1125,7 @@ function wikiLinkRule(state: StateInline, silent: boolean): boolean {
   const target = (separator >= 0 ? raw.slice(0, separator) : raw).trim();
   const label = (separator >= 0 ? raw.slice(separator + 1) : target).trim();
   if (!target || !label) return false;
-  if (silent) return true;
+  if (silent) { state.pos = close + 2; return true; }
   const open = state.push("link_open", "a", 1);
   open.attrs = [["href", wikiHrefForTarget(target)], ["class", "noema-wiki-link noema-internal-link"], ["data-wiki-target", target], ["data-internal-link", "true"]];
   if (isStableWikiHref(target)) open.attrSet("data-roam-stable", "true");
@@ -1328,12 +1374,30 @@ function aaronnoteCalloutsRule(state: StateCore): void {
       tokens[paraClose]!.tag = "div";
     }
 
-    // Strip [!type] from inline content; re-tokenize so inline formatting in title survives
-    const restLines = inline.content.includes("\n") ? inline.content.split("\n").slice(1) : [];
-    const newContent = restLines.length > 0 ? titleText + "\n" + restLines.join("\n") : titleText;
-    inline.content = newContent;
-    const parsed = state.md.parseInline(newContent, state.env as Record<string, unknown>);
-    inline.children = parsed[0]?.children ?? [];
+    // Strip [!type]; re-tokenize so inline formatting in the title survives.
+    // Lines after the first are the callout's body, as in the editor, where
+    // only the first line carries the title style.
+    const body = inline.content.split("\n").slice(1).join("\n");
+    const inlineTokens = (content: string) => (
+      state.md.parseInline(content, state.env as Record<string, unknown>)[0]?.children ?? []
+    );
+    inline.content = titleText;
+    inline.children = inlineTokens(titleText);
+    if (body.trim() && paraClose >= 0) {
+      const open = new state.Token("paragraph_open", "p", 1);
+      const text = new state.Token("inline", "", 0);
+      const close = new state.Token("paragraph_close", "p", -1);
+      open.block = text.block = close.block = true;
+      open.level = close.level = tokens[paraOpen]!.level;
+      text.level = inline.level;
+      text.content = body;
+      text.children = inlineTokens(body);
+      if (inline.map) {
+        open.map = [Math.min(inline.map[0] + 1, inline.map[1]), inline.map[1]];
+        text.map = open.map;
+      }
+      tokens.splice(paraClose + 1, 0, open, text, close);
+    }
   }
 }
 
@@ -1498,6 +1562,9 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
   // Must run before `escape`: otherwise the backslash escape rule consumes the
   // `\(` opener as a literal `(` and inline math is never recognized.
   md.inline.ruler.before("escape", "math_inline", mathInlineRule);
+  md.inline.ruler.before("emphasis", "highlight", pairedMarkRule("highlight", "mark", "==", true));
+  md.inline.ruler.before("emphasis", "superscript", pairedMarkRule("superscript", "sup", "^", false));
+  md.inline.ruler.before("emphasis", "subscript", pairedMarkRule("subscript", "sub", "~", false));
   md.inline.ruler.before("escape", "cite_inline", citeInlineRule);
   md.inline.ruler.before("escape", "revision_inline", revisionInlineRule);
   md.inline.ruler.before("escape", "comment_inline", commentInlineRule);

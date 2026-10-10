@@ -48,6 +48,10 @@ import { decodeRevisionAttribute, decodeRevisionContext } from "../src/authoring
 import { DEFAULT_REVISION_KIND, revisionKindIdOf, revisionKinds } from "../src/revision-kinds.ts";
 import { formatMathRenderError } from "../src/math-render.ts";
 import { mathPreviewFitScale } from "./math-preview-fit.ts";
+import { managedFormulaStyle, wrapManagedFormulaStyle, type ManagedFormulaStyle } from "./formula-style.ts";
+import { revealWhileLayoutSettles } from "./settled-reveal.ts";
+import { sameNoteFile } from "./same-note-file.ts";
+import { resolveNoteReference } from "../shared/note-refs.mjs";
 import { getKatexMacros, setKatexMacros } from "../src/katex-macros.ts";
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
 import { formatCitationLabel } from "../src/render-html.ts";
@@ -97,7 +101,7 @@ import {
 } from "./prose-check-lifecycle.ts";
 import { createFloatingTocPanel, inlineTagAnchorsFromText, markdownHeadingsFromText } from "./floating-toc.ts";
 import { createSlideDeckController, type SlideDeckController } from "./slide-deck.ts";
-import { normalizeDateValue } from "../src/planning-values.ts";
+import { normalizeDateValue, todayDateValue } from "../src/planning-values.ts";
 import { AARONNOTE_AUTHORING_SNIPPETS } from "../src/authoring-syntax.ts";
 import { patchPlanningNodeRaw } from "../shared/planning-dsl.mjs";
 import { scanPlanningDocument, planningSourceIsLive } from "../shared/planning-document.mjs";
@@ -113,6 +117,7 @@ import { createLocalGraphPanel } from "./local-graph.ts";
 import { openLanguageToolSettingsTool } from "./languagetool-tool.ts";
 import { openAssetMaintenance } from "./asset-maintenance.ts";
 import { setFindHighlightRanges } from "../src/cm6/find-highlight.ts";
+import { setWikiPageTitles } from "../src/cm6/roam-link-status.ts";
 import {
   refreshViewportDecorationsNow,
   setViewportDecorationRefreshPaused,
@@ -182,7 +187,7 @@ import {
   type BibliographyTextChange,
   type BibliographyWatchRange,
 } from "./bibliography-state.ts";
-import type { CursorPosition, NoteSummary, SnippetSummary } from "./types.ts";
+import type { CursorPosition, NoteSummary, ReadingNeighbor, SnippetSummary } from "./types.ts";
 import { createVimLite, type VimLiteKey, type VimLiteMode } from "./vim-lite.ts";
 import { ceilCommandGeneratedId, ceilLanguageForKernel } from "../src/cm6/extensions/visual/widgets/ceil-shared.ts";
 import {
@@ -323,6 +328,10 @@ root.innerHTML = `
         <button type="button" data-server-command="back" title="Back" aria-label="Back">←</button>
         <button type="button" data-server-command="forward" title="Forward" aria-label="Forward">→</button>
       </nav>
+      <nav class="noema-server-reading" aria-label="Reading order" data-server-reading hidden>
+        <button type="button" data-server-neighbor="previous" hidden>‹ Previous</button>
+        <button type="button" data-server-neighbor="next" hidden>Next ›</button>
+      </nav>
     </div>
     <strong class="noema-server-page"><span data-server-title>Noema</span></strong>
     <div class="noema-server-actions">
@@ -359,6 +368,30 @@ root.innerHTML = `
 const host = root.querySelector<HTMLElement>("[data-editor]")!;
 const fileLabel = document.createElement("strong");
 const serverTitleName = root.querySelector<HTMLElement>("[data-server-title]")!;
+const serverReadingNav = root.querySelector<HTMLElement>("[data-server-reading]")!;
+const serverReadingTargets: Record<"previous" | "next", ReadingNeighbor | null> = { previous: null, next: null };
+
+/** Offer the neighbours the public catalog computed for the opened page. */
+function updateServerReading(opened: { previous?: ReadingNeighbor | null; next?: ReadingNeighbor | null }): void {
+  if (!serverReaderMode) return;
+  for (const side of ["previous", "next"] as const) {
+    const target = opened[side]?.file ? opened[side]! : null;
+    serverReadingTargets[side] = target;
+    const button = serverReadingNav.querySelector<HTMLButtonElement>(`[data-server-neighbor="${side}"]`)!;
+    button.hidden = !target;
+    button.title = target ? `${side === "previous" ? "Previous" : "Next"}: ${target.title}` : "";
+  }
+  serverReadingNav.hidden = !serverReadingTargets.previous && !serverReadingTargets.next;
+}
+
+serverReadingNav.querySelectorAll<HTMLButtonElement>("[data-server-neighbor]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const target = serverReadingTargets[button.dataset.serverNeighbor === "previous" ? "previous" : "next"];
+    if (!target || target.file === currentFile) return;
+    pushNavigationBackLocation();
+    void openFile(target.file);
+  });
+});
 const modeLabel = root.querySelector<HTMLElement>("[data-vim-mode]")!;
 const readOnlyLabel = root.querySelector<HTMLElement>("[data-readonly]")!;
 const statusLabel = document.createElement("span");
@@ -1465,6 +1498,7 @@ const editorCommands = new Set<EditorCommand>([
   "link",
   "superscript",
   "subscript",
+  "inline-math",
   "insert-footnote",
   "insert-revision",
   "edit-properties",
@@ -1476,6 +1510,7 @@ const editorCommands = new Set<EditorCommand>([
   "bullet-list",
   "ordered-list",
   "task-list",
+  "toggle-task",
   "code-block",
   "paragraph-menu",
   "insert-table",
@@ -2859,14 +2894,18 @@ window.AaronnoteBibliography = {
   contextMenu: serverReaderMode && !serverReader.customContextMenu ? undefined : showCitationContextMenu,
 };
 
+let releaseSettledReveal = (): void => {};
+
 function revealCursorAfterLayout(): void {
-  const reveal = () => editor.revealCursor();
-  reveal();
-  window.requestAnimationFrame(reveal);
-  window.requestAnimationFrame(() => window.requestAnimationFrame(reveal));
-  for (const delay of [50, 120, 250, 500, 900]) {
-    window.setTimeout(reveal, delay);
-  }
+  releaseSettledReveal();
+  const { doc, selection } = editor.view.state;
+  const head = selection.main.head;
+  releaseSettledReveal = revealWhileLayoutSettles({
+    reveal: () => editor.revealCursor(),
+    stillCurrent: () => (
+      editor.view.state.doc === doc && editor.view.state.selection.main.head === head
+    ),
+  });
 }
 
 function scheduleWritingStats(documentChanged: boolean): void {
@@ -3230,7 +3269,10 @@ document.addEventListener("aaronnote:embed-query-open", (event) => {
     if (item.file !== currentFile) await openFile(item.file);
     if (item.file !== currentFile) return;
     const markdown = editor.getMarkdown();
-    const anchor = item.id ? markdown.indexOf(`{#${item.id}`) : -1;
+    // An id is a whole token: `{#a1` must not land on `{#a10}`.
+    const anchor = item.id
+      ? markdown.search(new RegExp(`\\{#${item.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=[\\s}])`))
+      : -1;
     const offset = anchor >= 0 ? markdown.lastIndexOf("\n", anchor) + 1 : 0;
     editor.setMarkdownSelection(offset, offset);
     editor.revealCursor();
@@ -3488,6 +3530,19 @@ if (!serverReaderMode) {
   }, { capture: true });
 }
 
+// The graph asks for its notes on every update. The list only changes when
+// the index replaces `notes`, so the filtered list keeps its identity until
+// then and the graph can tell "nothing changed" without comparing notes.
+let graphNotesSource: NoteSummary[] | null = null;
+let graphNotesValue: NoteSummary[] = [];
+function graphNotes(): NoteSummary[] {
+  if (graphNotesSource !== notes) {
+    graphNotesSource = notes;
+    graphNotesValue = notes.filter((note) => note.roam !== false);
+  }
+  return graphNotesValue;
+}
+
 const localGraphPanel = createLocalGraphPanel({
   root: graphPanelRoot,
   toggleButton: graphButton,
@@ -3505,7 +3560,7 @@ const localGraphPanel = createLocalGraphPanel({
   isVisible: () => !knowledgeGraphPane.hidden,
   getWorkspaceGraph: () => api.notes.graph(),
   getIndexVersion: () => lastNotesIndexVersion,
-  getNotes: () => notes.filter(note => note.roam !== false),
+  getNotes: graphNotes,
   getCurrentNote: currentNote,
   getMarkdown: () => editor.getMarkdown(),
   getMarkdownLength: () => editor.getMarkdownLength(),
@@ -4735,96 +4790,6 @@ function convertBlockMathToInline(target: ContextMathTarget, sourceTex = target.
   return true;
 }
 
-type ManagedFormulaStyle = {
-  body: string;
-  color: string;
-  background: string;
-  variant: string;
-  size: string;
-};
-
-const formulaVariantCommands = new Set(["mathbf", "mathrm", "mathsf", "mathtt", "mathcal", "mathbb", "mathfrak"]);
-const formulaSizeCommands = new Set(["small", "normalsize", "large", "Large", "LARGE", "huge"]);
-
-function readBracedFormulaArgument(source: string, from: number): { value: string; end: number } | null {
-  let start = from;
-  while (/\s/.test(source[start] ?? "")) start++;
-  if (source[start] !== "{") return null;
-  let depth = 1;
-  for (let index = start + 1; index < source.length; index++) {
-    if (source[index] === "\\") {
-      index++;
-      continue;
-    }
-    if (source[index] === "{") depth++;
-    else if (source[index] === "}" && --depth === 0) {
-      return { value: source.slice(start + 1, index), end: index + 1 };
-    }
-  }
-  return null;
-}
-
-function outerFormulaCommand(source: string, command: string, argumentCount: number): string[] | null {
-  const prefix = `\\${command}`;
-  if (!source.startsWith(prefix)) return null;
-  const args: string[] = [];
-  let offset = prefix.length;
-  for (let index = 0; index < argumentCount; index++) {
-    const argument = readBracedFormulaArgument(source, offset);
-    if (!argument) return null;
-    args.push(argument.value);
-    offset = argument.end;
-  }
-  return source.slice(offset).trim() ? null : args;
-}
-
-function managedFormulaStyle(tex: string): ManagedFormulaStyle {
-  const style: ManagedFormulaStyle = { body: tex.trim(), color: "", background: "", variant: "", size: "" };
-  for (;;) {
-    const before = style.body;
-    const color = outerFormulaCommand(style.body, "textcolor", 2);
-    if (color) {
-      style.color = color[0]!.trim();
-      style.body = color[1]!.trim();
-      continue;
-    }
-    const background = outerFormulaCommand(style.body, "colorbox", 2);
-    if (background) {
-      style.background = background[0]!.trim();
-      style.body = background[1]!.trim();
-      continue;
-    }
-    const variant = style.body.match(/^\\([A-Za-z]+)\b/)?.[1] ?? "";
-    if (formulaVariantCommands.has(variant)) {
-      const args = outerFormulaCommand(style.body, variant, 1);
-      if (args) {
-        style.variant = variant;
-        style.body = args[0]!.trim();
-        continue;
-      }
-    }
-    if (style.body.startsWith("{") && style.body.endsWith("}")) {
-      const inner = style.body.slice(1, -1).trim();
-      const size = inner.match(/^\\([A-Za-z]+)\s+/)?.[1] ?? "";
-      if (formulaSizeCommands.has(size)) {
-        style.size = size === "normalsize" ? "" : size;
-        style.body = inner.replace(/^\\[A-Za-z]+\s+/, "").trim();
-        continue;
-      }
-    }
-    if (style.body === before) return style;
-  }
-}
-
-function wrapManagedFormulaStyle(body: string, style: Omit<ManagedFormulaStyle, "body">): string {
-  let result = body.trim();
-  if (style.variant) result = `\\${style.variant}{${result}}`;
-  if (style.size) result = `{\\${style.size} ${result}}`;
-  if (style.background) result = `\\colorbox{${style.background}}{${result}}`;
-  if (style.color) result = `\\textcolor{${style.color}}{${result}}`;
-  return result;
-}
-
 function replaceContextMathTex(target: ContextMathTarget, tex: string, status: string): boolean {
   if (rejectReadOnlyAction("Read-only pane")) return false;
   const live = mathTargetAtPosition(Math.min(editor.view.state.doc.length, target.from + 1));
@@ -5842,6 +5807,7 @@ function applyOpenedNote(
   currentTitle = String(opened.title || "").trim();
   currentKind = String(opened.kind || "");
   currentStandalone = Boolean(opened.standalone);
+  updateServerReading(opened);
   currentLineEnding = sourceLineEnding(String(opened.content ?? ""));
   currentIncrementalSave = opened.incrementalSave === true && currentLineEnding.patchable;
   currentRemote = Boolean(opened.remote);
@@ -6702,6 +6668,7 @@ function applyIndexPayload(payload: { notes?: NoteSummary[]; note?: NoteSummary;
   if (typeof payload.standalone === "boolean") currentStandalone = payload.standalone;
   if (typeof payload.relationshipSource === "string") currentRelationshipSource = payload.relationshipSource;
   if (indexChanged) {
+    publishWikiPageTitles();
     pathSuggestions = [...new Set(notes
       .flatMap((note) => [note.path, note.file, note.link])
       .map((value) => String(value || "").trim())
@@ -6716,6 +6683,22 @@ function applyIndexPayload(payload: { notes?: NoteSummary[]; note?: NoteSummary;
     slideDeck?.sync(currentKind);
     renderModeToggleLabel(vim.mode());
   }
+}
+
+// The editor shows a label-less stable link under its page's current title
+// and marks a stable ID no page answers to. It can only do either once the
+// whole index is here: a partial list would mark good links broken.
+let publishedTitleNotes: NoteSummary[] | null = null;
+function publishWikiPageTitles(): void {
+  if (!notesIndexLoaded || publishedTitleNotes === notes) return;
+  publishedTitleNotes = notes;
+  const titles = new Map<string, string>();
+  for (const note of notes) {
+    const id = String(note.id || "").trim().toLowerCase();
+    const title = String(note.title || "").trim();
+    if (id && title) titles.set(id, title);
+  }
+  editor.view.dispatch({ effects: setWikiPageTitles.of(titles) });
 }
 
 async function reloadNotes(force = false): Promise<void> {
@@ -6847,26 +6830,9 @@ function currentNote(): NoteSummary | undefined {
   return currentNoteFromIndex(notes, currentFile, currentTitle);
 }
 
-function noteSearchValues(note: NoteSummary): string[] {
-  return [
-    note.id,
-    note.key,
-    note.title,
-    note.path,
-    note.link,
-    note.source,
-    note.file,
-    ...(note.aliases ?? []),
-    ...(note.tags ?? []),
-  ].map((value) => String(value || "").trim()).filter(Boolean);
-}
-
 function resolveNoteRef(ref: string): NoteSummary | undefined {
   const raw = decodeNoteRef(String(ref || "").replace(/^roam:\/\//i, "").split(/[?#@]/, 1)[0] || "").trim();
-  if (!raw) return undefined;
-  const key = raw.toLowerCase();
-  return notes.find((note) => noteSearchValues(note).some((value) => value.toLowerCase() === key))
-    ?? notes.find((note) => noteSearchValues(note).some((value) => value.toLowerCase().includes(key)));
+  return raw ? resolveNoteReference(notes, raw) : undefined;
 }
 
 function openNote(
@@ -7985,16 +7951,21 @@ function openFormModal(title: string, fields: ModalField[], submitLabel = "OK"):
     actions.append(cancel, submit);
     panel.appendChild(actions);
 
+    // The backdrop listener lives as long as this form: a one-shot listener
+    // was spent by the first click inside the form, after which clicking
+    // outside no longer dismissed it.
+    const dismissOnBackdrop = (event: MouseEvent): void => {
+      if (event.target === modal) close(null);
+    };
     const close = (value: Record<string, string> | null): void => {
+      modal.removeEventListener("mousedown", dismissOnBackdrop);
       modal.hidden = true;
       modal.innerHTML = "";
       editor.focus();
       resolve(value);
     };
     cancel.addEventListener("click", () => close(null));
-    modal.addEventListener("mousedown", (event) => {
-      if (event.target === modal) close(null);
-    }, { once: true });
+    modal.addEventListener("mousedown", dismissOnBackdrop);
     panel.addEventListener("keydown", (event) => {
       if (event.key !== "Escape" || event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
       event.preventDefault();
@@ -8173,9 +8144,7 @@ async function agendaProjectSuggestionsWithGlobal(nodes: PlanningNodeLike[], fal
 }
 
 function agendaDateOnly(time = Date.now()): string {
-  const d = new Date(time);
-  const pad = (n: number): string => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return todayDateValue(time);
 }
 
 function agendaDateTime(time = Date.now()): string {
@@ -8754,7 +8723,9 @@ async function updateNoteMeta(
       content: sourceWithLineEnding(editor.getMarkdown(), currentLineEnding.eol),
       ...body,
     });
-    applyOpenedNote(msg, currentFile);
+    // A metadata edit rewrites a few lines of the note being read; the
+    // viewport and the editing mode stay where they are.
+    applyOpenedNote(msg, currentFile, cursorPositions, { preserveView: true, resetVim: false });
     setStatus(success);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Update failed");
@@ -9036,7 +9007,7 @@ function todoClosed(todo: TodoItem): boolean {
 }
 
 function todoToday(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayDateValue();
 }
 
 function todoOverdue(todo: TodoItem): boolean {
@@ -9189,17 +9160,11 @@ type TodoUpdateResult = {
   mtimeMs?: number;
 };
 
-function fileBasename(path: string): string {
-  return String(path || "").split(/[\\/]/).pop() || String(path || "");
-}
-
-// True when two paths point at the open note. `todo.file`/`result.file` come
-// from different server normalizations than `currentFile`, so exact-string
-// comparison alone is too strict; fall back to basename equality.
+// True when PATH is the open note. `todo.file`/`result.file` come from other
+// server normalizations than `currentFile`; see `sameNoteFile` for what may
+// differ and why the file name alone never counts.
 function sameOpenFile(path: string): boolean {
-  const file = String(path || "");
-  if (!file || !currentFile) return false;
-  return file === currentFile || fileBasename(file) === fileBasename(currentFile);
+  return sameNoteFile(path, currentFile);
 }
 
 // Reflect a status change in the open editor so the CM6 page updates immediately
@@ -13076,7 +13041,11 @@ document.addEventListener("aaronnote:open-attachment", (event) => {
 });
 window.addEventListener("aaronnote:open-file", (event) => {
   const detail = (event as CustomEvent<{ file?: string }>).detail;
-  if (detail?.file && detail.file !== currentFile) pushNavigationBackLocation();
+  // The note this pane already shows is not opened again: that would reset
+  // its undo history and move the view back to the cursor. `refresh` is the
+  // command for taking the file from disk.
+  if (detail?.file && detail.file === currentFile) return;
+  if (detail?.file) pushNavigationBackLocation();
   void openFile(detail?.file);
 });
 

@@ -240,3 +240,22 @@ export function toggleListSpec(state: EditorState, kind: ListKind): TransactionS
   }
   return withMappedSelection(state, changes);
 }
+
+/**
+ * Check or uncheck the task items among the selected lines. One unchecked
+ * item makes the command check them all, so a mixed selection settles in one
+ * step instead of inverting line by line; lines that are not tasks are left
+ * alone, and null means there was no task to toggle.
+ */
+export function toggleTaskCheckSpec(state: EditorState): TransactionSpec | null {
+  const tasks = selectedLines(state).map(parseListLine).filter((item) => item.match?.[5] != null);
+  if (tasks.length === 0) return null;
+  const mark = tasks.some((item) => item.match![5] === " ") ? "x" : " ";
+  const changes: ChangeSpec[] = [];
+  for (const { line, quote, match } of tasks) {
+    if (match![5]!.toLowerCase() === mark) continue;
+    const box = line.from + quote.length + match![0].lastIndexOf("[") + 1;
+    changes.push({ from: box, to: box + 1, insert: mark });
+  }
+  return withMappedSelection(state, changes);
+}

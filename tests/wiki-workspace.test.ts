@@ -10,6 +10,7 @@ import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test"
 import {
   adoptWikiRepository,
   buildWikiIndex,
+  cloneWikiRepository,
   configureWikiGitProvider,
   copyWikiPage,
   createWikiPage,
@@ -235,7 +236,7 @@ describe("Wiki workspace", () => {
     expect(existsSync(join(root, "roam.db"))).toBe(false);
     expect(wikiIndexStatus(root)).toMatchObject({
       ok: true,
-      schemaVersion: 8,
+      schemaVersion: 9,
       lastMode: "incremental",
       repositories: [expect.objectContaining({ repositoryId: "private/research", headSha: headBefore })],
     });
@@ -1031,5 +1032,245 @@ describe("Wiki workspace", () => {
     });
     expect(result.fileCount).toBeGreaterThanOrEqual(2);
     expect((await stat(outputPath)).size).toBeGreaterThan(0);
+  });
+
+  test("derives backlinks and dependency status from the current workspace, not the parse cache", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "math");
+    const repository = join(root, "private", "math");
+    const source = await createWikiPage(root, "wiki", { title: "Source", repositoryId: "private/math", filename: "source.md" });
+    const target = await createWikiPage(root, "wiki", { title: "Target", repositoryId: "private/math", filename: "target.md" });
+    await writeFile(source.file, `${await readFile(source.file, "utf8")}See [[Target]].\n`);
+    await writeFile(target.file, `${await readFile(target.file, "utf8")}![figure](figures/plot.png)\n`);
+
+    let index = await buildWikiIndex(root, { layout: "wiki" });
+    let page = index.notes.find((note) => note.id === target.id)!;
+    expect(page.backlinks).toEqual([source.id]);
+    expect(page.dependencies).toMatchObject([{ path: "figures/plot.png", status: "missing" }]);
+
+    // Only other files change; Target itself is served from the parse cache.
+    await writeFile(source.file, (await readFile(source.file, "utf8")).replace("See [[Target]].", "No link."));
+    await mkdir(join(repository, "figures"));
+    await writeFile(join(repository, "figures", "plot.png"), "png");
+    index = await buildWikiIndex(root, { layout: "wiki" });
+    page = index.notes.find((note) => note.id === target.id)!;
+    expect(page.backlinks).toEqual([]);
+    expect(page.dependencies).toMatchObject([{ path: "figures/plot.png", status: "resolved" }]);
+    await expect(deleteWikiPage(root, { pageId: target.id }, { trashRoot: join(root, "trash") }))
+      .resolves.toMatchObject({ type: "wiki-page-trashed", backlinks: [] });
+  });
+
+  test("reads page identity from the preamble only and edits metadata literally", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "meta");
+    const page = await createWikiPage(root, "wiki", { title: "Cost plan", repositoryId: "private/meta", filename: "cost.md" });
+    const guide = join(root, "private", "meta", "guide.md");
+    await writeFile(guide, [
+      "# Writing metadata", "", ...Array.from({ length: 12 }, (_, line) => `Line ${line}.`), "",
+      "#+begin meta", `id: ${page.id}`, "title: Cost plan", "#+end meta", "",
+    ].join("\n"));
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    expect(index.reports.duplicateIds).toEqual([]);
+    expect(index.notes.find((note) => note.file === guide)).toMatchObject({ title: "Writing metadata", identityStatus: "provisional" });
+
+    // `$1` and `$&` are replacement patterns to String.replace; an empty field
+    // must not swallow the line after it.
+    const moved = await moveWikiPage(root, { pageId: page.id, title: "Cost $100 & $& plan" });
+    const content = await readFile(moved.file, "utf8");
+    expect(content).toContain("\ntitle: Cost $100 & $& plan\n");
+    expect(content).toContain("\naliases: Cost plan\n");
+    expect(content).toContain("\nrefs: \n");
+    expect(content).toContain("\n# Cost $100 & $& plan\n");
+    expect(content.match(/#\+end meta/g)).toHaveLength(1);
+  });
+
+  test("finds short CJK terms the trigram index cannot answer and filters by modification date", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "math");
+    const group = await createWikiPage(root, "wiki", { title: "群论", repositoryId: "private/math", filename: "group.md", tags: ["代数"] });
+    const ring = await createWikiPage(root, "wiki", { title: "Rings", repositoryId: "private/math", filename: "ring.md" });
+    await writeFile(ring.file, `${await readFile(ring.file, "utf8")}环是带有两种运算的集合，同构保持结构。\n`);
+    await buildWikiIndex(root, { layout: "wiki" });
+
+    expect(searchWikiDatabase(root, { query: "群论" }).items.map((item) => item.id)).toEqual([group.id]);
+    expect(searchWikiDatabase(root, { query: "群" }).items.map((item) => item.id)).toEqual([group.id]);
+    const body = searchWikiDatabase(root, { query: "同构" });
+    expect(body).toMatchObject({ total: 1, nextCursor: null });
+    expect(body.items[0]).toMatchObject({ id: ring.id, excerpt: expect.stringContaining("[[同构]]") });
+    expect(searchWikiDatabase(root, { query: "同构 运算" }).items.map((item) => item.id)).toEqual([ring.id]);
+    expect(searchWikiDatabase(root, { query: "同构 tag:代数" }).items).toEqual([]);
+    expect(searchWikiDatabase(root, { query: "100%" }).items).toEqual([]);
+
+    const ids = (query: string) => searchWikiDatabase(root, { query }).items.map((item) => item.id).sort();
+    const both = [group.id, ring.id].sort();
+    expect(ids("after:1d")).toEqual(both);
+    expect(ids("before:2000-01-01")).toEqual([]);
+    expect(ids("-before:2000-01-01")).toEqual(both);
+    expect(ids("after:not-a-date")).toEqual([]);
+    expect(ids("群 after:1d")).toEqual([group.id]);
+  });
+
+  test("filters by the period a page is dated in", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "math");
+    const old = await createWikiPage(root, "wiki", { title: "Old page", repositoryId: "private/math", filename: "old.md" });
+    const recent = await createWikiPage(root, "wiki", { title: "Recent page", repositoryId: "private/math", filename: "recent.md" });
+    const undated = await createWikiPage(root, "wiki", { title: "Undated page", repositoryId: "private/math", filename: "undated.md" });
+    const redate = async (file: string, line: string) => {
+      await writeFile(file, (await readFile(file, "utf8")).replace(/^date: .*\n/m, line));
+    };
+    await redate(old.file, "date: 2019-03-14\n");
+    await redate(undated.file, "");
+    await buildWikiIndex(root, { layout: "wiki" });
+
+    const ids = (query: string) => searchWikiDatabase(root, { query }).items.map((item) => item.id).sort();
+    // A new page is stamped with the day it was created.
+    expect(ids("created:1d")).toEqual([recent.id]);
+    expect(ids("created:2019")).toEqual([old.id]);
+    expect(ids("created:2019-03")).toEqual([old.id]);
+    expect(ids("created:2019-03-14")).toEqual([old.id]);
+    expect(ids("created:2019-03-15")).toEqual([]);
+    expect(ids("created:2019-04")).toEqual([]);
+    // A page without a date belongs to no period, and is what the negation keeps.
+    expect(ids("-created:2019 page")).toEqual([recent.id, undated.id].sort());
+    expect(ids("created:not-a-date")).toEqual([]);
+    expect(searchWikiDatabase(root, { query: "created:2019" }).items[0]).toMatchObject({
+      createdMs: new Date(2019, 2, 14).getTime(),
+    });
+  });
+
+  test("resolves a page whose alias repeats its own title, and never a redirect by title", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "math");
+    const kept = await createWikiPage(root, "wiki", { title: "Tensor", repositoryId: "private/math", filename: "tensor.md" });
+    const merged = await createWikiPage(root, "wiki", { title: "Tensors", repositoryId: "private/math", filename: "tensors.md" });
+    const reader = await createWikiPage(root, "wiki", { title: "Reader", repositoryId: "private/math", filename: "reader.md" });
+    await writeFile(kept.file, (await readFile(kept.file, "utf8")).replace("refs: ", "aliases: tensor\nrefs: "));
+    await writeFile(reader.file, `${await readFile(reader.file, "utf8")}[[Tensor]] and [[Tensors]].\n`);
+    await mergeWikiPages(root, { survivorId: kept.id, duplicateId: merged.id, confirm: "MERGE" });
+
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    expect(index.reports.ambiguous).toEqual([]);
+    expect(index.notes.find((note) => note.id === reader.id)?.refs).toEqual([kept.id]);
+    const db = new DatabaseSync(wikiDatabaseFile(root), { readOnly: true });
+    try {
+      const rows = db.prepare("SELECT l.raw_target, l.target_id, l.status FROM links l JOIN pages p ON p.page_key=l.source_key WHERE p.page_id=? ORDER BY l.raw_target").all(reader.id);
+      expect(rows).toEqual([
+        { raw_target: "Tensor", target_id: kept.id, status: "resolved" },
+        { raw_target: "Tensors", target_id: kept.id, status: "resolved" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("links a title that contains a colon unless a namespace answers first", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "math");
+    await initWikiRepository(root, "private", "notes");
+    const chapter = await createWikiPage(root, "wiki", { title: "Chapter 1: Scope", repositoryId: "private/math", filename: "chapter.md" });
+    const theorem = await createWikiPage(root, "wiki", { title: "定理：存在性", repositoryId: "private/math", filename: "theorem.md" });
+    const scoped = await createWikiPage(root, "wiki", { title: "Scope", repositoryId: "private/notes", filename: "scope.md" });
+    const reader = await createWikiPage(root, "wiki", { title: "Reader", repositoryId: "private/math", filename: "reader.md" });
+    await writeFile(reader.file, `${await readFile(reader.file, "utf8")}[[Chapter 1: Scope]] [[定理：存在性]] [[notes:Scope]] [[Nowhere: Else]]\n`);
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    const page = index.notes.find((note) => note.id === reader.id)!;
+    expect([...page.refs].sort()).toEqual([chapter.id, theorem.id, scoped.id].sort());
+    expect(page.unresolvedLinks).toEqual(["Nowhere: Else"]);
+    expect(index.reports.wanted).toMatchObject([{ title: "Nowhere: Else", namespace: "math" }]);
+    expect(resolveWikiLink(index, "定理：存在性", { sourceFile: reader.file })).toMatchObject({
+      status: "resolved", candidates: [{ id: theorem.id }],
+    });
+  });
+
+  test("keeps authored values on one meta line", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "meta");
+    const create = (body: Record<string, unknown>) => createWikiPage(root, "wiki", { repositoryId: "private/meta", ...body });
+    await expect(create({ title: "Innocent\nid: 019a0000-0000-7000-8000-000000000001", filename: "a.md" })).rejects.toThrow(/single line/);
+    await expect(create({ title: "Page", filename: "b.md", id: "x\nredirect_to: roam://y" })).rejects.toThrow(/single line/);
+    await expect(create({ title: "Page", filename: "c.md", kind: "page\nprivate: false" })).rejects.toThrow(/single line/);
+    const page = await create({ title: "Tagged", filename: "d.md", tags: ["a, b", "c"] });
+    expect(await readFile(page.file, "utf8")).toContain("\ntags: a  b, c\n");
+    await expect(moveWikiPage(root, { pageId: page.id, title: "New\nkind: redirect" })).rejects.toThrow(/single line/);
+    await expect(copyWikiPage(root, { pageId: page.id, filename: "e.md", title: "Copy\nid: z" })).rejects.toThrow(/single line/);
+    expect(existsSync(join(root, "private", "meta", "a.md"))).toBe(false);
+  });
+
+  test("a move that fails part way leaves the page and its assets where they were", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "math");
+    const repository = join(root, "private", "math");
+    const page = await createWikiPage(root, "wiki", { title: "Movable", repositoryId: "private/math", filename: "movable.md" });
+    const before = await readFile(page.file, "utf8");
+    await mkdir(join(repository, "images", page.id), { recursive: true });
+    await writeFile(join(repository, "images", page.id, "plot.png"), "png");
+    // The destination already holds an asset directory for this page id.
+    await mkdir(join(repository, "archive", "images", page.id), { recursive: true });
+
+    await expect(moveWikiPage(root, { pageId: page.id, directory: "archive", title: "Moved" }))
+      .rejects.toMatchObject({ code: "ERR_WIKI_ASSET_CONFLICT" });
+    expect(await readFile(page.file, "utf8")).toBe(before);
+    expect(existsSync(join(repository, "archive", "movable.md"))).toBe(false);
+    expect(existsSync(join(repository, "images", page.id, "plot.png"))).toBe(true);
+
+    await rm(join(repository, "archive", "images"), { recursive: true });
+    const moved = await moveWikiPage(root, { pageId: page.id, directory: "archive", title: "Moved" });
+    expect(moved.file).toBe(join(repository, "archive", "movable.md"));
+    expect(existsSync(page.file)).toBe(false);
+    expect(existsSync(join(repository, "archive", "images", page.id, "plot.png"))).toBe(true);
+    expect(await readFile(moved.file, "utf8")).toContain("\ntitle: Moved\n");
+  });
+
+  test("does not copy or retag a page whose metadata lives in YAML front matter", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "yaml");
+    const id = "019a0000-0000-7000-8000-00000000f00d";
+    const file = join(root, "private", "yaml", "front.md");
+    const content = `---\nid: ${id}\ntitle: Front\ntags: old\n---\n\n# Front\n`;
+    await writeFile(file, content);
+    await expect(copyWikiPage(root, { pageId: id, filename: "front-copy.md" })).rejects.toMatchObject({ code: "ERR_WIKI_IDENTITY" });
+    expect(existsSync(join(root, "private", "yaml", "front-copy.md"))).toBe(false);
+    await expect(updateWikiTag(root, { action: "rename", from: "old", to: "new" }))
+      .resolves.toMatchObject({ changed: [], skipped: [{ id }] });
+    expect(await readFile(file, "utf8")).toBe(content);
+  });
+
+  test("indexes a Markdown file exported by Alexandrie from its YAML front matter", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "imported");
+    // The shape `generateMarkdownWithMetadata` writes: quoted title, optional
+    // description, comma-separated tags, then the document body.
+    await writeFile(join(root, "private", "imported", "guide.md"),
+      '---\ntitle: "Docker 部署"\ndescription: "How to deploy"\ntags: docker, 运维\n---\n\n\nBody with [[Docker 部署]] and 运维 notes.\n');
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    expect(index.notes).toMatchObject([{ title: "Docker 部署", tags: ["docker", "运维"], identityStatus: "provisional" }]);
+    expect(searchWikiDatabase(root, { query: "tag:运维" }).items.map((item) => item.title)).toEqual(["Docker 部署"]);
+    expect(searchWikiDatabase(root, { query: "运维" }).total).toBe(1);
+  });
+
+  test("tracks an asset whose file name contains parentheses", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "math");
+    const repository = join(root, "private", "math");
+    const page = await createWikiPage(root, "wiki", { title: "Figures", repositoryId: "private/math", filename: "figures.md" });
+    await writeFile(join(repository, "fig(1).png"), "png");
+    await writeFile(join(repository, "shot (2).png"), "png");
+    await writeFile(page.file, `${await readFile(page.file, "utf8")}![a](fig(1).png) and ![b](<shot (2).png>) and [c](gone(3).pdf)\n`);
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    expect(index.notes.find((note) => note.id === page.id)?.dependencies).toMatchObject([
+      { path: "fig(1).png", status: "resolved" },
+      { path: "shot (2).png", status: "resolved" },
+      { path: "gone(3).pdf", status: "missing" },
+    ]);
+  });
+
+  test("clones only from remotes the remote policy accepts", async () => {
+    const root = await tempRoot();
+    await expect(cloneWikiRepository(root, { partition: "private", name: "evil", remote: "ext::sh -c 'touch pwned'" }))
+      .rejects.toThrow(/Git remote URL/);
+    await expect(cloneWikiRepository(root, { partition: "private", name: "evil", remote: "https://user:secret@example.test/x.git" }))
+      .rejects.toThrow(/embedded credentials/);
+    expect(existsSync(join(root, "private", "evil"))).toBe(false);
   });
 });

@@ -1,3 +1,5 @@
+import { ORG_META_PREAMBLE_LINE_LIMIT } from "../shared/meta-summary.mjs";
+
 export type TagChangeSet = {
   add: string[];
   remove: string[];
@@ -102,12 +104,40 @@ export function parseTagListText(value: unknown): string[] {
   return stableTagList(separatedTagEntries(String(value || "")).map((entry) => entry.value));
 }
 
+const META_OPEN_LINE_RE = /^[ \t]*#\+[ \t]*begin[ \t]+meta(?:[ \t]+.*)?[ \t]*$/i;
+const META_CLOSE_LINE_RE = /(?:^|\n)[ \t]*#\+[ \t]*end[ \t]+meta[ \t]*(?:\r?\n|$)/i;
+const META_CLOSE_LINES_RE = /^[ \t]*#\+[ \t]*end[ \t]+meta[ \t]*$/gim;
+
+/**
+ * The note's metadata block, located by the rule the index uses: YAML front
+ * matter at the very start, otherwise the first `#+begin meta` among the
+ * opening lines of the note (`ORG_META_PREAMBLE_LINE_LIMIT`).
+ *
+ * The two must agree. When this side only accepted a block at offset 0, a note
+ * whose block came after a blank line was taken to have none, and adding a tag
+ * put a second block above it. The index then read that new block, which had
+ * tags and nothing else, and the page lost its id and title.
+ */
 function metadataBlock(markdown: string): MetadataBlock | null {
   const text = String(markdown || "");
-  const org = /^(?:\uFEFF)?[ \t]*#\+begin[ \t]+meta[ \t]*\r?\n[\s\S]*?^[ \t]*#\+end[ \t]+meta[ \t]*(?:\r?\n|$)/im.exec(text);
-  if (org?.index === 0) return { kind: "org", from: 0, to: org[0].length, text: org[0] };
   const yaml = /^(?:\uFEFF)?[ \t]*---[ \t]*\r?\n[\s\S]*?^[ \t]*---[ \t]*(?:\r?\n|$)/m.exec(text);
-  return yaml?.index === 0 ? { kind: "yaml", from: 0, to: yaml[0].length, text: yaml[0] } : null;
+  if (yaml?.index === 0) return { kind: "yaml", from: 0, to: yaml[0].length, text: yaml[0] };
+
+  let from = 0;
+  for (let line = 0; line < ORG_META_PREAMBLE_LINE_LIMIT; line += 1) {
+    const newline = text.indexOf("\n", from);
+    const lineEnd = newline < 0 ? text.length : newline;
+    const lineText = text.slice(from, lineEnd).replace(/\r$/, "").replace(/^\uFEFF/, "");
+    if (META_OPEN_LINE_RE.test(lineText)) {
+      const close = META_CLOSE_LINE_RE.exec(text.slice(lineEnd));
+      if (!close) return null;
+      const to = lineEnd + close.index + close[0].length;
+      return { kind: "org", from, to, text: text.slice(from, to) };
+    }
+    if (newline < 0) break;
+    from = newline + 1;
+  }
+  return null;
 }
 
 function tagField(block: MetadataBlock): TagField | null {
@@ -202,7 +232,7 @@ function unchangedEntries(left: ParsedTagEntry[], right: ParsedTagEntry[]): bool
 
 function insertTagField(block: MetadataBlock, tags: ParsedTagEntry[]): MarkdownTagEdit {
   const lineEnding = block.text.includes("\r\n") ? "\r\n" : "\n";
-  const closePattern = block.kind === "org" ? /^[ \t]*#\+end[ \t]+meta[ \t]*$/gim : /^[ \t]*---[ \t]*$/gm;
+  const closePattern = block.kind === "org" ? META_CLOSE_LINES_RE : /^[ \t]*---[ \t]*$/gm;
   const closes = [...block.text.matchAll(closePattern)];
   const close = closes.at(-1);
   if (!close || close.index == null) return { changed: false, from: 0, to: 0, insert: "", tags: [] };
@@ -247,7 +277,7 @@ function planMetadataScalarChange(markdown: string, key: string, rawValue: unkno
   if (!value) return { changed: false, from: 0, to: 0, insert: "" };
 
   const lineEnding = block.text.includes("\r\n") ? "\r\n" : "\n";
-  const closePattern = block.kind === "org" ? /^[ \t]*#\+end[ \t]+meta[ \t]*$/gim : /^[ \t]*---[ \t]*$/gm;
+  const closePattern = block.kind === "org" ? META_CLOSE_LINES_RE : /^[ \t]*---[ \t]*$/gm;
   const close = [...block.text.matchAll(closePattern)].at(-1);
   if (!close || close.index == null) return { changed: false, from: 0, to: 0, insert: "" };
   const from = block.from + close.index;

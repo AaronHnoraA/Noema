@@ -541,6 +541,10 @@ function buildImageDecorations(view: EditorView): DecorationSet {
         if (rangeInsideAny(node.from, node.to, excludedRanges)) return false;
         if (node.name !== "Image") return;
         const line = doc.lineAt(node.to);
+        // `![alt⏎](src)` is one image to Markdown, but CodeMirror refuses a
+        // plugin decoration that replaces a line break: the whole view update
+        // throws and the document cannot be opened. Such an image stays source.
+        if (node.from < line.from) return false;
         const trailing = readImageTrailingAttrs(doc.sliceString(node.to, line.to), 0);
         const fullTo = trailing ? node.to + trailing.to : node.to;
         // Only a caret opens an image's source. A range keeps it rendered,
@@ -551,10 +555,16 @@ function buildImageDecorations(view: EditorView): DecorationSet {
 
         const raw = doc.sliceString(node.from, node.to);
         const m = raw.match(IMAGE_RE);
-        const alt = m?.[1] ?? "";
-        // src may include optional title; strip the title part and trim
-        const srcFull = m?.[2] ?? "";
-        const src = markdownLinkDestination(srcFull);
+        // The syntax tree already knows where the label ends and what the
+        // destination is. Cutting the source at the first `)` truncated every
+        // path with a parenthesis in it: `fig(1).png`, `<image (1).png>`.
+        const labelClose = node.node.getChildren("LinkMark")
+          .find((mark) => doc.sliceString(mark.from, mark.to) === "]");
+        const urlNode = node.node.getChild("URL");
+        const alt = labelClose ? doc.sliceString(node.from + 2, labelClose.from) : m?.[1] ?? "";
+        const src = urlNode
+          ? markdownLinkDestination(doc.sliceString(urlNode.from, urlNode.to), { stripTitle: false })
+          : markdownLinkDestination(m?.[2] ?? "");
         const layout = imageLayoutFromAttrs(trailing?.attrs ?? {});
         if (cursorInside) {
           // Editing the source of an image that has a line to itself keeps the

@@ -145,6 +145,15 @@ export function formatDateValue(time, hasTime) {
   return hasTime ? `${base} ${pad2(d.getHours())}:${pad2(d.getMinutes())}` : base;
 }
 
+/**
+ * Today's calendar date where the author is. `toISOString()` gives the UTC
+ * date, which east of Greenwich is still yesterday for the first hours of the
+ * day; a note created at 09:00 in Sydney was stamped with the previous day.
+ */
+export function todayDateValue(now = Date.now()) {
+  return formatDateValue(now, false);
+}
+
 export function normalizeDateValue(raw) {
   const parsed = parseDateValue(raw);
   return parsed ? formatDateValue(parsed.time, parsed.hasTime) : null;

@@ -1,6 +1,6 @@
 import { kernelMarkdownPath } from "./kernel-markdown-provider.mjs";
 
-const structuredQueryPattern = /(?:^|\s)-?(?:tag|title|repo|namespace|path|kind|linksto|is):/iu;
+const structuredQueryPattern = /(?:^|\s)-?(?:tag|title|repo|namespace|path|kind|linksto|is|after|before|created|intitle|category|repository|since|until):/iu;
 
 export function kernelLexicalSearchEligible(body = {}) {
   const query = String(body?.query || body?.q || "").normalize("NFKC").trim();

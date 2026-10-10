@@ -352,6 +352,20 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
     return liveInputs;
   }
 
+  // The signature of every note is the same string until the index hands
+  // over a new note list, so it is built once per list rather than on every
+  // edit while the graph is open.
+  let signedNotes: NoteSummary[] | null = null;
+  let signedNotesValue = "";
+  function allNotesSignature(): string {
+    const notes = options.getNotes();
+    if (notes !== signedNotes) {
+      signedNotes = notes;
+      signedNotesValue = notes.map(noteSignature).join("\n");
+    }
+    return signedNotesValue;
+  }
+
   function dataSignature(): string {
     const config = settings();
     const current = options.getCurrentNote();
@@ -368,7 +382,7 @@ export function createLocalGraphPanel(options: LocalGraphPanelOptions): LocalGra
       config.backlinks ? "backlinks" : "",
       config.tags ? "tags" : "",
       noteSignature(current),
-      options.getNotes().map(noteSignature).join("\n"),
+      allNotesSignature(),
       live.refs.join(","),
       live.tags.join(","),
     ].join("\n");

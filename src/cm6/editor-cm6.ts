@@ -306,7 +306,7 @@ function resolveRefLinkHref(state: EditorState, linkFrom: number, linkTo: number
 
 function markdownHrefFromLineAt(state: EditorState, pos: number): string | null {
   const line = state.doc.lineAt(Math.max(0, Math.min(pos, state.doc.length)));
-  const re = /!?\[[^\]\n]*\]\(([^)\n]+)\)/g;
+  const re = /!?\[[^\]\n]*\]\(((?:[^()\n]|\([^()\n]*\))+)\)/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(line.text)) !== null) {
     const from = line.from + match.index;
@@ -435,8 +435,8 @@ function resolveSourceWidgetHref(view: EditorView, event: MouseEvent): string | 
       const to = Number(toStr);
       const text = view.state.doc.sliceString(from, to);
       // Extract markdown image/link destination: ![alt](src) or [text](href)
-      const m = text.match(/^!?\[[^\]]*\]\(([^)]+)\)/);
-      if (m?.[1]) return m[1].trim();
+      const m = text.match(/^!?\[[^\]]*\]\(((?:[^()\n]|\([^()\n]*\))+)\)/);
+      if (m?.[1]) return markdownLinkDestination(m[1]);
       return null;
     }
     el = el.parentElement;
@@ -887,7 +887,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
         const visual = isVisualMode(view);
         view.dispatch({ effects: beforeChangeDocumentEffect.of(undefined) });
         view.setState(createState(md, visual));
-        viewportStabilizer!.resetBaseline();
+        viewportStabilizer!.resetDocument();
         documentResetListeners.forEach((listener) => listener());
         restoreHeadingFolds();
         scheduleViewportDecorationRefresh(view);

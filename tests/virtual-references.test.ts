@@ -9,6 +9,15 @@ describe("source-owned virtual references", () => {
     expect(matcher.search("ushers").map((match: { pattern: string }) => match.pattern)).toEqual(["she", "he", "hers"]);
   });
 
+  test("matches Han titles inside unspaced prose and keeps Latin word boundaries", () => {
+    const result = scanVirtualReferences([
+      { id: "target", title: "图论", aliases: ["Graph"], file: "/target.md", text: "# 图论" },
+      { id: "source", title: "Source", file: "/source.md", text: "我们研究图论的基本方法。Graphを学ぶ。Subgraphs are not it." },
+    ]);
+    const target = result.find((entry: { targetId: string }) => entry.targetId === "target");
+    expect(target.mentions).toEqual([expect.objectContaining({ sourceId: "source", count: 2 })]);
+  });
+
   test("reports unlinked title and alias mentions while excluding links, code, self and ambiguous aliases", () => {
     const result = scanVirtualReferences([
       { id: "alpha", title: "Alpha", aliases: ["First"], file: "/alpha.md", text: "# Alpha\nAlpha owns itself." },

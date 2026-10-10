@@ -135,7 +135,7 @@ export function nextTodoSourceForPatch(oldSource, body = {}, nowMs = Date.now())
   if (statusPatch) {
     const command = next.match(/^@@(todo|itodo)(?:\([^\)\n]*\))?[ \t]+/i)?.[1] || "todo";
     const prefix = statusPatch === "todo" ? `@@${command.toLowerCase()} ` : `@@${command.toLowerCase()}(${statusPatch}) `;
-    next = next.replace(/^@@(?:todo|itodo)(?:\([^\)\n]*\))?[ \t]+/i, prefix);
+    next = next.replace(/^@@(?:todo|itodo)(?:\([^\)\n]*\))?[ \t]+/i, () => prefix);
   }
   // Title edits use the same canonical attribute serialization as the Go writer.
   if (Object.keys(canonPatch).length > 0 || bodyHasOwn(body, "title")) next = patchTodoSourceCanonical(next, canonPatch);

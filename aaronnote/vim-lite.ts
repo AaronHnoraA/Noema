@@ -1328,6 +1328,9 @@ export function createVimLite(
   let replaying = false;
   let destroyed = false;
   let asyncEpoch = 0;
+  // False while a selection made elsewhere is being adopted; see
+  // `syncSelectionFromEditor`.
+  let revealsSelection = true;
   const jumpTimeoutMs = Math.max(0, options.jumpTimeoutMs ?? AVY_TIMEOUT_MS);
   // Tracks the in-flight system clipboard write so paste() can wait for it
   // before reading back. Avoids the dd→p race where writeText is async.
@@ -2252,7 +2255,7 @@ export function createVimLite(
         range.anchor === selection.ranges[index]?.anchor
         && range.head === selection.ranges[index]?.head
       ));
-    if (!same) editor.view.dispatch({ selection, scrollIntoView: true });
+    if (!same) editor.view.dispatch({ selection, scrollIntoView: revealsSelection });
   }
 
   function rememberVisual(): void {
@@ -2488,6 +2491,10 @@ export function createVimLite(
    * the scroll without the (identical) selection breaks that loop at its source.
    */
   function dispatchVisualSelection(selection: EditorSelection): void {
+    if (!revealsSelection) {
+      if (!selection.eq(editor.view.state.selection)) editor.view.dispatch({ selection });
+      return;
+    }
     editor.view.dispatch(selection.eq(editor.view.state.selection)
       ? { scrollIntoView: true }
       : { selection, scrollIntoView: true });
@@ -2761,7 +2768,23 @@ export function createVimLite(
     enterInsert();
   }
 
+  // Adopting a selection is not moving it. Whoever set the selection (a click,
+  // a drag, a jump that already scrolled) decided where the viewport is, and
+  // the adjustment made here can be far from that point: a cursor placed on a
+  // rendered table or formula snaps to the start of the block. Revealing that
+  // start pulled the view back up to the top of a block whose lower part had
+  // just been clicked.
   function syncSelectionFromEditor(): void {
+    const revealed = revealsSelection;
+    revealsSelection = false;
+    try {
+      adoptEditorSelection();
+    } finally {
+      revealsSelection = revealed;
+    }
+  }
+
+  function adoptEditorSelection(): void {
     const text = doc(editor);
     const { anchor, head } = editor.getMarkdownSelectionRange();
     if (mode === "visual" && visualCharStates && visualCharDoc === text

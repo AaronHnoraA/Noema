@@ -139,6 +139,7 @@ export function wikiLayout(value?: string): WikiLayout;
 export function discoverWikiRepositories(root: string): Promise<{
   root: string; layout: "wiki"; repositories: WikiRepository[]; diagnostics: WikiDiagnostic[];
 }>;
+export function wikiPageMetadata(content: string): Record<string, string>;
 export function buildWikiIndex(root: string, options?: {
   layout?: WikiLayout;
   mode?: "auto" | "incremental" | "full";

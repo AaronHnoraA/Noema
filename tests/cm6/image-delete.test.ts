@@ -43,4 +43,23 @@ describe("deleting an image", () => {
     runEditorDelete(ed.view, "backward");
     expect(ed.getMarkdown()).toBe("[a](b c");
   });
+
+  it("renders an image whose path contains parentheses or needs angle brackets", () => {
+    const cases: Array<[string, string, string]> = [
+      ["![shot](fig(1).png)", "fig(1).png", "shot"],
+      ["![my shot](<image (1).png>)", "image (1).png", "my shot"],
+      ['![a](pic.png "The (title)")', "pic.png", "a"],
+    ];
+    for (const [source, src, alt] of cases) {
+      const host = document.createElement("div");
+      document.body.append(host);
+      const editor = createEditorCM6(host, { initialContent: `${source}\n\ntext` });
+      editor.setSelection(source.length + 3);
+      const image = host.querySelector<HTMLImageElement>("img.cm-image-render");
+      expect(image?.getAttribute("src")).toBe(src);
+      expect(image?.alt).toBe(alt);
+      editor.destroy();
+      host.remove();
+    }
+  });
 });

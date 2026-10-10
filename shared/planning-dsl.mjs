@@ -320,7 +320,7 @@ export function patchPlanningNodeRaw(node, patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, "status")) {
     const status = String(patch.status || "").trim();
     const prefix = status ? `@@${node.kind}(${status}) ` : `@@${node.kind} `;
-    raw = raw.replace(/^@@[A-Za-z][\w-]*(?:\([^)\n]*\))?[ \t]+/i, prefix);
+    raw = raw.replace(/^@@[A-Za-z][\w-]*(?:\([^)\n]*\))?[ \t]+/i, () => prefix);
   }
   const emptyAttrsRaw = TITLE_PLANNING_KINDS.has(String(node?.kind || "").toLowerCase()) ? "{}" : "";
   const nextAttrsRaw = node?.shape === "block" ? serializeBlockAttrs(attrs) : (serializeInlineAttrs(attrs) || emptyAttrsRaw);

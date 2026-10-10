@@ -194,10 +194,72 @@ function loadMathLive(): Promise<MathLiveModule> {
 function loadMathLiveForSource(source: string): Promise<MathLiveModule> {
   try {
     assertMathLiveSourceSafe(source);
+    const issue = visualTexWritebackIssue(source);
+    if (issue) throw new Error(issue);
   } catch (error) {
     return Promise.reject(error);
   }
   return loadMathLive();
+}
+
+/** Environments MathLive 0.110 reads and writes back unchanged. */
+const mathLiveRoundTripEnvironments = new Set([
+  "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix",
+  "matrix*", "pmatrix*", "bmatrix*", "Bmatrix*", "vmatrix*", "Vmatrix*",
+  "smallmatrix", "array", "cases", "dcases", "rcases",
+  "aligned", "gathered", "split", "align", "align*",
+  "gather", "gather*", "multline", "multline*",
+]);
+
+/** How many `&` one row of the environment keeps; unlisted ones keep all. */
+const mathLiveRowMarkerLimits = new Map<string, number>([
+  ["align", 1], ["align*", 1], ["split", 1],
+  ["gather", 0], ["gather*", 0], ["gathered", 0],
+  ["multline", 0], ["multline*", 0],
+]);
+
+/**
+ * Why a formula cannot be edited visually without changing its source, or
+ * null when it can.
+ *
+ * MathLive does not report what it cannot represent. An environment it does
+ * not know loses its `\begin` and has every `&` rewritten as a literal `\&`;
+ * `align` and `split` re-wrap a third cell onto a new row; `gather` and
+ * `multline` turn each cell into a row. The result still looks like LaTeX, so
+ * committing it would silently replace the author's formula. Such a formula
+ * is edited as source instead, through the editor's `onUnavailable` path.
+ */
+export function visualTexWritebackIssue(source: string): string | null {
+  const environments: Array<{ name: string; markers: number }> = [];
+  for (let index = 0; index < source.length; index++) {
+    const character = source[index]!;
+    if (character === "\\") {
+      const token = readEnvironmentToken(source, index);
+      if (token?.kind === "begin") {
+        if (!mathLiveRoundTripEnvironments.has(token.name)) {
+          return `LiveTeX cannot edit the ${token.name} environment without changing it`;
+        }
+        environments.push({ name: token.name, markers: 0 });
+        index = token.end - 1;
+      } else if (token) {
+        environments.pop();
+        index = token.end - 1;
+      } else {
+        const row = environments[environments.length - 1];
+        if (row && source[index + 1] === "\\") row.markers = 0;
+        index++;
+      }
+      continue;
+    }
+    if (character !== "&") continue;
+    const row = environments[environments.length - 1];
+    if (!row) return "LiveTeX cannot edit an alignment marker outside an environment";
+    row.markers++;
+    if (row.markers > (mathLiveRowMarkerLimits.get(row.name) ?? Number.POSITIVE_INFINITY)) {
+      return `LiveTeX cannot edit this many columns in the ${row.name} environment without changing them`;
+    }
+  }
+  return null;
 }
 
 function isEscaped(source: string, index: number): boolean {
@@ -394,6 +456,41 @@ function addTopLevelAlignmentMarker(latex: string): string {
   return relation < 0 ? latex : `${latex.slice(0, relation)}&${latex.slice(relation)}`;
 }
 
+function hasTopLevelAlignmentMarker(latex: string): boolean {
+  let braceDepth = 0;
+  const environments: string[] = [];
+  for (let index = 0; index < latex.length; index++) {
+    const token = readEnvironmentToken(latex, index);
+    if (token) {
+      updateEnvironmentStack(environments, token);
+      index = token.end - 1;
+      continue;
+    }
+    const character = latex[index]!;
+    if (character === "{" && !isEscaped(latex, index)) braceDepth++;
+    else if (character === "}" && !isEscaped(latex, index)) braceDepth = Math.max(0, braceDepth - 1);
+    else if (character === "&" && !isEscaped(latex, index) && braceDepth === 0 && environments.length === 0) return true;
+  }
+  return false;
+}
+
+/**
+ * A row edits without its `&` only when the marker can be put back exactly:
+ * one marker, directly before the row's first relation. Anything else the
+ * author placed by hand (`a &= b & c &= d`, `&& \text{note}`, a continuation
+ * row `&\quad + 2`) stays in the row as written.
+ */
+function editableAlignedRow(row: string): string {
+  const stripped = stripTopLevelAlignmentMarkers(row);
+  const compact = (value: string): string => value.replace(/\s+/g, "");
+  return compact(addTopLevelAlignmentMarker(stripped)) === compact(row) ? stripped : row.trim();
+}
+
+/** The inverse: a row that carries its own markers is already aligned. */
+function alignedRowSource(row: string): string {
+  return hasTopLevelAlignmentMarker(row) ? row : addTopLevelAlignmentMarker(row);
+}
+
 function parseDisplayDocument(source: string): DisplayDocument {
   const normalized = source.replace(/\r\n?/g, "\n").trim();
   const begin = normalized.match(/^\\begin\{([A-Za-z]+\*?)\}/);
@@ -413,7 +510,7 @@ function parseDisplayDocument(source: string): DisplayDocument {
   const body = normalized.slice(bodyFrom, normalized.length - close.length).trim();
   const alignRelations = alignmentDisplayEnvironments.has(name);
   const rows = splitTopLevelDisplayRows(body)
-    .map((row) => alignRelations ? stripTopLevelAlignmentMarkers(row) : row);
+    .map((row) => alignRelations ? editableAlignedRow(row) : row);
   return { rows, envelope: { open, close, alignRelations } };
 }
 
@@ -429,7 +526,7 @@ export function joinVisualTexDisplayRows(rows: readonly string[]): string {
 
 function serializeDisplayDocument(rows: readonly string[], envelope: DisplayEnvelope | null): string {
   const body = joinVisualTexDisplayRows(
-    envelope?.alignRelations ? rows.map(addTopLevelAlignmentMarker) : rows,
+    envelope?.alignRelations ? rows.map(alignedRowSource) : rows,
   );
   if (!body || !envelope) return body;
   return `${envelope.open}\n${body}\n${envelope.close}`;
@@ -469,11 +566,13 @@ function managedLayoutDocument(source: string): { layout: VisualTexDisplayLayout
     return { layout: "equation", rows: parseDisplayDocument(normalized).rows };
   }
   const body = normalized.slice(begin[0].length, normalized.length - close.length).trim();
+  // `cases` separates a value from its condition with `&`; that is a column,
+  // like a matrix cell, not an alignment that can be regenerated.
   const aligned = name === "align" || name === "align*" || name === "aligned"
-    || name === "split" || name === "cases";
+    || name === "split";
   return {
     layout: name,
-    rows: splitTopLevelDisplayRows(body).map((row) => aligned ? stripTopLevelAlignmentMarkers(row) : row),
+    rows: splitTopLevelDisplayRows(body).map((row) => aligned ? editableAlignedRow(row) : row),
   };
 }
 
@@ -498,10 +597,15 @@ export function visualTexSupportsRows(source: string): boolean {
 export function setVisualTexDisplayLayout(source: string, layout: VisualTexDisplayLayout): string {
   const { rows } = managedLayoutDocument(source);
   const cleanRows = rows.map((row) => row.trim()).filter((row, index) => row || index === 0);
-  if (layout === "equation") return cleanRows.join(" \\qquad ").trim();
   const aligned = layout === "align" || layout === "align*" || layout === "aligned"
-    || layout === "split" || layout === "cases";
-  const body = joinVisualTexDisplayRows(aligned ? cleanRows.map(addTopLevelAlignmentMarker) : cleanRows);
+    || layout === "split";
+  const columns = aligned || layout === "cases" || layout === "matrix"
+    || layout === "pmatrix" || layout === "bmatrix";
+  // A layout without columns rejects `&` outright, so markers a row kept for
+  // itself cannot follow it there.
+  const targetRows = columns ? cleanRows : cleanRows.map(stripTopLevelAlignmentMarkers);
+  if (layout === "equation") return targetRows.join(" \\qquad ").trim();
+  const body = joinVisualTexDisplayRows(aligned ? targetRows.map(alignedRowSource) : targetRows);
   return body ? `\\begin{${layout}}\n${body}\n\\end{${layout}}` : "";
 }
 
@@ -4624,11 +4728,22 @@ function mountVisualTexAdvancedDisplayEditor(
   };
 }
 
+/**
+ * The row editor gives every row its own formula, and a formula on its own has
+ * no columns: MathLive writes a row's `&` back as a literal `\&`. A document
+ * whose rows carry columns (a matrix, `cases`, hand-placed alignment) is
+ * therefore edited as one formula.
+ */
+export function visualTexRowsCarryColumns(source: string): boolean {
+  const prepared = prepareVisualTexDisplayLatex(normalizeVisualTexLatex(source));
+  return managedLayoutDocument(prepared).rows.some(hasTopLevelAlignmentMarker);
+}
+
 export function mountVisualTexDisplayEditor(
   host: HTMLElement,
   options: VisualTexInlineEditorOptions,
 ): VisualTexInlineEditor {
-  return options.advanced
+  return options.advanced && !visualTexRowsCarryColumns(options.latex)
     ? mountVisualTexAdvancedDisplayEditor(host, options)
     : mountVisualTexSingleDisplayEditor(host, options);
 }

@@ -13,6 +13,7 @@ export function todoArgKeyForCanonical(canonKey: string, existingArgs?: Record<s
 export function midnightMs(d: Date): number;
 export function parseDateValue(raw: string): ParsedDate | null;
 export function formatDateValue(time: number, hasTime: boolean): string;
+export function todayDateValue(now?: number): string;
 export function normalizeDateValue(raw: string): string | null;
 
 export function normalizeTodoStatus(raw?: string): string;

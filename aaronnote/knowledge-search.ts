@@ -1,4 +1,5 @@
 import type { WikiNote, WikiSearchResult } from "./api-client.ts";
+import { renderSearchExcerpt } from "./search-excerpt.ts";
 import { markdownLinkPrimaryModifier } from "../src/cm6/markdown-link-events.ts";
 
 export type KnowledgeSearchController = { refresh: () => void; close: () => void; destroy: () => void };
@@ -47,7 +48,7 @@ export function createKnowledgeSearch(options: {
       button.append(title, meta);
       if (note.excerpt) {
         const excerpt = document.createElement("span");
-        excerpt.textContent = note.excerpt.replaceAll("[[", "").replaceAll("]]", "");
+        renderSearchExcerpt(excerpt, note.excerpt, options.input.value);
         button.appendChild(excerpt);
       } else if (note.reasons?.length) {
         const reason = document.createElement("span");

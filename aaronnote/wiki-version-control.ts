@@ -803,6 +803,11 @@ export function createVersionControlView(host: VersionControlHost) {
         return result as Record<string, unknown>;
       });
     });
+    // "Edit" aims the field at one remote. Once the field is emptied that
+    // aim is over, and the next URL typed is for origin, as the button says.
+    remoteUrl.addEventListener("input", () => {
+      if (!remoteUrl.value.trim()) delete remoteUrl.dataset.remoteName;
+    });
     remoteSave.addEventListener("click", () => {
       const url = remoteUrl.value.trim();
       if (!url) return;

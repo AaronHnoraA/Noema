@@ -438,6 +438,23 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
       .toBe("\\begin{align}\nS_k(T_H)&=S_{k,1}\\oplus S_{k,2}\n\\end{align}");
     expect(serializeVisualTexDisplayRows("align", ["a=b", "c=d"]))
       .toBe("\\begin{align}\na&=b \\\\\nc&=d\n\\end{align}");
+    // Markers the author placed by hand survive a layout round trip: `cases`
+    // columns, a second alignment column, and a continuation row.
+    for (const source of [
+      "\\begin{cases}\n1 & x > 0 \\\\\n0 & \\text{otherwise}\n\\end{cases}",
+      "\\begin{align}\na &= b & c &= d \\\\\ne &= f && \\text{note}\n\\end{align}",
+      "\\begin{aligned}\nx &= 1 \\\\\n&\\quad + 2\n\\end{aligned}",
+    ]) {
+      const layout = visualTexDisplayLayout(source);
+      expect(setVisualTexDisplayLayout(source, layout)).toBe(source);
+      expect(replaceVisualTexDisplayRows(source, splitVisualTexDisplayRows(source))).toBe(source);
+    }
+    expect(splitVisualTexDisplayRows(String.raw`\begin{aligned}x &= 1 \\ &\quad + 2\end{aligned}`))
+      .toEqual(["x = 1", String.raw`&\quad + 2`]);
+    expect(setVisualTexDisplayLayout(String.raw`\begin{align}a &= b & c &= d\end{align}`, "gathered"))
+      .toBe("\\begin{gathered}\na = b  c = d\n\\end{gathered}");
+    expect(setVisualTexDisplayLayout(String.raw`\begin{cases}1 & x > 0\end{cases}`, "equation"))
+      .toBe("1  x > 0");
     expect(visualTexOuterDisplayLayout(String.raw`\begin{align}#?\end{align}`)).toBe("align");
     expect(visualTexOuterDisplayLayout("a=b")).toBeNull();
   });

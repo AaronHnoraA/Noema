@@ -10,7 +10,7 @@
  */
 
 import { EditorView } from "@codemirror/view";
-import type { Text } from "@codemirror/state";
+import type { ChangeSet, EditorState, Line, Text, TransactionSpec } from "@codemirror/state";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
 import { parseTableModel, formatTableLines, splitTableCells, sortTableBodyRows, tableRowsToCSV, tableTooLarge, type TableAlign } from "../table-model.ts";
@@ -38,8 +38,10 @@ import {
 import { revisionAdviceRange, revisionSource, type RevisionSourceOptions } from "../../authoring-syntax.ts";
 import { deleteBlockAtCursor, duplicateBlockAtCursor, moveBlockAtCursor } from "../block-move.ts";
 import { clearInlineFormatSpec, inlineFormatsAvailable, toggleInlineFormatSpec, type InlineFormatKind } from "../inline-format.ts";
-import { changeHeadingLevelSpec, toggleBlockquoteSpec, toggleHeadingSpec, toggleListSpec, type ListKind } from "../block-format.ts";
+import { changeHeadingLevelSpec, toggleBlockquoteSpec, toggleHeadingSpec, toggleListSpec, toggleTaskCheckSpec, type ListKind } from "../block-format.ts";
 import { markdownInlineContext } from "../languages/markdown/index.ts";
+import { scanInlineMathRanges } from "../../inline-math.ts";
+import { orgMetaOpenLineNumber } from "../../org-meta.ts";
 
 // ---------------------------------------------------------------------------
 // Inline wrap (bold / italic / highlight / strike / code / link / image)
@@ -300,11 +302,28 @@ function editRevision(view: EditorView, value: string): boolean {
   return dispatchRevisionSource(view, from, to, "", source, "");
 }
 
-function editProperties(view: EditorView): boolean {
+function focusMetaProperties(view: EditorView): boolean {
   const existing = view.dom.querySelector<HTMLDetailsElement>(".aaronnote-meta-properties");
-  if (existing) {
-    existing.open = true;
-    existing.querySelector<HTMLElement>("input, textarea, summary")?.focus();
+  if (!existing) return false;
+  existing.open = true;
+  existing.querySelector<HTMLElement>("input, textarea, summary")?.focus();
+  return true;
+}
+
+function editProperties(view: EditorView): boolean {
+  if (focusMetaProperties(view)) return true;
+  // Whether the note has a metadata block is a fact about the document. Its
+  // panel is only in the DOM while the block is on screen in preview mode, so
+  // asking the DOM made this command add a second block to a note that was
+  // scrolled down or shown as source, and the index then read the new, empty
+  // block as the note's identity.
+  const metaLine = orgMetaOpenLineNumber(view.state.doc);
+  if (metaLine > 0) {
+    const open = view.state.doc.line(metaLine);
+    const body = Math.min(view.state.doc.length, open.to + 1);
+    view.dispatch({ selection: { anchor: body }, scrollIntoView: true });
+    view.focus();
+    view.requestMeasure({ read: () => null, write: () => { focusMetaProperties(view); } });
     return true;
   }
   const text = view.state.doc.toString();
@@ -679,13 +698,12 @@ export function exitEmptyMarkdownBlock(view: EditorView): boolean {
     const parentMarkup = parent?.match(CONTINUE_MARKUP_RE);
     if (parentMarkup) {
       const insert = `${parentMarkup[1] ?? ""}${parentMarkup[2] ?? ""}${nextListMarker(parentMarkup)}`;
-      view.dispatch({
+      dispatchRenumbered(view, {
         changes: { from: line.from, to: line.to, insert },
         selection: { anchor: line.from + insert.length },
         scrollIntoView: true,
         userEvent: "input",
       });
-      renumberMarkdownOrderedLists(view);
       return true;
     }
     exitToSeparatedLine(view, line, "", "");
@@ -719,12 +737,11 @@ export function continueMarkdownMarkup(view: EditorView): boolean {
   const quotePrefix = match[1] ?? "";
   const indent = match[2] ?? "";
   const insert = `\n${quotePrefix}${indent}${nextListMarker(match)}`;
-  view.dispatch({
+  dispatchRenumbered(view, {
     changes: { from: sel.from, insert },
     selection: { anchor: sel.from + insert.length },
     scrollIntoView: true,
   });
-  renumberMarkdownOrderedLists(view);
   return true;
 }
 
@@ -770,11 +787,8 @@ export function continueMarkdownBlock(view: EditorView): boolean {
   return continueMarkdownMarkup(view) || continueMarkdownQuote(view);
 }
 
-export function renumberMarkdownOrderedLists(
-  view: EditorView,
-  around = view.state.selection.main.from,
-): boolean {
-  const doc = view.state.doc;
+function orderedListRenumberChanges(state: EditorState, around: number): ChangeSet | null {
+  const doc = state.doc;
   const aroundLine = doc.lineAt(Math.max(0, Math.min(around, doc.length))).number;
   const { startLine, endLine } = markdownListRegion(doc, aroundLine);
   const oldLines = Array.from(
@@ -787,8 +801,15 @@ export function renumberMarkdownOrderedLists(
     const line = doc.line(startLine + index);
     return [{ from: line.from, to: line.to, insert: newLines[index]! }];
   });
-  if (changes.length === 0) return false;
-  const changeSet = view.state.changes(changes);
+  return changes.length === 0 ? null : state.changes(changes);
+}
+
+export function renumberMarkdownOrderedLists(
+  view: EditorView,
+  around = view.state.selection.main.from,
+): boolean {
+  const changeSet = orderedListRenumberChanges(view.state, around);
+  if (!changeSet) return false;
   const sel = view.state.selection.main;
   view.dispatch({
     changes: changeSet,
@@ -798,6 +819,26 @@ export function renumberMarkdownOrderedLists(
     },
   });
   return true;
+}
+
+/**
+ * Apply SPEC and the list renumbering it makes necessary as one transaction.
+ * Dispatching the renumbering separately made it a second undo step: one undo
+ * took back the numbers and left the edit that had caused them.
+ */
+function dispatchRenumbered(view: EditorView, spec: TransactionSpec): void {
+  const edit = view.state.update(spec);
+  const renumber = orderedListRenumberChanges(edit.state, edit.state.selection.main.from);
+  if (!renumber) {
+    view.dispatch(edit);
+    return;
+  }
+  view.dispatch({
+    changes: edit.changes.compose(renumber),
+    selection: edit.state.selection.map(renumber, 1),
+    scrollIntoView: edit.scrollIntoView,
+    ...(typeof spec.userEvent === "string" ? { userEvent: spec.userEvent } : {}),
+  });
 }
 
 function lineIndentWidth(text: string): number {
@@ -845,7 +886,9 @@ export function indentMarkdownList(view: EditorView, direction: 1 | -1): boolean
     (_, index) => listLineText(doc, region.startLine + index),
   );
   const indentedLines = [...oldLines];
-  for (let lineNum = startLine; lineNum <= blockEndLine; lineNum += 1) {
+  // The selection can reach past the list (into the paragraph or table after
+  // it); only lines of the list's own region are indented.
+  for (let lineNum = Math.max(startLine, region.startLine); lineNum <= Math.min(blockEndLine, region.endLine); lineNum += 1) {
     const localIndex = lineNum - region.startLine;
     const text = indentedLines[localIndex]!;
     if (!text.trim()) continue;
@@ -1144,7 +1187,9 @@ function runTableCommandCM6(view: EditorView, command: EditorCommand): boolean {
   if (command === "table-insert-row") {
     const colCount = splitCells(lines[0] ?? "").length;
     const emptyRow = buildRow(Array(colCount).fill(" "));
-    const insertAt = currentRowIdx + 1;
+    // A new row is a body row. From the header it goes below the delimiter
+    // row; between the two it would end the table.
+    const insertAt = Math.max(currentRowIdx + 1, lines.findIndex(isSeparatorRow) + 1);
     newLines.splice(insertAt, 0, emptyRow);
     newCursorRow = insertAt;
   } else if (command === "table-delete-row") {
@@ -1239,8 +1284,11 @@ function runTableCommandCM6(view: EditorView, command: EditorCommand): boolean {
   }
 
   const newText = newLines.join("\n");
-  const cursorRow = newLines[Math.max(0, Math.min(newCursorRow, newLines.length - 1))] ?? "";
-  const cursor = startPos + rowOffset(newLines, newCursorRow) + cellOffset(cursorRow, newCursorCol);
+  // The row may no longer exist (the only body row was deleted); the cursor
+  // then stays in the table's last row instead of past its end.
+  const cursorRowIdx = Math.max(0, Math.min(newCursorRow, newLines.length - 1));
+  const cursorRow = newLines[cursorRowIdx] ?? "";
+  const cursor = startPos + rowOffset(newLines, cursorRowIdx) + cellOffset(cursorRow, newCursorCol);
   view.dispatch({
     changes: { from: startPos, to: endPos, insert: newText },
     selection: { anchor: cursor },
@@ -1426,6 +1474,100 @@ export function tableEnterSameColumn(view: EditorView): boolean {
 // Main dispatch
 // ---------------------------------------------------------------------------
 
+/** The fenced block containing POS, as its opening and closing fence lines. */
+function fencedBlockAt(state: EditorView["state"], pos: number): { open: Line; close: Line | null } | null {
+  const tree = ensureSyntaxTree(state, Math.min(state.doc.length, pos + 1), 100) ?? syntaxTree(state);
+  for (let node: SyntaxNode | null = tree.resolveInner(pos, -1); node; node = node.parent) {
+    if (node.name !== "FencedCode") continue;
+    const open = state.doc.lineAt(node.from);
+    const last = state.doc.lineAt(node.to);
+    const fence = /^[ \t]{0,3}(`{3,}|~{3,})/u.exec(open.text)?.[1];
+    if (!fence) return null;
+    // An unterminated fence runs to the end of the document and has no closer.
+    const closed = last.number > open.number
+      && new RegExp(`^[ \\t]{0,3}${fence[0]}{${fence.length},}[ \\t]*$`, "u").test(last.text);
+    return { open, close: closed ? last : null };
+  }
+  return null;
+}
+
+/**
+ * Toggle a fenced code block. Inside a fence the two fence lines go and the
+ * code stays; a selection has its whole lines fenced; a bare caret gets an
+ * empty block. The fence is made longer than any backtick run in the body, so
+ * fencing text that itself shows a fence does not end early.
+ */
+function toggleCodeBlock(view: EditorView, lang: string): boolean {
+  const { state } = view;
+  const { from, to } = state.selection.main;
+  const fenced = fencedBlockAt(state, from);
+  if (fenced) {
+    const { open, close } = fenced;
+    const bodyFrom = Math.min(state.doc.length, open.to + 1);
+    const bodyTo = close ? Math.max(bodyFrom, close.from - 1) : state.doc.length;
+    const changes = [{ from: open.from, to: bodyFrom }];
+    if (close) changes.push({ from: bodyTo, to: close.to });
+    view.dispatch({
+      changes,
+      selection: { anchor: open.from, head: open.from + (bodyTo - bodyFrom) },
+      scrollIntoView: true,
+      userEvent: "input.format",
+    });
+    return true;
+  }
+  if (from === to) {
+    insertBlock(view, `\`\`\`${lang}\n\n\`\`\``, lang.length + 4);
+    return true;
+  }
+  const first = state.doc.lineAt(from);
+  const last = state.doc.lineAt(state.doc.lineAt(to).from === to ? to - 1 : to);
+  const body = state.doc.sliceString(first.from, last.to);
+  const longest = Math.max(0, ...Array.from(body.matchAll(/`+/gu), (match) => match[0].length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  const bodyFrom = first.from + fence.length + lang.length + 1;
+  view.dispatch({
+    changes: { from: first.from, to: last.to, insert: `${fence}${lang}\n${body}\n${fence}` },
+    selection: { anchor: bodyFrom, head: bodyFrom + body.length },
+    scrollIntoView: true,
+    userEvent: "input.format",
+  });
+  return true;
+}
+
+/**
+ * Wrap the selection in `\(…\)`, or unwrap the formula the selection is in.
+ * A bare caret gets an empty pair to type into. Math is a single-line span,
+ * so a selection that crosses a line break is left alone.
+ */
+function toggleInlineMath(view: EditorView): boolean {
+  const { state } = view;
+  const range = state.selection.main;
+  const line = state.doc.lineAt(range.from);
+  if (range.to > line.to || !inlineFormatsAvailable(state) || insideInlineCode(state, range.from)) return false;
+  const formula = scanInlineMathRanges(line.text, line.from)
+    .find((item) => item.from <= range.from && range.to <= item.to);
+  if (formula) {
+    view.dispatch({
+      changes: [{ from: formula.from, to: formula.from + 2 }, { from: formula.to - 2, to: formula.to }],
+      selection: { anchor: formula.from, head: formula.to - 4 },
+      scrollIntoView: true,
+      userEvent: "input.format",
+    });
+    return true;
+  }
+  // Edge whitespace stays outside the delimiters, as for the other marks.
+  const selected = state.doc.sliceString(range.from, range.to);
+  const from = range.from + (selected.length - selected.trimStart().length);
+  const to = Math.max(from, range.to - (selected.length - selected.trimEnd().length));
+  view.dispatch({
+    changes: [{ from, insert: "\\(" }, { from: to, insert: "\\)" }],
+    selection: { anchor: from + 2, head: to + 2 },
+    scrollIntoView: true,
+    userEvent: "input.format",
+  });
+  return true;
+}
+
 export function runCommandCM6(view: EditorView, command: EditorCommand, value = ""): boolean {
   if (command === "move-block-up") return moveBlockAtCursor(view, -1);
   if (command === "duplicate-block") return duplicateBlockAtCursor(view);
@@ -1445,6 +1587,7 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
   if (command === "code") return toggleInline(view, "code");
   if (command === "superscript") return toggleInline(view, "superscript");
   if (command === "subscript") return toggleInline(view, "subscript");
+  if (command === "inline-math") return toggleInlineMath(view);
   if (command === "clear-format") return dispatchSpec(view, clearInlineFormatSpec(view.state));
   if (command === "insert-footnote") return insertFootnote(view);
   if (command === "insert-revision") return insertRevision(view, value);
@@ -1515,14 +1658,7 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
   }
 
   // ── Block inserts ────────────────────────────────────────────────────────
-  if (command === "code-block") {
-    const { from, to } = view.state.selection.main;
-    const lang = value || "";
-    const body = from === to ? "" : view.state.doc.sliceString(from, to);
-    const template = `\`\`\`${lang}\n${body}\n\`\`\``;
-    insertBlock(view, template, lang.length + 4 + body.length);
-    return true;
-  }
+  if (command === "code-block") return toggleCodeBlock(view, value || "");
 
   if (command === "insert-table") {
     insertBlock(view, "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |", 2);
@@ -1617,14 +1753,17 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
   if (command === "heading-demote") return dispatchSpec(view, changeHeadingLevelSpec(view.state, 1));
 
   if (command === "blockquote") return dispatchSpec(view, toggleBlockquoteSpec(view.state));
+  if (command === "toggle-task") return dispatchSpec(view, toggleTaskCheckSpec(view.state));
   const listKind: ListKind | null = command === "bullet-list" ? "bullet"
     : command === "ordered-list" ? "ordered"
       : command === "task-list" ? "task"
         : null;
   if (listKind) {
-    const changed = dispatchSpec(view, toggleListSpec(view.state, listKind));
-    if (changed && listKind === "ordered") renumberMarkdownOrderedLists(view);
-    return changed;
+    const spec = toggleListSpec(view.state, listKind);
+    if (!spec) return false;
+    if (listKind === "ordered") dispatchRenumbered(view, spec);
+    else view.dispatch(spec);
+    return true;
   }
 
   return false;

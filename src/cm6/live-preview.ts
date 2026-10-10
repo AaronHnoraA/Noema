@@ -651,7 +651,9 @@ function buildDecorations(view: EditorView, tokens = collectLivePreviewTokens(vi
         break;
       case "html-inline": {
         const inSpan = selectionIntersectsSpan(sel, token.from, token.to);
-        if (!inSpan) {
+        // A tag broken across lines (`<a⏎href>`) stays source: a plugin may
+        // not replace a line break, and trying aborts the view update.
+        if (!inSpan && !token.source.includes("\n")) {
           decos.push(
             Decoration.replace({ widget: new HtmlInlineWidget(token.source) }).range(token.from, token.to),
           );

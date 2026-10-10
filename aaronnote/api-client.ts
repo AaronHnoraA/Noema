@@ -872,6 +872,9 @@ export type WikiNote = {
   repositoryId: string;
   partition: "public" | "private";
   mtimeMs: number;
+  /** Server reader only: authored `pinned: true` / `order: N` in the page meta. */
+  pinned?: boolean;
+  order?: number | null;
   refs: string[];
   backlinks: string[];
   unresolvedLinks: string[];

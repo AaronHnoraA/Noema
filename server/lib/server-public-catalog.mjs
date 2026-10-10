@@ -5,7 +5,7 @@ import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path"
 
 import { assetRefsFromContent } from "./runtime.mjs";
 import { knowledgeSearchResponse } from "./knowledge-search.mjs";
-import { resolveWikiLink, resolveWikiRelationships, searchWikiDatabase } from "./wiki-workspace.mjs";
+import { resolveWikiLink, resolveWikiRelationships, searchWikiDatabase, wikiPageMetadata } from "./wiki-workspace.mjs";
 
 function inside(root, target) {
   const rel = relative(resolve(root), resolve(target));
@@ -39,6 +39,56 @@ function cleanNote(note, absoluteToPublic) {
   delete result.repositoryUid;
   delete result.source;
   return result;
+}
+
+// Reading order is authored in the page, like everything else about it:
+// `pinned: true` lifts a page onto the reader's front page and `order: 3`
+// places it among the pages of its folder.  Both are read only when the
+// public catalog is built; the local index and its cache never see them.
+function readingMetadata(content) {
+  const meta = wikiPageMetadata(content);
+  const order = Number(String(meta.order ?? "").trim());
+  return {
+    pinned: /^(?:true|yes|1)$/i.test(String(meta.pinned ?? "").trim()),
+    order: String(meta.order ?? "").trim() !== "" && Number.isFinite(order) ? order : null,
+  };
+}
+
+const readingCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+function readingOrder(left, right) {
+  if (left.order !== right.order) {
+    if (left.order === null) return 1;
+    if (right.order === null) return -1;
+    return left.order - right.order;
+  }
+  return readingCollator.compare(left.title, right.title) || left.file.localeCompare(right.file);
+}
+
+/**
+ * Previous and next page for every public page: its neighbours among the
+ * pages of the same repository folder, in reading order.  Redirects are not
+ * pages to read through, so they neither get nor are neighbours.
+ */
+function readingNeighbors(notes) {
+  const folders = new Map();
+  for (const note of notes) {
+    if (note.kind === "redirect") continue;
+    const path = String(note.repositoryPath || "");
+    const folder = `${note.repositoryId}\0${path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""}`;
+    const bucket = folders.get(folder);
+    if (bucket) bucket.push(note);
+    else folders.set(folder, [note]);
+  }
+  const neighbors = new Map();
+  const link = (note) => (note ? { file: note.file, title: note.title } : null);
+  for (const pages of folders.values()) {
+    pages.sort(readingOrder);
+    pages.forEach((note, position) => {
+      neighbors.set(note.file, { previous: link(pages[position - 1]), next: link(pages[position + 1]) });
+    });
+  }
+  return neighbors;
 }
 
 function cleanReportValue(value, absoluteToPublic) {
@@ -150,11 +200,13 @@ export async function buildServerPublicCatalog(fullIndex, config) {
   for (const note of relationshipNotes) noteByRef.set(publicRef(note), resolve(note.file));
 
   const assetByRef = new Map();
+  const readingByFile = new Map();
   for (const note of visibleOriginal) {
     const repositoryRoot = repositoryRootById.get(note.repositoryId);
     if (!repositoryRoot) continue;
     let content = "";
     try { content = await readFile(note.file, "utf8"); } catch { continue; }
+    readingByFile.set(resolve(note.file), readingMetadata(content));
     for (const file of assetRefsFromContent(content, note.file)) {
       const absolute = resolve(file);
       if (!inside(repositoryRoot, absolute) || !existsSync(absolute)) continue;
@@ -164,7 +216,11 @@ export async function buildServerPublicCatalog(fullIndex, config) {
     }
   }
 
-  const notes = related.notes.map((note) => cleanNote(note, absoluteToPublic));
+  const notes = related.notes.map((note) => ({
+    ...cleanNote(note, absoluteToPublic),
+    ...(readingByFile.get(resolve(note.file)) || { pinned: false, order: null }),
+  }));
+  const neighbors = readingNeighbors(notes);
   const visibleNoteRefs = new Set(notes.map((note) => note.file));
   const files = [];
   for (const item of fullIndex.files || []) {
@@ -215,6 +271,9 @@ export async function buildServerPublicCatalog(fullIndex, config) {
     note(ref) {
       return noteByRef.get(String(ref || "")) || "";
     },
+    neighbors(ref) {
+      return neighbors.get(String(ref || "")) || { previous: null, next: null };
+    },
     search(body) {
       const lexical = searchWikiDatabase(config.noteRoot || fullIndex.root, {
         ...(body || {}),
@@ -259,5 +318,8 @@ export async function publicOpenedNote(catalog, ref) {
     size: info.size,
     standalone: false,
     remote: true,
+    pinned: note?.pinned === true,
+    // A catalog assembled elsewhere (the public MCP surface) has no reading order.
+    ...(typeof catalog.neighbors === "function" ? catalog.neighbors(key) : { previous: null, next: null }),
   };
 }

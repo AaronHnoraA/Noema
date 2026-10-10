@@ -116,4 +116,38 @@ describe("LiveTeX Cmd-bracket boundaries", () => {
       }
     });
   }
+
+  // LiveTeX Studio splits a formula into one field per row. A row on its own
+  // has no columns, so MathLive wrote `a & b` back as `a\&b`.
+  for (const [name, latex] of [
+    ["matrix", String.raw`\begin{pmatrix}a & b \\ c & d\end{pmatrix}`],
+    ["cases", String.raw`\begin{cases}1 & x > 0 \\ 0 & \text{otherwise}\end{cases}`],
+    ["continuation row", String.raw`\begin{aligned}x &= 1 \\ &\quad + 2\end{aligned}`],
+    ["plain alignment", String.raw`\begin{aligned}a &= b \\ c &= d\end{aligned}`],
+  ] as const) {
+    test(`LiveTeX Studio returns a ${name} without rewriting its columns`, async () => {
+      prepareMathLive();
+      const host = document.createElement("div");
+      document.body.append(host);
+      const editor = mountVisualTexDisplayEditor(host, {
+        latex,
+        macros: {},
+        entry: { kind: "end" },
+        advanced: true,
+        commitOnBlur: false,
+        onInput: () => {},
+        onCommit: () => {},
+        onUnavailable: (error) => { throw error; },
+      });
+      try {
+        await editor.ready;
+        const compact = (value: string): string => value.replace(/\s+/g, "");
+        expect(compact(editor.value())).toBe(compact(latex));
+        expect(editor.value()).not.toContain(String.raw`\&`);
+      } finally {
+        editor.destroy();
+        host.remove();
+      }
+    });
+  }
 });

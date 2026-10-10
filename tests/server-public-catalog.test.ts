@@ -76,4 +76,39 @@ describe("Server public projection", () => {
     expect(catalog.asset("images/unused.png", "public/knowledge/visible.md")).toBe("");
     expect(catalog.asset("../journal/images/secret.png", "public/knowledge/visible.md")).toBe("");
   });
+
+  test("orders the pages of a folder for reading and never routes through hidden pages", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-server-reading-"));
+    roots.push(root);
+    const repo = await repository(root, "public", "course");
+    await mkdir(join(repo, "notes"), { recursive: true });
+    await writeFile(join(repo, "notes", "b.md"), note("b", "Lecture 10", "", "order: 2\n"));
+    await writeFile(join(repo, "notes", "a.md"), note("a", "Welcome", "", "order: 1\npinned: true\n"));
+    await writeFile(join(repo, "notes", "c.md"), note("c", "Lecture 2"));
+    await writeFile(join(repo, "notes", "d.md"), note("d", "Lecture 11"));
+    await writeFile(join(repo, "notes", "draft.md"), note("draft", "Lecture 3", "", "private: true\n"));
+    await writeFile(join(repo, "notes", "old.md"), note("old", "Lecture 1", "", "kind: redirect\nredirect_to: roam://c\n"));
+    await writeFile(join(repo, "index.md"), note("index", "Course"));
+
+    configure({ root, workspaceRoot: root, workspaceLayout: "wiki", stateRoot: join(root, "state") });
+    const full = await buildWikiIndex(root, { layout: "wiki" });
+    const catalog = await buildServerPublicCatalog(full, { repositories: [{ id: "public/course" }] });
+    const ref = (name: string) => `public/course/notes/${name}.md`;
+    const walk = async (name: string) => {
+      const opened = await publicOpenedNote(catalog, ref(name));
+      return [opened.previous?.title ?? null, opened.next?.title ?? null];
+    };
+
+    // Explicit order first, then titles in natural order (2 before 11).
+    expect(await walk("a")).toEqual([null, "Lecture 10"]);
+    expect(await walk("b")).toEqual(["Welcome", "Lecture 2"]);
+    expect(await walk("c")).toEqual(["Lecture 10", "Lecture 11"]);
+    expect(await walk("d")).toEqual(["Lecture 2", null]);
+    expect(await walk("old")).toEqual([null, null]);
+    expect(await publicOpenedNote(catalog, "public/course/index.md")).toMatchObject({ previous: null, next: null, pinned: false });
+    expect(await publicOpenedNote(catalog, ref("a"))).toMatchObject({ pinned: true });
+    expect(catalog.index.notes.filter((item) => item.pinned).map((item) => item.title)).toEqual(["Welcome"]);
+    // The local index is not taught about reading order.
+    expect(full.notes.every((item) => !("pinned" in item) && !("order" in item))).toBe(true);
+  });
 });
