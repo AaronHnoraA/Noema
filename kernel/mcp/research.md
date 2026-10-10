@@ -17,6 +17,10 @@ edits a `.noema` document directly.
   receipt: selected references, omissions, digests and any ACP Session usage
   snapshot at finish. The usage is cumulative for the Session, not a per-Run
   charge. The receipt never contains the Run prompt or context bytes.
+- Attached context can be cut to fit. A `[Noema: ...]` line marks each cut,
+  names the sections it skips, and when it ends with `full text:` gives the
+  call that returns the original. A `context-omitted` item lists what was
+  left out whole. Make such a call only when the task needs the missing part.
 - Structure changes are Proposals. `proposal.create` submits an untrusted
   candidate; a person accepts it. `graph.declare` carries a whole plan — its
   blocks may reference each other by id — and is accepted or rejected as one

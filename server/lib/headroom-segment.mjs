@@ -5,7 +5,8 @@
 //
 //   https://github.com/headroomlabs-ai/headroom
 //   commit 976aa714ef3e19174dc0cb586cee7b20d064e4ef
-//   headroom/transforms/relevance_split.py   segment
+//   headroom/transforms/relevance_split.py                          segment
+//   crates/headroom-core/src/transforms/text_crusher/crusher.rs     shingles
 //
 // Changed in translation: lines end at "\n" only, and MAX_CHARS counts UTF-16
 // code units where the original counts code points.
@@ -45,4 +46,19 @@ export function segment(content, { window = 8, maxChars = 1200 } = {}) {
     }
   }
   return segments;
+}
+
+// The K-word windows of WORDS, for telling that one passage repeats another.
+// A passage shorter than K words gives every window it has, so two identical
+// short passages still match each other.
+export function shingles(words, k = 3) {
+  const set = new Set();
+  if (words.length < k) {
+    for (let size = 1; size <= words.length; size++) {
+      for (let start = 0; start + size <= words.length; start++) set.add(words.slice(start, start + size).join("\u0001"));
+    }
+    return set;
+  }
+  for (let start = 0; start + k <= words.length; start++) set.add(words.slice(start, start + k).join("\u0001"));
+  return set;
 }

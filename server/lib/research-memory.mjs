@@ -14,7 +14,8 @@ const COMMON_TERMS = new Set([
   "为什", "怎么", "可以", "以及", "因为", "所以", "但是", "如果", "没有", "就是", "还是", "已经",
 ]);
 
-export function memoryTerms(text) {
+/** Every term of TEXT in source order, repeats included. */
+export function termSequence(text) {
   const normalized = String(text || "").normalize("NFKC").toLowerCase();
   const terms = [];
   // Keep the source order across scripts. Collecting Latin before Han makes
@@ -26,11 +27,18 @@ export function memoryTerms(text) {
         const term = chars[index] + chars[index + 1];
         if (!COMMON_TERMS.has(term)) terms.push(term);
       }
-    } else if (!COMMON_TERMS.has(match[0])) {
-      terms.push(match[0]);
+    } else {
+      // Dots, colons and slashes belong inside an identifier or a path, not
+      // at the end of a sentence: "lease." is the word "lease".
+      const term = match[0].replace(/[.:/-]+$/, "");
+      if (term.length >= 3 && !COMMON_TERMS.has(term)) terms.push(term);
     }
   }
-  return [...new Set(terms)];
+  return terms;
+}
+
+export function memoryTerms(text) {
+  return [...new Set(termSequence(text))];
 }
 
 /**

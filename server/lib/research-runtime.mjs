@@ -39,7 +39,7 @@ import {
   validateResearchNotebook,
 } from "./research-notebook.mjs";
 import { findResearchProjectRoot, readProjectLayout } from "./research-project.mjs";
-import { excerptRanges } from "./research-context-excerpt.mjs";
+import { cutToBudget } from "./research-context-excerpt.mjs";
 import { requestTerms, selectRunMemory, similarFindings } from "./research-memory.mjs";
 
 export { findResearchProjectRoot };
@@ -428,55 +428,48 @@ function asContextItem({ ref, resolvedUri, bytes, mediaType, truncated = false }
 const AUTO_CONTEXT_MIN_TRUNCATED_BYTES = 1024;
 
 // An output or Handoff cut to a budget keeps its beginning and end, and when
-// passages in between match the request's TERMS, those too.
-function excerptedContextItem(item, bytes, maxBytes, note, terms) {
-  const gap = (omitted, lead = "") => Buffer.from(`\n\n[Noema: ${lead}${omitted} bytes omitted]\n`);
-  const first = gap(bytes.byteLength, `${note}; `).byteLength;
-  const ranges = excerptRanges(bytes, maxBytes - first, terms, gap(bytes.byteLength).byteLength);
-  if (!ranges) return null;
-  const parts = [];
-  ranges.forEach(([start, end], index) => {
-    if (index) parts.push(gap(start - ranges[index - 1][1], index === 1 ? `${note}; ` : ""));
-    parts.push(bytes.subarray(start, end));
+// passages in between match the request's TERMS, those too. An item the agent
+// can read back says how (`fullText`), so a cut loses nothing for good.
+function boundedContextItem(item, maxBytes, note = "compacted checkpoint truncated at 16 KiB", terms = []) {
+  const bytes = Buffer.from(item.contentBase64, "base64");
+  if (bytes.byteLength <= maxBytes) return item;
+  const cut = cutToBudget(bytes, maxBytes, {
+    note, terms, fullText: item.fullText || "",
+    keepEnd: item.ref.startsWith("result:") || item.ref.startsWith("handoff:"),
   });
-  const excerpt = Buffer.concat(parts);
-  if (excerpt.byteLength > maxBytes) return null;
   return {
     ...item,
-    contentBase64: excerpt.toString("base64"),
+    contentBase64: cut.bytes.toString("base64"),
     truncated: true,
-    truncationReason: `${note}; beginning and end retained, with the passages matching the request`,
+    truncationReason: cut.reason,
     sourceSha256: item.sourceSha256 || sha256(bytes),
     sourceBytes: item.sourceBytes || bytes.byteLength,
   };
 }
 
-function boundedContextItem(item, maxBytes, note = "compacted checkpoint truncated at 16 KiB", terms = []) {
-  const bytes = Buffer.from(item.contentBase64, "base64");
-  if (bytes.byteLength <= maxBytes) return item;
-  const preserveTail = item.ref.startsWith("result:") || item.ref.startsWith("handoff:");
-  const excerpted = preserveTail ? excerptedContextItem(item, bytes, maxBytes, note, terms) : null;
-  if (excerpted) return excerpted;
-  const marker = Buffer.from(`\n\n[Noema: ${note}${preserveTail ? "; middle omitted" : ""}]\n`);
-  const payloadBytes = Math.max(0, maxBytes - marker.byteLength);
-  const prefixBudget = preserveTail ? Math.ceil(payloadBytes / 2) : payloadBytes;
-  let prefixEnd = Math.min(bytes.byteLength, prefixBudget);
-  while (prefixEnd > 0 && prefixEnd < bytes.byteLength && (bytes[prefixEnd] & 0xc0) === 0x80) prefixEnd--;
-  const parts = [bytes.subarray(0, prefixEnd), marker];
-  if (preserveTail) {
-    let suffixStart = Math.max(prefixEnd, bytes.byteLength - (payloadBytes - prefixBudget));
-    while (suffixStart < bytes.byteLength && (bytes[suffixStart] & 0xc0) === 0x80) suffixStart++;
-    parts.push(bytes.subarray(suffixStart));
-  }
-  const bounded = Buffer.concat(parts);
-  return {
-    ...item,
-    contentBase64: bounded.toString("base64"),
-    truncated: true,
-    truncationReason: preserveTail ? `${note}; beginning and end retained` : note,
-    sourceSha256: item.sourceSha256 || sha256(bytes),
-    sourceBytes: item.sourceBytes || bytes.byteLength,
-  };
+// The noema-research tool call that returns a cell's whole source and output.
+function readCellCall(notebookId, cellId) {
+  return `research_cell {action: "read", notebookId: ${JSON.stringify(notebookId)}, cellId: ${JSON.stringify(cellId)}}`;
+}
+
+/** Tell the agent what was selected but left out, and how to read it. */
+function omittedContextItem(omitted) {
+  const readable = omitted.filter((entry) => entry.full_text);
+  if (!readable.length) return null;
+  const bytes = [
+    "# Noema context left out",
+    "",
+    "Selected for this request but over its context budget. Read one only if the task needs it.",
+    "",
+    ...readable.map((entry) => `- ${entry.ref} (${entry.bytes} bytes): ${entry.full_text}`),
+    "",
+  ].join("\n");
+  return { ...asContextItem({
+    ref: "context-omitted",
+    resolvedUri: `noema://context-omitted/${sha256(bytes).slice(0, 16)}`,
+    bytes,
+    mediaType: "text/markdown; charset=utf-8",
+  }), auto: true };
 }
 
 function publicContextItem(item) {
@@ -650,6 +643,9 @@ function fitAutomaticContext(items, limit = CONTEXT_LIMIT_BYTES, fanInRefs = new
   }
   let remaining = limit - required;
   const plain = items.map(({ auto: _auto, ...item }) => item);
+  const frozen = ({ fullText: _fullText, ...item }) => item;
+  const left = (index, reason) => ({ ref: plain[index].ref, resolved_uri: plain[index].resolvedUri,
+    bytes: sizes[index], reason, ...(plain[index].fullText ? { full_text: plain[index].fullText } : {}) });
   const chosen = items.map((item, index) => (item.auto ? undefined : plain[index]));
   const fanIn = items.map((item) => Boolean(item.auto && fanInRefs.has(item.ref)));
   const balancedFanIn = fanIn.filter(Boolean).length > 1;
@@ -693,8 +689,7 @@ function fitAutomaticContext(items, limit = CONTEXT_LIMIT_BYTES, fanInRefs = new
       remaining -= size(chosen[index]);
     });
     pending.filter((index) => !included.has(index)).forEach((index) => {
-      omitted.push({ ref: plain[index].ref, resolved_uri: plain[index].resolvedUri,
-        bytes: sizes[index], reason: "context budget; too little room for a DAG parent excerpt" });
+      omitted.push(left(index, "context budget; too little room for a DAG parent excerpt"));
     });
   }
   items.forEach((item, index) => {
@@ -705,10 +700,10 @@ function fitAutomaticContext(items, limit = CONTEXT_LIMIT_BYTES, fanInRefs = new
       remaining -= size(chosen[index]);
     } else {
       chosen[index] = null;
-      omitted.push({ ref: plain[index].ref, resolved_uri: plain[index].resolvedUri, bytes: sizes[index], reason: "context budget" });
+      omitted.push(left(index, "context budget"));
     }
   });
-  return { items: chosen.filter(Boolean), omitted };
+  return { items: chosen.filter(Boolean).map(frozen), omitted };
 }
 
 async function resolveContextItems({ root, notebook, sourceCell, declared, provider, sessionId, resolveKnowledgeNote }) {
@@ -740,12 +735,12 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
     checkDisclosure(cell, notebook);
     const title = valueString(researchWorkNodeForCell(notebook, cell)?.title || researchMeta(cell).title);
     const source = notebookSource(cell.source);
-    return asContextItem({
+    return { ...asContextItem({
       ref,
       resolvedUri: `noema://cell/${encodeURIComponent(notebookId)}/${encodeURIComponent(cell.id)}`,
       bytes: `${title ? `# ${title}\n\n` : ""}${source}`,
       mediaType: "text/markdown; charset=utf-8",
-    });
+    }), fullText: readCellCall(notebookId, cell.id) };
   };
   const outputItem = (workId, ref) => {
     const output = latestOutputForWork(notebook, workId);
@@ -753,12 +748,12 @@ async function resolveContextItems({ root, notebook, sourceCell, declared, provi
     checkDisclosure(output.cell, notebook);
     // A non-completed Run can leave useful partial output on the Work
     // cell. Keep it available, but never present it as a completed result.
-    return asContextItem({
+    return { ...asContextItem({
       ref,
       resolvedUri: `noema://work-output/${encodeURIComponent(notebookId)}/${encodeURIComponent(researchWorkNodeId(notebook, workId) || workId)}${output.runId ? `/${encodeURIComponent(output.runId)}` : ""}`,
       bytes: contextualWorkOutput(output),
       mediaType: "text/markdown; charset=utf-8",
-    });
+    }), fullText: readCellCall(notebookId, output.cell.id) };
   };
   const lineage = (depth) => {
     const maxDepth = Number(depth ?? 1);
@@ -901,12 +896,12 @@ async function latestParentHandoff(provider, root, sessionId, workNodeId = "") {
     ]);
     return {
       run,
-      item: asContextItem({
+      item: { ...asContextItem({
         ref: `handoff:${run.id}`,
         resolvedUri: `noema://artifact/${encodeURIComponent(artifactId)}`,
         bytes,
         mediaType: valueString(stored.artifact?.mediaType) || "text/markdown; charset=utf-8",
-      }),
+      }), fullText: `artifact {action: "read", id: ${JSON.stringify(artifactId)}}` },
     };
   };
   for (const run of runs) {
@@ -1983,8 +1978,34 @@ export function createResearchRuntimeService({
         }
       }
       const automaticContextRefs = new Set(candidateContext.filter((item) => item.auto).map((item) => item.ref));
-      const { items: contextItems, omitted: omittedContext } = fitAutomaticContext(
-        candidateContext, CONTEXT_LIMIT_BYTES, directParentOutputRefs, contextTerms);
+      // A cut or omitted item names the call that reads it back only when
+      // this Run is handed the tools that answer it.
+      if (!resolvedMCPServersForRun(capabilityEnvironment).some((server) => server.name === "noema-research")) {
+        for (const item of candidateContext) delete item.fullText;
+      }
+      const contextBytes = (items) => items.reduce((sum, item) => sum + Buffer.from(item.contentBase64, "base64").byteLength, 0);
+      let fitted = fitAutomaticContext(candidateContext, CONTEXT_LIMIT_BYTES, directParentOutputRefs, contextTerms);
+      let leftOut = omittedContextItem(fitted.omitted);
+      for (let pass = 0; leftOut && contextBytes(fitted.items) + contextBytes([leftOut]) > CONTEXT_LIMIT_BYTES; pass++) {
+        // Naming what was left out costs room too; fit again around it.
+        let again = null;
+        try {
+          again = pass < 2 ? fitAutomaticContext(candidateContext, CONTEXT_LIMIT_BYTES - contextBytes([leftOut]),
+            directParentOutputRefs, contextTerms) : null;
+        } catch {
+          again = null;
+        }
+        if (!again) {
+          leftOut = null;
+          break;
+        }
+        fitted = again;
+        leftOut = omittedContextItem(fitted.omitted);
+      }
+      const { auto: _auto, ...leftOutItem } = leftOut || {};
+      const contextItems = leftOut ? [...fitted.items, leftOutItem] : fitted.items;
+      const omittedContext = fitted.omitted;
+      if (leftOut) automaticContextRefs.add(leftOut.ref);
       if (memoryUnavailable) omittedContext.push({ ref: "finding:*", reason: "memory index unavailable", bytes: 0 });
       const capabilities = normalizeCapabilities(source.executor.capabilities, body.capabilities);
       assertCapabilityEnvelope(route.agent, capabilities, body, source.executor);
