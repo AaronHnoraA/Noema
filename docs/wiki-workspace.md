@@ -160,7 +160,7 @@ change that introduced it rebuilds an older `wiki.db` once.
 
 A query that no page answers in full is answered in part. Its terms are split
 into words and CJK character pairs; each counts by how few pages carry it, and
-only pages scoring at least the average are returned, at most twenty. The
+only pages whose score stands out from the rest are returned, at most twenty. The
 response says `match: "partial"`, each result lists the terms it matched, and
 the result list shows them as `partial match: …`. Field filters still apply.
 A query that has an exact answer never takes this path.
@@ -187,8 +187,8 @@ An existing title or alias in the chosen repository and namespace refuses a
 new page. A near title does not: the New Page workbench names up to three
 similar pages while the title is typed, and the Reports view lists pairs of
 pages that look like one page written twice (`Tensor Product` /
-`Tensor products`). Titles are compared by shared words, with English plurals
-folded and CJK compared by character pairs; titles that differ in a number
+`Tensor products`). Titles are compared by shared words, an inflected word counting as the same
+word, and CJK by character pairs; titles that differ in a number
 (`Lecture 1` / `Lecture 2`, two daily notes) are different pages. Both are
 notices. Nothing is merged or blocked for the author.
 
@@ -322,11 +322,14 @@ touches the link, and title links are left to the index to resolve.
 nanoMuse, a personal agent, was compared for its memory store. It has no Wiki
 and no Markdown editor, and its storage and sync (conversation sequence
 cursors, tombstones) answer a problem Git already answers here. What carried
-over is a habit of its recall, reimplemented rather than imported: weigh a
-term by how few documents carry it. It serves the partial search above, and
-Run memory recall in `docs/research-workflow.md`, alongside its duplicate
-check for near-identical statements. Embedding recall was not adopted: it
-would send private note text to an external endpoint.
+over is its recall: weigh a term by how few documents carry it, cut a result
+list relative to its own scores, and treat an inflected word as the same
+word. Those functions are translated in `shared/nanomuse-recall.mjs`
+(GPL-3.0-or-later, see `NOTICE` and `UPSTREAMS.md`) and serve the partial
+search and title comparison above; Run memory recall in
+`docs/research-workflow.md` applies the same weighting to Findings.
+Embedding recall was not adopted: it would send private note text to an
+external endpoint.
 The follow-up [MediaWiki × Roam interaction audit](mediawiki-roam-ux-audit-2026-10.md)
 tracks the link-to-page creation flow, multi-repository choices, page actions,
 and history semantics against MediaWiki's source and user-facing behavior.

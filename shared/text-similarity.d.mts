@@ -10,7 +10,6 @@ export const SIMILAR_PAGE_THRESHOLD: number;
 
 export function tokenize(value: unknown): Set<string>;
 export function rareTokenWeight(population: number, documentFrequency: number): number;
-export function aboveAverage<T extends { score: number }>(scored: T[], limit?: number): T[];
 export function titleSimilarity(left: unknown, right: unknown): number;
 export function similarTitles<T extends SimilarityNote>(
   title: unknown,

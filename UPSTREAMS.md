@@ -22,6 +22,22 @@ Each upstream directory retains its own license, history-facing documentation,
 tests and source layout. Noema-specific code lives in `lisp/`; upstream symbols
 remain intact so mature behavior is reused instead of imperfectly rewritten.
 
+## Recall and similarity
+
+`shared/nanomuse-recall.mjs` translates six functions of nanoMuse's memory
+store at `1e08351843052ddcace724e8cac1e4aefbc1101c` (GPL-3.0-or-later; the
+file keeps that license, see `NOTICE`). Two are in use: the inflection rule
+(`sameStem`) in Wiki title comparison and the relative cut (`standouts`) in
+partial search. `tokenize`, `similarity`, `search` and `fuse` are kept beside
+them, tested against upstream's documented behaviour, for the next consumer.
+Noema's own tokenizer stays in `shared/text-similarity.mjs`: it counts kana
+and compatibility ideographs as CJK and never pairs characters across a gap.
+
+Reviewed and not adopted: nanoMuse's embedding recall (it sends note text to
+an external endpoint), its model-driven memory tidy-up (Findings change only
+through a person's evidence review), and its conversation sync with sequence
+cursors and tombstones (Git already answers that here).
+
 ## Web editor upstreams
 
 LiveTeX (`src/cm6/extensions/visual/widgets/visualtex-inline.ts`) adapts

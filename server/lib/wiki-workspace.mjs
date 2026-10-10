@@ -20,7 +20,8 @@ import {
 } from "../../shared/knowledge-query.mjs";
 import { ORG_META_PREAMBLE_LINE_LIMIT } from "../../shared/meta-summary.mjs";
 import { todayDateValue } from "../../shared/planning-values.mjs";
-import { aboveAverage, rareTokenWeight, similarTitlePairs, similarTitles, tokenize } from "../../shared/text-similarity.mjs";
+import { standouts } from "../../shared/nanomuse-recall.mjs";
+import { rareTokenWeight, similarTitlePairs, similarTitles, tokenize } from "../../shared/text-similarity.mjs";
 import {
   normalizeWikiNamespace, qualifiedWikiTitle, scanWikiLinks, splitQualifiedWikiTarget, splitWantedWikiTarget,
   splitWikiFragmentTarget,
@@ -1366,8 +1367,9 @@ function excerptAround(body, terms) {
 
 // A query no page answers in full falls back to the pages that answer part of
 // it.  The terms are split into words and CJK character pairs, each weighted
-// by how few pages carry it, and only pages scoring at least the average are
-// kept, so a common pair alone ("的构") does not make a result.
+// by how few pages carry it, and only pages whose score stands out are kept
+// (above the mean; above it by a deviation from eight candidates on), so a
+// common pair alone ("的构") does not make a result.
 const PARTIAL_MAX_TOKENS = 16;
 const PARTIAL_MAX_RESULTS = 20;
 
@@ -1394,7 +1396,11 @@ function partialWikiMatches(db, textTerms, where, parameters, limit) {
       found.set(pageKey, entry);
     }
   }
-  const kept = aboveAverage([...found.values()].filter((entry) => entry.score > 0), Math.min(limit, PARTIAL_MAX_RESULTS));
+  const scored = [...found.values()].filter((entry) => entry.score > 0);
+  const cap = Math.min(limit, PARTIAL_MAX_RESULTS);
+  // Equal scores can sit a rounding error below their own mean; candidates
+  // that cannot be told apart are all kept.
+  const kept = standouts(scored, cap).length ? standouts(scored, cap) : scored.slice(0, cap);
   if (!kept.length) return [];
   const rows = db.prepare(`SELECT p.*, f.body AS match_body FROM pages_fts_trigram f JOIN pages p ON p.page_key = f.page_key WHERE p.page_key IN (${kept.map(() => "?").join(",")})`)
     .all(...kept.map((entry) => entry.pageKey));

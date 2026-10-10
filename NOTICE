@@ -74,6 +74,17 @@ License. The reviewed upstream revision is:
 
 See docs/pisper-agent-lifecycle-study.md for what was adopted.
 
+shared/nanomuse-recall.mjs is a translation of parts of nanoMuse's memory
+store (tokenize, similarity, rare-word search, reciprocal-rank fusion, the
+relative relevance cut and the inflection rule), copyright the nanoMuse
+contributors, licensed under the GNU General Public License, version 3 or
+later. That file stays under GPL-3.0-or-later; it is combined with this
+AGPL-3.0-only work as section 13 of both licenses permits. The reviewed
+upstream revision is:
+
+  https://github.com/nano-muse/nanoMuse
+  commit 1e08351843052ddcace724e8cac1e4aefbc1101c
+
 The editor bundles the MathLive mathfield runtime, copyright 2017--present
 Arno Gourdol, licensed under the MIT License:
 
