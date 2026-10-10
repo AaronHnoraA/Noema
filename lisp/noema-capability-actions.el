@@ -27,7 +27,7 @@
 (declare-function noema-capability-ui--after-mutation "noema-capability-ui" (buffer result error-object))
 (declare-function noema-research--entry-at-point "noema-research-mode" (&optional entries))
 (declare-function noema-research--require-cell "noema-research-mode" ())
-(declare-function vterm-send-string "vterm" (string &optional paste-p))
+(declare-function ghostel-paste-string "ghostel" (string))
 
 (defun noema-capability-ui--open-right (path &optional directory manager)
   "Open PATH to the right of MANAGER without replacing the manager window.
@@ -559,7 +559,7 @@ collide with a user-defined server.")
 
 (defun noema-capability-lookup--agent-buffer ()
   "Return the current buffer when it is an agent input surface, or nil."
-  (and (or (derived-mode-p 'agent-shell-mode) (derived-mode-p 'vterm-mode))
+  (and (or (derived-mode-p 'agent-shell-mode) (derived-mode-p 'ghostel-mode))
        (current-buffer)))
 
 (defun noema-capability-lookup--reference (record project)
@@ -610,7 +610,7 @@ TYPE is the manager's filter, or nil when both kinds are offered."
       (progn (require 'noema-agent-acp)
              (noema-agent-acp-draft buffer text))
     (with-current-buffer buffer
-      (if (derived-mode-p 'vterm-mode) (vterm-send-string text) (insert text)))))
+      (if (derived-mode-p 'ghostel-mode) (ghostel-paste-string text) (insert text)))))
 
 ;;;###autoload
 (defun noema-capability-lookup (&optional type buffer)

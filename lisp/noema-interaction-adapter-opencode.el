@@ -25,9 +25,9 @@
   :type '(repeat string)
   :group 'noema-interaction-opencode)
 
-(defcustom noema-interaction-opencode-terminal-backend 'vterm
+(defcustom noema-interaction-opencode-terminal-backend 'ghostel
   "Terminal backend used for OpenCode sessions."
-  :type '(choice (const vterm) (const eat))
+  :type '(choice (const ghostel) (const eat))
   :group 'noema-interaction-opencode)
 
 (define-minor-mode noema-interaction-opencode-mode

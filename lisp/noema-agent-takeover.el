@@ -4,7 +4,7 @@
 ;;
 ;; A takeover is only allowed for an idle, promoted ACP Session.  The Node and
 ;; Go authority choose and record the verified native resume argv before this
-;; module shuts down agent-shell and starts vterm.  PTY bytes are deliberately
+;; module shuts down agent-shell and starts Ghostel.  PTY bytes are deliberately
 ;; not projected as a document Run.
 
 ;;; Code:
@@ -15,9 +15,9 @@
 (require 'noema-agent-acp)
 
 (declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
-(declare-function vterm "vterm" (&optional buffer-name))
-(defvar vterm-shell)
-(defvar vterm-kill-buffer-on-exit)
+(declare-function my/ghostel-create-hidden "init-utils" (name))
+(declare-function my/ghostel-send-command "init-ghostel" (buffer command &optional retries))
+(defvar ghostel-kill-buffer-on-exit)
 (defvar my/noema--ready)
 (defvar-local noema-agent-promote--session-id)
 
@@ -89,7 +89,7 @@ REASON is stored in the durable handback event."
 			(if restart "" " (not reopened)"))))))))))
 
 (defun noema-agent-takeover--on-kill ()
-  "Close a durable intervention when its vterm buffer is killed."
+  "Close a durable intervention when its Ghostel buffer is killed."
   (when noema-agent-takeover--intervention-id
     (noema-agent-takeover--end (current-buffer) nil "PTY buffer closed")))
 
@@ -133,14 +133,14 @@ REASON is stored in the durable handback event."
       (error "Noema takeover response is incomplete"))
     (unless (executable-find (car command))
       (user-error "Native TUI executable not found: %s" (car command)))
-    (require 'vterm)
+    (require 'ghostel)
     (when (buffer-live-p origin)
       (noema-agent-acp-shutdown origin))
     (let* ((default-directory directory)
-           (vterm-shell (mapconcat #'shell-quote-argument command " "))
-           (vterm-kill-buffer-on-exit nil)
-           (buffer (vterm (generate-new-buffer-name (format "*noema-takeover:%s*" id)))))
+           (buffer (my/ghostel-create-hidden
+                    (generate-new-buffer-name (format "*noema-takeover:%s*" id)))))
       (with-current-buffer buffer
+        (setq-local ghostel-kill-buffer-on-exit nil)
         (setq-local noema-agent-takeover--intervention-id id
                     noema-agent-takeover--intervention-version version
                     noema-agent-takeover--root root
@@ -150,12 +150,14 @@ REASON is stored in the durable handback event."
                     noema-agent-takeover--agent-config config
                     noema-agent-takeover--handback-started nil)
         (add-hook 'kill-buffer-hook #'noema-agent-takeover--on-kill nil t))
+      (my/ghostel-send-command
+       buffer (concat "exec " (mapconcat #'shell-quote-argument command " ")))
       (pop-to-buffer buffer)
       buffer)))
 
 ;;;###autoload
 (defun noema-agent-takeover-session ()
-  "Hand the current promoted, idle agent-shell Session to a native vterm TUI."
+  "Hand the current promoted, idle agent-shell Session to a native Ghostel TUI."
   (interactive)
   (unless (and (fboundp 'my/noema-api-call) (bound-and-true-p my/noema--ready))
     (user-error "Noema web-host is not ready"))
@@ -182,7 +184,7 @@ REASON is stored in the durable handback event."
 
 ;;;###autoload
 (defun noema-agent-handback-session ()
-  "End the current Noema vterm intervention and reopen its ACP session."
+  "End the current Noema Ghostel intervention and reopen its ACP session."
   (interactive)
   (unless noema-agent-takeover--intervention-id
     (user-error "Current buffer is not an active Noema takeover"))

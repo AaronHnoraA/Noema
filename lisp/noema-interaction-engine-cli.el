@@ -140,18 +140,18 @@ answer-block regex matching; this makes session-mode parsing reliable."
 ;; ── Session routing ───────────────────────────────────────────────────────────
 
 (defvar noema-interaction-engine-cli--session-timeout 180
-  "Seconds to wait for an answer block from a managed vterm session.")
+  "Seconds to wait for an answer block from a managed Ghostel session.")
 
 (defvar noema-interaction-engine-cli--session-idle-cycles 3
   "Consecutive polls with no buffer growth to declare output stable.")
 
 (defun noema-interaction-engine-cli--session-request (tool-id prompt root fsm callback)
-  "Pipe PROMPT into the live TOOL-ID vterm session and poll for answer block.
+  "Pipe PROMPT into the live TOOL-ID Ghostel session and poll for answer block.
 Calls FSM/CALLBACK when the answer block appears or the timeout expires.
 
 Detection strategy (in order):
 1. Polling for a `.done` file created by the agent in `var/noema/`.
-2. `#+end answer` block in the vterm buffer (primary, with ANSI stripping).
+2. `#+end answer` block in the Ghostel buffer (primary, with ANSI stripping).
 3. Output stability: buffer unchanged for `noema-interaction-engine-cli--session-idle-cycles`
    polls, meaning the agent has likely finished.
 4. Hard timeout (`noema-interaction-engine-cli--session-timeout`)."
@@ -199,7 +199,7 @@ Detection strategy (in order):
                            (setq result raw-text))))
                      (ignore-errors (delete-file done-file))
                      (ignore-errors (delete-file output-file)))
-                 ;; 2. Fallback to scraping the vterm buffer
+                 ;; 2. Fallback to scraping the Ghostel buffer
                  (when (buffer-live-p session-buf)
                    (with-current-buffer session-buf
                      (let* ((end (point-max))
@@ -244,7 +244,7 @@ Detection strategy (in order):
 
 (cl-defmethod gptel--get-response ((backend noema-interaction-cli) fsm)
   "Drive the request in FSM through BACKEND.
-When a vterm session is live for this backend's tool-id, pipe the
+When a Ghostel session is live for this backend's tool-id, pipe the
 prompt into it and poll the buffer for an answer block (session mode).
 Otherwise fall back to a headless one-shot exec."
   (let* ((info (gptel-fsm-info fsm))
@@ -255,7 +255,7 @@ Otherwise fall back to a headless one-shot exec."
          (root (noema-interaction-cli--root info)))
     (plist-put info :callback callback)
     (if (noema-interaction-cli-session-live-p tool-id root)
-        ;; SESSION mode: reuse the running vterm, extract answer from buffer.
+        ;; SESSION mode: reuse the running Ghostel, extract answer from buffer.
         (condition-case err
             (noema-interaction-engine-cli--session-request tool-id prompt root fsm callback)
           (error

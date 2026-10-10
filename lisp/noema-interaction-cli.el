@@ -3,7 +3,7 @@
 ;;; Commentary:
 ;;
 ;; Unified CLI-session core for noema-interaction terminal backends.
-;; Provides parametric terminal session management (interactive vterm/eat)
+;; Provides parametric terminal session management (interactive Ghostel/eat)
 ;; and headless exec (one-shot process) for CLI AI tools.
 ;;
 ;; Tools are registered via `noema-interaction-cli-register-tool'.
@@ -11,7 +11,7 @@
 ;; thin public wrappers that delegate to the generic functions.
 ;;
 ;; Session principle:
-;;   Interactive vterm sessions: CLI keeps its own session (process + buffer).
+;;   Interactive Ghostel sessions: CLI keeps its own session (process + buffer).
 ;;   Headless exec path: one-shot process, no persistent session needed.
 
 ;;; Code:
@@ -24,19 +24,18 @@
 (require 'noema-interaction-backend)
 
 (defvar my/terminal-startup-cd-inhibited)
-(defvar my/vterm-popup-kind nil)
-(defvar my/vterm-popup-title nil)
-(defvar vterm-shell)
-(defvar vterm-environment)
+(defvar my/ghostel-popup-kind nil)
+(defvar my/ghostel-popup-title nil)
 (defvar eat-terminal)
 (defvar eat-term-name)
 
-(declare-function my/vterm-popup-display-buffer "init-vterm-popup" (buffer))
+(declare-function my/ghostel-popup-display-buffer "init-ghostel-popup" (buffer))
 (declare-function turn-off-evil-mode "evil" ())
 (declare-function evil-emacs-state "evil" ())
-(declare-function vterm "vterm" (&optional arg))
-(declare-function vterm-send-string "vterm" (string &optional paste-p))
-(declare-function vterm-send-return "vterm" ())
+(declare-function my/ghostel-create-hidden "init-utils" (name))
+(declare-function my/ghostel-send-command "init-ghostel" (buffer command &optional retries))
+(declare-function ghostel-paste-string "ghostel" (string))
+(declare-function ghostel-send-string "ghostel" (string))
 (declare-function eat-mode "eat" ())
 (declare-function eat-exec "eat" (buffer name command startfile &rest switches))
 (declare-function eat-term-send-string "eat" (terminal string))
@@ -49,10 +48,10 @@ Each entry is (ID . SPEC) where SPEC is a plist with:
   :name                Display name string
   :executable-var      Symbol of defcustom holding the executable path
   :extra-args-var      Symbol of defcustom holding extra arg list (or nil)
-  :terminal-backend-var Symbol of defcustom holding terminal backend (vterm/eat)
+  :terminal-backend-var Symbol of defcustom holding terminal backend (ghostel/eat)
   :env-vars            List of environment variable strings for the session
   :buffer-prefix       String prefix for buffer names (e.g. \"codex\")
-  :popup-kind          Symbol for the vterm popup kind
+  :popup-kind          Symbol for the Ghostel popup kind
   :minor-mode          Minor mode function symbol to activate in terminal buffers
   :exec-args-fn        Function (prompt output-file root) → command string list
   :exec-output         Symbol: \\='file or \\='stdout")
@@ -102,9 +101,9 @@ See `noema-interaction-cli--tools' for the expected plist keys."
     (and var (boundp var) (symbol-value var))))
 
 (defun noema-interaction-cli--terminal-backend (id)
-  "Return the terminal backend symbol (vterm or eat) for tool ID."
+  "Return the terminal backend symbol (ghostel or eat) for tool ID."
   (let ((var (noema-interaction-cli--spec id :terminal-backend-var)))
-    (or (and var (boundp var) (symbol-value var)) 'vterm)))
+    (or (and var (boundp var) (symbol-value var)) 'ghostel)))
 
 ;; ── Process registry ──────────────────────────────────────────────────────────
 
@@ -170,10 +169,8 @@ See `noema-interaction-cli--tools' for the expected plist keys."
 (defun noema-interaction-cli--ensure-terminal-backend (id)
   "Ensure the configured terminal backend for tool ID is available."
   (pcase (noema-interaction-cli--terminal-backend id)
-    ('vterm
-     (unless (featurep 'vterm) (require 'vterm nil t))
-     (unless (featurep 'vterm)
-       (user-error "The package vterm is not installed")))
+    ('ghostel
+     (require 'ghostel))
     ('eat
      (unless (featurep 'eat) (require 'eat nil t))
      (unless (featurep 'eat)
@@ -183,7 +180,7 @@ See `noema-interaction-cli--tools' for the expected plist keys."
 (defun noema-interaction-cli--terminal-paste-string (id string)
   "Send STRING using bracketed paste to the current buffer for tool ID."
   (pcase (noema-interaction-cli--terminal-backend id)
-    ('vterm (vterm-send-string string t))
+    ('ghostel (ghostel-paste-string string))
     ('eat
      (when eat-terminal
        (eat-term-send-string eat-terminal "\e[200~")
@@ -194,7 +191,7 @@ See `noema-interaction-cli--tools' for the expected plist keys."
 (defun noema-interaction-cli--terminal-send-return (id)
   "Send return to the current buffer for tool ID."
   (pcase (noema-interaction-cli--terminal-backend id)
-    ('vterm (vterm-send-return))
+    ('ghostel (ghostel-send-string "\r"))
     ('eat (when eat-terminal (eat-term-send-string eat-terminal "\r")))
     (tb (error "Unsupported terminal backend for %s: %s" id tb))))
 
@@ -205,13 +202,14 @@ See `noema-interaction-cli--tools' for the expected plist keys."
   (with-current-buffer buffer
     (setq default-directory project-root)
     (let ((kind (noema-interaction-cli--spec id :popup-kind)))
-      (when kind (setq-local my/vterm-popup-kind kind)))
-    (setq-local my/vterm-popup-title
+      (when kind (setq-local my/ghostel-popup-kind kind)))
+    (setq-local my/ghostel-popup-title
                 (format "%s  %s"
                         (or (noema-interaction-cli--spec id :name) (symbol-name id))
                         (abbreviate-file-name project-root)))
-    (when (fboundp 'evil-emacs-state) (evil-emacs-state))
-    (when (bound-and-true-p evil-local-mode) (turn-off-evil-mode))
+    (unless (derived-mode-p 'ghostel-mode)
+      (when (fboundp 'evil-emacs-state) (evil-emacs-state))
+      (when (bound-and-true-p evil-local-mode) (turn-off-evil-mode)))
     (let ((mode (noema-interaction-cli--spec id :minor-mode)))
       (when (and mode (fboundp mode)) (funcall mode 1)))))
 
@@ -233,17 +231,13 @@ Returns a (BUFFER . PROCESS) cons cell."
          (env-vars (or (noema-interaction-cli--spec id :env-vars)
                        (list "TERM_PROGRAM=emacs"))))
     (pcase (noema-interaction-cli--terminal-backend id)
-      ('vterm
-       (let* ((vterm-buffer-name buffer-name)
-              (vterm-shell command-string)
-              (vterm-environment (append env-vars vterm-environment))
-              (buffer (let ((my/terminal-startup-cd-inhibited t))
-                        (save-window-excursion
-                          (vterm vterm-buffer-name)))))
-         (unless buffer (error "Failed to create %s vterm buffer" id))
+      ('ghostel
+       (let* ((process-environment (append env-vars process-environment))
+              (buffer (my/ghostel-create-hidden buffer-name)))
          (noema-interaction-cli--configure-buffer id buffer project-root)
+         (my/ghostel-send-command buffer (concat "exec " command-string))
          (let ((process (get-buffer-process buffer)))
-           (unless process (error "Failed to get %s vterm process" id))
+           (unless process (error "Failed to get %s Ghostel process" id))
            (cons buffer process))))
       ('eat
        (let* ((buffer (get-buffer-create buffer-name))
@@ -310,14 +304,13 @@ Returns the session buffer."
              (buffer (car buf-and-proc))
              (process (cdr buf-and-proc)))
         (noema-interaction-cli--set-process id root process)
-        (set-process-sentinel
-         process
-         (lambda (_proc event)
-           (when (string-match-p "\\(finished\\|exited\\|killed\\|terminated\\)" event)
-             (noema-interaction-cli--cleanup-on-exit id root))))
+        ;; Ghostel owns the process sentinel and closes its buffer on exit.
+        ;; Replacing that sentinel would leave its native terminal state stale.
         (with-current-buffer buffer
           (add-hook 'kill-buffer-hook
-                    (lambda () (noema-interaction-cli--cleanup-on-exit id root))
+                    (lambda ()
+                      (noema-interaction-cli--remove-process id root)
+                      (noema-interaction-session-clear-profile-injected id root))
                     nil t))))
     (noema-interaction-cli-buffer id root)))
 
@@ -325,7 +318,7 @@ Returns the session buffer."
   "Open the terminal buffer for tool ID via the popup window system."
   (if-let* ((buf (noema-interaction-cli-buffer
                   id (noema-interaction-cli--working-directory project-root))))
-      (my/vterm-popup-display-buffer buf)
+      (my/ghostel-popup-display-buffer buf)
     (user-error "No %s session for this project" id)))
 
 (defun noema-interaction-cli-stop (id &optional project-root)

@@ -7,7 +7,7 @@
 ;; provides actions for lifecycle, profile, and session management.
 ;;
 ;; HTTP model backends have been removed.  CLI agents are the only backends.
-;; Use `noema-interaction' (C-c A W) to pick and open an interactive vterm session.
+;; Use `noema-interaction' (C-c A W) to pick and open an interactive Ghostel session.
 
 ;;; Code:
 
