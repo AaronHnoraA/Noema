@@ -187,8 +187,8 @@ An existing title or alias in the chosen repository and namespace refuses a
 new page. A near title does not: the New Page workbench names up to three
 similar pages while the title is typed, and the Reports view lists pairs of
 pages that look like one page written twice (`Tensor Product` /
-`Tensor products`). Titles are compared by shared words, an inflected word counting as the same
-word, and CJK by character pairs; titles that differ in a number
+`Tensor products`). Titles are compared by shared words, with English plurals folded, and CJK by
+character pairs; titles that differ in a number
 (`Lecture 1` / `Lecture 2`, two daily notes) are different pages. Both are
 notices. Nothing is merged or blocked for the author.
 
@@ -322,12 +322,13 @@ touches the link, and title links are left to the index to resolve.
 nanoMuse, a personal agent, was compared for its memory store. It has no Wiki
 and no Markdown editor, and its storage and sync (conversation sequence
 cursors, tombstones) answer a problem Git already answers here. What carried
-over is its recall: weigh a term by how few documents carry it, cut a result
-list relative to its own scores, and treat an inflected word as the same
-word. Those functions are translated in `shared/nanomuse-recall.mjs`
-(GPL-3.0-or-later, see `NOTICE` and `UPSTREAMS.md`) and serve the partial
-search and title comparison above; Run memory recall in
-`docs/research-workflow.md` applies the same weighting to Findings.
+over is its recall: weigh a term by how few documents carry it, and cut a
+result list relative to its own scores. The cut is translated in
+`shared/nanomuse-recall.mjs` (GPL-3.0-or-later, see `NOTICE`); the weighting
+is written for Noema's data, here and in Run memory recall
+(`docs/research-workflow.md`). Its prefix rule for inflected words was tried
+and rejected, because it equates titles such as `Group` and `Groupoid`;
+`UPSTREAMS.md` lists every decision.
 Embedding recall was not adopted: it would send private note text to an
 external endpoint.
 The follow-up [MediaWiki × Roam interaction audit](mediawiki-roam-ux-audit-2026-10.md)

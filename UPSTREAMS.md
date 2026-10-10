@@ -24,19 +24,21 @@ remain intact so mature behavior is reused instead of imperfectly rewritten.
 
 ## Recall and similarity
 
-`shared/nanomuse-recall.mjs` translates six functions of nanoMuse's memory
-store at `1e08351843052ddcace724e8cac1e4aefbc1101c` (GPL-3.0-or-later; the
-file keeps that license, see `NOTICE`). Two are in use: the inflection rule
-(`sameStem`) in Wiki title comparison and the relative cut (`standouts`) in
-partial search. `tokenize`, `similarity`, `search` and `fuse` are kept beside
-them, tested against upstream's documented behaviour, for the next consumer.
-Noema's own tokenizer stays in `shared/text-similarity.mjs`: it counts kana
-and compatibility ideographs as CJK and never pairs characters across a gap.
+nanoMuse's memory store was read at `1e08351843052ddcace724e8cac1e4aefbc1101c`
+and each candidate judged by whether it improves Noema, not by whether it
+could be carried over.
 
-Reviewed and not adopted: nanoMuse's embedding recall (it sends note text to
-an external endpoint), its model-driven memory tidy-up (Findings change only
-through a person's evidence review), and its conversation sync with sequence
-cursors and tombstones (Git already answers that here).
+| nanoMuse | Decision |
+|---|---|
+| `standouts` (cut a result list relative to its own scores) | Translated into `shared/nanomuse-recall.mjs` (GPL-3.0-or-later, see `NOTICE`); used by partial Wiki search. |
+| Rare-word weighting of shared terms | Idea adopted, written for Noema's data: SQL document counts in partial search, weighted vocabulary share in Run memory recall. |
+| Near-duplicate check on statements | Idea adopted as a notice for Wiki titles and Findings; never a refusal. |
+| `_same_stem` (prefix match for inflections) | Rejected after trial: on the real vault it equated `tensor` with `tensorforscientist`, and by rule `Group` with `Groupoid`. |
+| `tokenize` | Rejected: Noema's tokenizer counts kana and compatibility ideographs as CJK and never pairs characters across a gap. |
+| `similarity`, `search`, `fuse` | Not carried over: nothing in Noema would call them. |
+| Embedding recall | Rejected: it sends note text to an external endpoint. |
+| Model-driven memory tidy-up | Rejected: Findings change only through a person's evidence review. |
+| Conversation sync (sequence cursors, tombstones), column-add migrations | Rejected: Git owns sync, and `wiki.db` is a projection that rebuilds. |
 
 ## Web editor upstreams
 

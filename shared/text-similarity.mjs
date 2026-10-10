@@ -1,10 +1,6 @@
 // Token overlap for Wiki titles and search terms.  Words are compared in
 // alphabetic scripts; CJK text has no spaces, so it is compared by adjacent
-// character pairs inside each run.  The tokenizer is Noema's (kana and
-// compatibility ideographs count as CJK, and a pair never spans a gap); the
-// stem rule and the relevance cut come from nanomuse-recall.mjs.
-
-import { sameStem } from "./nanomuse-recall.mjs";
+// character pairs inside each run.
 
 const CJK_CLASS = "\\u2e80-\\u9fff\\uf900-\\ufaff";
 const WORD_RE = new RegExp(`(?:(?![${CJK_CLASS}])[\\p{L}\\p{N}])+`, "gu");
@@ -30,6 +26,16 @@ export function tokenize(value) {
   return tokens;
 }
 
+// English plural endings only.  A looser stem rule would call "Group" and
+// "Groupoid", or "Tensor" and "Tensorforscientist", one title.
+function singular(token) {
+  if (!/^[a-z]{4,}$/.test(token)) return token;
+  if (token.endsWith("ies")) return `${token.slice(0, -3)}y`;
+  if (/(?:ch|sh|ss|x|z)es$/.test(token)) return token.slice(0, -2);
+  if (token.endsWith("s") && !token.endsWith("ss")) return token.slice(0, -1);
+  return token;
+}
+
 // Inverse document frequency: a term in half the pages says little about
 // which page is meant, a term in one page says everything.
 export function rareTokenWeight(population, documentFrequency) {
@@ -41,29 +47,17 @@ function titleNumbers(value) {
 }
 
 // How alike two page titles are, 0 to 1: the share of tokens they have in
-// common, an inflected word counting as the same word ("Tensor Product" /
+// common, an English plural counting as its singular ("Tensor Product" /
 // "Tensor Products").  Titles that differ in a number are different pages
 // ("Lecture 1" / "Lecture 2", two daily notes).
 export function titleSimilarity(left, right) {
   if (titleNumbers(left) !== titleNumbers(right)) return 0;
-  const a = tokenize(left);
-  const b = tokenize(right);
+  const a = new Set([...tokenize(left)].map(singular));
+  const b = new Set([...tokenize(right)].map(singular));
   if (!a.size || !b.size) return fold(left).trim() && fold(left).trim() === fold(right).trim() ? 1 : 0;
-  const unmatched = new Set(b);
   let shared = 0;
-  for (const token of a) {
-    const match = unmatched.has(token) ? token : [...unmatched].find((other) => sameStem(token, [other]));
-    if (match === undefined) continue;
-    unmatched.delete(match);
-    shared += 1;
-  }
+  for (const token of a) if (b.has(token)) shared += 1;
   return shared / (a.size + b.size - shared);
-}
-
-// Tokens that sameStem could match share their first four characters.
-function stemKey(token) {
-  const chars = [...token];
-  return chars.length >= 5 ? chars.slice(0, 4).join("") : token;
 }
 
 function noteNames(note) {
@@ -110,7 +104,7 @@ export function similarTitlePairs(notes, options = {}) {
   const buckets = new Map();
   pages.forEach((note, position) => {
     const keys = new Set();
-    for (const name of noteNames(note)) for (const token of tokenize(name)) keys.add(stemKey(token));
+    for (const name of noteNames(note)) for (const token of tokenize(name)) keys.add(singular(token));
     for (const key of keys) {
       const bucket = buckets.get(key) || [];
       bucket.push(position);
