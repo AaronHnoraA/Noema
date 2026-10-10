@@ -74,6 +74,7 @@ const METHODS = Object.freeze({
 	"proposal:review": "reviewProposal",
 	"finding:get": "finding",
 	"finding:list": "findings",
+	"finding:retire": "retireFinding",
 	"research-ir:list": "researchIR",
 	"problem-model:list": "problemModels",
 	"export:create": "exportWorkstream",

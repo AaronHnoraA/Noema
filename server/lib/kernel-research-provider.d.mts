@@ -53,6 +53,7 @@ export type ResearchRuntimeProvider = {
   beginProposalAcceptance(args: { root: string; review: Record<string, any> }): Promise<{ proposal: Record<string, any> }>;
   reviewProposal(args: { root: string; review: Record<string, any> }): Promise<Record<string, any>>;
   finding(args: { root: string; id: string }): Promise<Record<string, any>>;
+  retireFinding(args: { root: string; id: string; status: string; reason: string; reviewedBy: string; expectedVersion: number }): Promise<Record<string, any>>;
   findings(args: { root: string; workstreamId?: string; status?: string; query?: string; limit?: number; includeLocal?: boolean }): Promise<Record<string, any>[]>;
   researchIR(args: { root: string; workstreamId: string; limit?: number }): Promise<Record<string, any>[]>;
   problemModels(args: { root: string; workstreamId: string; limit?: number }): Promise<Record<string, any>[]>;

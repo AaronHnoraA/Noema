@@ -69,6 +69,17 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   excerpts enter as pending `finding.create` Proposals; only a person's
   evidence review may promote one to `supported`/`human_reviewed`. Do not infer
   a durable fact from a transcript, a retrieval hit or a Pi coordinator reply.
+- **Retiring a Finding is a person's act, and one-way.** `RetireFinding`
+  moves a Finding to `disputed`, `refuted` or `superseded` with a reason and a
+  version compare-and-swap, and refuses any reviewer that is not `human:`. It
+  deletes nothing: evidence and history stay, and the Finding only leaves
+  automatic recall. There is no way back by edit; a retired claim returns
+  through a new evidence review. Do not add an agent-facing tool for it or a
+  "reinstate" shortcut.
+- **Similarity is a notice.** Near-identical Findings and page titles are
+  reported to the person (`similarFindings`, `reports.similar`); the only
+  identity the system acts on stays exact (`semantic_sha256`, the canonical
+  title). Do not turn a similarity score into a refusal or an automatic merge.
 - **Recorded is not applied.** `research_state` writes a durable request; the
   editor applies it. Say so in the result and give the agent
   `{action: "status"}` to find out, rather than letting it assume the document

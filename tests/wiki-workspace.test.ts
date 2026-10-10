@@ -236,7 +236,7 @@ describe("Wiki workspace", () => {
     expect(existsSync(join(root, "roam.db"))).toBe(false);
     expect(wikiIndexStatus(root)).toMatchObject({
       ok: true,
-      schemaVersion: 9,
+      schemaVersion: 10,
       lastMode: "incremental",
       repositories: [expect.objectContaining({ repositoryId: "private/research", headSha: headBefore })],
     });
@@ -1108,6 +1108,77 @@ describe("Wiki workspace", () => {
     expect(ids("-before:2000-01-01")).toEqual(both);
     expect(ids("after:not-a-date")).toEqual([]);
     expect(ids("群 after:1d")).toEqual([group.id]);
+  });
+
+  test("keeps the CJK pair index in step with page text", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "math");
+    const page = await createWikiPage(root, "wiki", { title: "Notes", repositoryId: "private/math", filename: "notes.md", tags: ["代数"] });
+    const original = await readFile(page.file, "utf8");
+    await writeFile(page.file, `${original}同构保持结构。\n`);
+    await buildWikiIndex(root, { layout: "wiki" });
+    const pairs = () => {
+      const db = new DatabaseSync(wikiDatabaseFile(root), { readOnly: true });
+      try {
+        return db.prepare("SELECT bigram FROM page_bigrams ORDER BY bigram").all().map((row) => String(row.bigram));
+      } finally {
+        db.close();
+      }
+    };
+    expect(pairs()).toEqual(expect.arrayContaining(["代数", "同构", "构保", "结构"]));
+    expect(pairs()).not.toContain("es");
+    expect(searchWikiDatabase(root, { query: "同构" }).items.map((item) => item.id)).toEqual([page.id]);
+    expect(searchWikiDatabase(root, { query: "同构 代数" }).items.map((item) => item.id)).toEqual([page.id]);
+    // 群 is nowhere, so the whole query has no answer and the page is offered as a partial one.
+    expect(searchWikiDatabase(root, { query: "同构 群" })).toMatchObject({ match: "partial", items: [expect.objectContaining({ id: page.id, matchedTerms: ["同构"] })] });
+
+    await writeFile(page.file, `${original}环是集合。\n`);
+    await buildWikiIndex(root, { layout: "wiki" });
+    expect(pairs()).toContain("集合");
+    expect(pairs()).not.toContain("同构");
+    expect(searchWikiDatabase(root, { query: "同构" }).items).toEqual([]);
+  });
+
+  test("answers part of a query when no page answers all of it", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "qc");
+    const code = await createWikiPage(root, "wiki", { title: "Stabilizer codes", repositoryId: "private/qc", filename: "code.md" });
+    const other = await createWikiPage(root, "wiki", { title: "Notes", repositoryId: "private/qc", filename: "notes.md" });
+    await writeFile(code.file, `${await readFile(code.file, "utf8")}量子纠错码用稳定子群描述。\n`);
+    await writeFile(other.file, `${await readFile(other.file, "utf8")}今天的天气很好，量子计算课改期。\n`);
+    await buildWikiIndex(root, { layout: "wiki" });
+
+    const exact = searchWikiDatabase(root, { query: "稳定子群" });
+    expect(exact).toMatchObject({ match: "full", total: 1 });
+    expect(exact.items[0].matchedTerms).toBeUndefined();
+
+    // No page holds the whole phrase; the page sharing its rare pairs wins and
+    // the one sharing only 量子 falls below the average.
+    const partial = searchWikiDatabase(root, { query: "量子纠错码的构造" });
+    expect(partial).toMatchObject({ match: "partial", total: 1, nextCursor: null });
+    expect(partial.items[0]).toMatchObject({ id: code.id, excerpt: expect.stringContaining("[[") });
+    expect(partial.items[0].matchedTerms).toEqual(expect.arrayContaining(["纠错", "错码"]));
+
+    expect(searchWikiDatabase(root, { query: "stabilizer homology" })).toMatchObject({ match: "partial", items: [expect.objectContaining({ id: code.id })] });
+    expect(searchWikiDatabase(root, { query: "homology" })).toMatchObject({ match: "full", total: 0 });
+    expect(searchWikiDatabase(root, { query: "stabilizer homology tag:none" }).items).toEqual([]);
+  });
+
+  test("reports near titles on creation and in the index without refusing them", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "math");
+    const first = await createWikiPage(root, "wiki", { title: "Tensor Product", repositoryId: "private/math", filename: "a.md" });
+    expect(first.similar).toEqual([]);
+    const second = await createWikiPage(root, "wiki", { title: "Tensor products", repositoryId: "private/math", filename: "b.md" });
+    expect(second.similar).toEqual([expect.objectContaining({ id: first.id, title: "Tensor Product", score: 1 })]);
+    await createWikiPage(root, "wiki", { title: "Lecture 1", repositoryId: "private/math", filename: "l1.md" });
+    expect((await createWikiPage(root, "wiki", { title: "Lecture 2", repositoryId: "private/math", filename: "l2.md" })).similar).toEqual([]);
+    expect((await createWikiPage(root, "wiki", { title: "2026-10-10", repositoryId: "private/math", filename: "d.md" })).similar).toEqual([]);
+
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    expect(index.reports.similar).toHaveLength(1);
+    expect(index.reports.similar[0].candidates.map((item: { id: string }) => item.id).sort()).toEqual([first.id, second.id].sort());
+    expect(index.reports.duplicates).toEqual([]);
   });
 
   test("filters by the period a page is dated in", async () => {

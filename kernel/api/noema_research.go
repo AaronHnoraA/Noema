@@ -1234,6 +1234,36 @@ func noemaResearchFindingGet(c *gin.Context) {
 	ret.Data = finding
 }
 
+func noemaResearchFindingRetire(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+	store, ok := noemaResearchStore(arg, ret)
+	if !ok {
+		return
+	}
+	var id, status, reviewedBy, reason string
+	var expectedVersion float64
+	if !util.ParseJsonArgs(arg, ret,
+		util.BindJsonArg("id", &id, true, true),
+		util.BindJsonArg("status", &status, true, true),
+		util.BindJsonArg("reviewedBy", &reviewedBy, true, true),
+		util.BindJsonArg("reason", &reason, true, true),
+		util.BindJsonArg("expectedVersion", &expectedVersion, true, false)) {
+		return
+	}
+	finding, err := store.RetireFinding(research.RetireFindingInput{ID: id, Status: status,
+		ReviewedBy: reviewedBy, Reason: reason, ExpectedVersion: int64(expectedVersion)})
+	if err != nil {
+		ret.Code, ret.Msg = -1, err.Error()
+		return
+	}
+	ret.Data = map[string]any{"finding": finding}
+}
+
 func noemaResearchFindings(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
 	defer c.JSON(http.StatusOK, ret)

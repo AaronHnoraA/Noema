@@ -70,5 +70,34 @@
       (should (equal (alist-get 'runId request) "run_1"))
       (should (equal (alist-get 'statement request) "Use SQLite")))))
 
+(ert-deftest noema-findings-retire-sends-version-and-reason ()
+  "Retiring asks for confirmation and sends the listed version."
+  (with-temp-buffer
+    (noema-findings-mode)
+    (setq noema-findings--root "/tmp/noema-findings-test/")
+    (noema-findings--render [((id . "finding_1") (kind . "claim") (status . "supported")
+                              (statement . "A signal exists") (version . 3)
+                              (verificationLevel . "human_reviewed") (evidence . []))])
+    (goto-char (point-min))
+    ;; `yes-or-no-p' is a primitive; replacing it must not depend on a
+    ;; native-compilation trampoline being buildable in the test process.
+    (let ((native-comp-enable-subr-trampolines nil)
+          channels body)
+      (cl-letf (((symbol-function 'my/noema-api-call)
+                 (lambda (channel args done &optional _timeout)
+                   (push channel channels)
+                   (when (equal channel "aaronnote:api:research:finding:retire")
+                     (setq body (aref args 0))
+                     (funcall done '((finding . ((id . "finding_1")))) nil))))
+                ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+        (should-error (noema-findings-retire "refuted" "  ") :type 'user-error)
+        (noema-findings-retire "refuted" " mislabelled benchmark ")
+        (should (equal (alist-get 'id body) "finding_1"))
+        (should (equal (alist-get 'status body) "refuted"))
+        (should (equal (alist-get 'reason body) "mislabelled benchmark"))
+        (should (equal (alist-get 'expectedVersion body) 3))
+        ;; The list reloads after the kernel confirms.
+        (should (equal (car channels) "aaronnote:api:research:finding:list"))))))
+
 (provide 'noema-findings-tests)
 ;;; noema-findings-tests.el ends here

@@ -117,7 +117,12 @@ export function knowledgeSearchResponse(index, body, lexicalResult) {
   const recommendation = mode === "related" || (!query && mode === "suggest");
   let items = recommendation
     ? recommendKnowledgeNotes(index, body)
-    : (lexicalResult?.items || []).map((item) => ({ ...item, score: Math.max(0, -Number(item.rank || 0)), reasons: [], resultKind: "note" }));
+    : (lexicalResult?.items || []).map((item) => ({
+      ...item,
+      score: Math.max(0, -Number(item.rank || 0)),
+      reasons: item.matchedTerms?.length ? [`partial match: ${item.matchedTerms.slice(0, 4).join(", ")}`] : [],
+      resultKind: "note",
+    }));
   if (!recommendation && mode === "suggest" && items.length === 0) {
     items = fuzzyTitleSuggestions(index, query, Math.max(1, Math.min(12, Number(body?.limit) || 8)));
   }
@@ -127,6 +132,7 @@ export function knowledgeSearchResponse(index, body, lexicalResult) {
     generation: String(index?.generation || lexicalResult?.generation || ""),
     query,
     mode,
+    match: !recommendation && lexicalResult?.match === "partial" ? "partial" : "full",
     items,
     total: recommendation ? items.length : Number(lexicalResult?.total || items.length),
     nextCursor: recommendation ? null : lexicalResult?.nextCursor ?? null,

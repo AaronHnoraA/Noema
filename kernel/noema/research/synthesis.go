@@ -201,6 +201,17 @@ type FindingFilter struct {
 	IncludeLocal bool
 }
 
+// RetireFindingInput is a person's decision that a Finding no longer holds.
+type RetireFindingInput struct {
+	ID              string
+	Status          string
+	ReviewedBy      string
+	Reason          string
+	ExpectedVersion int64
+}
+
+var retiredFindingStatuses = map[string]bool{"disputed": true, "refuted": true, "superseded": true}
+
 type ResearchIRVersion struct {
 	WorkstreamID string         `json:"workstreamId"`
 	Version      int64          `json:"version"`
@@ -585,6 +596,66 @@ func (s *Store) GetFinding(id string) (Finding, error) {
 		return Finding{}, err
 	}
 	return s.attachFindingDetails(finding)
+}
+
+// RetireFinding moves a Finding to disputed, refuted or superseded. Only a
+// person may do it, and nothing here moves a Finding back: a retired claim
+// returns through a new evidence review, never through an edit. The Finding,
+// its evidence and its history stay; it simply stops qualifying for recall.
+func (s *Store) RetireFinding(input RetireFindingInput) (Finding, error) {
+	input.ID, input.Status = strings.TrimSpace(input.ID), strings.TrimSpace(input.Status)
+	input.ReviewedBy, input.Reason = strings.TrimSpace(input.ReviewedBy), strings.TrimSpace(input.Reason)
+	if !strings.HasPrefix(input.ID, "finding_") || !retiredFindingStatuses[input.Status] {
+		return Finding{}, errors.New("a Finding can only be retired as disputed, refuted or superseded")
+	}
+	if !strings.HasPrefix(input.ReviewedBy, "human:") || len(input.ReviewedBy) > 200 {
+		return Finding{}, errors.New("only a person can retire a Finding")
+	}
+	if input.ExpectedVersion < 1 || input.Reason == "" || len(input.Reason) > 4000 {
+		return Finding{}, errors.New("retiring a Finding requires its version and a bounded reason")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return Finding{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	finding, err := scanFinding(tx.QueryRow(findingSelect+` WHERE id = ?`, input.ID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Finding{}, fmt.Errorf("finding %q not found", input.ID)
+	}
+	if err != nil {
+		return Finding{}, err
+	}
+	if finding.Version != input.ExpectedVersion {
+		return Finding{}, errors.New("finding changed since it was read")
+	}
+	if finding.Status == input.Status {
+		return Finding{}, fmt.Errorf("finding is already %s", input.Status)
+	}
+	nowMs := time.Now().UTC().Truncate(time.Millisecond).UnixMilli()
+	if _, err := tx.Exec(`UPDATE findings SET status = ?, version = version + 1 WHERE id = ? AND version = ?`,
+		input.Status, finding.ID, input.ExpectedVersion); err != nil {
+		return Finding{}, err
+	}
+	if _, err := appendEvent(tx, Event{Type: "finding.retired", WorkstreamID: finding.WorkstreamID}, nowMs,
+		map[string]any{"finding_id": finding.ID, "from": finding.Status, "to": input.Status,
+			"reviewed_by": input.ReviewedBy, "reason": input.Reason}); err != nil {
+		return Finding{}, err
+	}
+	finding.Status = input.Status
+	finding.Version++
+	if finding.Evidence, err = findingEvidenceTx(tx, finding.ID); err != nil {
+		return Finding{}, err
+	}
+	if finding.Relations, err = findingRelationsTx(tx, finding.ID); err != nil {
+		return Finding{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Finding{}, err
+	}
+	return finding, nil
 }
 
 func (s *Store) ListFindings(filter FindingFilter) ([]Finding, error) {

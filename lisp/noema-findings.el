@@ -126,12 +126,46 @@
            (noema-findings--show finding))))
      30)))
 
+;;;###autoload
+(defun noema-findings-retire (status reason)
+  "Retire the Finding at point as STATUS, recording REASON.
+STATUS is disputed, refuted or superseded.  The Finding keeps its evidence
+and stays listed; it only stops being recalled into agent Runs.  Nothing
+here brings it back: a retired claim returns through a new evidence review."
+  (interactive
+   (progn
+     (unless (tabulated-list-get-id) (user-error "No Finding on this line"))
+     (list (completing-read "Retire Finding as: " '("disputed" "refuted" "superseded") nil t)
+           (read-string "Reason: "))))
+  (let* ((id (or (tabulated-list-get-id) (user-error "No Finding on this line")))
+         (record (seq-find (lambda (item) (equal (noema-findings--get item "id") id))
+                           noema-findings--records))
+         (version (noema-findings--get record "version" 0))
+         (root noema-findings--root)
+         (buffer (current-buffer)))
+    (when (string-empty-p (string-trim reason)) (user-error "A reason is required"))
+    (unless (yes-or-no-p (format "Retire this Finding as %s? " status))
+      (user-error "Finding left unchanged"))
+    (my/noema-api-call
+     "aaronnote:api:research:finding:retire"
+     (vector `((cwd . ,root) (id . ,id) (status . ,status)
+               (reason . ,(string-trim reason)) (expectedVersion . ,version)))
+     (lambda (_result error-object)
+       (if error-object
+           (message "Noema Finding: %s"
+                    (noema-findings--get error-object "message" "unavailable"))
+         (message "Finding %s is now %s" id status)
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer (noema-findings-refresh)))))
+     30)))
+
 (defvar noema-findings-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map tabulated-list-mode-map)
     (define-key map (kbd "RET") #'noema-findings-open)
     (define-key map (kbd "g") #'noema-findings-refresh)
     (define-key map (kbd "s") #'noema-findings-change-query)
+    (define-key map (kbd "x") #'noema-findings-retire)
     map))
 
 (define-derived-mode noema-findings-mode tabulated-list-mode "Noema-Findings"

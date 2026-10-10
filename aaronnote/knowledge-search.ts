@@ -50,7 +50,8 @@ export function createKnowledgeSearch(options: {
         const excerpt = document.createElement("span");
         renderSearchExcerpt(excerpt, note.excerpt, options.input.value);
         button.appendChild(excerpt);
-      } else if (note.reasons?.length) {
+      }
+      if (note.reasons?.length && (!note.excerpt || note.matchedTerms?.length)) {
         const reason = document.createElement("span");
         reason.textContent = note.reasons.join(" · ");
         button.appendChild(reason);

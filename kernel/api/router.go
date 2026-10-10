@@ -233,6 +233,7 @@ func ServeAPI(ginServer *gin.Engine) {
 	ginServer.Handle("POST", "/api/noema/research/proposal/review", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchProposalReview)
 	ginServer.Handle("POST", "/api/noema/research/finding/get", model.CheckAuth, noemaResearchFindingGet)
 	ginServer.Handle("POST", "/api/noema/research/finding/list", model.CheckAuth, noemaResearchFindings)
+	ginServer.Handle("POST", "/api/noema/research/finding/retire", model.CheckAuth, noemaResearchFindingRetire)
 	ginServer.Handle("POST", "/api/noema/research/research-ir/list", model.CheckAuth, noemaResearchIRList)
 	ginServer.Handle("POST", "/api/noema/research/problem-model/list", model.CheckAuth, noemaResearchProblemModels)
 	ginServer.Handle("POST", "/api/noema/research/export/create", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, noemaResearchExportCreate)

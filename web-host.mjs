@@ -587,9 +587,13 @@ async function knowledgeIndexPayload() {
 
 async function knowledgeSearchPayload(body = {}) {
   const index = await knowledgeIndexPayload();
-  const lexical = kernelKnowledgeSearch && kernelLexicalSearchEligible(body)
+  let lexical = kernelKnowledgeSearch && kernelLexicalSearchEligible(body)
     ? await kernelKnowledgeSearch(index, body)
     : searchWikiDatabase(noteRoot, body);
+  // The kernel answers whole queries only; wiki.db can also answer part of one.
+  if (lexical.source === "kernel-fts5" && !lexical.total && workspaceLayout === "wiki") {
+    lexical = searchWikiDatabase(noteRoot, body);
+  }
   return knowledgeSearchResponse(index, body, lexical);
 }
 

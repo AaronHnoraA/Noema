@@ -9,6 +9,7 @@ import { api, type WikiDirectory, type WikiIndex, type WikiNote, type WikiReposi
 import { serverMode } from "./host-mode.ts";
 import { installNoemaThemeRuntime } from "./theme-runtime.ts";
 import { splitWantedWikiTarget } from "../shared/wiki-link.mjs";
+import { similarTitles } from "../shared/text-similarity.mjs";
 import { renderSearchExcerpt } from "./search-excerpt.ts";
 import { createWorkspaceGraph, type WorkspaceGraph, type WorkspaceGraphSettings } from "./workspace-graph.ts";
 import type { GraphNode, GraphPayload } from "./types.ts";
@@ -756,6 +757,7 @@ function noteCard(note: WikiNote): HTMLElement {
     note.aliases.length ? `${note.aliases.length} aliases` : "",
     note.backlinks.length ? `${note.backlinks.length} backlinks` : "",
     note.tags.slice(0, 4).join(" · "),
+    ...(note.reasons || []),
   ].filter(Boolean).join(" · ") || "No metadata";
   copy.append(title, path, meta);
   if (note.excerpt) {
@@ -1227,6 +1229,7 @@ function renderReports(): void {
   const reports = [
     ["Ambiguous links", index?.reports.ambiguous.length || 0, "A title or alias matches more than one page."],
     ["Duplicate titles / aliases", index?.reports.duplicates.length || 0, "Use partition, repository, and path to disambiguate."],
+    ["Similar titles", index?.reports.similar?.length || 0, "Pages that may be one page written twice. Merge them from Manage this Wiki page, or leave them."],
     ["Workspace diagnostics", index?.diagnostics.length || 0, "Non-Git directories are reported and never initialized automatically."],
   ];
   const grid = document.createElement("div");
@@ -1243,6 +1246,31 @@ function renderReports(): void {
     grid.append(card);
   }
   viewEl.append(grid);
+  const similar = index?.reports.similar || [];
+  if (similar.length) {
+    const list = document.createElement("div");
+    list.className = "noema-wiki-report-list";
+    for (const pair of similar) {
+      const row = document.createElement("article");
+      const copy = document.createElement("div");
+      const heading = document.createElement("h2");
+      heading.textContent = pair.candidates.map((item) => item.title).join("  ↔  ");
+      copy.append(heading);
+      for (const item of pair.candidates) {
+        const detail = document.createElement("p");
+        detail.textContent = item.location;
+        copy.append(detail);
+      }
+      row.append(copy);
+      for (const item of pair.candidates) {
+        const open = button(`Open ${item.title}`);
+        open.addEventListener("click", () => openNote({ file: item.file }));
+        row.append(open);
+      }
+      list.append(row);
+    }
+    viewEl.append(list);
+  }
   for (const diagnostic of index?.diagnostics || []) {
     const row = document.createElement("p");
     row.className = "noema-wiki-diagnostic";
@@ -1509,7 +1537,7 @@ function render(): void {
   root.querySelector<HTMLElement>("[data-count-namespaces]")!.textContent = String(new Set(index.notes.map((note) => note.qualifiedNamespace || `${note.partition}/${note.namespace || note.repository}`)).size);
   root.querySelector<HTMLElement>("[data-count-files]")!.textContent = String(index.files.length);
   root.querySelector<HTMLElement>("[data-count-wanted]")!.textContent = String(index.reports.wanted.length);
-  root.querySelector<HTMLElement>("[data-count-reports]")!.textContent = String(index.reports.ambiguous.length + index.reports.duplicates.length + index.diagnostics.length);
+  root.querySelector<HTMLElement>("[data-count-reports]")!.textContent = String(index.reports.ambiguous.length + index.reports.duplicates.length + (index.reports.similar?.length || 0) + index.diagnostics.length);
   root.querySelector<HTMLElement>("[data-count-repos]")!.textContent = String(index.repositories.length);
   root.querySelector<HTMLElement>("[data-tool-pages]")!.textContent = String(index.notes.length);
   root.querySelector<HTMLElement>("[data-tool-repositories]")!.textContent = String(index.repositories.length);
@@ -1677,8 +1705,13 @@ function updateCreateContext(): void {
   const existing = index?.notes.filter((note) => note.repositoryId === repositoryId
     && note.namespace?.toLocaleLowerCase() === namespace.toLocaleLowerCase()
     && [note.title, ...note.aliases].some((value) => value.toLocaleLowerCase() === title.toLocaleLowerCase())) || [];
+  // A near title is a notice, never a gate: two close titles are often two pages.
+  const similar = existing.length ? [] : similarTitles(title, index?.notes);
+  const similarNotice = similar.length
+    ? ` · similar: ${similar.map(({ note }) => note.qualifiedTitle || note.title).join(", ")}`
+    : "";
   root.querySelector<HTMLElement>("[data-create-context]")!.textContent = repository
-    ? `${newForm.dataset.chooseRepository ? "Confirm repository: " : ""}${repository.partition} · ${repository.path}/${directory ? `${directory}/` : ""}${filename}${existing.length ? ` · ${existing.length} existing page or alias matches this title` : ""}`
+    ? `${newForm.dataset.chooseRepository ? "Confirm repository: " : ""}${repository.partition} · ${repository.path}/${directory ? `${directory}/` : ""}${filename}${existing.length ? ` · ${existing.length} existing page or alias matches this title` : ""}${similarNotice}`
     : "Choose a repository";
   const useExisting = root.querySelector<HTMLButtonElement>("[data-use-existing]")!;
   useExisting.hidden = existing.length !== 1;

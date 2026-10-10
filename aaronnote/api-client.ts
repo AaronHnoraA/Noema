@@ -883,6 +883,7 @@ export type WikiNote = {
   excerpt?: string;
   score?: number;
   reasons?: string[];
+  matchedTerms?: string[];
   resultKind?: "note" | "tag" | "missing" | "attachment";
 };
 export type WikiFile = {
@@ -1036,6 +1037,7 @@ export type WikiIndex = {
     wanted: Array<{ title: string; namespace?: string; qualifiedTitle?: string; references: Array<{ sourceId: string; sourceTitle: string; sourceFile: string }> }>;
     ambiguous: Array<Record<string, unknown>>;
     duplicates: Array<Record<string, unknown>>;
+    similar?: Array<{ score: number; candidates: Array<{ id: string; title: string; file: string; location: string }> }>;
     duplicateIds?: Array<Record<string, unknown>>;
     missingFragments?: Array<Record<string, unknown>>;
   };
@@ -1049,6 +1051,7 @@ export type WikiSearchResult = {
   nextCursor: number | null;
   query?: string;
   mode?: "suggest" | "results" | "related";
+  match?: "full" | "partial";
   facets?: {
     tags: Array<{ name: string; count: number }>;
     namespaces: Array<{ name: string; count: number }>;

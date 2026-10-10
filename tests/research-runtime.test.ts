@@ -11,7 +11,7 @@ import {
   manualTUICommand,
   parseResearchPrompt,
 } from "../server/lib/research-runtime.mjs";
-import { memoryTerms, selectRunMemory } from "../server/lib/research-memory.mjs";
+import { memoryTerms, selectRunMemory, similarFindings, statementOverlap } from "../server/lib/research-memory.mjs";
 import {
   createResearchCell,
   createResearchNotebook,
@@ -177,6 +177,62 @@ describe("research runtime service", () => {
       "SQLite 存储研究索引", "ws", { maxBytes: 20 })).toEqual([]);
   });
 
+  test("memory recall weighs rare terms and skips a restatement of a chosen Finding", () => {
+    const base = { workstreamId: "ws", kind: "decision", status: "supported",
+      verificationLevel: "human_reviewed", disclosure: "project", version: 1,
+      evidence: [{ artifactId: "art_1", byteStart: 0, byteEnd: 10 }] };
+    // Every Finding of this workstream mentions the same three identifiers, so
+    // sharing only those says nothing about which Finding the prompt means.
+    const shared = "sqlite wal checkpoint";
+    const findings = [
+      { ...base, id: "f_index", statement: `${shared} index rebuild` },
+      { ...base, id: "f_lease", statement: `${shared} lease expiry` },
+      { ...base, id: "f_trash", statement: `${shared} trash retention` },
+    ];
+    expect(selectRunMemory(findings, `${shared} unrelated topic`, "ws")).toEqual([]);
+    expect(selectRunMemory(findings, `${shared} index rebuild`, "ws").map((item) => item.id)).toEqual(["f_index"]);
+    // Alone, the same Finding is still recalled by its three shared terms.
+    expect(selectRunMemory([findings[1]], `${shared} unrelated topic`, "ws").map((item) => item.id)).toEqual(["f_lease"]);
+
+    const restated = [
+      { ...base, id: "f_a", statement: "research index rebuild uses atomic rename" },
+      { ...base, id: "f_b", statement: "research index rebuild uses atomic rename swap" },
+      { ...base, id: "f_c", statement: "research index rebuild keeps the watermark" },
+    ];
+    expect(selectRunMemory(restated, "research index rebuild uses atomic rename swap and keeps the watermark", "ws")
+      .map((item) => item.id).sort()).toEqual(["f_b", "f_c"]);
+  });
+
+  test("finds Findings that restate a statement, whatever their status", () => {
+    expect(statementOverlap("采用 SQLite 存储研究索引", "采用 SQLite 存储研究索引。")).toBe(1);
+    expect(statementOverlap("", "anything here")).toBe(0);
+    const findings = [
+      { id: "f_old", workstreamId: "ws", status: "refuted", statement: "研究索引采用 SQLite 存储" },
+      { id: "f_far", workstreamId: "ws", status: "supported", statement: "任务调度使用租约心跳" },
+      { id: "f_other", workstreamId: "other", status: "supported", statement: "采用 SQLite 存储研究索引" },
+    ];
+    expect(similarFindings(findings, "采用 SQLite 存储研究索引。", "ws").map((item) => item.finding.id)).toEqual(["f_old"]);
+    expect(similarFindings(findings, "x", "ws")).toEqual([]);
+  });
+
+  test("retires a Finding only with a version, a retired status and a reason", async () => withProject(async (root) => {
+    const retireFinding = vi.fn(async ({ id, status, expectedVersion }: any) => ({ id, status, version: expectedVersion + 1 }));
+    const service = createResearchRuntimeService({ getProvider: () => ({ retireFinding }) as any });
+    const request = { root, id: "finding_1", status: "refuted", reason: "The benchmark was mislabelled", expectedVersion: 2 };
+    expect((await service.retireFinding(request)).finding).toEqual({ id: "finding_1", status: "refuted", version: 3 });
+    expect(retireFinding).toHaveBeenCalledWith(expect.objectContaining({
+      id: "finding_1", status: "refuted", expectedVersion: 2, reviewedBy: "human:local", reason: request.reason }));
+    for (const bad of [{ status: "supported" }, { reason: "  " }, { expectedVersion: 0 }, { id: "" }]) {
+      await expect(service.retireFinding({ ...request, ...bad })).rejects.toMatchObject({ code: "ERR_RESEARCH_FINDING" });
+    }
+    expect(retireFinding).toHaveBeenCalledTimes(1);
+    // A retired Finding is no longer recalled into a Run.
+    const retired = { id: "f_r", workstreamId: "ws", kind: "decision", status: "refuted",
+      verificationLevel: "human_reviewed", disclosure: "project", version: 2, statement: "采用 SQLite 存储研究索引。",
+      evidence: [{ artifactId: "art", byteStart: 0, byteEnd: 10 }] };
+    expect(selectRunMemory([retired], "研究索引采用 SQLite 存储。", "ws")).toEqual([]);
+  }));
+
   test("memory recall preserves mixed-script order and a long prompt's current task", () => {
     expect(memoryTerms("研究索引 SQLite 存储"))
       .toEqual(["研究", "究索", "索引", "sqlite", "存储"]);
@@ -229,12 +285,25 @@ describe("research runtime service", () => {
           byteEnd: handoff.indexOf(Buffer.from(request.statement)) + Buffer.byteLength(request.statement) }],
       }) },
     }) });
+    expect(result.similar).toEqual([]);
     expect((await service.proposeRunMemory(request)).proposal.id).toBe("prop_memory");
+
+    // A Finding that already says nearly this is reported with its status;
+    // the proposal is recorded all the same.
+    (provider as any).findings = vi.fn(async () => [
+      { id: "finding_old", workstreamId: "ws_memory", status: "refuted", statement: "研究索引采用 SQLite 存储" },
+      { id: "finding_same", workstreamId: "ws_memory", status: "proposed", statement: request.statement },
+    ]);
+    const warned = await service.proposeRunMemory(request);
+    expect(warned.proposal.id).toBe("prop_memory");
+    expect(warned.similar).toEqual([expect.objectContaining({ id: "finding_old", status: "refuted" })]);
+    (provider as any).findings = vi.fn(async () => { throw new Error("index offline"); });
+    expect(await service.proposeRunMemory(request)).toMatchObject({ similar: [] });
     expect(proposal.mock.calls[0][0].proposal.clientRequestId)
       .toBe(proposal.mock.calls[1][0].proposal.clientRequestId);
     await expect(service.proposeRunMemory({ ...request, statement: "Handoff never said this" }))
       .rejects.toMatchObject({ code: "ERR_RESEARCH_MEMORY" });
-    expect(proposal).toHaveBeenCalledTimes(2);
+    expect(proposal).toHaveBeenCalledTimes(4);
     expect(createResearchApiHandlers(service)["aaronnote:api:research:memory:propose-from-run"])
       .toBeTypeOf("function");
   }));
@@ -1245,7 +1314,7 @@ describe("research runtime service", () => {
     ]);
     expect(await findResearchProjectRoot(join(root, "nested"))).toBe(root);
     const handlers = createResearchApiHandlers({} as any);
-    for (const suffix of ["cache:status", "cache:maintain", "cell:resolve", "capability:list", "capability:config", "capability:mutate", "run:prepare", "run:cancel", "run:fail-preparing", "run:live", "artifact:read", "artifact:import", "corpus:index", "corpus:index-files", "corpus:search", "corpus:block-read", "worker:lease", "worker:attach", "worker:start", "worker:events", "worker:permission", "worker:input", "permission:decide", "input:get", "input:respond", "attention:list", "proposal:create", "supervisor:propose", "proposal:get", "proposal:list", "proposal:review", "finding:get", "finding:list", "research-ir:list", "problem-model:list", "export:create", "task:create", "task:list", "task:transition", "job:create", "job:list", "job:claim", "job:start", "job:lease-renew", "job:lease-expire", "job:complete", "job:fail", "job:unresolved", "job:retry", "invocation:list", "scheduler-worker:register", "scheduler-worker:list", "delegation:create", "delegation:list", "orchestration:snapshot", "session:promote", "session:list", "session:get", "session:context", "session:compact", "session:takeover", "session:handback", "history:index", "history:search", "history:peek", "history:read"]) {
+    for (const suffix of ["cache:status", "cache:maintain", "cell:resolve", "capability:list", "capability:config", "capability:mutate", "run:prepare", "run:cancel", "run:fail-preparing", "run:live", "artifact:read", "artifact:import", "corpus:index", "corpus:index-files", "corpus:search", "corpus:block-read", "worker:lease", "worker:attach", "worker:start", "worker:events", "worker:permission", "worker:input", "permission:decide", "input:get", "input:respond", "attention:list", "proposal:create", "supervisor:propose", "proposal:get", "proposal:list", "proposal:review", "finding:get", "finding:list", "finding:retire", "research-ir:list", "problem-model:list", "export:create", "task:create", "task:list", "task:transition", "job:create", "job:list", "job:claim", "job:start", "job:lease-renew", "job:lease-expire", "job:complete", "job:fail", "job:unresolved", "job:retry", "invocation:list", "scheduler-worker:register", "scheduler-worker:list", "delegation:create", "delegation:list", "orchestration:snapshot", "session:promote", "session:list", "session:get", "session:context", "session:compact", "session:takeover", "session:handback", "history:index", "history:search", "history:peek", "history:read"]) {
       expect(handlers[`aaronnote:api:research:${suffix}`]).toBeTypeOf("function");
     }
   }));

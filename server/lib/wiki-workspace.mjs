@@ -20,6 +20,7 @@ import {
 } from "../../shared/knowledge-query.mjs";
 import { ORG_META_PREAMBLE_LINE_LIMIT } from "../../shared/meta-summary.mjs";
 import { todayDateValue } from "../../shared/planning-values.mjs";
+import { aboveAverage, rareTokenWeight, similarTitlePairs, similarTitles, tokenize } from "../../shared/text-similarity.mjs";
 import {
   normalizeWikiNamespace, qualifiedWikiTitle, scanWikiLinks, splitQualifiedWikiTarget, splitWantedWikiTarget,
   splitWikiFragmentTarget,
@@ -32,7 +33,7 @@ const execFileAsync = promisify(execFile);
 const PARTITIONS = Object.freeze(["public", "private"]);
 const NOTE_EXTENSIONS = new Set([".md", ".markdown"]);
 const REPOSITORY_MANIFEST = "noema.toml";
-const WIKI_SCHEMA_VERSION = 9;
+const WIKI_SCHEMA_VERSION = 10;
 const WIKI_FULL_REBUILD_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const REPOSITORY_GITIGNORE = [
   ".DS_Store",
@@ -637,12 +638,23 @@ export function resolveWikiRelationships(notes) {
       title,
       candidates: items.map((item) => ({ id: item.id, title: item.title, file: item.file, location: disambiguation(item) })),
     }));
+  // Report, do not decide: near-identical titles are listed for the author,
+  // who alone knows whether two pages are one.  Exact matches inside one
+  // namespace are already in `duplicates`.
+  const similar = similarTitlePairs(notes)
+    .filter(({ left, right }) => !(canonicalTitle(left.qualifiedNamespace) === canonicalTitle(right.qualifiedNamespace)
+      && canonicalTitle(left.title) === canonicalTitle(right.title)))
+    .map(({ left, right, score }) => ({
+      score: Math.round(score * 100) / 100,
+      candidates: [left, right].map((item) => ({ id: item.id, title: item.title, file: item.file, location: disambiguation(item) })),
+    }));
   return {
     notes,
     reports: {
       wanted: [...wanted.values()].sort((a, b) => a.title.localeCompare(b.title)),
       ambiguous,
       duplicates,
+      similar,
       duplicateIds,
       missingFragments,
     },
@@ -938,6 +950,7 @@ function createWikiSchema(db) {
   db.exec(`
     DROP TABLE IF EXISTS pages_fts;
     DROP TABLE IF EXISTS pages_fts_trigram;
+    DROP TABLE IF EXISTS page_bigrams;
     DROP TABLE IF EXISTS repositories;
     DROP TABLE IF EXISTS files;
     DROP TABLE IF EXISTS pages;
@@ -964,6 +977,8 @@ function createWikiSchema(db) {
     CREATE TABLE repository_index_state (repository_id text primary key, repository_uid text not null, head_sha text not null, scanned_at text not null);
     CREATE VIRTUAL TABLE pages_fts USING fts5(page_key UNINDEXED, title, aliases, tags, path, body, tokenize='unicode61 remove_diacritics 2');
     CREATE VIRTUAL TABLE pages_fts_trigram USING fts5(page_key UNINDEXED, title, aliases, tags, path, body, tokenize='trigram case_sensitive 0');
+    CREATE TABLE page_bigrams (bigram text not null, page_key text not null, primary key(bigram, page_key)) WITHOUT ROWID;
+    CREATE INDEX wiki_page_bigrams_page_idx ON page_bigrams(page_key);
     CREATE INDEX wiki_pages_id_idx ON pages(page_id);
     CREATE INDEX wiki_pages_title_idx ON pages(title);
     CREATE INDEX wiki_pages_namespace_idx ON pages(qualified_namespace, title);
@@ -1064,6 +1079,17 @@ async function chooseWikiPersistence(index, requestedMode) {
   }
 }
 
+// Most Chinese words are two characters, one short of what the trigram index
+// can answer.  Every adjacent CJK pair of a page's searchable text is kept in
+// an ordinary indexed table, so those terms are a lookup instead of a scan.
+const CJK_PAIR_RE = /^[\u2e80-\u9fff\uf900-\ufaff]{2}$/u;
+
+function cjkPairs(...texts) {
+  const pairs = new Set();
+  for (const text of texts) for (const token of tokenize(text)) if (CJK_PAIR_RE.test(token)) pairs.add(token);
+  return pairs;
+}
+
 function applyWikiIndex(db, index, { full, reason, changedFiles = [] }) {
   const now = new Date().toISOString();
   const changes = { repositories: 0, files: 0, pages: 0, relationships: 0, removed: 0 };
@@ -1084,6 +1110,8 @@ function applyWikiIndex(db, index, { full, reason, changedFiles = [] }) {
   const insertFts = db.prepare("INSERT INTO pages_fts VALUES (?, ?, ?, ?, ?, ?)");
   const insertTrigram = db.prepare("INSERT INTO pages_fts_trigram VALUES (?, ?, ?, ?, ?, ?)");
   const selectFtsBody = db.prepare("SELECT body FROM pages_fts WHERE page_key=?");
+  const deletePairs = db.prepare("DELETE FROM page_bigrams WHERE page_key=?");
+  const insertPair = db.prepare("INSERT OR IGNORE INTO page_bigrams VALUES (?, ?)");
   const upsertCache = db.prepare("INSERT OR REPLACE INTO note_cache VALUES (?, ?, ?, ?, ?, ?)");
   const desiredFileByKey = new Map((index.files || []).map((item) => [`${item.repositoryId}\0${item.repositoryPath}`, item]));
   const desiredRepositoryById = new Map((index.repositories || []).map((item) => [item.id, item]));
@@ -1139,6 +1167,7 @@ function applyWikiIndex(db, index, { full, reason, changedFiles = [] }) {
       db.prepare("DELETE FROM note_cache WHERE repository_id=? AND path=?").run(row.repository_id, row.repository_path);
       deleteFts.run(row.page_key);
       deleteTrigram.run(row.page_key);
+      deletePairs.run(row.page_key);
       changes.removed++;
     }
     for (const note of index.notes || []) {
@@ -1185,6 +1214,8 @@ function applyWikiIndex(db, index, { full, reason, changedFiles = [] }) {
         deleteTrigram.run(pageKey);
         insertFts.run(pageKey, note.title, aliases, tags, path, body);
         insertTrigram.run(pageKey, note.title, aliases, tags, path, body);
+        deletePairs.run(pageKey);
+        for (const pair of cjkPairs(note.title, aliases, tags, body)) insertPair.run(pair, pageKey);
       }
       if (full || !note.cacheHit) {
         const file = desiredFileByKey.get(`${note.repositoryId}\0${note.repositoryPath}`);
@@ -1333,6 +1364,52 @@ function excerptAround(body, terms) {
   return `${from > 0 ? " … " : ""}${clean(text.slice(from, hit))}[[${text.slice(hit, hit + length)}]]${clean(text.slice(hit + length, to))}${to < text.length ? " … " : ""}`;
 }
 
+// A query no page answers in full falls back to the pages that answer part of
+// it.  The terms are split into words and CJK character pairs, each weighted
+// by how few pages carry it, and only pages scoring at least the average are
+// kept, so a common pair alone ("的构") does not make a result.
+const PARTIAL_MAX_TOKENS = 16;
+const PARTIAL_MAX_RESULTS = 20;
+
+function partialWikiMatches(db, textTerms, where, parameters, limit) {
+  const tokens = [...tokenize(textTerms.join(" "))].slice(0, PARTIAL_MAX_TOKENS);
+  if (tokens.length < 2) return [];
+  const population = Number(db.prepare(`SELECT count(*) AS count FROM pages p WHERE 1${where}`).get(...parameters)?.count || 0);
+  if (!population) return [];
+  const columns = ["f.title", "f.aliases", "f.tags", "f.body"];
+  const like = db.prepare(`SELECT p.page_key FROM pages_fts_trigram f JOIN pages p ON p.page_key = f.page_key WHERE (${columns.map((column) => `${column} LIKE ? ESCAPE '\\'`).join(" OR ")})${where}`);
+  const word = db.prepare(`SELECT p.page_key FROM pages_fts JOIN pages p ON p.page_key = pages_fts.page_key WHERE pages_fts MATCH ?${where}`);
+  const pair = db.prepare(`SELECT p.page_key FROM page_bigrams b JOIN pages p ON p.page_key = b.page_key WHERE b.bigram = ?${where}`);
+  const found = new Map();
+  for (const token of tokens) {
+    const keys = CJK_PAIR_RE.test(token) ? pair.all(token, ...parameters)
+      : CJK_RE.test(token) ? like.all(...columns.map(() => likePattern(token)), ...parameters)
+        : word.all(`"${token.replaceAll('"', '""')}"`, ...parameters);
+    if (!keys.length) continue;
+    const weight = rareTokenWeight(population, keys.length);
+    for (const { page_key: pageKey } of keys) {
+      const entry = found.get(pageKey) || { pageKey, score: 0, terms: [] };
+      entry.score += weight;
+      entry.terms.push(token);
+      found.set(pageKey, entry);
+    }
+  }
+  const kept = aboveAverage([...found.values()].filter((entry) => entry.score > 0), Math.min(limit, PARTIAL_MAX_RESULTS));
+  if (!kept.length) return [];
+  const rows = db.prepare(`SELECT p.*, f.body AS match_body FROM pages_fts_trigram f JOIN pages p ON p.page_key = f.page_key WHERE p.page_key IN (${kept.map(() => "?").join(",")})`)
+    .all(...kept.map((entry) => entry.pageKey));
+  const byKey = new Map(rows.map((row) => [row.page_key, row]));
+  return kept.flatMap((entry) => {
+    const row = byKey.get(entry.pageKey);
+    if (!row) return [];
+    row.rank = -entry.score;
+    row.excerpt = excerptAround(row.match_body, entry.terms);
+    row.matched_terms = entry.terms;
+    delete row.match_body;
+    return [row];
+  });
+}
+
 function knowledgeSqlFilters(parsed, filters, parameters) {
   for (const clause of parsed.clauses) {
     if (!clause.field || !clause.value) continue;
@@ -1428,9 +1505,11 @@ export function searchWikiDatabase(rootValue, body = {}) {
     const trigram = CJK_RE.test(textTerms.join(""));
     if (trigram && textTerms.some((term) => [...term].length < TRIGRAM_MIN_TERM)) {
       const columns = ["f.title", "f.aliases", "f.tags", "f.body"];
-      const termFilter = `(${columns.map((column) => `${column} LIKE ? ESCAPE '\\'`).join(" OR ")})`;
-      const termParameters = textTerms.flatMap((term) => columns.map(() => likePattern(term)));
-      const from = `FROM pages_fts_trigram f JOIN pages p ON p.page_key = f.page_key WHERE ${textTerms.map(() => termFilter).join(" AND ")}${where}`;
+      const scanFilter = `(${columns.map((column) => `${column} LIKE ? ESCAPE '\\'`).join(" OR ")})`;
+      const pairFilter = "p.page_key IN (SELECT page_key FROM page_bigrams WHERE bigram = ?)";
+      const indexed = (term) => CJK_PAIR_RE.test(term);
+      const termParameters = textTerms.flatMap((term) => (indexed(term) ? [term] : columns.map(() => likePattern(term))));
+      const from = `FROM pages_fts_trigram f JOIN pages p ON p.page_key = f.page_key WHERE ${textTerms.map((term) => (indexed(term) ? pairFilter : scanFilter)).join(" AND ")}${where}`;
       rows = db.prepare(`SELECT p.*, 0 AS rank, f.body AS match_body ${from} ORDER BY ${titleOrder}, CASE WHEN lower(p.title) LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END, p.mtime DESC, p.page_key LIMIT ? OFFSET ?`)
         .all(...termParameters, ...parameters, first, `${first}%`, likePattern(first), limit, offset);
       for (const row of rows) {
@@ -1448,6 +1527,12 @@ export function searchWikiDatabase(rootValue, body = {}) {
       const order = sort === "recent" ? "p.mtime DESC, p.page_key" : "p.title COLLATE NOCASE, p.page_key";
       rows = db.prepare(`SELECT p.*, 0 AS rank FROM pages p ${baseWhere} ORDER BY ${order} LIMIT ? OFFSET ?`).all(...parameters, limit, offset);
       total = Number(db.prepare(`SELECT count(*) AS count FROM pages p ${baseWhere}`).get(...parameters)?.count || 0);
+    }
+    let match = "full";
+    if (textTerms.length && total === 0 && offset === 0) {
+      rows = partialWikiMatches(db, textTerms, where, parameters, limit);
+      total = rows.length;
+      if (total) match = "partial";
     }
     const aliasStatement = db.prepare("SELECT alias FROM aliases WHERE page_key=? ORDER BY alias");
     const tagStatement = db.prepare("SELECT tag FROM tags WHERE page_key=? ORDER BY tag");
@@ -1478,6 +1563,7 @@ export function searchWikiDatabase(rootValue, body = {}) {
       createdMs: Number(row.created) || 0,
       rank: Number(row.rank) || 0,
       excerpt: String(row.excerpt || ""),
+      ...(row.matched_terms ? { matchedTerms: row.matched_terms } : {}),
       aliases: aliasStatement.all(row.page_key).map((item) => item.alias),
       tags: tagStatement.all(row.page_key).map((item) => item.tag),
       blocks: blockStatement.all(row.page_key).map((item) => ({
@@ -1491,7 +1577,7 @@ export function searchWikiDatabase(rootValue, body = {}) {
       backlinks: backlinksStatement.all(row.page_id).map((item) => item.page_id),
       unresolvedLinks: missingStatement.all(row.page_key).map((item) => item.raw_target),
     }));
-    return { ok: true, type: "wiki-search", generation, items, total, nextCursor: offset + items.length < total ? offset + items.length : null };
+    return { ok: true, type: "wiki-search", generation, items, total, match, nextCursor: offset + items.length < total ? offset + items.length : null };
   } finally {
     db.close();
   }
@@ -2034,6 +2120,7 @@ export async function createWikiPage(rootValue, layoutValue, body = {}) {
   const tags = (Array.isArray(body.tags) ? body.tags.map(String) : parseList(body.tags))
     .map((tag) => cleanMetaValue(tag, "Tag").replaceAll(",", " ").trim()).filter(Boolean);
   const namespace = cleanWikiNamespace(body.namespace, repository.namespace || repository.name);
+  let similar = [];
   if (layout === "wiki") {
     const index = await buildWikiIndex(root, { layout: "wiki" });
     if (index.notes.some((note) => note.repositoryId === repository.id
@@ -2041,6 +2128,11 @@ export async function createWikiPage(rootValue, layoutValue, body = {}) {
       && [note.title, ...note.aliases].some((value) => canonicalTitle(value) === canonicalTitle(title)))) {
       throw apiError("A page with this title or alias already exists in the selected repository and namespace", 409, "ERR_WIKI_TITLE_CONFLICT");
     }
+    // An exact title in the same place is refused above; a near one is only
+    // reported, since two close titles are often two pages.
+    similar = similarTitles(title, index.notes).map(({ note, score, name }) => ({
+      id: note.id, title: note.title, matched: name, file: note.file, location: disambiguation(note), score: Math.round(score * 100) / 100,
+    }));
   }
   const content = [
     "#+begin meta",
@@ -2062,7 +2154,7 @@ export async function createWikiPage(rootValue, layoutValue, body = {}) {
   return {
     ok: true, file, id, title, namespace,
     qualifiedTitle: qualifiedWikiTitle(namespace, title),
-    repositoryId: repository.id, partition: repository.partition,
+    repositoryId: repository.id, partition: repository.partition, similar,
   };
 }
 

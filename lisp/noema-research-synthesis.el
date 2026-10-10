@@ -53,8 +53,20 @@ DISCLOSURE is local_only or project. The result stays pending in Attention."
        (if error-object
            (message "Noema memory proposal failed: %s"
                     (or (noema-research--get error-object "message") "unavailable"))
-         (message "Memory proposal %s is pending in Attention"
-                  (or (noema-research--get (noema-research--get result "proposal") "id") "unknown"))))
+         (let ((similar (append (noema-research--get result "similar") nil)))
+           (message "Memory proposal %s is pending in Attention%s"
+                    (or (noema-research--get (noema-research--get result "proposal") "id") "unknown")
+                    (if similar
+                        (format "; similar to %s"
+                                (mapconcat
+                                 (lambda (finding)
+                                   (format "%s (%s): %s"
+                                           (noema-research--get finding "id")
+                                           (noema-research--get finding "status")
+                                           (truncate-string-to-width
+                                            (or (noema-research--get finding "statement") "") 60 nil nil t)))
+                                 similar "; "))
+                      "")))))
      30)))
 
 (defconst noema-research-synthesis--system

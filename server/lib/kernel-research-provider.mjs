@@ -249,6 +249,9 @@ export function createKernelResearchProvider({ baseUrl, fetchImpl = globalThis.f
 	finding({ root, id }) {
 	  return post("finding/get", { root, id });
 	},
+	async retireFinding({ root, id, status, reason, reviewedBy, expectedVersion }) {
+	  return (await post("finding/retire", { root, id, status, reason, reviewedBy, expectedVersion })).finding;
+	},
 	async findings({ root, workstreamId = "", status = "", query = "", limit = 200, includeLocal = false }) {
 	  const data = await post("finding/list", { root, workstreamId, status, query, limit, includeLocal });
 	  return Array.isArray(data.findings) ? data.findings : [];

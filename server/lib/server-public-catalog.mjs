@@ -282,7 +282,7 @@ export async function buildServerPublicCatalog(fullIndex, config) {
       });
       lexical.items = lexical.items.map((item) => {
         const clean = publicByPageKey.get(item.pageKey || item.key);
-        return clean ? { ...clean, rank: item.rank, excerpt: item.excerpt } : null;
+        return clean ? { ...clean, rank: item.rank, excerpt: item.excerpt, ...(item.matchedTerms ? { matchedTerms: item.matchedTerms } : {}) } : null;
       }).filter(Boolean);
       return knowledgeSearchResponse(index, body || {}, lexical);
     },

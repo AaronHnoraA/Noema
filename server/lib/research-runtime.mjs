@@ -39,7 +39,7 @@ import {
   validateResearchNotebook,
 } from "./research-notebook.mjs";
 import { findResearchProjectRoot, readProjectLayout } from "./research-project.mjs";
-import { selectRunMemory } from "./research-memory.mjs";
+import { selectRunMemory, similarFindings } from "./research-memory.mjs";
 
 export { findResearchProjectRoot };
 
@@ -2750,7 +2750,24 @@ export function createResearchRuntimeService({
         kind: "finding.create", payload, proposedBy: "human:emacs",
         sourceAdapter: "noema-run-handoff",
       } });
-      return { root, proposal };
+      // Report, do not decide: a Finding that already says nearly this is
+      // shown to the reviewer, who alone can tell a restatement from a
+      // refinement. The proposal stays pending either way.
+      let similar = [];
+      if (typeof provider().findings === "function") {
+        try {
+          const findings = await provider().findings({ root, workstreamId: run.workstreamId, limit: 1000, includeLocal: true });
+          similar = similarFindings(findings, statement, run.workstreamId)
+            .filter(({ finding }) => valueString(finding.statement).trim() !== statement.trim())
+            .map(({ finding, overlap }) => ({
+              id: finding.id, status: finding.status, statement: finding.statement,
+              overlap: Math.round(overlap * 100) / 100,
+            }));
+        } catch {
+          // Advisory only; the proposal is already recorded.
+        }
+      }
+      return { root, proposal, similar };
     },
 
     async supervisorProposal(body = {}) {
@@ -3016,6 +3033,26 @@ export function createResearchRuntimeService({
     async finding(body = {}) {
       const root = await rootFor(body);
       return { root, finding: await provider().finding({ root, id: valueString(body.id || body.findingId || body.finding_id) }) };
+    },
+
+    // A person's decision that a Finding no longer holds. It stays listed with
+    // its evidence and leaves automatic recall, which only reads supported and
+    // accepted Findings. The kernel refuses any reviewer that is not a person.
+    async retireFinding(body = {}) {
+      const root = await rootFor(body);
+      const id = valueString(body.id || body.findingId || body.finding_id);
+      const status = valueString(body.status);
+      const reason = valueString(body.reason).trim();
+      const expectedVersion = Number(body.expectedVersion || body.expected_version) || 0;
+      if (!id || !["disputed", "refuted", "superseded"].includes(status) || !reason
+          || Buffer.byteLength(reason) > 4000 || expectedVersion < 1) {
+        throw researchError("Retiring a Finding requires its id and version, a status of disputed, refuted or superseded, and a reason", 422, "ERR_RESEARCH_FINDING");
+      }
+      const finding = await provider().retireFinding({
+        root, id, status, reason, expectedVersion,
+        reviewedBy: valueString(body.reviewedBy || body.reviewed_by) || "human:local",
+      });
+      return { root, finding };
     },
 
     async findings(body = {}) {

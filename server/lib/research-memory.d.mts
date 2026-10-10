@@ -11,6 +11,13 @@ export type RunMemoryFinding = {
 };
 
 export function memoryTerms(text: string): string[];
+export function statementOverlap(left: string | string[], right: string | string[]): number;
+export function similarFindings<T extends Pick<RunMemoryFinding, "id" | "workstreamId" | "statement">>(
+  findings: T[],
+  statement: string,
+  workstreamId: string,
+  options?: { threshold?: number; limit?: number },
+): Array<{ finding: T; overlap: number }>;
 export function selectRunMemory(
   findings: RunMemoryFinding[],
   prompt: string,

@@ -40,7 +40,7 @@ or initialized automatically.
 
 `wiki.db` is a disposable, local SQLite/WAL projection of Git-owned Markdown.
 It stores page identity, titles, aliases, tags, links, backlinks, dependencies,
-diagnostics, and Unicode/trigram full-text indexes. It is never committed. The
+diagnostics, Unicode/trigram full-text indexes, and a CJK character-pair index. It is never committed. The
 legacy `roam.db` and `roam-db.json` are neither read nor written in either
 layout and can be removed. Both the desktop and Emacs adapters use the same
 `wiki.db`; the Emacs-hosted renderer does not maintain a second database.
@@ -149,9 +149,21 @@ or an age (`7d`, `2w`, `3m`, `1y`). The bound is the local start of that day:
 the last week. A page without a `date` matches no `created:` filter.
 
 Free text uses the Unicode index, or the trigram index when it contains CJK.
-A trigram index cannot answer a term shorter than three characters, so a query
-with a one- or two-character CJK term (`群论`) scans the indexed title,
-aliases, tags and body instead and cuts the excerpt around the first hit.
+A trigram index cannot answer a term shorter than three characters, and most
+Chinese words are two. `wiki.db` therefore also keeps every adjacent CJK
+character pair of a page's title, aliases, tags and body in an indexed table
+(`page_bigrams`), so a two-character term (`群论`) is a lookup. Only a
+single-character term (`群`) still scans those fields. In both cases the
+excerpt is cut around the first hit. The table is part of the disposable
+projection: it is rewritten with a page's full-text rows, and the schema
+change that introduced it rebuilds an older `wiki.db` once.
+
+A query that no page answers in full is answered in part. Its terms are split
+into words and CJK character pairs; each counts by how few pages carry it, and
+only pages scoring at least the average are returned, at most twenty. The
+response says `match: "partial"`, each result lists the terms it matched, and
+the result list shows them as `partial match: …`. Field filters still apply.
+A query that has an exact answer never takes this path.
 
 In the Emacs editor, each Roam title stays one continuous text link with a
 single node marker at its start, even when spelling annotations divide the
@@ -170,6 +182,15 @@ There is no automatic link insertion on save or render.
 
 File location is not identity. New page profiles configure partition,
 repository, directory, filename pattern, and note kind.
+
+An existing title or alias in the chosen repository and namespace refuses a
+new page. A near title does not: the New Page workbench names up to three
+similar pages while the title is typed, and the Reports view lists pairs of
+pages that look like one page written twice (`Tensor Product` /
+`Tensor products`). Titles are compared by shared words, with English plurals
+folded and CJK compared by character pairs; titles that differ in a number
+(`Lecture 1` / `Lecture 2`, two daily notes) are different pages. Both are
+notices. Nothing is merged or blocked for the author.
 
 Page management is available from the editor's **Manage this Wiki page** tool.
 Rename and move preserve the stable page ID; an old title becomes an alias.
@@ -298,6 +319,14 @@ under the target document's current name; Noema does the same for a stable
 link written without a label, `[[roam://<id>]]`, and marks a stable ID that no
 page answers to. The source keeps the ID and shows it while the selection
 touches the link, and title links are left to the index to resolve.
+nanoMuse, a personal agent, was compared for its memory store. It has no Wiki
+and no Markdown editor, and its storage and sync (conversation sequence
+cursors, tombstones) answer a problem Git already answers here. What carried
+over is a habit of its recall, reimplemented rather than imported: weigh a
+term by how few documents carry it. It serves the partial search above, and
+Run memory recall in `docs/research-workflow.md`, alongside its duplicate
+check for near-identical statements. Embedding recall was not adopted: it
+would send private note text to an external endpoint.
 The follow-up [MediaWiki × Roam interaction audit](mediawiki-roam-ux-audit-2026-10.md)
 tracks the link-to-page creation flow, multi-repository choices, page actions,
 and history semantics against MediaWiki's source and user-facing behavior.

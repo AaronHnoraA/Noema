@@ -481,3 +481,55 @@ func TestWorkstreamExportIsDeterministicAndDisclosureSafe(t *testing.T) {
 		t.Fatal("explicit full export must retain local_only content")
 	}
 }
+
+func TestRetireFindingIsHumanOnlyVersionedAndOneWay(t *testing.T) {
+	store, _, artifact := setupSynthesisTest(t)
+	proposal, err := store.CreateProposal(findingProposalInput("proposal-retire", artifact))
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := store.ReviewProposal(ReviewProposalInput{
+		ProposalID: proposal.ID, Decision: "accept", ExpectedVersion: 1, ReviewedBy: "human:test",
+	})
+	if err != nil || review.Finding == nil {
+		t.Fatalf("accept Finding: %+v (%v)", review, err)
+	}
+	finding := *review.Finding
+	retire := func(status, by, reason string, version int64) (Finding, error) {
+		return store.RetireFinding(RetireFindingInput{ID: finding.ID, Status: status,
+			ReviewedBy: by, Reason: reason, ExpectedVersion: version})
+	}
+	for name, attempt := range map[string]func() (Finding, error){
+		"agent":     func() (Finding, error) { return retire("refuted", "agent:codex", "wrong", finding.Version) },
+		"revive":    func() (Finding, error) { return retire("supported", "human:test", "back", finding.Version) },
+		"no reason": func() (Finding, error) { return retire("refuted", "human:test", " ", finding.Version) },
+		"stale":     func() (Finding, error) { return retire("refuted", "human:test", "wrong", finding.Version+1) },
+	} {
+		if _, err := attempt(); err == nil {
+			t.Fatalf("%s retirement must be refused", name)
+		}
+	}
+	retired, err := retire("refuted", "human:test", "the benchmark was mislabelled", finding.Version)
+	if err != nil || retired.Status != "refuted" || retired.Version != finding.Version+1 || len(retired.Evidence) == 0 {
+		t.Fatalf("retire Finding: %+v (%v)", retired, err)
+	}
+	if _, err := retire("refuted", "human:test", "again", retired.Version); err == nil {
+		t.Fatal("retiring to the same status must be refused")
+	}
+	listed, err := store.ListFindings(FindingFilter{WorkstreamID: finding.WorkstreamID, Status: "refuted", IncludeLocal: true})
+	if err != nil || len(listed) != 1 || listed[0].ID != finding.ID {
+		t.Fatalf("retired Finding must stay listed: %+v (%v)", listed, err)
+	}
+	// The same claim proposed again is deduplicated onto the retired Finding
+	// and must not revive it.
+	again, err := store.CreateProposal(findingProposalInput("proposal-retire-again", artifact))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.ReviewProposal(ReviewProposalInput{
+		ProposalID: again.ID, Decision: "accept", ExpectedVersion: 1, ReviewedBy: "human:test",
+	})
+	if err != nil || second.Finding == nil || second.Finding.Status != "refuted" {
+		t.Fatalf("a retired Finding must not be revived by a proposal: %+v (%v)", second, err)
+	}
+}

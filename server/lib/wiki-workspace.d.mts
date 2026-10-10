@@ -22,6 +22,7 @@ export type WikiDiagnostic = {
   name?: string;
 };
 export type WikiNote = {
+  matchedTerms?: string[];
   key: string;
   pageKey?: string;
   id: string;
@@ -88,6 +89,7 @@ export type WikiIndex = {
     wanted: Array<{ title: string; namespace?: string; qualifiedTitle?: string; references: Array<{ sourceId: string; sourceTitle: string; sourceFile: string }> }>;
     ambiguous: Array<Record<string, unknown>>;
     duplicates: Array<Record<string, unknown>>;
+    similar: Array<{ score: number; candidates: Array<{ id: string; title: string; file: string; location: string }> }>;
     duplicateIds?: Array<Record<string, unknown>>;
     missingFragments?: Array<Record<string, unknown>>;
   };
@@ -192,6 +194,7 @@ export function searchWikiDatabase(root: string, body?: {
   generation: string;
   items: WikiNote[];
   total: number;
+  match?: "full" | "partial";
   nextCursor: number | null;
 };
 export function initWikiWorkspace(root: string): Promise<unknown>;
@@ -216,6 +219,7 @@ export function wikiRepositoryRemotes(root: string, body?: Record<string, unknow
 export function runWikiRemoteAction(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;
 export function createWikiPage(root: string, layout: WikiLayout, body?: Record<string, unknown>): Promise<{
   ok: true; file: string; id: string; title: string; namespace: string; qualifiedTitle: string; repositoryId: string; partition: WikiPartition;
+  similar: Array<{ id: string; title: string; matched: string; file: string; location: string; score: number }>;
 }>;
 export function publicWikiNotes(index: WikiIndex): WikiNote[];
 export function moveWikiPage(root: string, body?: Record<string, unknown>): Promise<Record<string, any>>;

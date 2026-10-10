@@ -65,6 +65,7 @@ export type ResearchRuntimeService = {
   reviewProposal: RuntimeMethod;
   finding: RuntimeMethod;
   findings: RuntimeMethod;
+  retireFinding: RuntimeMethod;
   researchIR: RuntimeMethod;
   problemModels: RuntimeMethod;
   exportWorkstream: RuntimeMethod;
