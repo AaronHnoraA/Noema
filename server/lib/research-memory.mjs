@@ -5,7 +5,13 @@ const ELIGIBLE_STATUSES = new Set(["supported", "accepted"]);
 const ELIGIBLE_VERIFICATION = new Set(["reproduced", "human_reviewed", "formally_verified"]);
 const COMMON_TERMS = new Set([
   "about", "agent", "context", "from", "have", "into", "noema", "that", "the", "this", "what", "with",
+  // Function words: without these a passage or Finding can match a request on
+  // "and", "when" and "which" alone.
+  "all", "and", "any", "are", "but", "can", "did", "does", "for", "has", "how", "its", "may", "not",
+  "our", "should", "than", "then", "there", "they", "was", "were", "when", "where", "which", "who",
+  "why", "will", "would", "you", "your",
   "一个", "这个", "我们", "如何", "什么", "任务", "项目", "根据", "相关", "进行", "继续", "需要",
+  "为什", "怎么", "可以", "以及", "因为", "所以", "但是", "如果", "没有", "就是", "还是", "已经",
 ]);
 
 export function memoryTerms(text) {
@@ -25,6 +31,16 @@ export function memoryTerms(text) {
     }
   }
   return [...new Set(terms)];
+}
+
+/**
+ * The terms a work prompt is searched by. The query stays bounded while
+ * keeping the current request when a work block begins with a long list of
+ * background identifiers or references.
+ */
+export function requestTerms(prompt) {
+  const terms = memoryTerms(prompt);
+  return terms.length <= 32 ? terms : [...terms.slice(0, 16), ...terms.slice(-16)];
 }
 
 const RESTATEMENT_OVERLAP = 0.8;
@@ -59,10 +75,7 @@ export function similarFindings(findings, statement, workstreamId, { threshold =
 
 /** Return a small set of current, evidence-backed Findings relevant to PROMPT. */
 export function selectRunMemory(findings, prompt, workstreamId, { maxResults = 3, maxBytes = 3600 } = {}) {
-  const terms = memoryTerms(prompt);
-  // Keep a bounded query while retaining the current request when a work
-  // block begins with a long list of background identifiers or references.
-  const query = terms.length <= 32 ? terms : [...terms.slice(0, 16), ...terms.slice(-16)];
+  const query = requestTerms(prompt);
   if (!workstreamId || query.length < 2) return [];
   const querySet = new Set(query);
   const candidates = [];

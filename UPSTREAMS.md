@@ -40,6 +40,37 @@ could be carried over.
 | Model-driven memory tidy-up | Rejected: Findings change only through a person's evidence review. |
 | Conversation sync (sequence cursors, tombstones), column-add migrations | Rejected: Git owns sync, and `wiki.db` is a projection that rebuilds. |
 
+## Run context under a budget
+
+context-mode (`8de5f73af9365d459bdfc564c045948cc3fc488b`, Elastic License 2.0)
+and Headroom (`976aa714ef3e19174dc0cb586cee7b20d064e4ef`, Apache-2.0) were read
+on 2026-10-11 for how they keep an agent's context small. Both sit where Noema
+does not: context-mode replaces an agent's tools through MCP and hooks, and
+Headroom rewrites requests in a proxy in front of the model. Noema's part is
+the frozen 64 KiB context of a Run, so each piece was judged there.
+
+The Elastic License adds restrictions the AGPL does not allow on combined
+work, so nothing from context-mode is translated; only ideas are taken.
+
+| Upstream | Decision |
+|---|---|
+| Headroom `relevance_split.segment` (records at blank lines, windows, indented continuations) | Translated into `server/lib/headroom-segment.mjs` (Apache-2.0, see `NOTICE`); a cut parent output or Handoff is split with it. |
+| Headroom `plan_relevance_split`, context-mode `extractSnippet` (keep what matches the request, not the first N bytes) | Idea adopted in `server/lib/research-context-excerpt.mjs`: beginning, end and the matching passages. On Noema's own long documents at 8 KiB the excerpt held 6 of 8, 3 of 4 and 4 of 4 request terms where the plain cut held 2, 2 and 2. |
+| Headroom's Otsu cut and BM25/embedding scorer | Not carried over: the byte budget ranks the passages, and the score is the rare-term weight Run memory already uses. An absolute share of the request decides instead, because a relative cut always keeps something, including when the document does not answer the request. |
+| context-mode's window fill in document order | Rejected: the first matches spend the budget, so a common word early in the text wins over the passage meant. |
+| Function words in the query (found while calibrating, in neither upstream) | Added to `memoryTerms`: `and`, `when` and `which` alone matched passages of `docs/research-workflow.md` to a question it does not answer. Finding recall shares the list. |
+| Headroom CCR, context-mode's snapshot as a table of contents (leave a marker, fetch the original on demand) | Not adopted: an agent has no tool that reads one work output or artifact by reference, and pointing it at the whole `.noema` file costs more context than the cut saved. The person sees every cut and omission in the receipt. |
+| Headroom SmartCrusher, CodeCompressor, log and diff compressors, lossless compaction, dense-line elision | Not carried over: automatic context is agent prose, source cells and Findings. Declared `@@ctx` files are a contract and are never rewritten. |
+| Headroom cross-turn dedup, read lifecycle, thinking compaction, cold-prefix rewrites, CacheAligner | Not carried over: they rewrite a conversation's history, which the ACP agent owns. Noema sends one turn; identical context items are already attached once. |
+| Headroom Kompress model, image compression | Rejected: a model deciding what a frozen RunSpec contains is not reproducible. |
+| Headroom output shaping (terseness note, lower reasoning effort after a tool result) | Rejected: agents own their models, and context-mode records a benchmark loss from brevity prompts. |
+| Headroom `learn` (mine failed sessions into `CLAUDE.md`) | Rejected: a durable fact needs a person's evidence review. |
+| Headroom cross-agent memory | Rejected: reviewed Findings fill that role. |
+| context-mode sandbox execution and tool routing hooks (`ctx_execute`, PreToolUse redirection) | Rejected: ACP agents own their tools. A person can install context-mode in an agent; Noema neither requires nor configures it. |
+| context-mode session events and the PreCompact snapshot | Already present: durable Run events, Handoff artifacts and rollover at a Run boundary. |
+| context-mode FTS5 store with stemming, trigram and rank fusion | Already present for what Noema searches: `wiki.db` and the history index. |
+| context-mode secret redaction of stored tool input | Already present: `RedactSecrets`. |
+
 ## Web editor upstreams
 
 LiveTeX (`src/cm6/extensions/visual/widgets/visualtex-inline.ts`) adapts

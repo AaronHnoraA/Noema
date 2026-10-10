@@ -84,6 +84,14 @@ upstream revision is:
   https://github.com/nano-muse/nanoMuse
   commit 1e08351843052ddcace724e8cac1e4aefbc1101c
 
+server/lib/headroom-segment.mjs is a translation of the record segmentation
+(segment) from Headroom's relevance split, copyright Headroom Labs and the
+Headroom contributors, licensed under the Apache License, Version 2.0. That
+file stays under Apache-2.0. The reviewed upstream revision is:
+
+  https://github.com/headroomlabs-ai/headroom
+  commit 976aa714ef3e19174dc0cb586cee7b20d064e4ef
+
 The editor bundles the MathLive mathfield runtime, copyright 2017--present
 Arno Gourdol, licensed under the MIT License:
 

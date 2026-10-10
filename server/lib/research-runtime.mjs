@@ -39,7 +39,8 @@ import {
   validateResearchNotebook,
 } from "./research-notebook.mjs";
 import { findResearchProjectRoot, readProjectLayout } from "./research-project.mjs";
-import { selectRunMemory, similarFindings } from "./research-memory.mjs";
+import { excerptRanges } from "./research-context-excerpt.mjs";
+import { requestTerms, selectRunMemory, similarFindings } from "./research-memory.mjs";
 
 export { findResearchProjectRoot };
 
@@ -426,10 +427,36 @@ function asContextItem({ ref, resolvedUri, bytes, mediaType, truncated = false }
 // a smaller fragment helps nobody and is omitted instead.
 const AUTO_CONTEXT_MIN_TRUNCATED_BYTES = 1024;
 
-function boundedContextItem(item, maxBytes, note = "compacted checkpoint truncated at 16 KiB") {
+// An output or Handoff cut to a budget keeps its beginning and end, and when
+// passages in between match the request's TERMS, those too.
+function excerptedContextItem(item, bytes, maxBytes, note, terms) {
+  const gap = (omitted, lead = "") => Buffer.from(`\n\n[Noema: ${lead}${omitted} bytes omitted]\n`);
+  const first = gap(bytes.byteLength, `${note}; `).byteLength;
+  const ranges = excerptRanges(bytes, maxBytes - first, terms, gap(bytes.byteLength).byteLength);
+  if (!ranges) return null;
+  const parts = [];
+  ranges.forEach(([start, end], index) => {
+    if (index) parts.push(gap(start - ranges[index - 1][1], index === 1 ? `${note}; ` : ""));
+    parts.push(bytes.subarray(start, end));
+  });
+  const excerpt = Buffer.concat(parts);
+  if (excerpt.byteLength > maxBytes) return null;
+  return {
+    ...item,
+    contentBase64: excerpt.toString("base64"),
+    truncated: true,
+    truncationReason: `${note}; beginning and end retained, with the passages matching the request`,
+    sourceSha256: item.sourceSha256 || sha256(bytes),
+    sourceBytes: item.sourceBytes || bytes.byteLength,
+  };
+}
+
+function boundedContextItem(item, maxBytes, note = "compacted checkpoint truncated at 16 KiB", terms = []) {
   const bytes = Buffer.from(item.contentBase64, "base64");
   if (bytes.byteLength <= maxBytes) return item;
   const preserveTail = item.ref.startsWith("result:") || item.ref.startsWith("handoff:");
+  const excerpted = preserveTail ? excerptedContextItem(item, bytes, maxBytes, note, terms) : null;
+  if (excerpted) return excerpted;
   const marker = Buffer.from(`\n\n[Noema: ${note}${preserveTail ? "; middle omitted" : ""}]\n`);
   const payloadBytes = Math.max(0, maxBytes - marker.byteLength);
   const prefixBudget = preserveTail ? Math.ceil(payloadBytes / 2) : payloadBytes;
@@ -614,7 +641,7 @@ function contextRef(entry) {
  * not are truncated into a useful remainder or omitted and reported, instead of
  * failing a Run nobody configured (D-036).
  */
-function fitAutomaticContext(items, limit = CONTEXT_LIMIT_BYTES, fanInRefs = new Set()) {
+function fitAutomaticContext(items, limit = CONTEXT_LIMIT_BYTES, fanInRefs = new Set(), terms = []) {
   const size = (item) => Buffer.from(item.contentBase64, "base64").byteLength;
   const sizes = items.map(size);
   const required = items.reduce((sum, item, index) => sum + (item.auto ? 0 : sizes[index]), 0);
@@ -662,7 +689,7 @@ function fitAutomaticContext(items, limit = CONTEXT_LIMIT_BYTES, fanInRefs = new
       const equalShare = Math.floor(remaining / (selected.length - position));
       const share = Math.min(remaining - futureMinimum, Math.max(fanInReserve[index], equalShare));
       chosen[index] = boundedContextItem(plain[index], share,
-        "DAG parent output truncated to share the Run context budget across branches");
+        "DAG parent output truncated to share the Run context budget across branches", terms);
       remaining -= size(chosen[index]);
     });
     pending.filter((index) => !included.has(index)).forEach((index) => {
@@ -673,7 +700,8 @@ function fitAutomaticContext(items, limit = CONTEXT_LIMIT_BYTES, fanInRefs = new
   items.forEach((item, index) => {
     if (!item.auto || chosen[index] || (balancedFanIn && fanIn[index])) return;
     if (remaining >= AUTO_CONTEXT_MIN_TRUNCATED_BYTES) {
-      chosen[index] = boundedContextItem(plain[index], remaining, "automatic context truncated to fit the Run context budget");
+      chosen[index] = boundedContextItem(plain[index], remaining,
+        "automatic context truncated to fit the Run context budget", terms);
       remaining -= size(chosen[index]);
     } else {
       chosen[index] = null;
@@ -1879,6 +1907,8 @@ export function createResearchRuntimeService({
       // upstream was asked (D-036).  Everything here is automatic context and
       // yields to the declared context budget.
       const automaticRefs = [];
+      // What a cut output or Handoff keeps from its middle follows the request.
+      const contextTerms = requestTerms(source.prompt);
       const fallbackLineage = source.notebook && source.workNodeId
         && ["fresh", "fork-reconstructed"].includes(route.mode)
         && researchWorkNodeSummary(source.notebook, source.workNodeId).lineage.length
@@ -1918,7 +1948,7 @@ export function createResearchRuntimeService({
       }
       if (reconstruction?.item) {
         candidateContext.push({ ...(valueString(route.compaction?.id)
-          ? boundedContextItem(reconstruction.item, COMPACTION_CHECKPOINT_MAX_BYTES)
+          ? boundedContextItem(reconstruction.item, COMPACTION_CHECKPOINT_MAX_BYTES, undefined, contextTerms)
           : reconstruction.item), auto: true });
       }
       const skillIds = [...values(source.executor.skills), ...values(body.skills)].map(valueString).filter(Boolean);
@@ -1954,7 +1984,7 @@ export function createResearchRuntimeService({
       }
       const automaticContextRefs = new Set(candidateContext.filter((item) => item.auto).map((item) => item.ref));
       const { items: contextItems, omitted: omittedContext } = fitAutomaticContext(
-        candidateContext, CONTEXT_LIMIT_BYTES, directParentOutputRefs);
+        candidateContext, CONTEXT_LIMIT_BYTES, directParentOutputRefs, contextTerms);
       if (memoryUnavailable) omittedContext.push({ ref: "finding:*", reason: "memory index unavailable", bytes: 0 });
       const capabilities = normalizeCapabilities(source.executor.capabilities, body.capabilities);
       assertCapabilityEnvelope(route.agent, capabilities, body, source.executor);

@@ -34,7 +34,7 @@ At a DAG merge, Noema attaches the latest output of each direct lineage parent b
 
 When the remaining budget cannot cover every parent, the merge fits as many parents' minimum excerpts as possible. Complete short outputs cost their actual byte size; ties follow the document's parent order. The context preview shows each truncated excerpt's original size and each omission reason, so the allocation can be checked before dispatch.
 
-Truncated parent outputs and Handoffs retain both their beginning and end, with a marker where the middle was removed. This keeps the final outcome visible under a tight budget. Other automatic references retain a leading excerpt.
+Truncated parent outputs and Handoffs retain both their beginning and end, with a marker where the middle was removed. This keeps the final outcome visible under a tight budget. When the excerpt has at least 4 KiB and a passage in between carries a quarter or more of what the work prompt asks for, that passage is kept too, in document order, and each gap is marked with the bytes it omits. The prompt's terms are the recall terms above, weighted by how few passages carry them, so a request made only of the document's common words, or one the document does not answer, keeps the plain beginning and end. The receipt's truncation reason says which of the two happened. Other automatic references retain a leading excerpt.
 
 `depends` edges express ordering, so their outputs are attached only when the block declares `@@ctx(depends)` (or names a `result:<work-node-id>` explicitly). This keeps a readiness dependency from silently becoming prompt content.
 

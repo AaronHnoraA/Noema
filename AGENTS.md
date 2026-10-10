@@ -69,6 +69,12 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   excerpts enter as pending `finding.create` Proposals; only a person's
   evidence review may promote one to `supported`/`human_reviewed`. Do not infer
   a durable fact from a transcript, a retrieval hit or a Pi coordinator reply.
+- **A cut is deterministic and only touches automatic context.** What a
+  budgeted parent output or Handoff keeps is a pure function of its bytes and
+  the work prompt (`research-context-excerpt.mjs`), so a preview and the frozen
+  RunSpec agree. Declared `@@ctx` content is never shortened or rewritten, and
+  no model chooses what a RunSpec contains. `UPSTREAMS.md` records what was
+  taken from context-mode and Headroom and why the rest was not.
 - **Retiring a Finding is a person's act, and one-way.** `RetireFinding`
   moves a Finding to `disputed`, `refuted` or `superseded` with a reason and a
   version compare-and-swap, and refuses any reviewer that is not `human:`. It
