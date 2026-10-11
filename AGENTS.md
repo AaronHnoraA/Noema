@@ -69,6 +69,26 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   excerpts enter as pending `finding.create` Proposals; only a person's
   evidence review may promote one to `supported`/`human_reviewed`. Do not infer
   a durable fact from a transcript, a retrieval hit or a Pi coordinator reply.
+- **One search, in the kernel.** `kernel/noema/wikisearch` answers every
+  Knowledge search from `wiki.db`. The editor, the Wiki pages and Emacs send
+  the typed text and show the answer; a client that filters, ranks or
+  fuzzy-matches again throws away matches the kernel made (`maintian` found
+  `maintain`). New syntax or ranking goes into the Go package with a test in
+  `search_test.go`; `server/lib/wiki-workspace.mjs`'s `searchWikiDatabase` is
+  only the fallback and gains nothing new. The Go package reads the schema
+  `createWikiSchema` writes: change a table both read and the fixture in
+  `search_test.go` in one commit.
+- **The kernel writes links.** A reference lookup returns `insert`, the text
+  that refers to the item. The Command-R popup, the Emacs command and Raycast
+  insert or copy that text; none builds a link. A new kind of thing to refer
+  to, or a change to how one is written, is a change to `references.go`.
+  Typing `[[` or `roam://` opens the same popup; the completion popup has no
+  roam sources and must not grow one back that ranks pages in the page.
+- **`host.json` and `mcp.json` name their writer.** Local tools outside Emacs
+  (the Raycast extension) find the host through `host.json` in the state
+  directory and trust it only while its `pid` is alive. A process removes a
+  descriptor only when it wrote it: a restarted host writes its own before
+  the old one has exited.
 - **A cut is deterministic and only touches automatic context.** What a
   budgeted parent output or Handoff keeps is a pure function of its bytes and
   the work prompt (`research-context-excerpt.mjs`), so a preview and the frozen

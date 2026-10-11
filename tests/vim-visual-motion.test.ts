@@ -71,13 +71,18 @@ describe("Visual mode grows and shrinks with h and l", () => {
     s.done();
   });
 
-  test("h at a line start and l at a line end hold the selection", () => {
+  test("h holds at a line start; l steps onto the line break and no further", () => {
     const a = mount("abc\ndef", 4, "v");
     a.keys("h");
     expect(a.picked()).toBe("d");
     a.done();
+    // Vim's characterwise Visual caret may stand on the line break.
     const b = mount("abc\ndef", 2, "v");
     b.keys("l");
+    expect(b.picked()).toBe("c\n");
+    b.keys("l");
+    expect(b.picked()).toBe("c\n");
+    b.keys("h");
     expect(b.picked()).toBe("c");
     b.done();
   });

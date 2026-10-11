@@ -41,13 +41,15 @@ describe("AssistScheduler", () => {
     expect(schedulerIndex).toBeLessThan(firstModeUpdateIndex);
   });
 
-  test("editor scrolling closes fixed previews instead of repositioning them every frame", () => {
+  test("caret reveal keeps completion open while user scrolling closes it", () => {
     const source = readFileSync(join(process.cwd(), "aaronnote/main.ts"), "utf8");
     const start = source.indexOf('window.addEventListener("scroll", (event) => {');
     const end = source.indexOf('}, { capture: true, passive: true });', start);
     const handler = source.slice(start, end);
-    expect(handler).toContain('transientSurfaces.close(["snippet-popup", "math-preview"');
-    expect(handler).not.toContain("mathPreview: true");
+    expect(handler).toContain("performance.now() - lastUserEditorScrollAt > 350");
+    expect(handler).toContain('keepCompletion\n    ? ["prose-popover", "context-menu"]\n    : ["snippet-popup", "math-preview", "prose-popover", "context-menu"]');
+    expect(handler).toContain("scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true })");
+    expect(handler).toContain("snippetCompletionArmed = false");
     expect(handler).not.toContain("selectionTool: true");
   });
 

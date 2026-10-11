@@ -40,6 +40,34 @@ could be carried over.
 | Model-driven memory tidy-up | Rejected: Findings change only through a person's evidence review. |
 | Conversation sync (sequence cursors, tombstones), column-add migrations | Rejected: Git owns sync, and `wiki.db` is a projection that rebuilds. |
 
+## Knowledge search
+
+MediaWiki core search (`includes/Search`, commit
+`d4e8b8ac42a09658ab5cd53a415055fabc264adb`, GPL-2.0-or-later) and Obsidian's
+search (closed source; its public API typings and the Search and Quick
+switcher help pages) were read on 2026-10-11. No code was taken from either;
+`kernel/noema/wikisearch` is written for `wiki.db`.
+
+| Upstream | Decision |
+|---|---|
+| MediaWiki `TitleMatcher::getNearMatch` (the title typed is the page, tried in case variants and NFKC) | Adopted as the `exact` match, on text folded once for case, accents and dash/underscore/space instead of tried variant by variant. |
+| MediaWiki `SearchExactMatchRescorer` (exact title first; a redirect and its target are one result) | Adopted: an alias hit is listed as its page and names the alias in `via`. |
+| MediaWiki `parseNamespacePrefixes` (a prefix narrows only when it names a namespace; `all:`; spaces around the colon) | Adopted, with namespace aliases and the `public/`/`private/` partition. A search field keeps its name over a namespace of the same name. |
+| MediaWiki `completionSearch` (title prefix first, fallbacks only fill what is left) | Adopted as the order of results: every title match before any text match, corrections and partial answers only when nothing better exists. |
+| MediaWiki `SearchHighlighter` (the stretch holding all terms, prose before templates) | Idea adopted for the excerpt: the line with the most query words, prose before code and metadata. |
+| MediaWiki language-variant fallback, `searchmenu-new` | Variants not carried over: `kernel/search/hanconv.go` exists but nothing asks for it here. "Create this page" adopted as `create`. |
+| Obsidian quick switcher (letters in order, skipping some; create on Enter) | Adopted as the last title tier, scored so that runs and word starts count and scattered letters do not; first letters of a title's words rank as a title match. |
+| Obsidian `SearchResult.matches` (matched ranges with the result) | Adopted as `titleRanges` and `[[ ]]` in the excerpt, so no client matches again to highlight. |
+| Obsidian search terms: `OR`, parentheses, `-`, `"…"`, `file:`, `path:`, `content:`, `tag:`, `line:`, `/regex/`, explain | Adopted. A regular expression or `line:` inside an `OR` group is not: both are checked against page text after the SQL, which only a top-level condition allows. |
+| Obsidian `section:`, `block:`, `task:`, `match-case:`, `[property:value]` for any property | Not carried over: `wiki.db` indexes no arbitrary properties (the response says so and searches the text), and tasks are the Agenda's. |
+| Typo tolerance (neither upstream's core search has it; CirrusSearch does through Elasticsearch) | Written here: bounded optimal-string-alignment distance on title words, and for page text the nearest word of the FTS5 vocabulary (`fts5vocab`). |
+
+Tried on a copy of the real index (261 pages) before and after: `coloring`
+and `densty` found nothing, `krull schmit` missed Krull–Schmidt Theorem,
+`tens` listed `tensorforscientist` above `tensor`, and Emacs `find-note`
+showed no candidate for `readme: maintian`. Each now lists its page first.
+A search takes 2 to 14 ms.
+
 ## Run context under a budget
 
 context-mode (`8de5f73af9365d459bdfc564c045948cc3fc488b`, Elastic License 2.0)

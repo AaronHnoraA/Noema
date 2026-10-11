@@ -14,8 +14,10 @@ Inside math there are three input styles:
   exact/prefix matching only, so ordinary words do not cause noisy matches.
 
 The popup shows at most ten results. Use Up/Down, Page Up/Page Down, Home/End,
-Cmd+1…Cmd+0, or Tab. Enter remains normal editor input. Escape dismisses the
+Cmd+1…Cmd+0, Tab, or Enter to accept the selected result. Escape dismisses the
 current popup. Snippet choices use the same popup.
+Typing keeps the menu open when the editor scrolls to reveal the caret. Clicking
+to move the caret or scrolling the page closes it; a click alone does not open it.
 
 In Markdown prose, type a key to open the same completion popup. Structural
 keys include `h1`–`h6` (headings), `ul`, `ol`, `bq`, `todo`, `code`, `table`,

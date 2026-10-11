@@ -24,7 +24,7 @@
 
 import { EditorSelection, type Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { nextGraphemePosition } from "../src/cm6/text-boundaries.ts";
+import { nextGraphemePosition, previousGraphemePosition } from "../src/cm6/text-boundaries.ts";
 
 export type VimRowSpan = { from: number; to: number };
 
@@ -60,6 +60,53 @@ function measuredEnd(view: EditorView, pos: number, assoc: -1 | 1): number {
   return view.moveToLineBoundary(EditorSelection.cursor(pos, assoc), true, true).head;
 }
 
+type RowBand = { top: number; bottom: number };
+
+/** Graphemes examined on either side of a row for text that has no height. */
+const HIDDEN_RUN_PROBE_LIMIT = 32;
+
+function bandAt(view: EditorView, pos: number): RowBand | null {
+  const coords = view.coordsAtPos(pos, 1);
+  return coords ? { top: coords.top, bottom: coords.bottom } : null;
+}
+
+function hasHeight(band: RowBand): boolean {
+  return band.bottom - band.top >= 1;
+}
+
+/**
+ * The vertical band of the row starting at FROM: that of its first character
+ * with a height.  Hidden Markdown syntax is laid out as a sliver without one.
+ */
+function visibleBand(view: EditorView, from: number, to: number): RowBand | null {
+  const doc = view.state.doc;
+  let fallback: RowBand | null = null;
+  let at = from;
+  for (let probe = 0; probe <= HIDDEN_RUN_PROBE_LIMIT && at <= to; probe++) {
+    const band = bandAt(view, at);
+    if (band && hasHeight(band)) return band;
+    fallback ??= band;
+    if (at >= to) break;
+    at = nextGraphemePosition(doc, at);
+  }
+  return fallback;
+}
+
+/**
+ * Whether POS is drawn on the row occupying BAND.  A hidden sliver sits at
+ * the top of its row, so it belongs there when its top falls inside the band;
+ * two characters with a height share a row when they overlap by more than
+ * half of the shorter one.
+ */
+function onBand(view: EditorView, pos: number, band: RowBand): boolean {
+  const other = bandAt(view, pos);
+  if (!other) return false;
+  if (!hasHeight(other)) return other.top >= band.top - 2 && other.top < band.bottom - 2;
+  if (!hasHeight(band)) return band.top >= other.top - 2 && band.top < other.bottom - 2;
+  const overlap = Math.min(band.bottom, other.bottom) - Math.max(band.top, other.top);
+  return overlap > Math.min(band.bottom - band.top, other.bottom - other.top) / 2;
+}
+
 export const domRowLayout: VimRowLayout = {
   available(view) {
     const rect = view.contentDOM.getBoundingClientRect();
@@ -71,21 +118,42 @@ export const domRowLayout: VimRowLayout = {
     const line = doc.lineAt(clamp(pos, 0, doc.length));
     let from = measuredStart(view, pos, assoc);
     let to = measuredEnd(view, pos, assoc);
-    // A replaced block widget may legitimately span several source lines; any
-    // other answer that does not contain POS is a measuring failure (the line
-    // is outside the rendered viewport, or the DOM is mid-update).
-    if (from > pos || to < pos) return { from: line.from, to: line.to };
+    if (from > pos || to < pos) {
+      // An answer that misses POS and leaves its line is a measuring failure
+      // (the line is outside the rendered viewport, or the DOM is mid-update).
+      if (from < line.from || to > line.to) return { from: line.from, to: line.to };
+      // One inside the line is hidden Markdown syntax: the `## ` of a heading
+      // or the `>` of a quote has no height, and CodeMirror reports the row
+      // as starting after it.  POS is on that row all the same.
+      from = Math.min(from, pos);
+      to = Math.max(to, pos);
+    }
+    // A replaced block widget may legitimately span several source lines.
+    if (from < line.from || to > line.to) return { from, to };
     // CodeMirror's "end of visual line" can stop before a hanging wrap space.
     // Rows must partition the line, so extend TO until it is the next row's
     // start — otherwise that space belongs to no row and stepping over rows
     // makes no progress.
-    const lineEnd = doc.lineAt(to).to;
-    for (let probe = 0; probe < ROW_END_PROBE_LIMIT && to < lineEnd; probe++) {
+    for (let probe = 0; probe < ROW_END_PROBE_LIMIT && to < line.to; probe++) {
       if (measuredStart(view, to, 1) !== from) break;
       to = nextGraphemePosition(doc, to);
     }
-    from = Math.min(from, pos);
-    return { from, to: Math.max(to, pos) };
+    // Take in what is drawn on the same row but was measured as another one:
+    // a hidden marker before the row, or the text after a hidden marker.
+    const band = visibleBand(view, from, to);
+    if (!band) return { from, to };
+    for (let probe = 0; probe < HIDDEN_RUN_PROBE_LIMIT && to < line.to; probe++) {
+      if (!onBand(view, to, band)) break;
+      const end = measuredEnd(view, to, 1);
+      to = end > to ? Math.min(end, line.to) : nextGraphemePosition(doc, to);
+    }
+    for (let probe = 0; probe < HIDDEN_RUN_PROBE_LIMIT && from > line.from; probe++) {
+      const previous = previousGraphemePosition(doc, from);
+      if (!onBand(view, previous, band)) break;
+      const start = measuredStart(view, previous, 1);
+      from = start < previous ? Math.max(start, line.from) : previous;
+    }
+    return { from, to };
   },
 
   xAt(view, pos) {
@@ -95,10 +163,11 @@ export const domRowLayout: VimRowLayout = {
   },
 
   posAtX(view, row, x) {
-    const coords = view.coordsAtPos(row.from, 1);
-    if (!coords) return row.from;
+    // A row that opens with hidden syntax has no height at its first offset.
+    const band = visibleBand(view, row.from, row.to);
+    if (!band) return row.from;
     const rect = view.contentDOM.getBoundingClientRect();
-    const hit = view.posAtCoords({ x: rect.left + x, y: (coords.top + coords.bottom) / 2 }, false);
+    const hit = view.posAtCoords({ x: rect.left + x, y: (band.top + band.bottom) / 2 }, false);
     return clamp(hit, row.from, row.to);
   },
 };

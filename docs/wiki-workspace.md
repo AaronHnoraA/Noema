@@ -127,17 +127,58 @@ to bound a word.
 
 ## Search
 
-Structured Knowledge queries run against `wiki.db`. A query combines free text
-with `field:value` filters; a leading `-` negates a filter and quotes keep a
-phrase together.
+There is one search. The kernel (`kernel/noema/wikisearch`, endpoint
+`/api/noema/knowledge/search`) answers it from `wiki.db`, and the editor's
+search field, the Wiki pages and Emacs `find-note` all ask it through the
+host's `knowledge:search` channel. No client keeps a page list or matches on
+its own. Only "pages related to this one" and what is offered before anything
+is typed are the host's, since neither is a search. While the kernel cannot
+answer, the host's older SQL search does, without fuzzy matching, and the
+response says `source: "host-wiki-fallback"`.
+
+### How a page is found
+
+Results come in this order, and each says which it was (`matchKind`):
+
+| Order | `matchKind` | Found by |
+| --- | --- | --- |
+| 1 | `exact` | the title or an alias, compared without case, accents or the difference between `–`, `-`, `_` and a space |
+| 2 | `title` | a title beginning with the query, holding each of its words at the start of a word, or whose words' first letters it spells (`ti` → Tensor Isomorphism); the shorter title first |
+| 3 | `alias`, `path` | the same against an alias or the file name |
+| 4 | `fuzzy` | a misspelled title: one slip in a word of four to seven letters, two from eight (`krull schmit` → Krull–Schmidt Theorem) |
+| 5 | `content` | the page text, ranked by BM25 with the title weighted over tags, path and body |
+| 6 | `fuzzy` | letters of the title typed in order with gaps (`qntmst` → Quantum State), when they form runs or begin words |
+| 7 | `corrected` | the text, after a word no page contains is replaced by the nearest word the index knows (`coloring` → `colouring`); the response carries `corrected` |
+| 8 | `partial` | part of the query, as described below |
+
+A query that already names a title is never "corrected", and a quoted phrase
+is taken literally: no fuzzy title, no correction, no partial answer. When no
+page has the typed title the response carries `create`, the title and
+namespace a new page would get.
+
+### Query syntax
+
+Words are joined by AND and match by prefix. `OR`, parentheses, a leading `-`
+and `"a phrase"` work as in Obsidian's search. A leading `Namespace:` narrows
+the search when it names a namespace or one of its aliases, as in MediaWiki:
+`Math:tensor`, `数学: tensor` and `public/Math:tensor` are the same search,
+and a namespace includes those nested under it. A prefix that names no
+namespace is ordinary text. `all:` lifts whatever scope the surface applied.
+`/regular expression/` matches page text; `path:/…/`, `file:/…/` and
+`title:/…/` match those fields. Every response carries `explain`, the query
+in plain words, including what could not be understood.
 
 | Filter | Matches |
 | --- | --- |
 | `title:` (`intitle:`) | title or alias |
-| `tag:` (`category:`) | tag |
-| `repo:` (`repository:`), `namespace:`, `path:`, `kind:` | location and page kind |
+| `alias:` | alias only |
+| `tag:` (`category:`), `#tag`, `[tag:…]` | tag |
+| `content:` (`body:`) | page text only |
+| `file:` (`filename:`) | the file name |
+| `line:(a b)` | the words on one line |
+| `repo:` (`repository:`), `namespace:` (`ns:`), `path:`, `kind:` | location and page kind |
 | `linksto:` | a page linking to the given ID or title |
-| `is:orphan`, `is:missing` | no resolved links in or out; has an unresolved link |
+| `is:orphan`, `is:missing`, `is:private`, `is:public`, `is:redirect` | no resolved links in or out; has an unresolved link; partition; redirect |
 | `after:` (`since:`), `before:` (`until:`) | modification time |
 | `created:` | the period of the page's `date` metadata |
 
@@ -148,13 +189,57 @@ or an age (`7d`, `2w`, `3m`, `1y`). The bound is the local start of that day:
 `created:2026-10` is pages dated that month, `created:7d` pages dated within
 the last week. A page without a `date` matches no `created:` filter.
 
+### Referring to something
+
+Linking is the same search asked a different way: the endpoint's mode
+`references` lists what a note can refer to and, for each item, the text that
+refers to it. Command-R in the editor opens a popup at the caret with it;
+`M-x my/noema-insert-reference` asks the same lookup from any Emacs buffer.
+Neither matches anything or knows a link syntax. The prefixes are roam's own:
+
+| Typed | Lists |
+| --- | --- |
+| nothing | this note's headings, tags and identified blocks in order, then recent pages |
+| `text` | the same of this note, then pages by name, found as a search finds them; a title nobody has is offered as a link to a new page |
+| `#text` | tags and blocks: this note's, then every page's |
+| `@text` | headings: this note's, then every page's |
+| `Page#text`, `Page@text` | tags or headings of the page the left part names, by search or by id; Tab on a page row writes `ID@` |
+| `@@text` | citation keys of the bibliographies the note can see, matched by key, title, author or year |
+| `/text` | files of the workspace by name or path |
+
+Each item carries `insert`, the whole link; `target`, its destination alone;
+and `labelRange`, where the display text sits in `insert` (UTF-16 units). The
+label is a default: the editor leaves it selected after inserting, so typing
+replaces it. Links are roam's: a page `[Title](roam://ID)`, a tag or block
+`[tag](roam://ID#tag)`, a heading `[Heading](roam://ID@above@heading)`, a
+citation `@@cite(ns)[key]`, a file `[name](relative/path)` (an image embedded
+with `!`). A page whose identity is provisional is `[[Title]]`, and its
+headings and tags can be linked only from inside it, by `#hash`.
+
+A heading's path is the slugs of the headings really above it, by the page's
+`slugDomTarget` (an explicit `{#id}` is the slug). The page keeps a looser
+stack, in which an earlier sibling can linger, and resolves any path that is a
+suffix of its own, which the true path always is. Tags are `@@tag[…]` and
+equation `\tag{…}`; blocks are those carrying a stable `{#uuid}`. Nothing
+inside a code fence, inline code or the metadata block counts. The request
+carries the note's path and its unsaved text, so a heading typed a moment ago
+can be linked; other pages' headings, tags and blocks are read from the
+indexed text once per index generation.
+
+Typing `[[` or `roam://` in a note opens the same popup and replaces what was
+typed: a whole link for `[[`, the destination alone for `roam://`. The
+completion popup no longer has sources for these; it used to rank a local copy
+of the page list for them. Dismissing the popup leaves the typed text alone.
+
 Free text uses the Unicode index, or the trigram index when it contains CJK.
 A trigram index cannot answer a term shorter than three characters, and most
 Chinese words are two. `wiki.db` therefore also keeps every adjacent CJK
 character pair of a page's title, aliases, tags and body in an indexed table
 (`page_bigrams`), so a two-character term (`群论`) is a lookup. Only a
-single-character term (`群`) still scans those fields. In both cases the
-excerpt is cut around the first hit. The table is part of the disposable
+single-character term (`群`) still scans those fields. The excerpt is the
+line of the page holding the most of the query's words, prose before code and
+metadata, with the hits in `[[ ]]`; a page found by its title alone shows how
+its text begins. The table is part of the disposable
 projection: it is rewritten with a page's full-text rows, and the schema
 change that introduced it rebuilds an older `wiki.db` once.
 

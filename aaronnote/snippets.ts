@@ -1264,7 +1264,7 @@ export type SnippetPopupKeyInput = {
   ctrlKey?: boolean;
   altKey?: boolean;
   isComposing?: boolean;
-  /** Inline math has no newline action while company completion is visible. */
+  /** False only for a surface that must consume Enter without insertion. */
   acceptEnter?: boolean;
 };
 
@@ -1306,7 +1306,7 @@ export function snippetPopupKeyAction(input: SnippetPopupKeyInput): SnippetPopup
   if (key === "PageUp") return { type: "page", delta: -6 };
   if (key === "Home") return { type: "edge", edge: "first" };
   if (key === "End") return { type: "edge", edge: "last" };
-  if (key === "Enter") return { type: input.acceptEnter ? "accept" : "consume" };
+  if (key === "Enter") return { type: input.acceptEnter === false ? "consume" : "accept" };
   if (key === "Tab" && !input.shiftKey) return { type: "accept" };
   if (key === "Escape") return { type: "dismiss" };
   return { type: "none" };

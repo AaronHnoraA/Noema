@@ -64,8 +64,8 @@ describe("unbound Normal-mode chords are reported", () => {
   it("still reports the unbound key a count was aimed at", async () => {
     const { press, reported, dispose } = await setup();
     press("3");
-    press("q");
-    expect(reported).toEqual(["q"]);
+    press("K");
+    expect(reported).toEqual(["K"]);
     dispose();
   });
 
@@ -88,11 +88,11 @@ describe("unbound Normal-mode chords are reported", () => {
     dispose();
   });
 
-  it("reports unbound single keys such as q and m", async () => {
+  it("reports unbound single keys such as K and &", async () => {
     const { press, reported, dispose } = await setup();
-    press("q");
-    press("m");
-    expect(reported).toEqual(["q", "m"]);
+    press("K");
+    press("&");
+    expect(reported).toEqual(["K", "&"]);
     dispose();
   });
 

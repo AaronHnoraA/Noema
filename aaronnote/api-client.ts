@@ -776,9 +776,6 @@ type NativeApi = {
     obsidianStart?: (body: Record<string, unknown>) => Promise<unknown>;
     obsidianCancel?: (body: Record<string, unknown>) => Promise<unknown>;
   };
-  ime?: {
-    vimMode?: (mode: string) => Promise<unknown>;
-  };
   proseCheck?: {
     run?: (body: ProseCheckBody) => Promise<unknown>;
     acceptWord?: (word: string) => Promise<unknown>;
@@ -1848,17 +1845,6 @@ export const api = {
       return ensureOk(await call({ taskID }) as ObsidianImportTask, "Obsidian import cancellation failed");
     },
   },
-  ime: {
-    async vimMode(mode: "normal" | "insert"): Promise<{ enabled?: boolean }> {
-      const call = window.aaronnoteApi?.ime?.vimMode;
-      if (!call) return { enabled: false };
-      try {
-        return (await call(mode)) as { enabled?: boolean } ?? { enabled: false };
-      } catch (_) {
-        return {};
-      }
-    },
-  },
   proseCheck: {
     async run(body: ProseCheckBody): Promise<ProseCheckMsg> {
       const call = requireMethod(nativeApi().proseCheck?.run, "Prose check");
@@ -2080,7 +2066,7 @@ export const api = {
     },
   },
   knowledge: {
-    async search(body: { query?: string; mode?: "suggest" | "results" | "related"; context?: Record<string, string>; entityKinds?: string[]; cursor?: number; limit?: number }): Promise<WikiSearchResult> {
+    async search(body: { query?: string; mode?: "suggest" | "results" | "related" | "references"; context?: Record<string, string>; entityKinds?: string[]; cursor?: number; limit?: number; file?: string; content?: string }): Promise<WikiSearchResult> {
       const call = requireMethod(nativeApi().knowledge?.search || nativeApi().wiki?.search, "Knowledge search");
       return ensureOk(await call(body) as WikiSearchResult, "Knowledge search failed");
     },

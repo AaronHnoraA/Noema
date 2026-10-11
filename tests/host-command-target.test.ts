@@ -103,6 +103,21 @@ describe("stale host pause recovery", () => {
     // Without the report Emacs still believes the pane is paused, so the next
     // genuine background transition is deduplicated away and a hidden page
     // stays fully awake.
-    expect(handler).toContain("api.emacs.inputFocus");
+    expect(handler).toContain("reportInputFocusToHost(true)");
+    const report = mainSource.slice(mainSource.indexOf("function reportInputFocusToHost"));
+    expect(report.slice(0, 400)).toContain("api.emacs.inputFocus");
+  });
+
+  // A click inside WebKit does not select the Emacs window, so the pause can
+  // arrive just after it; applying it released the editor's focus and the
+  // caret vanished under the pointer.
+  test("a pause that finds the user in the pane is refused and reported", () => {
+    const start = mainSource.indexOf('case "pause":');
+    expect(start).toBeGreaterThan(-1);
+    const handler = mainSource.slice(start, start + 500);
+    expect(handler.indexOf("holdsInputAgainstHostPause()")).toBeGreaterThan(-1);
+    expect(handler.indexOf("holdsInputAgainstHostPause()"))
+      .toBeLessThan(handler.indexOf('setPausedReason("host", true)'));
+    expect(handler).toContain("reportInputFocusToHost()");
   });
 });

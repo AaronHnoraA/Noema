@@ -301,10 +301,10 @@ describe("^ goes to the first non-blank", () => {
     s.done();
   });
 
-  test("an all-blank line falls back to the line start", () => {
+  test("an all-blank line goes to its last character, as in Vim", () => {
     const s = mount("a\n   \nb", 3);
     s.keys("^");
-    expect(s.head()).toBe(2);
+    expect(s.head()).toBe(4);
     s.done();
   });
 });

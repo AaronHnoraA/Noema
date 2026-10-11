@@ -90,6 +90,7 @@ import {
   hostInputFocusEventTypes,
   installNativeKeyboardYield,
   provesHostInputFocus,
+  holdsInputAgainstHostPause,
   reclaimHostInputFocus,
   releaseHostInputFocus,
 } from "./host-input-focus.ts";
@@ -250,7 +251,8 @@ import {
   installNoemaThemeRuntime,
   loadNoemaAppConfig,
 } from "./theme-runtime.ts";
-import { wikiCompletionSnippets, wikiLinkCompletionContext } from "./wiki-completion.ts";
+import { wikiLinkCompletionContext } from "./wiki-completion.ts";
+import { createReferencePicker, type ReferenceAnswer } from "./reference-picker.ts";
 import { createdWikiLinkChange, wikiCreationSource } from "./wiki-create-intent.ts";
 import { reviewedWikiLinkChange, scanWikiLinkSuggestions } from "./wiki-link-review.ts";
 import { createLinkPreviewController } from "./link-preview.ts";
@@ -1256,6 +1258,8 @@ const completionEpoch = new Epoch();
 const completionTimer = new CoalescedTimer(60);
 let completionContextKey = "";
 let completionPendingItems: SnippetSummary[] | null = null;
+let completionRequestPending = false;
+let completionAcceptWhenReady = false;
 let pendingOpenHash = "";
 let pendingOpenDomTarget = "";
 let pendingTodoTarget: TodoTarget | null = null;
@@ -1265,7 +1269,11 @@ let snippetDeleteBefore = 0;
 let snippetSuppressedPrefix = "";
 let snippetCompletionArmed = false;
 let snippetRenderKey = "";
+let snippetRenderedIndex = -1;
 let snippetPopupMatchKey = "";
+let snippetPointerPosition: { x: number; y: number } | null = null;
+let snippetKeyboardPointerPosition: { x: number; y: number } | null = null;
+let lastUserEditorScrollAt = -Infinity;
 let snippetPopupChooseHandler: ((snippet: SnippetSummary) => boolean) | null = null;
 const snippetUsage = new SnippetUsageStore();
 
@@ -1808,6 +1816,9 @@ const editor = createEditor(host, {
   onBlur: () => {
     // Focus changes are not mode commands. Emacs buffer switches must preserve
     // Insert/Normal/Visual and the live selection.
+    snippetCompletionArmed = false;
+    hideSnippetPopup();
+    clearCompletionCache();
     void flushCursorPosition();
   },
 });
@@ -3318,24 +3329,6 @@ host.addEventListener("aaronnote:inline-math-edit-error", (event) => {
   scheduleAssistUpdate({ mathPreview: true, cursor: true });
 });
 
-// IME switching for Vim mode (macOS) — fire-and-forget, never blocks keystrokes.
-// Requires macism or im-select installed; feature silently disables when absent.
-const imeCoalesceTimer = new CoalescedTimer(80);
-let imeEnabled = true;
-let imeLastSentMode: "" | "normal" | "insert" = "";
-function syncImeForVimMode(mode: import("./vim-lite.ts").VimLiteMode): void {
-  if (!imeEnabled) return;
-  const effective: "normal" | "insert" = mode === "insert" ? "insert" : "normal";
-  imeCoalesceTimer.schedule(() => {
-    if (effective === "insert" && !document.hasFocus()) return;
-    if (effective === imeLastSentMode) return;
-    imeLastSentMode = effective;
-    void api.ime.vimMode(effective)
-      .then((r) => { if (r?.enabled === false) imeEnabled = false; })
-      .catch(() => {});
-  });
-}
-
 /**
  * Adopt a selection that CodeMirror built on its own into the Vim model.
  *
@@ -3352,17 +3345,33 @@ function adoptKeyboardSelectionIntoVim(): void {
   }, 0);
 }
 
+// Vim's `/`: the panel is the search prompt.  Enter accepts the match and
+// returns to the note, where `n` and `N` continue the search.
+let findOpenedFromVim = false;
+let findVimOrigin = 0;
 function runVimFind(): boolean {
+  findVimOrigin = editor.getMarkdownSelectionRange().head;
   openFindPanel();
+  findOpenedFromVim = true;
   return true;
 }
 
+/** Vim's `n`/`N`: the next match of the panel's query from FROM, wrapping. */
+function vimSearchNext(from: number, direction: 1 | -1): number | null {
+  const result = createFindPattern(findInput.value, currentFindOptions());
+  const matches = collectFindMatches(editor.getMarkdown(), result.pattern);
+  if (matches.length === 0) return null;
+  if (direction > 0) return (matches.find((match) => match.from > from) ?? matches[0]!).from;
+  return (matches.findLast((match) => match.from < from) ?? matches[matches.length - 1]!).from;
+}
+
 const vim = createVimLite(editor, host, {
-  onModeChange: (mode) => { updateModeLabel(mode); syncImeForVimMode(mode); },
+  onModeChange: updateModeLabel,
   onUndo: () => editor.undo(),
   onRedo: () => editor.redo(),
   onIndent: (dir) => indentMarkdownBlock(editor.view, dir),
   onFind: runVimFind,
+  searchNext: vimSearchNext,
   // A modal key with no binding used to be swallowed with no trace, which is
   // indistinguishable from the keystroke being dropped. Name it instead.
   onUnhandledKey: (sequence) => setStatus(`Vim: ${sequence} is not bound`),
@@ -3444,10 +3453,7 @@ reconcileVimSelection = () => {
     }
   });
 };
-// Re-assert IME state when the window regains focus.
 window.addEventListener("focus", () => {
-  imeLastSentMode = "";
-  syncImeForVimMode(vim.mode());
   void refreshPendingExternalSaveOnFocus();
 });
 host.addEventListener("focusin", () => {
@@ -5320,6 +5326,7 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
       ] },
       { label: "Paste", detail: primaryShortcut("V"), disabled: currentReadOnly, run: () => pasteIntoEditorFromContextMenu() },
       { label: "Find in Note", detail: primaryShortcut("F"), run: () => openFindPanel() },
+      { label: "Insert Reference", detail: primaryShortcut("R"), disabled: currentReadOnly, run: () => openReferencePicker() },
       { label: "Save", detail: currentReadOnly ? "read-only" : primaryShortcut("S"), disabled: currentReadOnly || !currentFile, run: () => save() },
       { label: headingNumberingPreference.enabled ? "Hide Heading Numbers" : "Show Heading Numbers", detail: "visual only", run: toggleHeadingNumbering },
       { label: slideDeck?.isSlides()
@@ -7629,7 +7636,19 @@ function closeFindPanel(): void {
   findRecountTimer = 0;
   findStale = false;
   findPanel.hidden = true;
+  findOpenedFromVim = false;
+  // The panel shows the current match as a selection.  Outside Insert that
+  // selection would be adopted as Visual mode; a search leaves the caret on
+  // the match instead, as in Vim.
+  const match = findMatches[findIndex];
   clearFindHighlights();
+  const selection = editor.getMarkdownSelection();
+  if (match && vim.mode() !== "insert"
+      && Math.min(selection.from, selection.to) === match.from
+      && Math.max(selection.from, selection.to) === match.to) {
+    editor.setMarkdownSelection(match.from);
+    vim.syncSelectionFromEditor();
+  }
   editor.focus();
 }
 
@@ -7768,6 +7787,98 @@ function runClipboardShortcut(event: KeyboardEvent): boolean {
     return true;
   }
   return false;
+}
+
+// Cmd-R: link to a page, heading, tag or citation.  The kernel answers the
+// lookup and writes the link text; see reference-picker.ts.
+// A lookup started by typing a link in the note: the typed text is replaced
+// by what is chosen.  "link" replaces `[[text` with a whole link; "target"
+// replaces a hand-typed `roam://…` with the destination alone, since the
+// brackets around it are already there.
+type ReferenceTrigger = { mode: "link" | "target"; start: number; before: number; after: number };
+
+// Dismissing the popup means "let me type this myself": the same typed link
+// does not open it again.
+let dismissedReferenceTrigger = -1;
+
+const referencePicker = createReferencePicker({
+  lookup: async (query) => await api.knowledge.search({
+    query, mode: "references", file: currentFile, content: editor.getMarkdown(), limit: 30,
+  }) as unknown as ReferenceAnswer,
+  insert: (item, context) => {
+    const trigger = context as ReferenceTrigger | undefined;
+    const text = trigger?.mode === "target" ? (item.target || "") : item.insert;
+    if (!text) return;
+    editor.focus();
+    const head = editor.view.state.selection.main.head;
+    const from = head - (trigger?.before ?? 0);
+    const to = head + (trigger?.after ?? 0);
+    editor.view.dispatch({
+      changes: { from, to, insert: text },
+      selection: { anchor: from + text.length },
+      userEvent: "input.complete",
+    });
+    // The label is the kernel's default, not the author's wording: leave it
+    // selected so that typing replaces it and moving on keeps it.
+    const label = trigger?.mode === "target" ? undefined : item.labelRange;
+    if (label && label[1] > label[0] && label[1] <= text.length) {
+      editor.setMarkdownSelection(from + label[0], from + label[1]);
+    }
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    // Linking to a page nobody has written yet opens the New Page workbench
+    // with its title, as the old `[[` completion did.
+    if (item.kind === "create" && item.title) void openWikiPageCreation(item.title);
+  },
+  anchor: () => {
+    const head = editor.view.state.selection.main.head;
+    return editor.view.coordsAtPos(head);
+  },
+  closed: (chosen, context) => {
+    const trigger = context as ReferenceTrigger | undefined;
+    dismissedReferenceTrigger = !chosen && trigger ? trigger.start : -1;
+    editor.focus();
+  },
+});
+
+function openReferencePicker(initial = "", trigger?: ReferenceTrigger): void {
+  if (currentReadOnly) return;
+  hideSnippetPopup();
+  referencePicker.open(initial, trigger);
+}
+
+/**
+ * A link being typed at the cursor: `[[text`, or `roam://…` inside a link.
+ * These used to be four completion sources that ranked a local copy of the
+ * page list; the kernel's lookup answers all of them now.
+ */
+function referenceTriggerAt(before: string, after: string): { query: string; trigger: ReferenceTrigger } | null {
+  const cursor = before.length;
+  const wiki = wikiLinkCompletionContext(before, after);
+  if (wiki) {
+    const typed = wiki.prefix.length + 2;
+    return {
+      query: wiki.prefix,
+      trigger: { mode: "link", start: cursor - typed, before: typed, after: wiki.hasClosingDelimiter ? 2 : 0 },
+    };
+  }
+  const roam = before.match(/(?:^|[\s([{"'=])(roam:\/\/[^\s\])}"'`<>]*)$/i);
+  if (roam && roamFeaturesEnabled()) {
+    const typed = roam[1]!.length;
+    return { query: roam[1]!, trigger: { mode: "target", start: cursor - typed, before: typed, after: 0 } };
+  }
+  return null;
+}
+
+// Cmd-R refers to something; Cmd-Shift-R makes the thing at the cursor
+// referable (tags it) and copies the reference to it.
+function runReferenceShortcut(event: KeyboardEvent): boolean {
+  if (!primaryMod(event) || event.altKey || event.ctrlKey || event.isComposing) return false;
+  if (!modal.hidden || !toolsPanel.hidden || !roamToolsPanel.hidden) return false;
+  if (event.key.toLowerCase() !== "r") return false;
+  event.preventDefault();
+  if (event.shiftKey) void tagOrCopyRef();
+  else openReferencePicker();
+  return true;
 }
 
 function runFindShortcut(event: KeyboardEvent): boolean {
@@ -9676,7 +9787,7 @@ function toolActions(): ToolAction[] {
     }] : []),
     ...(slideDeck?.isSlides() ? [{ id: "slides-mirror", group: "publish" as const, title: "Reveal mirror", detail: "Edit this note's .slides JavaScript mirror", run: () => void slideDeck?.openMirror() }] : []),
     { id: "toc", group: "view", title: "Page outline", detail: "Headings from the live CM6 index", run: togglePageOutline },
-    { id: "tag-ref", group: "writing", title: "Tag / copy reference", detail: "Equation tag, inline anchor, and reference copy", run: () => void tagOrCopyRef() },
+    { id: "tag-ref", group: "writing", title: "Tag / copy reference", detail: `Equation tag, inline anchor, and reference copy · ${primaryShortcut("⇧R")}`, run: () => void tagOrCopyRef() },
     { id: "format-copy", group: "writing", title: "Copy selection format", detail: "Activate one-shot Markdown format painter", disabled: currentReadOnly, run: () => captureFormatPainter("once") },
     { id: "format-copy-continuous", group: "writing", title: "Copy format continuously", detail: "Keep painting selections until canceled", disabled: currentReadOnly, run: () => captureFormatPainter("continuous") },
     { id: "format-apply", group: "writing", title: "Apply copied format", detail: formatPainterDetail(), disabled: currentReadOnly || !editor.getFormatPainterState(), run: applyFormatPainter },
@@ -9869,13 +9980,16 @@ function hideMathPreview(): void {
 }
 
 function hideSnippetPopup(): void {
+  if (completionRequestPending) clearCompletionCache();
   const wasVisible = !snippetPopup.hidden;
   snippetPopup.hidden = true;
   snippetPopupItems = [];
   snippetPopupIndex = 0;
   snippetDeleteBefore = 0;
   snippetRenderKey = "";
+  snippetRenderedIndex = -1;
   snippetPopupMatchKey = "";
+  snippetKeyboardPointerPosition = null;
   snippetPopupChooseHandler = null;
   if (wasVisible) repositionMathPreviewForCompletion();
 }
@@ -10194,11 +10308,6 @@ function pathCompletionPrefix(before: string): string {
   return prefix;
 }
 
-function roamCompletionPrefix(before: string): string | null {
-  const match = before.match(/(?:^|[\s([{"'=])roam:\/\/([^\s\])}"'`<>]*)$/i);
-  return match ? match[1] ?? "" : null;
-}
-
 function inlineTagCompletionPrefix(before: string): string | null {
   const match = before.match(/@@tag\[([^\]\n]*)$/);
   return match ? match[1] ?? "" : null;
@@ -10247,20 +10356,6 @@ function noteFromCompletionRef(ref: string): NoteSummary | undefined {
   return resolveHrefNote(ref) || resolveNoteRef(ref);
 }
 
-function tagCompletionContext(before: string): { note: NoteSummary; tagPrefix: string } | null {
-  const roamMatch = before.match(/(?:^|[\s([{"'=])roam:\/\/([^\s\])}"'`<>#]*)#([^\s\])}"'`<>]*)$/i);
-  if (roamMatch) {
-    const note = noteFromCompletionRef(roamMatch[1] ?? "");
-    if (note) return { note, tagPrefix: roamMatch[2] ?? "" };
-  }
-  const pathMatch = before.match(/(?:^|[\s([{"'=])((?:\.{1,2}\/|\.|[^\s\])}"'`<>#@]+)[^\s\])}"'`<>#@]*)#([^\s\])}"'`<>]*)$/);
-  if (pathMatch) {
-    const note = noteFromCompletionRef(pathMatch[1] ?? "");
-    if (note) return { note, tagPrefix: pathMatch[2] ?? "" };
-  }
-  return null;
-}
-
 function domCompletionParts(rawHref: string): { ref: string; parentSegments: string[]; domPrefix: string } | null {
   const clean = cleanHref(rawHref);
   if (!clean || clean.includes("#")) return null;
@@ -10295,15 +10390,6 @@ function domCompletionParts(rawHref: string): { ref: string; parentSegments: str
     parentSegments: endsAtSeparator ? segments : segments.slice(0, -1),
     domPrefix: endsAtSeparator ? "" : segments[segments.length - 1] || "",
   };
-}
-
-function domCompletionContext(before: string): { note: NoteSummary; domPrefix: string; parentSegments: string[] } | null {
-  const match = before.match(/(?:^|[\s([{"'=])((?:roam:\/\/|\.{1,2}\/|\.|[^\s()[\]{}"'`<>#]+)[^\s()[\]{}"'`<>#]*)$/i);
-  const parts = match ? domCompletionParts(match[1] ?? "") : null;
-  if (!parts) return null;
-  const note = noteFromCompletionRef(parts.ref);
-  if (!note) return null;
-  return { note, domPrefix: parts.domPrefix, parentSegments: parts.parentSegments };
 }
 
 async function matchingTagCompletions(note: NoteSummary, prefix: string): Promise<SnippetSummary[]> {
@@ -10403,24 +10489,6 @@ function matchingDomCompletions(note: NoteSummary, prefix: string, parentSegment
       source: domTargetPathLabel(target.labelPath) || note.path || note.file || canonicalRoamNoteId(note) || target.label,
     };
   });
-}
-
-async function matchingRoamCompletions(prefix: string): Promise<SnippetSummary[]> {
-  if (!roamFeaturesEnabled()) return [];
-  const needle = prefix.trim().toLowerCase();
-  try {
-    const result = await api.completions.roam(needle);
-    return (result.notes ?? []).map((note) => ({
-      key: note.title || note.id,
-      name: note.title || note.id,
-      body: `${encodeURIComponent(note.id || note.key)}`,
-      mode: "markdown-mode",
-      group: "roam",
-      source: note.path || note.id,
-    }));
-  } catch {
-    return [];
-  }
 }
 
 async function matchingInlineTagCompletions(prefix: string): Promise<SnippetSummary[]> {
@@ -10531,11 +10599,16 @@ async function matchingPathCompletions(prefix: string): Promise<SnippetSummary[]
 
 
 function renderSnippetPopup(prefix: string, rect: { left: number; top: number; bottom: number } | null): void {
-  const nextKey = `${prefix}\n${snippetPopupIndex}\n${snippetPopupItems.map((snippet) => `${snippet.mode}:${snippet.key}:${snippet.name}`).join("\n")}`;
+  // Selection is presentation state. Rebuilding the list for every arrow key
+  // makes the popup disappear for a frame and lets hover steal the new row.
+  const nextKey = snippetPopupItems.map((snippet) =>
+    `${snippet.id}:${snippet.kind}:${snippet.mode}:${snippet.group}:${snippet.key}:${snippet.name}:${snippet.description}:${snippet.source}:${snippet.body}`,
+  ).join("\n");
   if (!snippetPopup.hidden && snippetRenderKey === nextKey) {
+    snippetPopup.dataset.prefix = prefix;
     placeFloating(snippetPopup, rect);
     repositionMathPreviewForCompletion();
-    revealSnippetPopupActiveOption();
+    if (snippetRenderedIndex !== snippetPopupIndex) updateSnippetPopupActiveOption();
     return;
   }
   snippetRenderKey = nextKey;
@@ -10573,11 +10646,20 @@ function renderSnippetPopup(prefix: string, rect: { left: number; top: number; b
     button.addEventListener("mousedown", (event) => {
       event.preventDefault();
       snippetPopupIndex = index;
+      if (completionRequestPending) {
+        completionAcceptWhenReady = true;
+        updateSnippetPopupActiveOption();
+        return;
+      }
       chooseSnippetPopupItem();
     });
     // Do not let a popup appearing under a stationary pointer steal the
     // keyboard selection. A real pointer movement still selects the row.
-    button.addEventListener("pointermove", () => {
+    button.addEventListener("pointermove", (event) => {
+      // A popup moving under a stationary pointer is not a mouse selection.
+      const anchor = snippetKeyboardPointerPosition;
+      if (anchor && event.clientX === anchor.x && event.clientY === anchor.y) return;
+      snippetKeyboardPointerPosition = null;
       if (snippetPopupIndex === index) return;
       snippetPopupIndex = index;
       updateSnippetPopupActiveOption();
@@ -10586,6 +10668,7 @@ function renderSnippetPopup(prefix: string, rect: { left: number; top: number; b
   });
   snippetPopup.dataset.prefix = prefix;
   snippetPopup.setAttribute("aria-activedescendant", `aaronnote-snippet-option-${snippetPopupIndex}`);
+  snippetRenderedIndex = snippetPopupIndex;
   snippetPopup.hidden = false;
   placeFloating(snippetPopup, rect);
   repositionMathPreviewForCompletion();
@@ -10610,8 +10693,13 @@ function updateSnippetPopupActiveOption(): void {
     button.setAttribute("aria-selected", active ? "true" : "false");
   });
   snippetPopup.setAttribute("aria-activedescendant", `aaronnote-snippet-option-${snippetPopupIndex}`);
+  snippetRenderedIndex = snippetPopupIndex;
   revealSnippetPopupActiveOption();
 }
+
+document.addEventListener("pointermove", (event) => {
+  snippetPointerPosition = { x: event.clientX, y: event.clientY };
+}, { capture: true, passive: true });
 
 function showSnippetPopup(
   prefix: string,
@@ -10620,11 +10708,12 @@ function showSnippetPopup(
   rect: { left: number; top: number; bottom: number } | null,
   chooseHandler: ((snippet: SnippetSummary) => boolean) | null = null,
 ): void {
+  if (chooseHandler && completionRequestPending) clearCompletionCache();
   const matchKey = `${prefix}\n${items.map((snippet) => `${snippet.kind}:${snippet.mode}:${snippet.group}:${snippet.key}:${snippet.name}`).join("\n")}`;
   snippetDeleteBefore = deleteBefore;
   if (matchKey !== snippetPopupMatchKey) {
     snippetPopupIndex = 0;
-    snippetRenderKey = "";
+    snippetKeyboardPointerPosition = snippetPointerPosition;
   } else {
     snippetPopupIndex = Math.min(snippetPopupIndex, items.length - 1);
   }
@@ -10777,6 +10866,9 @@ function clearCompletionCache(): void {
   completionTimer.cancel();
   completionContextKey = "";
   completionPendingItems = null;
+  completionRequestPending = false;
+  completionAcceptWhenReady = false;
+  snippetPopup.removeAttribute("aria-busy");
 }
 
 function scheduleAsyncCompletion(
@@ -10791,6 +10883,7 @@ function scheduleAsyncCompletion(
     clearCompletionCache();
     return;
   }
+  if (contextKey === completionContextKey && completionRequestPending) return;
   // Same context: show cached result immediately, no new request needed.
   if (contextKey === completionContextKey && completionPendingItems !== null) {
     if (completionPendingItems.length > 0) {
@@ -10800,10 +10893,14 @@ function scheduleAsyncCompletion(
     }
     return;
   }
-  // A menu from the old cursor context must not remain actionable while a
-  // fresh request is pending. Its Tab handler may otherwise apply an old
-  // candidate to a new prefix (or fail after the menu was visibly offered).
-  hideSnippetPopup();
+  // Keep the menu mounted while the next result arrives. Old rows cannot be
+  // accepted against a new prefix; Tab waits for the current request instead.
+  completionRequestPending = true;
+  completionAcceptWhenReady = false;
+  if (!snippetPopup.hidden) {
+    snippetPopup.dataset.prefix = renderPrefix;
+    snippetPopup.setAttribute("aria-busy", "true");
+  }
   completionContextKey = contextKey;
   completionPendingItems = null;
   const run = completionEpoch.begin();
@@ -10812,21 +10909,44 @@ function scheduleAsyncCompletion(
   completionTimer.schedule(() => {
     void fetchFn().then((items) => {
       if (!run.current) return;
-      if (editor.view.state.selection.main.head !== requestSelection.head
+      if (!snippetCompletionArmed || !editorOwnsActiveSurface()
+        || editor.view.state.selection.main.head !== requestSelection.head
         || editor.view.state.selection.main.anchor !== requestSelection.anchor
         || editor.view.state.doc !== requestDoc) {
         clearCompletionCache();
+        hideSnippetPopup();
         return;
       }
+      const accept = completionAcceptWhenReady;
+      completionRequestPending = false;
+      completionAcceptWhenReady = false;
+      snippetPopup.removeAttribute("aria-busy");
       completionPendingItems = items;
       if (items.length > 0) {
-        showSnippetPopup(renderPrefix, items, deleteBefore, rect);
+        const selected = snippetPopup.hidden ? null : snippetPopupItems[snippetPopupIndex];
+        // CM6 may scroll the caret into view while the request is in flight.
+        // Use its current screen position, not the pre-request rectangle.
+        showSnippetPopup(renderPrefix, items, deleteBefore, editor.cursorContext(320).rect ?? rect);
+        if (selected) {
+          const retained = items.findIndex((item) => selected.id && item.id
+            ? item.id === selected.id
+            : item.group === selected.group && item.mode === selected.mode && item.key === selected.key);
+          if (retained >= 0) {
+            snippetPopupIndex = retained;
+            updateSnippetPopupActiveOption();
+          }
+        }
+        if (accept) chooseSnippetPopupItem();
       } else {
         hideSnippetPopup();
+        if (accept) runEditorTab(editor.view);
       }
     }).catch(() => {
       if (!run.current) return;
+      const accept = completionAcceptWhenReady;
+      clearCompletionCache();
       hideSnippetPopup();
+      if (accept) runEditorTab(editor.view);
     });
   });
 }
@@ -10897,18 +11017,24 @@ function updateSnippetPopup(
     return;
   }
 
-  const wikiContext = wikiLinkCompletionContext(ctx.before, ctx.after);
-  if (wikiContext) {
-    const renderPrefix = `[[${wikiContext.prefix}`;
-    scheduleAsyncCompletion(
-      `wiki:${wikiContext.hasClosingDelimiter ? "closed" : "open"}:${wikiContext.prefix}`,
-      renderPrefix,
-      wikiContext.prefix.length,
-      ctx.rect,
-      async () => wikiCompletionSnippets((await loadWikiCompletionIndex()).notes, wikiContext),
-    );
+  // A cursor click or navigation is not a completion trigger. This also
+  // covers the asynchronous wiki, path, tag and bibliography providers.
+  if (!snippetCompletionArmed) {
+    hideSnippetPopup();
+    clearCompletionCache();
     return;
   }
+
+  const typedReference = referenceTriggerAt(ctx.before, ctx.after);
+  if (typedReference) {
+    hideSnippetPopup();
+    clearCompletionCache();
+    if (typedReference.trigger.start !== dismissedReferenceTrigger && !referencePicker.isOpen()) {
+      openReferencePicker(typedReference.query, typedReference.trigger);
+    }
+    return;
+  }
+  dismissedReferenceTrigger = -1;
 
   // Link target completion ([...](here) or inline href position)
   const linkTarget = markdownInlineLinkTargetAtCursor();
@@ -10946,20 +11072,6 @@ function updateSnippetPopup(
       return;
     }
 
-    const roamLinkPrefix = targetPrefix.match(/^roam:\/\/(.*)$/i)?.[1];
-    if (roamLinkPrefix != null) {
-      if (!roamFeaturesEnabled()) { hideSnippetPopup(); clearCompletionCache(); return; }
-      const renderPrefix = `roam://${roamLinkPrefix}`;
-      scheduleAsyncCompletion(
-        `link-roam:${roamLinkPrefix}`,
-        renderPrefix,
-        roamLinkPrefix.length,
-        ctx.rect,
-        () => matchingRoamCompletions(roamLinkPrefix),
-      );
-      return;
-    }
-
     if (pathCompletionPrefix(` ${targetPrefix}`) === targetPrefix) {
       scheduleAsyncCompletion(
         `link-path:${currentFile}:${targetPrefix}`,
@@ -10973,30 +11085,6 @@ function updateSnippetPopup(
 
     hideSnippetPopup();
     clearCompletionCache();
-    return;
-  }
-
-  const domContext = domCompletionContext(ctx.before);
-  if (domContext) {
-    const renderPrefix = `@${domContext.domPrefix}`;
-    if (renderPrefix === snippetSuppressedPrefix) { hideSnippetPopup(); clearCompletionCache(); return; }
-    const matches = matchingDomCompletions(domContext.note, domContext.domPrefix, domContext.parentSegments);
-    if (matches.length === 0) { hideSnippetPopup(); clearCompletionCache(); return; }
-    clearCompletionCache();
-    showSnippetPopup(renderPrefix, matches, domContext.domPrefix.length, ctx.rect);
-    return;
-  }
-
-  const tagContext = tagCompletionContext(ctx.before);
-  if (tagContext) {
-    const renderPrefix = `#${tagContext.tagPrefix}`;
-    scheduleAsyncCompletion(
-      `tag:${tagContext.note.file}:${tagContext.tagPrefix}`,
-      renderPrefix,
-      tagContext.tagPrefix.length,
-      ctx.rect,
-      () => matchingTagCompletions(tagContext.note, tagContext.tagPrefix),
-    );
     return;
   }
 
@@ -11039,20 +11127,6 @@ function updateSnippetPopup(
     return;
   }
 
-  const roamPrefix = roamCompletionPrefix(ctx.before);
-  if (roamPrefix !== null) {
-    if (!roamFeaturesEnabled()) { hideSnippetPopup(); clearCompletionCache(); return; }
-    const renderPrefix = `roam://${roamPrefix}`;
-    scheduleAsyncCompletion(
-      `roam:${roamPrefix}`,
-      renderPrefix,
-      roamPrefix.length,
-      ctx.rect,
-      () => matchingRoamCompletions(roamPrefix),
-    );
-    return;
-  }
-
   const depRefContext = depRefCompletionContext(ctx.before);
   if (depRefContext) {
     const { prefix: depRefPrefix, quoted } = depRefContext;
@@ -11090,7 +11164,6 @@ function updateSnippetPopup(
     hideSnippetPopup();
     return;
   }
-  if (!snippetCompletionArmed && snippetPopup.hidden) return;
   const mode = snippetContextMode(ctx, activeMath === undefined ? mathAtCursor(ctx) : activeMath);
   const matches = matchingSnippets(prefix, mode, ctx);
   if (matches.length === 0) {
@@ -11103,6 +11176,7 @@ function updateSnippetPopup(
 function chooseSnippetPopupItem(): boolean {
   const snippet = snippetPopupItems[snippetPopupIndex];
   if (!snippet) return false;
+  snippetCompletionArmed = false;
   const chooseHandler = snippetPopupChooseHandler;
   if (chooseHandler) {
     hideSnippetPopup();
@@ -11127,11 +11201,7 @@ function chooseSnippetPopupItem(): boolean {
   const deleteBefore = snippetDeleteBefore;
   hideSnippetPopup();
   snippetSuppressedPrefix = "";
-  const inserted = insertSnippet(snippet, deleteBefore);
-  if (inserted && snippet.provider === "wiki-create") {
-    void openWikiPageCreation(String(snippet.source || snippet.key || "").trim());
-  }
-  return inserted;
+  return insertSnippet(snippet, deleteBefore);
 }
 
 function acceptSnippetPopupItem(): boolean {
@@ -11148,26 +11218,40 @@ function applySnippetPopupKeyAction(action: ReturnType<typeof snippetPopupKeyAct
   switch (action.type) {
     case "move":
       snippetPopupIndex = (snippetPopupIndex + action.delta + snippetPopupItems.length) % snippetPopupItems.length;
+      snippetKeyboardPointerPosition = snippetPointerPosition;
       updateSnippetPopupActiveOption();
       return true;
     case "page":
       snippetPopupIndex = ((snippetPopupIndex + action.delta) % snippetPopupItems.length + snippetPopupItems.length) % snippetPopupItems.length;
+      snippetKeyboardPointerPosition = snippetPointerPosition;
       updateSnippetPopupActiveOption();
       return true;
     case "edge":
       snippetPopupIndex = action.edge === "first" ? 0 : snippetPopupItems.length - 1;
+      snippetKeyboardPointerPosition = snippetPointerPosition;
       updateSnippetPopupActiveOption();
       return true;
     case "accept":
+      if (completionRequestPending && editorOwnsActiveSurface()) {
+        completionAcceptWhenReady = true;
+        return true;
+      }
       return acceptSnippetPopupItem();
     case "consume":
       return true;
     case "select":
       if (action.index < 0 || action.index >= snippetPopupItems.length) return false;
       snippetPopupIndex = action.index;
+      if (completionRequestPending && editorOwnsActiveSurface()) {
+        completionAcceptWhenReady = true;
+        updateSnippetPopupActiveOption();
+        return true;
+      }
       return chooseSnippetPopupItem();
     case "dismiss":
       snippetSuppressedPrefix = snippetPopup.dataset.prefix ?? "";
+      snippetCompletionArmed = false;
+      clearCompletionCache();
       hideSnippetPopup();
       return true;
     case "none":
@@ -11821,6 +11905,19 @@ function recoverFromStaleHostPause(event: Event): void {
   if (!pauseReasons.has("host") || !provesHostInputFocus(event)) return;
   setPausedReason("host", false);
   rendererActivity.notifyActivity();
+  reportInputFocusToHost(true);
+}
+
+/**
+ * Correct Emacs' belief that this pane is in the background.  Refused pauses
+ * can repeat while Emacs runs commands elsewhere, so they are reported at
+ * most once a second; a recovery from an applied pause always is.
+ */
+let lastInputFocusReport = 0;
+function reportInputFocusToHost(force = false): void {
+  const now = Date.now();
+  if (!force && now - lastInputFocusReport < 1000) return;
+  lastInputFocusReport = now;
   void api.emacs.inputFocus({ client: currentClient, file: currentFile });
 }
 for (const type of hostInputFocusEventTypes) {
@@ -11946,6 +12043,9 @@ function runHostKey(body: Record<string, unknown>): boolean {
   if (modeBeforeReplay === "insert"
       && text !== null
       && editor.view.state.doc === documentBeforeReplay) {
+    // A host-replayed key has no native beforeinput event, which normally
+    // starts the completion session for physical typing.
+    if (text && text !== "\t") snippetCompletionArmed = true;
     runEditorTextInput(editor.view, text);
   }
   restoreEditorFocusAfterCommand(editor);
@@ -12102,6 +12202,12 @@ function runHostCommand(detail: unknown): boolean {
     case "key":
       return runHostKey(body as Record<string, unknown>);
     case "pause":
+      // A pause that finds the user in this pane is stale; tell Emacs who
+      // holds the input instead of dropping the caret under their hands.
+      if (holdsInputAgainstHostPause()) {
+        reportInputFocusToHost();
+        return true;
+      }
       setPausedReason("host", true);
       return true;
     case "resume":
@@ -12204,6 +12310,14 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     case "find":
       openFindPanel();
+      return true;
+    case "tag-reference":
+    case "tag-ref":
+      void tagOrCopyRef();
+      return true;
+    case "reference":
+    case "insert-reference":
+      openReferencePicker(String(body.value || body.text || ""));
       return true;
     case "knowledge-search":
     case "search-notes":
@@ -12582,9 +12696,6 @@ document.addEventListener("keydown", (event) => {
   // Native widget editors are deliberately outside the document's Vim and
   // authoring-shortcut pipeline, regardless of the current document mode.
   if (eventTargetsNativeWidgetInput(event.target)) return;
-  if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key.length !== 1 && event.key !== "Tab") {
-    snippetCompletionArmed = false;
-  }
   // The editor's xwidget arrow-key guard runs in capture phase.  In Reveal it
   // must yield before that guard so Reveal receives arrows, PageUp/PageDown,
   // Home/End, Space and Escape.  Cmd-/ remains the way back to editing.
@@ -12593,6 +12704,10 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (runFindShortcut(event)) {
+    event.stopPropagation();
+    return;
+  }
+  if (runReferenceShortcut(event)) {
     event.stopPropagation();
     return;
   }
@@ -12629,6 +12744,11 @@ document.addEventListener("keydown", (event) => {
   if (handleSnippetPopupKey(event)) {
     event.stopPropagation();
     return;
+  }
+  // A navigation key moves the caret only when the completion menu did not
+  // claim it. Cancel automatic completion before CM6 changes the selection.
+  if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key.length !== 1 && event.key !== "Tab") {
+    snippetCompletionArmed = false;
   }
   const texBracketDirection = !event.defaultPrevented
     && vim.mode() === "insert"
@@ -12750,9 +12870,13 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 }, true);
-host.addEventListener("mouseup", () => {
-  if (snippetPopup.hidden) snippetCompletionArmed = false;
-});
+host.addEventListener("pointerdown", (event) => {
+  if (!(event.target instanceof Node) || !editor.view.dom.contains(event.target)) return;
+  snippetPointerPosition = { x: event.clientX, y: event.clientY };
+  snippetCompletionArmed = false;
+  hideSnippetPopup();
+  clearCompletionCache();
+}, { capture: true });
 host.addEventListener("click", (event) => {
   const target = event.target instanceof Element
     ? event.target.closest(".cm-prose-diagnostic")
@@ -12809,6 +12933,14 @@ document.addEventListener("beforeinput", (event) => {
   })) return;
   if (eventTargetsNativeWidgetInput(event.target)) return;
   const ie = event as InputEvent;
+  // Outside insert mode an input method must not write into the note.  The
+  // key itself is already swallowed by Vim; this stops what the input method
+  // commits on its own (WebKit reports it as insertFromComposition).
+  if (vim.mode() !== "insert" && (ie.isComposing || /Composition/.test(ie.inputType || ""))
+      && editor.view.dom.contains(event.target as Node | null)) {
+    event.preventDefault();
+    return;
+  }
   if (ie.inputType === "insertText" && ie.data && ie.data !== "\t") {
     snippetCompletionArmed = true;
   }
@@ -12902,6 +13034,16 @@ window.addEventListener("resize", () => {
   liveTexPreview?.refreshLayout();
   scheduleAssistUpdate({ mathPreview: true, cursor: true, selectionTool: !selectionTool.hidden });
 });
+for (const type of ["wheel", "touchmove"] as const) {
+  window.addEventListener(type, (event) => {
+    const target = event.target;
+    if (target === window || target === document
+      || target === document.body || target === document.documentElement
+      || (target instanceof Node && host.contains(target))) {
+      lastUserEditorScrollAt = performance.now();
+    }
+  }, { capture: true, passive: true });
+}
 window.addEventListener("scroll", (event) => {
   const target = event.target;
   const editorViewportScrolled = target === document
@@ -12909,12 +13051,20 @@ window.addEventListener("scroll", (event) => {
     || (target instanceof Node && host.contains(target));
   if (!editorViewportScrolled) return;
   mathPreviewGeometryEpoch++;
-  // A fixed formula/snippet/selection surface chasing an inertial scroll has
-  // to read caret geometry and write overlay styles every frame. In WebKit it
-  // also feeds back into CM6 measurement, visibly pulling the document in the
-  // opposite direction. Viewport movement closes transient editing aids; the
-  // next real cursor/input action may open them again at fresh coordinates.
-  transientSurfaces.close(["snippet-popup", "math-preview", "prose-popover", "context-menu"], "viewport");
+  // CM6 also emits scroll while revealing the caret after typing. Only a
+  // wheel/touch scroll ends the completion session; caret reveal relocates it.
+  const keepCompletion = snippetCompletionArmed && editorOwnsActiveSurface()
+    && (!snippetPopup.hidden || completionRequestPending)
+    && performance.now() - lastUserEditorScrollAt > 350;
+  transientSurfaces.close(keepCompletion
+    ? ["prose-popover", "context-menu"]
+    : ["snippet-popup", "math-preview", "prose-popover", "context-menu"], "viewport");
+  if (keepCompletion) {
+    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+  } else {
+    snippetCompletionArmed = false;
+    clearCompletionCache();
+  }
   // A half-typed revision is real editing work, not a transient hint: follow
   // its anchor through the scroll instead of throwing the form away.
   if (revisionFormAnchor) updateSelectionTool();
@@ -12973,14 +13123,27 @@ editor.view.dom.addEventListener("aaronnote-edit-revision", (event) => {
 
 findInput.addEventListener("input", () => refreshFind(findInput.value, false));
 findInput.addEventListener("keydown", (event) => {
+  // Enter and Escape that an input method takes confirm or cancel its
+  // candidate; they are not the panel's.
+  if (event.isComposing || event.keyCode === 229) return;
   if (event.key === "Escape") {
     event.preventDefault();
+    // Cancelling a Vim search returns to where it started.
+    const origin = findOpenedFromVim ? findVimOrigin : null;
     closeFindPanel();
+    if (origin != null && vim.mode() !== "insert") {
+      editor.setMarkdownSelection(Math.min(origin, editor.getMarkdownLength()));
+      vim.syncSelectionFromEditor();
+    }
     return;
   }
   if (event.key === "Enter") {
     event.preventDefault();
     refreshFind(findInput.value, true);
+    if (findOpenedFromVim && !event.shiftKey) {
+      closeFindPanel();
+      return;
+    }
     gotoFindMatch(findIndex + (event.shiftKey ? -1 : 1));
   }
 });
@@ -13085,7 +13248,6 @@ window.addEventListener("beforeunload", () => {
   rendererActivity.destroy();
   focusQuiescence.destroy();
   vim.destroy();
-  imeCoalesceTimer.cancel();
   zoomController.destroy();
   writingStatsController?.destroy();
   flushCursorPositionKeepalive();

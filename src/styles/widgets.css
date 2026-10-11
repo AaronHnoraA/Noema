@@ -83,10 +83,26 @@
   white-space: break-spaces;
 }
 .cm-editor.cm-focused { outline: none; }
+/* One painter. `drawSelection` hides the browser's own highlight on editor
+ * lines and paints `.cm-selectionBackground`; styling `::selection` here as
+ * well showed every selection twice, in two shapes. */
 .cm-editor .cm-selectionBackground,
-.cm-editor.cm-focused .cm-selectionBackground,
-.cm-editor .cm-content ::selection {
+.cm-editor.cm-focused .cm-selectionBackground {
   background-color: var(--aaron-selection, rgb(49 70 94 / 48%)) !important;
+}
+/* CodeMirror takes the content box for the width of a selected line, and the
+ * page margin is padding on that box, so the full-line pieces of a selection
+ * reached into both margins. Clip the layer to the text column, measured by
+ * `selectionColumnClip`; its pieces are positioned from the scroller, hence
+ * the shift back. */
+.cm-editor .cm-selectionLayer {
+  left: var(--noema-selection-inset-left, 0px);
+  right: var(--noema-selection-inset-right, 0px);
+  bottom: 0;
+  overflow: clip;
+}
+.cm-editor .cm-selectionLayer > .cm-selectionBackground {
+  transform: translateX(calc(-1 * var(--noema-selection-inset-left, 0px)));
 }
 /* Let outer container scroll — no inner CM6 scrollbar */
 .cm-editor { height: auto; }
@@ -187,7 +203,14 @@
  * cursor is outside the mark's surrounding span. CM6 positions still
  * track it; arrow keys may briefly land on a hidden delim and the char
  * becomes visible as soon as the cursor enters the span. */
-.cm-editor .syntax-hidden { font-size: 0; }
+/* Hidden, but still measurable. At `font-size: 0` WebKit reports no client
+ * rect for the text, so `coordsAtPos` is null at the start of a line that
+ * opens with a hidden marker (every heading). A selection ending there then
+ * had no bottom edge, and `drawSelection` painted its middle block down to
+ * the layout limit: a second highlight far larger than the selection.
+ * `vertical-align: top` puts the sliver at the line's top, where the first
+ * visible character starts, instead of on the baseline. */
+.cm-editor .syntax-hidden { font-size: 0.01px; vertical-align: top; }
 .cm-editor .math-source-hidden { display: none; }
 
 /* Inline span styling — applied to whole parent span when cursor is outside.

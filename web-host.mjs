@@ -96,6 +96,7 @@ import {
 } from "./server/lib/kernel-knowledge-search.mjs";
 import { createKernelRelationshipOverlay } from "./server/lib/kernel-relationships.mjs";
 import { createKernelSupervisor } from "./server/lib/kernel-supervisor.mjs";
+import { writeHostDescriptor } from "./server/lib/host-descriptor.mjs";
 import { startNoteWatcher } from "./server/lib/watch.mjs";
 import { workAgendaPlanning } from "./shared/work-agenda.mjs";
 import { validateResearchNotebook } from "./server/lib/research-notebook.mjs";
@@ -230,7 +231,6 @@ import {
 import { openWikiGitUi, stopAllWikiGitUis } from "./server/lib/wiki-git-ui.mjs";
 import { knowledgeSearchResponse } from "./server/lib/knowledge-search.mjs";
 import { virtualReferencesPayload } from "./server/lib/virtual-references.mjs";
-import { createImeSwitcher } from "./server/lib/ime.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
 import { readJson, readText } from "./server/infrastructure/http-body.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
@@ -253,7 +253,6 @@ import {
   researchNotebookWatchFile,
 } from "./server/lib/research-watch.mjs";
 
-const ime = createImeSwitcher();
 import { runtimeMkdtemp, sweepRuntimeTmp } from "./server/lib/tmp.mjs";
 import { createJupyterCellService, readPersistedScriptCell } from "./server/lib/jupyter-cell.mjs";
 import { authorizedWorkspaceEnvironment } from "./server/lib/workspace-env.mjs";
@@ -1608,6 +1607,22 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
 }
 process.on("SIGTERM", () => beginShutdown({ reason: "SIGTERM", exitCode: 0, deadlineMs: 30_000 }));
 process.on("SIGINT", () => beginShutdown({ reason: "SIGINT", exitCode: 0 }));
+// Emacs hangs up its subprocesses as it exits; the default action would end
+// the host mid-shutdown and leave its kernel running.
+process.on("SIGHUP", () => beginShutdown({ reason: "SIGHUP", exitCode: 0, deadlineMs: 30_000 }));
+
+// The process that started the host owns it. A host that outlives a crashed
+// or force-quit owner would keep its port, kernels and agents forever.
+const ownerPid = Number(process.env.NOEMA_HOST_OWNER_PID || 0);
+if (Number.isInteger(ownerPid) && ownerPid > 1) {
+  setInterval(() => {
+    try {
+      process.kill(ownerPid, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") beginShutdown({ reason: `owner ${ownerPid} exited`, exitCode: 0 });
+    }
+  }, 5000).unref();
+}
 process.on("exit", () => kernelSupervisor?.forceCloseSync());
 
 const MIME = {
@@ -2674,7 +2689,6 @@ const apiRouter = new ApiRouter().register({
     probeLanguageTool,
     broadcast,
   }),
-  "aaronnote:api:ime:vim-mode": (body) => ime.vimMode(String(body?.mode || "")),
   "aaronnote:api:shell:show-in-folder": (file) => showInFolder(file),
   "aaronnote:api:shell:open-path": (file) => openPath(file),
   "aaronnote:api:shell:open-directory": (body) => openDirectory(body),
@@ -3385,9 +3399,6 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     copilot: {
       request: function(action, body) { return call("aaronnote:api:copilot:request", [String(action || ""), body || {}]); }
     },
-    ime: {
-      vimMode: function(mode) { return call("aaronnote:api:ime:vim-mode", [{ mode: String(mode || "") }]); }
-    },
     config: {
       katexMacros: function() { return call("aaronnote:api:config:katex-macros", []); },
       app: function() { return call("aaronnote:api:config:app", []); },
@@ -4031,5 +4042,12 @@ if (hostMode !== "server") {
 server.listen(bindPort, bindHost, () => {
   const port = server.address().port;
   process.stderr.write(`[aaronnote-web] http://${bindHost}:${port}\n`);
+  if (hostMode !== "server") {
+    try {
+      writeHostDescriptor(stateRoot, { url: `http://${bindHost}:${port}`, noteRoot });
+    } catch (error) {
+      process.stderr.write(`[aaronnote-web] host descriptor update failed: ${error?.message || error}\n`);
+    }
+  }
   if (hostMode === "emacs") connectGateway(port);
 });

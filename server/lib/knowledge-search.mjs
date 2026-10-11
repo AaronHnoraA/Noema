@@ -111,7 +111,20 @@ function fuzzyTitleSuggestions(index, query, limit) {
     .map(({ note, distance }) => ({ ...note, score: 100 - distance * 20, reasons: ["spelling suggestion"], resultKind: "note" }));
 }
 
+// Why a page is in the list, in the words the result list shows.
+function matchReasons(item, lexicalResult) {
+  if (item.matchedTerms?.length) return [`partial match: ${item.matchedTerms.slice(0, 4).join(", ")}`];
+  if (item.matchKind === "alias" || (item.matchKind === "exact" && item.via)) return [`alias: ${item.via}`];
+  if (item.matchKind === "path") return [`file: ${item.via}`];
+  if (item.matchKind === "fuzzy") return [item.via ? `similar to ${item.via}` : "similar title"];
+  if (item.matchKind === "corrected") return [`corrected: ${lexicalResult?.corrected?.to || ""}`.trim()];
+  return [];
+}
+
 export function knowledgeSearchResponse(index, body, lexicalResult) {
+  // A reference lookup is the kernel's answer as it is: its items are not
+  // pages to rank, facet or annotate.
+  if (lexicalResult?.type === "wiki-references") return lexicalResult;
   const query = String(body?.query || body?.q || "").normalize("NFKC").trim();
   const mode = ["suggest", "related"].includes(String(body?.mode || "")) ? String(body.mode) : "results";
   const recommendation = mode === "related" || (!query && mode === "suggest");
@@ -120,7 +133,7 @@ export function knowledgeSearchResponse(index, body, lexicalResult) {
     : (lexicalResult?.items || []).map((item) => ({
       ...item,
       score: Math.max(0, -Number(item.rank || 0)),
-      reasons: item.matchedTerms?.length ? [`partial match: ${item.matchedTerms.slice(0, 4).join(", ")}`] : [],
+      reasons: matchReasons(item, lexicalResult),
       resultKind: "note",
     }));
   if (!recommendation && mode === "suggest" && items.length === 0) {
@@ -136,6 +149,12 @@ export function knowledgeSearchResponse(index, body, lexicalResult) {
     items,
     total: recommendation ? items.length : Number(lexicalResult?.total || items.length),
     nextCursor: recommendation ? null : lexicalResult?.nextCursor ?? null,
+    // What the kernel understood, the words it replaced, and the page the
+    // query would name if it were created.
+    explain: recommendation ? [] : lexicalResult?.explain || [],
+    ...(!recommendation && lexicalResult?.corrected ? { corrected: lexicalResult.corrected } : {}),
+    ...(!recommendation && lexicalResult?.create ? { create: lexicalResult.create } : {}),
+    source: recommendation ? "host-recommendation" : String(lexicalResult?.source || "host-wiki"),
     facets: {
       tags: facet(items, (item) => item.tags || []),
       namespaces: facet(items, (item) => [item.qualifiedNamespace || item.namespace]),

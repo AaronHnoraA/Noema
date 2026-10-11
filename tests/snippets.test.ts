@@ -183,10 +183,14 @@ describe("aaronnote snippets", () => {
     }).prefix).toBe(String.raw`\frac`);
   });
 
-  test("snippet popup accepts Enter only for the math company surface", () => {
-    expect(snippetPopupKeyAction({ key: "Enter" })).toEqual({ type: "consume" });
+  test("snippet popup keeps navigation and acceptance on the active menu", () => {
+    expect(snippetPopupKeyAction({ key: "Enter" })).toEqual({ type: "accept" });
     expect(snippetPopupKeyAction({ key: "Enter", acceptEnter: true })).toEqual({ type: "accept" });
     expect(snippetPopupKeyAction({ key: "Tab" })).toEqual({ type: "accept" });
+    expect(snippetPopupKeyAction({ key: "ArrowDown" })).toEqual({ type: "move", delta: 1 });
+    expect(snippetPopupKeyAction({ key: "ArrowUp" })).toEqual({ type: "move", delta: -1 });
+    expect(snippetPopupKeyAction({ key: "PageDown" })).toEqual({ type: "page", delta: 6 });
+    expect(snippetPopupKeyAction({ key: "Escape" })).toEqual({ type: "dismiss" });
     expect(snippetPopupKeyAction({ key: "2", commandKey: true })).toEqual({ type: "select", index: 1 });
     expect(snippetPopupKeyAction({ key: "3", altKey: true })).toEqual({ type: "select", index: 2 });
     expect(snippetPopupKeyAction({ key: "0", commandKey: true })).toEqual({ type: "select", index: 9 });

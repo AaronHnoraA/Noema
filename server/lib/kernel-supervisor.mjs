@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 
 const LOOPBACK_KERNEL = /^http:\/\/127\.0\.0\.1:\d+$/;
@@ -8,9 +8,22 @@ export function mcpDescriptorPath(stateRoot) {
   return join(resolve(stateRoot), "mcp.json");
 }
 
-export function removeMcpDescriptor(stateRoot) {
+// The descriptor says where the kernel listens; Raycast and other local tools
+// read it.  Only its writer removes it: when the host is restarted, the old
+// process exits after the new one has written its own, and removing that left
+// a running kernel nobody outside could find.
+export function removeMcpDescriptor(stateRoot, ownerPid = 0) {
   if (!stateRoot) return;
-  try { unlinkSync(mcpDescriptorPath(stateRoot)); } catch (error) {
+  const target = mcpDescriptorPath(stateRoot);
+  if (ownerPid) {
+    try {
+      if (Number(JSON.parse(readFileSync(target, "utf8"))?.pid) !== Number(ownerPid)) return;
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      // An unreadable descriptor serves nobody; remove it below.
+    }
+  }
+  try { unlinkSync(target); } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
 }
@@ -224,7 +237,7 @@ export function createKernelSupervisor({
           ownedKernel: config.owned === true,
         });
       } else {
-        removeMcpDescriptor(stateRoot);
+        removeMcpDescriptor(stateRoot, supervisorPid);
       }
     } catch (error) {
       stderr.write(`[aaronnote-web] MCP descriptor update failed: ${error?.message || error}\n`);
@@ -509,12 +522,12 @@ export function createKernelSupervisor({
       wakeSleepers();
       await stopChild();
       await loopPromise;
-      try { removeMcpDescriptor(stateRoot); } catch {}
+      try { removeMcpDescriptor(stateRoot, supervisorPid); } catch {}
     },
     forceCloseSync() {
       closing = true;
       wakeSleepers();
-      try { removeMcpDescriptor(stateRoot); } catch {}
+      try { removeMcpDescriptor(stateRoot, supervisorPid); } catch {}
       const target = child;
       child = null;
       if (target) {

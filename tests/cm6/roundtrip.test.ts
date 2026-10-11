@@ -4960,19 +4960,20 @@ After`;
 
     editor.setMarkdownSelection(3);
     vim.setMode("normal");
+    // Leaving Insert steps one character left, typed in or not.
     expect(vim.handleKey({ key: "i" })).toBe(true);
     expect(vim.handleKey({ key: "Escape" })).toBe(true);
-    expect(editor.getMarkdownSelection().from).toBe(3);
+    expect(editor.getMarkdownSelection().from).toBe(2);
 
     expect(vim.handleKey({ key: "a" })).toBe(true);
-    expect(editor.getMarkdownSelection().from).toBe(4);
-    expect(vim.handleKey({ key: "Escape" })).toBe(true);
     expect(editor.getMarkdownSelection().from).toBe(3);
+    expect(vim.handleKey({ key: "Escape" })).toBe(true);
+    expect(editor.getMarkdownSelection().from).toBe(2);
 
     expect(vim.handleKey({ key: "I" })).toBe(true);
     expect(editor.getMarkdownSelection().from).toBe(2);
     expect(vim.handleKey({ key: "Escape" })).toBe(true);
-    expect(editor.getMarkdownSelection().from).toBe(2);
+    expect(editor.getMarkdownSelection().from).toBe(1);
 
     editor.setMarkdownSelection(3);
     expect(vim.handleKey({ key: "i" })).toBe(true);

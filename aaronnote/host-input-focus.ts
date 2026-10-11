@@ -106,6 +106,23 @@ export function hostInputFocusReleased(): boolean {
   return keyboardReleased;
 }
 
+/**
+ * Whether a host pause must be refused because the user is in this page.
+ *
+ * Emacs pauses a pane it believes is in the background, and pausing releases
+ * the editor's focus.  A click inside the WebKit view makes it first responder
+ * without Emacs selecting the surrounding window, so that pause can arrive
+ * just after the click: the caret appeared and then vanished, and nothing gave
+ * the focus back.  When Emacs really takes the keyboard it says so first
+ * (`releaseHostInputFocus`), and when another window or application takes it
+ * the page no longer has native focus; a pause that finds neither is stale.
+ */
+export function holdsInputAgainstHostPause(
+  doc: { hasFocus?: () => boolean } = document,
+): boolean {
+  return !keyboardReleased && typeof doc.hasFocus === "function" && doc.hasFocus();
+}
+
 export function provesHostInputFocus(event: Pick<Event, "type" | "isTrusted">): boolean {
   if (event.isTrusted !== true || !FOREGROUND_PROOF_EVENTS.has(event.type)) return false;
   if (event.type === "pointerdown") return true;

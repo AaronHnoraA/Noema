@@ -1,101 +1,105 @@
-import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
+import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 // @ts-ignore The search adapter is a Node ESM module outside the TS app graph.
 import { createKernelKnowledgeSearch, kernelLexicalSearchEligible } from "../server/lib/kernel-knowledge-search.mjs";
-
-const roots: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
-});
+// @ts-ignore
+import { knowledgeSearchResponse } from "../server/lib/knowledge-search.mjs";
 
 describe("data-kernel knowledge search", () => {
-  test("routes plain lexical queries but preserves Node-only query modes", () => {
+  test("every search is the kernel's; related pages and the empty suggestion are not searches", () => {
     expect(kernelLexicalSearchEligible({ query: "portable identity", mode: "suggest" })).toBe(true);
-    expect(kernelLexicalSearchEligible({ query: "" })).toBe(false);
+    expect(kernelLexicalSearchEligible({ query: "tag:design portable" })).toBe(true);
+    expect(kernelLexicalSearchEligible({ query: "-repo:private portable" })).toBe(true);
+    expect(kernelLexicalSearchEligible({ query: "" })).toBe(true);
+    expect(kernelLexicalSearchEligible({ query: "", mode: "suggest" })).toBe(false);
     expect(kernelLexicalSearchEligible({ query: "portable", mode: "related" })).toBe(false);
-    expect(kernelLexicalSearchEligible({ query: "tag:design portable" })).toBe(false);
-    expect(kernelLexicalSearchEligible({ query: "-repo:private portable" })).toBe(false);
   });
 
-  test("maps FTS5 box paths back to production WikiNote results", async () => {
-    const root = await mkdtemp(join(tmpdir(), "noema-kernel-search-"));
-    const noteFile = join(root, "nested", "identity.md");
-    roots.push(root);
-    await mkdir(join(root, "nested"), { recursive: true });
-    await writeFile(noteFile, "# Identity\n", "utf8");
-    const note = {
-      id: "019c3a56-87d4-7a4b-8a92-701f398eb702",
-      title: "Identity",
-      file: noteFile,
-      path: "nested/identity.md",
-      aliases: [],
-      tags: ["architecture"],
-      refs: [],
-      backlinks: [],
-    };
+  test("sends the whole request to the kernel and returns its answer", async () => {
+    let url = "";
     let requestBody: Record<string, unknown> = {};
+    const answer = {
+      ok: true, type: "wiki-search", source: "kernel-wiki", generation: "g1", total: 1, match: "full", nextCursor: null,
+      items: [{ id: "id-1", title: "Identity", matchKind: "fuzzy", excerpt: "Portable [[identity]] source" }],
+      explain: ['a word beginning "identty"'], corrected: { from: "identty", to: "identity" },
+    };
     const search = createKernelKnowledgeSearch({
       baseUrl: "http://127.0.0.1:6806/",
-      box: { id: "box-a", root },
-      fetchImpl: async (_url: string, init: RequestInit) => {
+      box: { id: "box-a", root: "/vault" },
+      fetchImpl: async (target: string, init: RequestInit) => {
+        url = target;
         requestBody = JSON.parse(String(init.body)) as Record<string, unknown>;
-        return new Response(JSON.stringify({
-          code: 0,
-          data: {
-            matchedBlockCount: 2,
-            matchedRootCount: 1,
-            blocks: [
-              { box: "other-box", path: "/nested/identity.md", content: "ignored" },
-              { box: "box-a", path: "/nested/identity.md", content: "Portable <mark>identity</mark> source" },
-            ],
-          },
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(JSON.stringify({ code: 0, data: answer }), { status: 200, headers: { "Content-Type": "application/json" } });
       },
     });
-
-    const result = await search({ generation: "g1", notes: [note] }, {
-      query: "identity",
-      limit: 8,
+    const result = await search({ generation: "g1", notes: [] }, {
+      query: "Math:identty tag:design", mode: "suggest", limit: 8, cursor: 16, namespace: "Math", sort: "recent",
+      allowedRepositoryIds: ["public/Math"],
     });
-
-    expect(requestBody).toMatchObject({
-      query: "identity",
-      page: 1,
-      pageSize: 8,
-      paths: ["box-a/"],
-      method: 0,
-      orderBy: 7,
+    expect(url).toBe("http://127.0.0.1:6806/api/noema/knowledge/search");
+    expect(requestBody).toEqual({
+      notebook: "box-a", query: "Math:identty tag:design", mode: "suggest", limit: 8, cursor: 16,
+      repositoryId: "", partition: "", namespace: "Math", sort: "recent", allowedRepositoryIds: ["public/Math"],
     });
-    expect(result).toMatchObject({
-      source: "kernel-fts5",
-      generation: "g1",
-      total: 1,
-      nextCursor: null,
-      items: [{ id: note.id, title: "Identity", excerpt: "Portable [[identity]] source" }],
+    expect(result).toEqual(answer);
+
+    // The host adds what its pages show and keeps what the kernel explained.
+    const response = knowledgeSearchResponse({ generation: "g1", notes: [] }, { query: "identty" }, result);
+    expect(response).toMatchObject({
+      type: "knowledge-search", total: 1, corrected: { from: "identty", to: "identity" },
+      explain: ['a word beginning "identty"'],
+      items: [{ id: "id-1", matchKind: "fuzzy", reasons: ["similar title"] }],
     });
   });
 
-  test("does not expose indexed paths missing from the production catalog", async () => {
-    const root = await mkdtemp(join(tmpdir(), "noema-kernel-search-catalog-"));
-    roots.push(root);
+  test("a reference lookup carries its note and comes back untouched", async () => {
+    let requestBody: Record<string, unknown> = {};
+    const answer = { ok: true, type: "wiki-references", source: "kernel-wiki", scope: "here", total: 1,
+      items: [{ kind: "heading", label: "Setup", insert: "[Setup](#setup)" }], explain: [] };
     const search = createKernelKnowledgeSearch({
-      baseUrl: "http://127.0.0.1:6806",
-      box: { id: "box-a", root },
-      fetchImpl: async () => new Response(JSON.stringify({
-        code: 0,
-        data: {
-          matchedBlockCount: 1,
-          matchedRootCount: 1,
-          blocks: [{ box: "box-a", path: "/not-in-catalog.md", content: "private" }],
-        },
-      }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      baseUrl: "http://127.0.0.1:6806", box: { id: "box-a", root: "/vault" },
+      fetchImpl: async (_target: string, init: RequestInit) => {
+        requestBody = JSON.parse(String(init.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({ code: 0, data: answer }), { status: 200 });
+      },
     });
+    const body = { query: "set", mode: "references", file: "/vault/n.md", content: "# Setup\n" };
+    expect(kernelLexicalSearchEligible(body)).toBe(true);
+    const result = await search({}, body);
+    expect(requestBody).toMatchObject({ mode: "references", file: "/vault/n.md", content: "# Setup\n" });
+    expect(knowledgeSearchResponse({ notes: [] }, body, result)).toBe(result);
 
-    const result = await search({ generation: "g1", notes: [] }, { query: "private" });
-    expect(result.items).toEqual([]);
+    // An empty lookup is still the kernel's: it lists this page.
+    expect(kernelLexicalSearchEligible({ query: "", mode: "references" })).toBe(true);
+    const down = createKernelKnowledgeSearch({
+      baseUrl: "http://127.0.0.1:6806", box: { id: "box-a", root: "/vault" },
+      fetchImpl: async () => { throw new Error("down"); },
+    });
+    expect(await down({}, body)).toMatchObject({ ok: false, type: "wiki-references", items: [] });
+  });
+
+  test("a kernel that cannot answer falls back to the host's search and says so", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-kernel-search-"));
+    try {
+      const failures: unknown[] = [];
+      for (const fetchImpl of [
+        async () => { throw new Error("connect ECONNREFUSED"); },
+        async () => new Response("not found", { status: 404 }),
+        async () => new Response(JSON.stringify({ code: -1, msg: "notebook is required" }), { status: 200 }),
+      ]) {
+        const search = createKernelKnowledgeSearch({
+          baseUrl: "http://127.0.0.1:6806", box: { id: "box-a", root }, fetchImpl,
+          onFallback: (error: unknown) => failures.push(error),
+        });
+        const result = await search({}, { query: "anything" });
+        expect(result).toMatchObject({ ok: true, type: "wiki-search", source: "host-wiki-fallback", items: [], total: 0 });
+      }
+      expect(failures).toHaveLength(3);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

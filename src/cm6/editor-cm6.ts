@@ -59,6 +59,7 @@ import {
 } from "../paste.ts";
 import { adaptPasteText, pasteTransactionSpec } from "./paste-context.ts";
 import { joinTypingEvent, lastEditKindField } from "./history-grouping.ts";
+import { selectionColumnClip } from "./selection-column-clip.ts";
 import { exitFencedCode } from "./code-block-input.ts";
 import { renderMarkdownHTML } from "../render-html.ts";
 import {
@@ -837,6 +838,10 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
         const source = getMarkdown();
         const nextDocumentKey = currentDocumentKey();
         if (setOptions.preserveView && nextDocumentKey === activeDocumentKey) {
+          // A reload that finds the text already on screen (a reconnect, a
+          // save from another pane that carried no change) replaces nothing,
+          // so the undo history is still the history of this text.
+          if (md === source) return;
           const selection = EditorSelection.create(
             view.state.selection.ranges.map((range) => {
               const anchorAssoc = range.empty ? range.assoc : range.anchor <= range.head ? -1 : 1;
@@ -1332,6 +1337,7 @@ function buildExtensions(
     EditorView.clickAddsSelectionRange.of((event) => event.altKey || event.metaKey || event.ctrlKey),
     ...(standalone ? [
       drawSelection({ cursorBlinkRate: -1 }),
+      selectionColumnClip,
       lastEditKindField,
       standaloneHistory,
     ] : []),

@@ -1,5 +1,5 @@
 import type { Editor } from "../src/lib.ts";
-import type { VimLiteController } from "./vim-lite.ts";
+import { inputMethodKey, type VimLiteController } from "./vim-lite.ts";
 import {
   runEditorDelete,
   runEditorEnter,
@@ -89,6 +89,8 @@ const XWIDGET_SHIFT_TAB_KEYS = new Set(["Backtab", "ISO_Left_Tab", "Shift-Tab"])
 const DUPLICATE_BEFOREINPUT_MS = 80;
 const MODE_ENTRY_BEFOREINPUT_MS = 25;
 let lastHandledKeydown: { editor: Editor; key: string; at: number; enteredInsert: boolean } | null = null;
+/** The last key an input method took outside Insert; its text must not run as a command. */
+let lastInputMethodKeydown: { editor: Editor; at: number } | null = null;
 type MathBeforeInputExpectation = {
   editor: Editor;
   at: number;
@@ -277,6 +279,12 @@ function recentlyHandledKeydown(editor: Editor, key: string): boolean {
       && lastHandledKeydown.key === key
       && nowMs() - lastHandledKeydown.at < DUPLICATE_BEFOREINPUT_MS,
   );
+}
+
+function recentInputMethodKeydown(editor: Editor): boolean {
+  return Boolean(lastInputMethodKeydown
+    && lastInputMethodKeydown.editor === editor
+    && nowMs() - lastInputMethodKeydown.at < DUPLICATE_BEFOREINPUT_MS);
 }
 
 function recentlyEnteredInsertWithKey(editor: Editor, key: string): boolean {
@@ -533,7 +541,29 @@ export function handleXwidgetControlKeydown(
   return true;
 }
 
+/**
+ * Whether EVENT is a key an input method has taken while the document is in
+ * Normal or Visual mode.  It is checked before the composition test of
+ * `shouldHandleXwidgetVimKey`: a composing key is exactly what must not pass.
+ */
+function inputMethodKeyOutsideInsert(event: KeyboardEvent, context: XwidgetKeyContext): boolean {
+  if (context.enabled === false || context.vim.mode() === "insert" || event.defaultPrevented) return false;
+  if (event.key === "Escape" || (event.ctrlKey && event.key === "[")) return false;
+  if (!inputMethodKey(event)) return false;
+  if (isTextEditingTarget(event.target, context.editorHost)) return false;
+  if (isTextEditingTarget(document.activeElement, context.editorHost)) return false;
+  return eventOwnedByEditor(event, context.editorHost, context.allowDetachedTarget !== false);
+}
+
 export function handleXwidgetVimKeydown(event: KeyboardEvent, context: XwidgetKeyContext): boolean {
+  // With an input method on, a key outside Insert is neither a command nor
+  // text: running `j` while Pinyin also composes "j" leaves two states that
+  // disagree.  Swallow it here, ahead of every command path.
+  if (inputMethodKeyOutsideInsert(event, context)) {
+    hardStop(event);
+    lastInputMethodKeydown = { editor: context.editor, at: nowMs() };
+    return true;
+  }
   if (!shouldHandleXwidgetVimKey(event, context)) return false;
   const key = normalizedEditorKey(event);
   const beforeMode = context.vim.mode();
@@ -601,6 +631,9 @@ export function handleXwidgetVimBeforeInput(event: InputEvent, context: XwidgetK
   if (!shouldHandleXwidgetVimKey(event, context)) return false;
   if (!event.inputType.startsWith("insert") || typeof event.data !== "string" || event.data.length === 0) return false;
   hardStop(event);
+  // What an input method writes outside Insert (full-width punctuation, or the
+  // letter of a key it took) is dropped, not read back as a Vim key.
+  if (inputMethodKey({ key: event.data }) || recentInputMethodKeydown(context.editor)) return true;
   if (event.data.length === 1) {
     if (recentlyHandledKeydown(context.editor, event.data)) lastHandledKeydown = null;
     else {

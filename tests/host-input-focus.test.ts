@@ -1,5 +1,6 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import {
+  holdsInputAgainstHostPause,
   hostInputFocusEventTypes,
   hostInputFocusReleased,
   provesHostInputFocus,
@@ -108,5 +109,26 @@ describe("Emacs xwidget input-focus recovery", () => {
     expect(hostOwnedKeyFromEvent(new KeyboardEvent("keydown", { key: "Shift" }))).toBeNull();
     expect(hostOwnedKeyFromEvent(new KeyboardEvent("keydown", { key: "a", isComposing: true }))).toBeNull();
     expect(hostOwnedKeyFromEvent(new KeyboardEvent("keydown", { key: "F5" }))).toEqual({ key: "<f5>" });
+  });
+});
+
+// A click inside the WebKit view does not select the Emacs window, so Emacs
+// could pause the pane just clicked; pausing releases the editor's focus, and
+// the caret that had appeared vanished.
+describe("a host pause while the user is in the page", () => {
+  test("is refused only while the page holds the native keyboard and Emacs has not taken it", () => {
+    try {
+      reclaimHostInputFocus();
+      expect(holdsInputAgainstHostPause({ hasFocus: () => true })).toBe(true);
+      // Another window or application has the keyboard: the pause is real.
+      expect(holdsInputAgainstHostPause({ hasFocus: () => false })).toBe(false);
+      // A host without the focus query cannot prove anything.
+      expect(holdsInputAgainstHostPause({})).toBe(false);
+      // Emacs announced that it took the keyboard: the pause is real.
+      releaseHostInputFocus();
+      expect(holdsInputAgainstHostPause({ hasFocus: () => true })).toBe(false);
+    } finally {
+      reclaimHostInputFocus();
+    }
   });
 });

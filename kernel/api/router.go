@@ -153,6 +153,7 @@ func ServeAPI(ginServer *gin.Engine) {
 	ginServer.Handle("POST", "/api/noema/markdown/virtualReferences", model.CheckAuth, listMarkdownVirtualReferences)
 	ginServer.Handle("POST", "/api/noema/markdown/registerExternalBox", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, registerExternalMarkdownBox)
 	ginServer.Handle("POST", "/api/noema/markdown/listExternalBoxes", model.CheckAuth, listExternalMarkdownBoxes)
+	ginServer.Handle("POST", "/api/noema/knowledge/search", model.CheckAuth, noemaKnowledgeSearch)
 	ginServer.Handle("POST", "/api/noema/config/katexMacros", model.CheckAuth, loadNoemaKatexMacros)
 	ginServer.Handle("POST", "/api/noema/latex/preparePandoc", model.CheckAuth, prepareNoemaLatexPandoc)
 	ginServer.Handle("POST", "/api/noema/latex/extractMetadata", model.CheckAuth, extractNoemaLatexMetadata)
