@@ -299,7 +299,8 @@ and do not add a parallel browser or desktop workflow product.
 Existing lowercase `aaronnote` paths, `AARONNOTE_*` environment variables and
 API channels remain protocol compatibility contracts until separately
 migrated. They do not imply a second product host. The Emacs Lisp public
-surface uses `my/noema-*`; do not add new `my/aaronnote-*` aliases.
+implementation uses `my/noema-*`; the searchable `noema-*` menus own their
+Transient layouts directly. Do not add new `my/aaronnote-*` aliases.
 
 Chrome plus the Noema extension is an explicit external capture boundary, not
 a Noema UI. Public server pages are read-only publication surfaces, not an

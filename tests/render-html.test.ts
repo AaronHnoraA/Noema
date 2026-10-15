@@ -24,6 +24,27 @@ describe("shared markdown HTML renderer", () => {
     expect(renderMarkdownHTML("\\(x^2 + y^2\\) and \\(a_1 ~ b\\)")).not.toContain("<sup>");
   });
 
+  test("keeps source-newlined inline TeX inside one rendered paragraph", () => {
+    const html = renderMarkdownHTML("before \\(\nx+y\n\\) after");
+    const root = document.createElement("div");
+    root.innerHTML = html;
+    expect(root.querySelectorAll("p")).toHaveLength(1);
+    expect(root.querySelectorAll(".aaronnote-math-inline .katex")).toHaveLength(1);
+    expect(root.textContent).toContain("before");
+    expect(root.textContent).toContain("after");
+  });
+
+  test("renders aligned TeX as inline math inside a list item", () => {
+    const html = renderMarkdownHTML("- before \\(\n\\begin{aligned}x&=1\\\\y&=2\\end{aligned}\n\\) after");
+    const root = document.createElement("div");
+    root.innerHTML = html;
+    expect(root.querySelectorAll("li")).toHaveLength(1);
+    expect(root.querySelectorAll("li .aaronnote-math-inline .katex")).toHaveLength(1);
+    expect(root.querySelector("li .katex-display")).toBeNull();
+    expect(root.querySelector("li")?.textContent).toContain("before");
+    expect(root.querySelector("li")?.textContent).toContain("after");
+  });
+
   test("renders Noema inline syntax inside link text and emphasis without throwing", () => {
     // markdown-it validates link text by running every inline rule in its
     // no-output mode; a rule that matches there without advancing aborts the

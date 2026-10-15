@@ -5,6 +5,8 @@ import "./style.css";
 import "../src/styles/aaron-ui-tokens.css";
 import "../src/styles/aaron-ui-elegant.css";
 import "../src/styles/theme-loader.ts";
+import type { Text } from "@codemirror/state";
+import type { MathfieldElement } from "mathlive";
 
 import {
   createEditor,
@@ -27,10 +29,12 @@ import {
   formulaSourceRangeAtPosition,
   revealFormulaSource,
 } from "../src/cm6/extensions/visual/widgets/math.ts";
-import { getBlockMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
+import { getBlockMathRanges, getMultilineInlineMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
+import { scanCodeRanges } from "../src/cm6/code-ranges.ts";
 import {
   mountVisualTexDisplayEditor,
   mountVisualTexPreview,
+  applyVisualTexStyle,
   normalizeVisualTexLatex,
   setVisualTexDisplayLayout,
   visualTexDisplayLayout,
@@ -48,6 +52,7 @@ import { decodeRevisionAttribute, decodeRevisionContext } from "../src/authoring
 import { DEFAULT_REVISION_KIND, revisionKindIdOf, revisionKinds } from "../src/revision-kinds.ts";
 import { formatMathRenderError } from "../src/math-render.ts";
 import { mathPreviewFitScale } from "./math-preview-fit.ts";
+import { liveTexMatrixTemplate, liveTexPaletteBeforeInputKey, liveTexPaletteCategories, liveTexPaletteMatches, liveTexPaletteSourceTemplate, rebaseLiveTexPaletteRange, searchLiveTexPalette, type LiveTexPaletteItem } from "./live-tex-palette.ts";
 import { managedFormulaStyle, wrapManagedFormulaStyle, type ManagedFormulaStyle } from "./formula-style.ts";
 import { revealWhileLayoutSettles } from "./settled-reveal.ts";
 import { sameNoteFile } from "./same-note-file.ts";
@@ -127,6 +132,7 @@ import { setMeasuredWidgetObservationPaused } from "../src/cm6/extensions/visual
 import {
   createFocusQuiescenceController,
   editorTextFromKeydown,
+  normalizedEditorKey,
   replayEditorKeydown,
 } from "../src/cm6/focus-quiescence.ts";
 import { createRendererActivityGate, idleAssistAllowed, type RendererActivityState } from "../src/renderer-activity.ts";
@@ -1086,7 +1092,7 @@ liveTexStudio.innerHTML = `
         <button type="button" data-livetex-apply title="Apply formula" aria-label="Apply formula">✓</button>
       </div>
       <div class="aaronnote-livetex-head-actions">
-        <button type="button" data-livetex-close aria-label="Close LiveTeX">×</button>
+        <button type="button" data-livetex-close title="取消修改并关闭 LiveTeX" aria-label="取消修改并关闭 LiveTeX">×</button>
       </div>
     </header>
     <nav class="aaronnote-livetex-toolbar" aria-label="Visual formula tools">
@@ -1094,6 +1100,9 @@ liveTexStudio.innerHTML = `
         <span aria-hidden="true">{ }</span>
         <strong>可视化编辑</strong>
       </div>
+      <button type="button" class="aaronnote-livetex-keyboard" data-livetex-keyboard
+        title="点击输入公式符号与结构" aria-label="打开公式工具板" aria-expanded="false" aria-controls="aaronnote-livetex-palette">∑ 公式工具</button>
+      <button type="button" data-livetex-source title="在文档中编辑公式 LaTeX 源码">TeX 源码</button>
       <i aria-hidden="true"></i>
       <div class="aaronnote-livetex-view-actions" role="group" aria-label="Formula alignment">
         <button type="button" data-livetex-align="left" title="Align left">≡</button>
@@ -1111,6 +1120,40 @@ liveTexStudio.innerHTML = `
     <main class="aaronnote-livetex-stage" data-livetex-stage data-align="center">
       <div class="aaronnote-livetex-editor" data-livetex-editor data-aaronnote-vim="native" data-cm-visual-math="active"></div>
     </main>
+    <section class="aaronnote-livetex-palette" id="aaronnote-livetex-palette" data-livetex-palette role="dialog" aria-modal="false" aria-label="公式快速输入" hidden>
+      <div class="aaronnote-livetex-palette-head">
+        <div class="aaronnote-livetex-palette-tabs" data-livetex-palette-tabs role="tablist" aria-label="公式工具分类"></div>
+        <input type="search" class="aaronnote-livetex-palette-search" data-livetex-palette-search placeholder="搜索符号或 LaTeX 命令" aria-label="搜索公式工具" autocomplete="off" spellcheck="false" />
+        <button type="button" data-livetex-custom-toggle title="添加自己的公式模板">＋ 自定义</button>
+        <button type="button" data-livetex-palette-close aria-label="关闭公式工具板">×</button>
+      </div>
+      <div class="aaronnote-livetex-palette-help">Tab 切分类 · 方向键选符号 · Enter 插入 · 分类末尾 Tab / ⌘F 搜索 · Esc 返回编辑</div>
+      <form class="aaronnote-livetex-palette-custom" data-livetex-custom-form hidden>
+        <input name="name" maxlength="36" placeholder="名称，例如 傅里叶变换" aria-label="自定义公式名称" required />
+        <input name="latex" maxlength="1200" placeholder="LaTeX，例如 \\frac{\\placeholder{}}{\\placeholder{}}" aria-label="自定义公式 LaTeX" required spellcheck="false" />
+        <button type="submit">保存磁贴</button>
+      </form>
+      <form class="aaronnote-livetex-matrix-builder" data-livetex-matrix-builder hidden>
+        <label>行 <input type="number" name="rows" min="1" max="10" value="2" aria-label="矩阵行数" /></label>
+        <label>列 <input type="number" name="columns" min="1" max="10" value="2" aria-label="矩阵列数" /></label>
+        <select name="environment" aria-label="矩阵样式">
+          <option value="matrix">无括号</option><option value="pmatrix">圆括号</option>
+          <option value="bmatrix">方括号</option><option value="Bmatrix">花括号</option>
+          <option value="vmatrix">行列式</option><option value="Vmatrix">双线行列式</option>
+        </select>
+        <button type="submit">插入自定义矩阵</button>
+      </form>
+      <div class="aaronnote-livetex-stylebar" data-livetex-stylebar hidden>
+        <button type="button" data-livetex-format="bold" title="选区加粗">𝐁 粗体</button>
+        <button type="button" data-livetex-format="italic" title="选区斜体">𝑰 斜体</button>
+        <button type="button" data-livetex-format="upright" title="选区正体">正体</button>
+        <span>字色</span><div class="aaronnote-livetex-style-swatches" data-livetex-swatches="color"></div>
+        <input type="color" data-livetex-custom-color="color" aria-label="自定义文字颜色" value="#4f7cff" />
+        <span>底色</span><div class="aaronnote-livetex-style-swatches" data-livetex-swatches="backgroundColor"></div>
+        <input type="color" data-livetex-custom-color="backgroundColor" aria-label="自定义高亮颜色" value="#fdd835" />
+      </div>
+      <div class="aaronnote-livetex-palette-items" data-livetex-palette-items role="group" aria-label="可插入的公式符号与结构"></div>
+    </section>
   </section>
 `;
 document.body.appendChild(liveTexStudio);
@@ -1119,10 +1162,277 @@ const liveTexStage = liveTexStudio.querySelector<HTMLElement>("[data-livetex-sta
 const liveTexEditorHost = liveTexStudio.querySelector<HTMLElement>("[data-livetex-editor]")!;
 const liveTexEditorTools = liveTexStudio.querySelector<HTMLElement>("[data-livetex-editor-tools]")!;
 const liveTexZoomLabel = liveTexStudio.querySelector<HTMLOutputElement>("[data-livetex-zoom-label]")!;
+const liveTexPalette = liveTexStudio.querySelector<HTMLElement>("[data-livetex-palette]")!;
+const liveTexPaletteOverlay = document.createElement("div");
+liveTexPaletteOverlay.className = "aaronnote-livetex-palette-overlay";
+liveTexPaletteOverlay.hidden = true;
+liveTexPaletteOverlay.append(liveTexPalette);
+document.body.appendChild(liveTexPaletteOverlay);
+const liveTexPaletteTabs = liveTexPalette.querySelector<HTMLElement>("[data-livetex-palette-tabs]")!;
+const liveTexPaletteItems = liveTexPalette.querySelector<HTMLElement>("[data-livetex-palette-items]")!;
+const liveTexPaletteSearch = liveTexPalette.querySelector<HTMLInputElement>("[data-livetex-palette-search]")!;
+const liveTexPaletteToggle = liveTexStudio.querySelector<HTMLButtonElement>("[data-livetex-keyboard]")!;
+const liveTexCustomForm = liveTexPalette.querySelector<HTMLFormElement>("[data-livetex-custom-form]")!;
+const liveTexMatrixBuilder = liveTexPalette.querySelector<HTMLFormElement>("[data-livetex-matrix-builder]")!;
+const liveTexStylebar = liveTexPalette.querySelector<HTMLElement>("[data-livetex-stylebar]")!;
 let liveTexEditor: VisualTexInlineEditor | null = null;
 let liveTexTarget: ContextMathTarget | null = null;
 let liveTexDraft = "";
 let liveTexZoom = 1;
+const liveTexPaletteStorageKey = "noema:livetex-palette:v1";
+type LiveTexSavedPalette = { favorites: string[]; custom: LiveTexPaletteItem[] };
+function readLiveTexSavedPalette(): LiveTexSavedPalette {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(liveTexPaletteStorageKey) || "null");
+    if (!saved || typeof saved !== "object") return { favorites: [], custom: [] };
+    const candidate = saved as Partial<LiveTexSavedPalette>;
+    const favorites = Array.isArray(candidate.favorites)
+      ? candidate.favorites.filter((value): value is string => typeof value === "string").slice(0, 80)
+      : [];
+    const custom = Array.isArray(candidate.custom)
+      ? candidate.custom.filter((value): value is LiveTexPaletteItem => (
+        !!value && typeof value.label === "string" && value.label.length <= 36
+        && typeof value.name === "string" && value.name.length <= 36
+        && typeof value.latex === "string" && value.latex.length <= 1200
+      )).slice(0, 40)
+      : [];
+    return { favorites, custom };
+  } catch {
+    return { favorites: [], custom: [] };
+  }
+}
+const liveTexSavedPalette = readLiveTexSavedPalette();
+const liveTexPaletteFavorites = new Set(liveTexSavedPalette.favorites);
+const liveTexPaletteCustom = liveTexSavedPalette.custom;
+function saveLiveTexPalette(): void {
+  try {
+    localStorage.setItem(liveTexPaletteStorageKey, JSON.stringify({
+      favorites: [...liveTexPaletteFavorites], custom: liveTexPaletteCustom,
+    }));
+  } catch { /* Palette works for this session when storage is unavailable. */ }
+}
+let liveTexPaletteCategory = liveTexPaletteCategories[0]!.id;
+let liveTexPaletteResults: readonly LiveTexPaletteItem[] = [];
+let liveTexPaletteRenderFrame = 0;
+let liveTexPaletteSelectedIndex = 0;
+let liveTexPaletteHandledTabAt = -Infinity;
+let liveTexPaletteHandledEnterAt = -Infinity;
+let liveTexPaletteReturnFocus: HTMLElement | null = null;
+type LiveTexPaletteSource = { file: string; doc: Text; from: number; to: number; formulaFrom: number | null };
+let liveTexPaletteSource: LiveTexPaletteSource | null = null;
+let liveTexPaletteKeepOpen = false;
+let liveTexPaletteVisualField: MathfieldElement | null = null;
+liveTexEditorHost.addEventListener("focusin", (event) => {
+  const field = event.target instanceof Element ? event.target.closest("math-field") : null;
+  if (field) liveTexPaletteVisualField = field as MathfieldElement;
+});
+const liveTexColors = [
+  ["none", "清除", "transparent"], ["red", "红", "#ef5350"],
+  ["orange", "橙", "#fb8c00"], ["yellow", "黄", "#fdd835"],
+  ["lime", "浅绿", "#9ccc65"], ["green", "绿", "#43a047"],
+  ["teal", "青", "#26a69a"], ["blue", "蓝", "#4f7cff"],
+  ["indigo", "靛", "#5c6bc0"], ["purple", "紫", "#ab47bc"],
+  ["magenta", "洋红", "#ec407a"], ["black", "黑", "#1f2430"],
+  ["white", "白", "#f4f6fb"],
+] as const;
+
+for (const swatches of liveTexStylebar.querySelectorAll<HTMLElement>("[data-livetex-swatches]")) {
+  const style = swatches.dataset.livetexSwatches!;
+  for (const [color, name, hex] of liveTexColors) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.livetexStyle = style;
+    button.dataset.livetexStyleValue = color;
+    button.title = `${style === "color" ? "字色" : "底色"}：${name}`;
+    button.setAttribute("aria-label", button.title);
+    button.style.setProperty("--noema-livetex-swatch", hex);
+    swatches.appendChild(button);
+  }
+}
+
+for (const category of [{ id: "favorites", label: "常用" }, ...liveTexPaletteCategories]) {
+  const tab = document.createElement("button");
+  tab.type = "button";
+  tab.dataset.livetexPaletteCategory = category.id;
+  tab.setAttribute("role", "tab");
+  tab.textContent = category.label;
+  liveTexPaletteTabs.appendChild(tab);
+}
+
+function renderLiveTexPalette(): void {
+  liveTexPaletteRenderFrame = 0;
+  if (liveTexPalette.hidden) return;
+  const query = liveTexPaletteSearch.value;
+  liveTexMatrixBuilder.hidden = Boolean(query) || liveTexPaletteCategory !== "arrays";
+  liveTexStylebar.hidden = Boolean(query) || liveTexPaletteCategory !== "style";
+  const customMatches = liveTexPaletteCustom.filter((entry) => liveTexPaletteMatches(entry, query));
+  liveTexPaletteResults = liveTexPaletteCategory === "favorites" && !query
+    ? [
+      ...liveTexPaletteCategories.flatMap(({ items }) => items)
+        .filter((entry, index, all) => liveTexPaletteFavorites.has(entry.latex)
+          && all.findIndex((candidate) => candidate.latex === entry.latex) === index),
+      ...liveTexPaletteCustom,
+    ]
+    : query
+      ? [...searchLiveTexPalette(query, liveTexPaletteCategory), ...customMatches]
+      : searchLiveTexPalette("", liveTexPaletteCategory);
+  liveTexPaletteSelectedIndex = Math.min(liveTexPaletteSelectedIndex, Math.max(0, liveTexPaletteResults.length - 1));
+  for (const tab of liveTexPaletteTabs.querySelectorAll<HTMLButtonElement>("button")) {
+    const active = !query && tab.dataset.livetexPaletteCategory === liveTexPaletteCategory;
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+  }
+  const fragment = document.createDocumentFragment();
+  for (const [index, entry] of liveTexPaletteResults.entries()) {
+    const tile = document.createElement("div");
+    tile.className = "aaronnote-livetex-palette-tile";
+    tile.classList.toggle("is-selected", index === liveTexPaletteSelectedIndex);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "aaronnote-livetex-palette-insert";
+    button.dataset.livetexPaletteIndex = String(index);
+    button.title = `${entry.name} · ${entry.latex}`;
+    button.setAttribute("aria-label", `${entry.name}，插入 ${entry.latex}`);
+    const glyph = document.createElement("span");
+    glyph.className = "aaronnote-livetex-palette-glyph";
+    glyph.textContent = entry.label;
+    const caption = document.createElement("small");
+    caption.textContent = entry.name;
+    button.append(glyph, caption);
+    const isCustom = liveTexPaletteCustom.includes(entry);
+    const pin = document.createElement("button");
+    pin.type = "button";
+    pin.className = "aaronnote-livetex-palette-pin";
+    pin.dataset.livetexPalettePin = String(index);
+    pin.textContent = isCustom ? "×" : liveTexPaletteFavorites.has(entry.latex) ? "★" : "☆";
+    pin.setAttribute("aria-label", isCustom ? `删除自定义磁贴 ${entry.name}`
+      : liveTexPaletteFavorites.has(entry.latex) ? `取消收藏 ${entry.name}` : `收藏 ${entry.name}`);
+    tile.append(button, pin);
+    fragment.appendChild(tile);
+  }
+  if (!liveTexPaletteResults.length) {
+    const empty = document.createElement("p");
+    empty.className = "aaronnote-livetex-palette-empty";
+    empty.textContent = query ? "没有找到符号或命令" : "收藏常用工具，或添加自己的公式磁贴";
+    fragment.appendChild(empty);
+  }
+  liveTexPaletteItems.replaceChildren(fragment);
+  liveTexPaletteItems.scrollTop = 0;
+}
+
+function scheduleLiveTexPaletteRender(): void {
+  if (liveTexPaletteRenderFrame) cancelAnimationFrame(liveTexPaletteRenderFrame);
+  liveTexPaletteRenderFrame = requestAnimationFrame(renderLiveTexPalette);
+}
+
+function focusLiveTexPaletteCategory(): void {
+  const tab = [...liveTexPaletteTabs.querySelectorAll<HTMLButtonElement>("button")]
+    .find((button) => button.dataset.livetexPaletteCategory === liveTexPaletteCategory);
+  tab?.focus();
+  tab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function setLiveTexPaletteOpen(open: boolean, restoreFocus = true): void {
+  if (open && liveTexPalette.hidden) {
+    const active = document.activeElement as HTMLElement | null;
+    liveTexPaletteReturnFocus = active?.closest(".aaronnote-livetex-studio") ? null : active;
+  }
+  liveTexPalette.hidden = !open;
+  liveTexPaletteOverlay.hidden = !open;
+  liveTexPaletteToggle.setAttribute("aria-expanded", String(open));
+  if (open) {
+    liveTexPaletteSelectedIndex = 0;
+    liveTexPaletteSearch.value = "";
+    renderLiveTexPalette();
+    focusLiveTexPaletteCategory();
+    const reclaimFocus = (): void => {
+      if (!liveTexPalette.hidden && !liveTexPalette.contains(document.activeElement)) {
+        focusLiveTexPaletteCategory();
+      }
+    };
+    requestAnimationFrame(reclaimFocus);
+    window.setTimeout(reclaimFocus, 40);
+  } else {
+    if (liveTexPaletteRenderFrame) cancelAnimationFrame(liveTexPaletteRenderFrame);
+    liveTexPaletteRenderFrame = 0;
+    if (restoreFocus) {
+      if (liveTexPaletteKeepOpen && !liveTexStudio.hidden && liveTexPaletteVisualField?.isConnected) {
+        liveTexPaletteVisualField.focus();
+      } else if (liveTexPaletteReturnFocus?.isConnected) liveTexPaletteReturnFocus.focus();
+      else editor.focus();
+    }
+    liveTexPaletteReturnFocus = null;
+    liveTexPaletteSource = null;
+    liveTexPaletteVisualField = null;
+    liveTexPaletteKeepOpen = false;
+  }
+}
+
+function selectLiveTexPaletteItem(index: number, focus = false): void {
+  if (!liveTexPaletteResults.length) return;
+  liveTexPaletteSelectedIndex = Math.max(0, Math.min(index, liveTexPaletteResults.length - 1));
+  for (const button of liveTexPaletteItems.querySelectorAll<HTMLButtonElement>("[data-livetex-palette-index]")) {
+    const selected = Number(button.dataset.livetexPaletteIndex) === liveTexPaletteSelectedIndex;
+    button.parentElement?.classList.toggle("is-selected", selected);
+    if (selected && focus) {
+      button.focus();
+      button.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+}
+
+function insertSelectedLiveTexPaletteItem(): void {
+  if (liveTexPaletteRenderFrame) renderLiveTexPalette();
+  const entry = liveTexPaletteResults[liveTexPaletteSelectedIndex];
+  if (entry) insertLiveTexPaletteTemplate(entry.latex);
+}
+
+function cycleLiveTexPaletteCategory(direction: number): void {
+  const categories = ["favorites", ...liveTexPaletteCategories.map(({ id }) => id)];
+  const current = categories.indexOf(liveTexPaletteCategory);
+  const next = current + direction;
+  if (next < 0 || next >= categories.length) {
+    liveTexPaletteSearch.focus();
+    liveTexPaletteSearch.select();
+    return;
+  }
+  liveTexPaletteCategory = categories[next]!;
+  liveTexPaletteSearch.value = "";
+  liveTexPaletteSelectedIndex = 0;
+  renderLiveTexPalette();
+  focusLiveTexPaletteCategory();
+}
+
+function handleLiveTexPaletteNavigation(key: string, shiftKey = false): boolean {
+  if (key === "Tab" || key === "\t") {
+    cycleLiveTexPaletteCategory(shiftKey ? -1 : 1);
+    return true;
+  }
+  if (key === "Enter" || key === " ") {
+    const active = document.activeElement instanceof Element
+      ? document.activeElement.closest<HTMLButtonElement>("[data-livetex-palette-index]") : null;
+    if (active) selectLiveTexPaletteItem(Number(active.dataset.livetexPaletteIndex));
+    insertSelectedLiveTexPaletteItem();
+    return true;
+  }
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key)) return false;
+  if (liveTexPaletteRenderFrame) renderLiveTexPalette();
+  const buttons = [...liveTexPaletteItems.querySelectorAll<HTMLButtonElement>("[data-livetex-palette-index]")];
+  if (!buttons.length) return true;
+  const active = document.activeElement instanceof Element
+    ? document.activeElement.closest<HTMLButtonElement>("[data-livetex-palette-index]") : null;
+  if (!active) {
+    selectLiveTexPaletteItem(liveTexPaletteSelectedIndex, true);
+    return true;
+  }
+  const columns = buttons.filter((button) => button.offsetTop === buttons[0]?.offsetTop).length || 1;
+  const index = Number(active.dataset.livetexPaletteIndex);
+  const delta = key === "ArrowLeft" ? -1 : key === "ArrowRight" ? 1
+    : key === "ArrowUp" ? -columns : columns;
+  if (index + delta < 0 && key === "ArrowUp") focusLiveTexPaletteCategory();
+  else selectLiveTexPaletteItem(index + delta, true);
+  return true;
+}
 
 const bibliographyPanel = document.createElement("section");
 bibliographyPanel.className = "aaronnote-bib-panel";
@@ -1171,6 +1481,7 @@ function currentFindOptions(): FindOptions {
 
 let currentFile = "";
 let currentTitle = "";
+let detachedDraftName = "";
 let currentClient = rendererClient;
 let currentKind = "";
 let currentStandalone = false;
@@ -1729,8 +2040,8 @@ snippets = withBuiltinSnippets(snippets);
  * the text node and invalidates layout — so each write is guarded by a read.
  */
 function updateTitle(): void {
-  const name = currentFile.split(/[\\/]/).at(-1) || "Noema";
-  const displayName = serverReaderMode && currentTitle ? currentTitle : name;
+  const name = currentFile.split(/[\\/]/).at(-1) || detachedDraftName || "Noema";
+  const displayName = detachedDraftName || (serverReaderMode && currentTitle ? currentTitle : name);
   if (fileLabel.textContent !== name) fileLabel.textContent = name;
   if (serverTitleName.textContent !== displayName) serverTitleName.textContent = displayName;
   const serverTitle = currentFile || displayName;
@@ -4719,6 +5030,19 @@ function mathTargetAtPosition(pos: number): ContextMathTarget | null {
     };
   }
 
+  const multiline = rangeAtPosition(safePos, getMultilineInlineMathRanges(state));
+  if (multiline && !rangeOverlapsAny(multiline.from, multiline.to, blockRanges)
+    && scanCodeRanges(state, [{ from: multiline.from, to: multiline.to }]).length === 0) {
+    return {
+      kind: "inline",
+      from: multiline.from,
+      to: multiline.to,
+      tex: multiline.tex,
+      contentFrom: multiline.contentFrom,
+      contentTo: multiline.contentTo,
+    };
+  }
+
   const line = state.doc.lineAt(safePos);
   INLINE_MATH_RE.lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -4727,6 +5051,7 @@ function mathTargetAtPosition(pos: number): ContextMathTarget | null {
     const to = from + match[0].length;
     if (safePos < from || safePos > to) continue;
     if (rangeOverlapsAny(from, to, blockRanges)) continue;
+    if (scanCodeRanges(state, [{ from, to }]).length > 0) continue;
     return { kind: "inline", from, to, tex: match[1] || "" };
   }
   return null;
@@ -4770,7 +5095,7 @@ function convertInlineMathToBlock(target: ContextMathTarget, sourceTex = target.
   const state = editor.view.state;
   const line = state.doc.lineAt(target.from);
   const before = state.doc.sliceString(line.from, target.from);
-  const after = state.doc.sliceString(target.to, line.to);
+  const after = state.doc.sliceString(target.to, state.doc.lineAt(target.to).to);
   const prefix = before.trim().length > 0 ? "\n" : "";
   const suffix = after.trim().length > 0 ? "\n" : "";
   const tex = normalizeVisualTexLatex(sourceTex).trim();
@@ -4806,9 +5131,10 @@ function replaceContextMathTex(target: ContextMathTarget, tex: string, status: s
     if (live.kind === "inline") {
       const from = live.from + 2;
       const to = live.to - 2;
-      const nextFormulaTo = live.to + compatibleTex.length - (to - from);
+      const insert = live.contentFrom == null ? compatibleTex : `\n${compatibleTex.trim()}\n`;
+      const nextFormulaTo = live.to + insert.length - (to - from);
       editor.view.dispatch({
-        changes: { from, to, insert: compatibleTex },
+        changes: { from, to, insert },
         selection: { anchor: nextFormulaTo },
       });
     } else {
@@ -4853,6 +5179,7 @@ function applyFormulaLayout(target: ContextMathTarget, layout: VisualTexDisplayL
 }
 
 function dismissLiveTexStudio(): void {
+  if (liveTexPaletteKeepOpen && !liveTexPalette.hidden) setLiveTexPaletteOpen(false, false);
   const wasOpen = !liveTexStudio.hidden;
   liveTexEditor?.destroy();
   liveTexEditor = null;
@@ -4861,11 +5188,13 @@ function dismissLiveTexStudio(): void {
   liveTexEditorHost.replaceChildren();
   liveTexEditorTools.replaceChildren();
   liveTexStudio.hidden = true;
+  document.body.classList.remove("aaronnote-livetex-active");
   if (wasOpen) {
     host.dispatchEvent(new CustomEvent("aaronnote:inline-math-edit-state", {
       bubbles: true,
       detail: { active: false, kind: "studio" },
     }));
+    retryRendererReloadAfterLiveTex();
   }
 }
 
@@ -4930,6 +5259,15 @@ function closeLiveTexStudioWithApply(): void {
   applyLiveTexStudio();
 }
 
+function cancelLiveTexStudio(): void {
+  if (liveTexStudio.hidden) return;
+  editor.preserveViewport(() => {
+    dismissLiveTexStudio();
+    editor.focus();
+  });
+  setStatus("LiveTeX 已关闭；本次公式修改未应用");
+}
+
 function openContextLiveTex(target: ContextMathTarget, returnMode?: VimLiteMode): boolean {
   if (rejectReadOnlyAction("Read-only pane")) return false;
   finishInlineMathEditing(editor.view);
@@ -4945,6 +5283,7 @@ function openContextLiveTex(target: ContextMathTarget, returnMode?: VimLiteMode)
   liveTexStage.style.setProperty("--noema-livetex-zoom", "1");
   liveTexStage.dataset.align = "center";
   liveTexStudio.hidden = false;
+  document.body.classList.add("aaronnote-livetex-active");
   host.dispatchEvent(new CustomEvent("aaronnote:inline-math-edit-state", {
     bubbles: true,
     detail: { active: true, kind: "studio" },
@@ -4952,7 +5291,9 @@ function openContextLiveTex(target: ContextMathTarget, returnMode?: VimLiteMode)
   liveTexEditor = mountVisualTexDisplayEditor(liveTexEditorHost, {
     latex: liveTexDraft,
     macros: getKatexMacros(),
-    entry: { kind: "all" },
+    // Opening an existing equation is an edit, not a replace-all operation.
+    // Selecting its contents made the first typed character erase the formula.
+    entry: { kind: "end" },
     advanced: true,
     commitOnBlur: false,
     toolbarHost: liveTexEditorTools,
@@ -4986,12 +5327,280 @@ function revealLiveTexStudioSource(): boolean {
   return revealed;
 }
 
+function openIndependentLiveTexPalette(target: ContextMathTarget | null = null): void {
+  if (!liveTexStudio.hidden) {
+    liveTexPaletteKeepOpen = true;
+    liveTexPaletteVisualField ??= liveTexEditorHost.querySelector<MathfieldElement>("math-field");
+    setLiveTexPaletteOpen(true);
+    return;
+  }
+  liveTexPaletteKeepOpen = false;
+  const formulaPosition = target?.from ?? null;
+  finishInlineMathEditing(editor.view);
+  const state = editor.view.state;
+  const selection = state.selection.main;
+  const formula = (formulaPosition == null ? null : mathTargetAtPosition(formulaPosition + 1))
+    ?? mathTargetAtPosition(selection.head);
+  let from = selection.from;
+  let to = selection.to;
+  if (formula) {
+    const contentFrom = formula.kind === "inline" ? formula.from + 2 : formula.contentFrom!;
+    let contentTo = formula.kind === "inline" ? formula.to - 2 : formula.contentTo!;
+    if (formula.kind === "block") {
+      const content = state.doc.sliceString(contentFrom, contentTo);
+      contentTo -= content.length - content.trimEnd().length;
+    }
+    if (from < contentFrom || to > contentTo) from = to = contentTo;
+  }
+  liveTexPaletteSource = { file: currentFile, doc: state.doc, from, to, formulaFrom: formula?.from ?? null };
+  setLiveTexPaletteOpen(true);
+}
+
+function currentLiveTexPaletteSource(): LiveTexPaletteSource | null {
+  const saved = liveTexPaletteSource;
+  if (!saved) return null;
+  if (saved.file !== currentFile) {
+    setLiveTexPaletteOpen(false);
+    return null;
+  }
+  const state = editor.view.state;
+  if (saved.doc === state.doc) return saved;
+  const mapped = rebaseLiveTexPaletteRange(
+    saved.doc.sliceString(0), state.doc.sliceString(0), saved,
+  );
+  let { from, to, formulaFrom } = mapped;
+  if (formulaFrom != null) {
+    const formula = mathTargetAtPosition(Math.min(state.doc.length, formulaFrom + 1));
+    if (!formula || formula.from !== formulaFrom) {
+      setStatus("原公式已移除；公式工具板已关闭");
+      setLiveTexPaletteOpen(false);
+      return null;
+    }
+    const contentFrom = formula.kind === "inline" ? formula.from + 2 : formula.contentFrom!;
+    const contentTo = formula.kind === "inline" ? formula.to - 2 : formula.contentTo!;
+    from = Math.max(contentFrom, Math.min(from, contentTo));
+    to = Math.max(from, Math.min(to, contentTo));
+  } else {
+    from = Math.max(0, Math.min(from, state.doc.length));
+    to = Math.max(from, Math.min(to, state.doc.length));
+  }
+  liveTexPaletteSource = { file: currentFile, doc: state.doc, from, to, formulaFrom };
+  return liveTexPaletteSource;
+}
+
+function insertLiveTexPaletteTemplate(template: string): boolean {
+  if (rejectReadOnlyAction("Read-only pane")) return false;
+  if (liveTexPaletteKeepOpen && !liveTexStudio.hidden) {
+    const field = liveTexPaletteVisualField?.isConnected ? liveTexPaletteVisualField
+      : liveTexEditorHost.querySelector<MathfieldElement>("math-field");
+    if (!field) return false;
+    liveTexPaletteVisualField = field;
+    const inserted = field.insert(template, {
+      format: "latex",
+      insertionMode: "replaceSelection",
+      selectionMode: "placeholder",
+      focus: false,
+      feedback: false,
+      scrollIntoView: false,
+    });
+    if (!inserted) return false;
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    queueMicrotask(() => {
+      if (!liveTexPalette.hidden) selectLiveTexPaletteItem(liveTexPaletteSelectedIndex, true);
+    });
+    return true;
+  }
+  const source = currentLiveTexPaletteSource();
+  const state = editor.view.state;
+  if (!source) return false;
+  const selected = state.doc.sliceString(source.from, source.to);
+  const insertion = liveTexPaletteSourceTemplate(template, selected);
+  const prefix = source.formulaFrom == null ? "\\(" : "";
+  const suffix = source.formulaFrom == null ? "\\)" : "";
+  const text = `${prefix}${insertion.text}${suffix}`;
+  const caret = source.from + prefix.length + insertion.caret;
+  editor.preserveViewport(() => editor.view.dispatch({
+    changes: { from: source.from, to: source.to, insert: text },
+    selection: { anchor: caret },
+  }));
+  const formula = mathTargetAtPosition(source.formulaFrom == null ? source.from + 1 : source.formulaFrom + 1);
+  if (formula) {
+    const contentFrom = formula.kind === "inline" ? formula.from + 2 : formula.contentFrom!;
+    revealFormulaSource(editor.view, formula.from, formula.to, Math.max(0, caret - contentFrom));
+  }
+  liveTexPaletteSource = {
+    file: currentFile,
+    doc: editor.view.state.doc,
+    from: caret,
+    to: caret,
+    formulaFrom: formula?.from ?? null,
+  };
+  scheduleAssistUpdate({ mathPreview: true, cursor: true, snippets: true });
+  if (!liveTexPaletteKeepOpen) {
+    setLiveTexPaletteOpen(false);
+    return true;
+  }
+  // Keep keyboard navigation in the palette after an insertion; Escape returns
+  // to the source caret, including the first unfilled template argument.
+  queueMicrotask(() => {
+    if (!liveTexPalette.hidden) selectLiveTexPaletteItem(liveTexPaletteSelectedIndex, true);
+  });
+  return true;
+}
+
+function applyLiveTexPaletteColor(style: "color" | "backgroundColor", value: string): void {
+  if (liveTexPaletteKeepOpen && !liveTexStudio.hidden && liveTexPaletteVisualField?.isConnected) {
+    applyVisualTexStyle(liveTexPaletteVisualField, style, value === "none" ? "" : value);
+    liveTexPaletteVisualField.dispatchEvent(new Event("input", { bubbles: true }));
+    return;
+  }
+  const formulaFrom = currentLiveTexPaletteSource()?.formulaFrom;
+  const target = formulaFrom == null ? null : mathTargetAtPosition(formulaFrom + 1);
+  if (!target) {
+    const command = style === "color" ? "color" : "colorbox";
+    if (value !== "none") insertLiveTexPaletteTemplate(`\\${command}{${value}}{\\placeholder{}}`);
+    return;
+  }
+  const patch = style === "color" ? { color: value === "none" ? "" : value }
+    : { background: value === "none" ? "" : value };
+  if (!applyFormulaStyle(target, patch, "公式颜色已更新")) return;
+  const live = mathTargetAtPosition(formulaFrom + 1);
+  if (!live) return;
+  let contentTo = live.kind === "inline" ? live.to - 2 : live.contentTo!;
+  if (live.kind === "block") {
+    const content = editor.view.state.doc.sliceString(live.contentFrom!, contentTo);
+    contentTo -= content.length - content.trimEnd().length;
+  }
+  liveTexPaletteSource = {
+    file: currentFile,
+    doc: editor.view.state.doc,
+    from: contentTo,
+    to: contentTo,
+    formulaFrom: live.from,
+  };
+}
+
 liveTexStudio.querySelectorAll<HTMLButtonElement>("[data-livetex-align]").forEach((button) => {
   button.addEventListener("click", () => {
     liveTexStage.dataset.align = button.dataset.livetexAlign || "center";
     liveTexEditor?.focus();
   });
 });
+liveTexStudio.querySelector<HTMLButtonElement>("[data-livetex-keyboard]")!
+  .addEventListener("mousedown", (event) => event.preventDefault());
+liveTexPaletteToggle.addEventListener("click", () => {
+  if (liveTexPalette.hidden) openIndependentLiveTexPalette(liveTexTarget);
+  else setLiveTexPaletteOpen(false);
+});
+liveTexStudio.querySelector<HTMLButtonElement>("[data-livetex-source]")!
+  .addEventListener("click", () => revealLiveTexStudioSource());
+liveTexPaletteTabs.addEventListener("click", (event) => {
+  const tab = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-livetex-palette-category]");
+  if (!tab?.dataset.livetexPaletteCategory) return;
+  liveTexPaletteCategory = tab.dataset.livetexPaletteCategory;
+  liveTexPaletteSearch.value = "";
+  liveTexPaletteSelectedIndex = 0;
+  scheduleLiveTexPaletteRender();
+  tab.focus();
+});
+liveTexPaletteSearch.addEventListener("input", () => {
+  liveTexPaletteSelectedIndex = 0;
+  scheduleLiveTexPaletteRender();
+});
+liveTexPaletteSearch.addEventListener("keydown", (event) => {
+  const key = normalizedEditorKey(event);
+  if (key === "Tab" && event.shiftKey) {
+    event.preventDefault();
+    focusLiveTexPaletteCategory();
+  } else if (event.key === "ArrowDown") {
+    event.preventDefault();
+    if (liveTexPaletteRenderFrame) renderLiveTexPalette();
+    selectLiveTexPaletteItem(liveTexPaletteSelectedIndex, true);
+  } else if (key === "Enter") {
+    event.preventDefault();
+    event.stopPropagation();
+    liveTexPaletteHandledEnterAt = performance.now();
+    insertSelectedLiveTexPaletteItem();
+  }
+});
+liveTexPaletteItems.addEventListener("pointerdown", (event) => {
+  if ((event.target as HTMLElement).closest("button")) event.preventDefault();
+});
+liveTexPaletteItems.addEventListener("click", (event) => {
+  const pin = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-livetex-palette-pin]");
+  if (pin) {
+    const entry = liveTexPaletteResults[Number(pin.dataset.livetexPalettePin)];
+    if (!entry) return;
+    const customIndex = liveTexPaletteCustom.indexOf(entry);
+    if (customIndex >= 0) liveTexPaletteCustom.splice(customIndex, 1);
+    else if (liveTexPaletteFavorites.has(entry.latex)) liveTexPaletteFavorites.delete(entry.latex);
+    else liveTexPaletteFavorites.add(entry.latex);
+    saveLiveTexPalette();
+    scheduleLiveTexPaletteRender();
+    return;
+  }
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-livetex-palette-index]");
+  const entry = button && liveTexPaletteResults[Number(button.dataset.livetexPaletteIndex)];
+  if (button) selectLiveTexPaletteItem(Number(button.dataset.livetexPaletteIndex));
+  if (entry) insertLiveTexPaletteTemplate(entry.latex);
+});
+liveTexPalette.querySelector<HTMLButtonElement>("[data-livetex-palette-close]")!
+  .addEventListener("click", () => setLiveTexPaletteOpen(false));
+liveTexPalette.querySelector<HTMLButtonElement>("[data-livetex-custom-toggle]")!
+  .addEventListener("click", () => {
+    liveTexCustomForm.hidden = !liveTexCustomForm.hidden;
+    if (!liveTexCustomForm.hidden) (liveTexCustomForm.elements.namedItem("name") as HTMLInputElement).focus();
+  });
+liveTexCustomForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const name = (liveTexCustomForm.elements.namedItem("name") as HTMLInputElement).value.trim();
+  const latex = (liveTexCustomForm.elements.namedItem("latex") as HTMLInputElement).value.trim();
+  if (!name || !latex || liveTexPaletteCustom.length >= 40) return;
+  liveTexPaletteCustom.push({ label: name, name, latex });
+  saveLiveTexPalette();
+  liveTexCustomForm.reset();
+  liveTexCustomForm.hidden = true;
+  liveTexPaletteSearch.value = "";
+  liveTexPaletteCategory = "favorites";
+  liveTexPaletteSelectedIndex = 0;
+  scheduleLiveTexPaletteRender();
+});
+liveTexMatrixBuilder.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const rows = Number((liveTexMatrixBuilder.elements.namedItem("rows") as HTMLInputElement).value);
+  const columns = Number((liveTexMatrixBuilder.elements.namedItem("columns") as HTMLInputElement).value);
+  const environment = (liveTexMatrixBuilder.elements.namedItem("environment") as HTMLSelectElement)
+    .value as Parameters<typeof liveTexMatrixTemplate>[2];
+  if (!insertLiveTexPaletteTemplate(liveTexMatrixTemplate(rows, columns, environment))) {
+    setStatus("矩阵暂时无法插入当前公式");
+  }
+});
+liveTexStylebar.addEventListener("pointerdown", (event) => {
+  if ((event.target as HTMLElement).closest("button")) event.preventDefault();
+});
+liveTexStylebar.addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button");
+  if (!button) return;
+  const format = button.dataset.livetexFormat as "bold" | "italic" | "upright" | undefined;
+  const colorStyle = button.dataset.livetexStyle as "color" | "backgroundColor" | undefined;
+  if (format) {
+    const command = format === "bold" ? "mathbf" : format === "italic" ? "mathit" : "mathrm";
+    insertLiveTexPaletteTemplate(`\\${command}{\\placeholder{}}`);
+  } else if (colorStyle) applyLiveTexPaletteColor(colorStyle, button.dataset.livetexStyleValue || "none");
+});
+liveTexStylebar.querySelectorAll<HTMLInputElement>("[data-livetex-custom-color]").forEach((picker) => {
+  picker.addEventListener("change", () => {
+    const style = picker.dataset.livetexCustomColor as "color" | "backgroundColor";
+    applyLiveTexPaletteColor(style, picker.value);
+  });
+});
+liveTexPalette.addEventListener("keydown", (event) => event.stopPropagation());
+document.addEventListener("pointerdown", (event) => {
+  if (!liveTexPalette.hidden && !liveTexPalette.contains(event.target as Node)
+      && !liveTexPaletteToggle.contains(event.target as Node)) {
+    setLiveTexPaletteOpen(false, false);
+  }
+}, { capture: true });
 liveTexStudio.querySelectorAll<HTMLButtonElement>("[data-livetex-zoom]").forEach((button) => {
   button.addEventListener("click", () => {
     liveTexZoom = Math.max(0.7, Math.min(1.6, liveTexZoom + (button.dataset.livetexZoom === "in" ? 0.1 : -0.1)));
@@ -5003,7 +5612,7 @@ liveTexStudio.querySelectorAll<HTMLButtonElement>("[data-livetex-zoom]").forEach
 liveTexStudio.querySelector<HTMLButtonElement>("[data-livetex-close]")!
   .addEventListener("mousedown", (event) => event.preventDefault());
 liveTexStudio.querySelector<HTMLButtonElement>("[data-livetex-close]")!
-  .addEventListener("click", closeLiveTexStudioWithApply);
+  .addEventListener("click", cancelLiveTexStudio);
 liveTexStudio.querySelector<HTMLButtonElement>("[data-livetex-apply]")!
   .addEventListener("mousedown", (event) => event.preventDefault());
 liveTexStudio.querySelector<HTMLButtonElement>("[data-livetex-apply]")!
@@ -5013,10 +5622,92 @@ liveTexStudio.addEventListener("mousedown", (event) => {
 });
 liveTexStudioPanel.addEventListener("mousedown", (event) => event.stopPropagation());
 window.addEventListener("keydown", (event) => {
-  if (liveTexStudio.hidden || event.key !== "Escape") return;
+  if (!liveTexPalette.hidden && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    const key = normalizedEditorKey(event);
+    const target = event.target instanceof Element ? event.target : null;
+    const inPalette = Boolean(target && liveTexPalette.contains(target));
+    const navigationTarget = !inPalette || Boolean(target?.closest(
+      "[data-livetex-palette-category], [data-livetex-palette-index]",
+    ));
+    if (navigationTarget && handleLiveTexPaletteNavigation(key, event.shiftKey
+        || /^(?:Backtab|ISO_Left_Tab|Shift-Tab)$/.test(event.key))) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (key === "Tab") liveTexPaletteHandledTabAt = performance.now();
+      if (key === "Enter") liveTexPaletteHandledEnterAt = performance.now();
+      return;
+    }
+    if (!inPalette) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      focusLiveTexPaletteCategory();
+      return;
+    }
+  }
+  // MathLive may consume Cmd-/ before the document's shortcut listener sees
+  // it.  Catch only its active formula widget here and open the full studio.
+  if (event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey
+      && (event.code === "Slash" || event.key === "/")) {
+    const formula = liveTexStudio.hidden ? mathTargetFromSourceElement(event.target) : null;
+    if (formula || !liveTexStudio.hidden) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (formula) openContextLiveTex(formula);
+      else revealLiveTexStudioSource();
+      return;
+    }
+  }
+  if (event.metaKey && event.shiftKey && !event.altKey && !event.ctrlKey
+      && (event.code === "Slash" || event.key === "?")) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (liveTexPalette.hidden) {
+      const selection = editor.view.state.selection.main;
+      const formula = mathTargetFromSourceElement(event.target)
+        ?? mathTargetAtPosition(selection.head);
+      openIndependentLiveTexPalette(formula);
+    } else setLiveTexPaletteOpen(false);
+    return;
+  }
+  if (!liveTexPalette.hidden && event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey
+      && event.key.toLowerCase() === "f") {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    liveTexPaletteSearch.focus();
+    liveTexPaletteSearch.select();
+    return;
+  }
+  if (event.key === "Escape" && !liveTexPalette.hidden) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    setLiveTexPaletteOpen(false);
+    return;
+  }
+  if (liveTexStudio.hidden) return;
+  if (event.key !== "Escape") return;
   event.preventDefault();
   event.stopPropagation();
   closeLiveTexStudioWithApply();
+}, { capture: true });
+document.addEventListener("beforeinput", (event) => {
+  const input = event as InputEvent;
+  const key = liveTexPaletteBeforeInputKey(input.inputType, input.data);
+  const tab = key === "Tab";
+  const enter = key === "Enter";
+  const pairedTab = tab && performance.now() - liveTexPaletteHandledTabAt < 180;
+  const pairedEnter = enter && performance.now() - liveTexPaletteHandledEnterAt < 180;
+  // In source mode Enter closes the palette in keydown. WebKit can still send
+  // its paired beforeinput to the Markdown editor afterwards.
+  if (liveTexPalette.hidden && !pairedTab && !pairedEnter) return;
+  const paletteInput = event.target instanceof Element
+    ? event.target.closest("input, textarea, select, [contenteditable='true']") : null;
+  if (!liveTexPalette.hidden && liveTexPalette.contains(event.target as Node) && paletteInput) {
+    if (paletteInput !== liveTexPaletteSearch || !enter) return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (!liveTexPalette.hidden && tab && !pairedTab) handleLiveTexPaletteNavigation("Tab");
+  if (!liveTexPalette.hidden && enter && !pairedEnter) handleLiveTexPaletteNavigation("Enter");
 }, { capture: true });
 
 const formulaColorOptions = ["", "red", "orange", "yellow", "lime", "green", "teal", "blue", "indigo", "purple", "magenta", "black", "white"];
@@ -5528,10 +6219,33 @@ function scheduleSave(): void {
 }
 
 let rendererReloadPending = false;
+let rendererReloadDeferred = false;
+
+function retryRendererReloadAfterLiveTex(): void {
+  if (!rendererReloadDeferred) return;
+  queueMicrotask(async () => {
+    if (!rendererReloadDeferred || !liveTexStudio.hidden) return;
+    try {
+      if (await window.AaronnotePrepareRendererReload?.() && liveTexStudio.hidden) {
+        rendererReloadDeferred = false;
+        window.location.reload();
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Renderer reload failed");
+    }
+  });
+}
+
 window.AaronnotePrepareRendererReload = async () => {
   if (rendererReloadPending) return false;
   rendererReloadPending = true;
   try {
+    if (!liveTexStudio.hidden) {
+      setStatus("Renderer updated — apply or close LiveTeX before reloading");
+      rendererReloadDeferred = true;
+      rendererReloadPending = false;
+      return false;
+    }
     if (!currentFile && revision !== savedRevision && editor.getMarkdownLength() > 0) {
       setStatus("Renderer updated — preserve the scratch text, then reopen Noema");
       rendererReloadPending = false;
@@ -5550,7 +6264,19 @@ window.AaronnotePrepareRendererReload = async () => {
         return false;
       }
     }
+    if (!liveTexStudio.hidden) {
+      setStatus("Renderer updated — apply or close LiveTeX before reloading");
+      rendererReloadDeferred = true;
+      rendererReloadPending = false;
+      return false;
+    }
     await flushCursorPosition();
+    if (!liveTexStudio.hidden) {
+      setStatus("Renderer updated — apply or close LiveTeX before reloading");
+      rendererReloadDeferred = true;
+      rendererReloadPending = false;
+      return false;
+    }
     setStatus("Renderer updated — reloading…");
     return true;
   } catch (error) {
@@ -5692,6 +6418,10 @@ function pushNavigationBackLocation(location = trackCursorPosition()): void {
 }
 
 function navigateBack(): void {
+  if (slideDeck?.exitRevealView()) {
+    renderModeToggleLabel(vim.mode());
+    return;
+  }
   if (!navigationBackStack.length) return;
   if (navigationHistoryReady && navigationHistoryIndex > 0) window.history.back();
   else queueNavigationRestore("back");
@@ -5806,6 +6536,7 @@ function applyOpenedNote(
   const resetVim = options.resetVim !== false;
   const reloadNoteIndex = options.reloadNotes !== false;
   currentFile = String(opened.file || fallbackFile || "");
+  detachedDraftName = "";
   // A retry scheduled for the previous note must not fire into this one.
   if (currentFile !== previousFile) saveDrain.cancelRetry();
   // The same file can be reopened with its document revision reset to zero.
@@ -9520,6 +10251,34 @@ async function renameRoamTagTool(): Promise<void> {
   }
 }
 
+async function moveCurrentNoteFromEmacs(source?: string, target?: string): Promise<void> {
+  if (!source || !target || source !== currentFile || currentReadOnly) {
+    setStatus("Move canceled: the requested note is no longer open for editing");
+    return;
+  }
+  if (!commitActiveLiveTexForBoundary(true)) return;
+  try {
+    await save(false);
+    if (source !== currentFile || revision !== savedRevision) {
+      setStatus("Move canceled: save the current draft first");
+      return;
+    }
+    const result = await api.fs.move({ file: source, target });
+    const movedTo = typeof result.file === "string" && result.file ? result.file : target;
+    await openFile(movedTo);
+    if (currentFile !== movedTo) {
+      setStatus(`Moved to ${movedTo}; reopen it to continue editing`);
+      return;
+    }
+    const rewrite = result.referenceRewrite as { referenceCount?: number } | undefined;
+    const warnings = [result.relativeReferenceRewriteError, result.referenceRewriteError]
+      .filter((value): value is string => typeof value === "string" && value.length > 0);
+    setStatus(`Moved note; ${rewrite?.referenceCount ?? 0} references updated${warnings.length ? `; ${warnings.join("; ")}` : ""}`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Move note failed");
+  }
+}
+
 async function deleteRoamTagTool(): Promise<void> {
   const suggestions = await databaseTagSuggestions();
   const result = await openFormModal("Delete roam tag", [
@@ -9598,7 +10357,119 @@ const TOOL_GROUPS: Array<{ id: ToolAction["group"]; label: string }> = [
   { id: "maintenance", label: "Maintenance & settings" },
 ];
 
+let noteTrashInProgress = false;
+let noteRemovalInProgress = "";
+
+async function leaveRemovedNote(
+  deletingFile: string,
+  name: string,
+  keepDraft = false,
+  reason: "trash" | "deleted" | "missing" | "moved" = "trash",
+): Promise<void> {
+  // Both the initiating page and sibling pages use this transition.  Nothing
+  // may keep saving to a path that has disappeared or moved.
+  saveDrain.cancelRetry();
+  window.clearTimeout(saveTimer);
+  saveTimer = 0;
+  pendingExternalSave = null;
+  const description = reason === "trash" ? "moved to Trash"
+    : reason === "moved" ? "moved to another path"
+      : reason === "deleted" ? "deleted" : "removed from disk";
+  if (keepDraft || revision !== savedRevision) {
+    // A sibling pane may have unsaved work, or a host command may have edited
+    // the initiating page while its editor was inert.  Keep the bytes visible.
+    currentFile = "";
+    detachedDraftName = `${reason === "trash" ? "Trashed" : "Detached"} draft: ${name}`;
+    copilotFileChangeHandlers.forEach((handler) => handler());
+    updateTitle();
+    saveButton.disabled = true;
+    await api.emacs.currentFile("", currentClient);
+    setStatus(`Note ${description}; later edits remain here as an unsaved draft. Copy them before closing.`);
+    return;
+  }
+  revision = 0;
+  savedRevision = 0;
+  currentFile = "";
+  detachedDraftName = "";
+  copilotFileChangeHandlers.forEach((handler) => handler());
+  host.inert = false;
+  // Return to this pane's previous page.  A missing previous page is skipped.
+  const previous = [...navigationBackStack].reverse()
+    .filter((location) => location.file && location.file !== deletingFile);
+  for (const location of previous) {
+    await openFile(location.file);
+    if (currentFile === location.file) {
+      restoreCursorPosition(location);
+      navigationBackStack = [];
+      navigationForwardStack = [];
+      navigationHistoryIndex = 0;
+      if (navigationHistoryReady) {
+        try {
+          window.history.replaceState(
+            { ...window.history.state, noemaNavigationIndex: 0 },
+            "", window.location.href,
+          );
+        } catch {
+          navigationHistoryReady = false;
+        }
+      }
+      setStatus(`${name} ${description}`);
+      return;
+    }
+  }
+  await api.emacs.currentFile("", currentClient);
+  window.location.replace(new URL("/wiki", window.location.origin));
+}
+
+async function handleCurrentNoteRemoved(
+  file: string, reason: "trash" | "deleted" | "missing" = "trash",
+): Promise<void> {
+  if (!file || file !== currentFile || noteTrashInProgress || noteRemovalInProgress === file) return;
+  noteRemovalInProgress = file;
+  try {
+    const keepDraft = !commitActiveLiveTexForBoundary(false);
+    if (saveDrain.isActive()) await saveDrain.request();
+    if (file !== currentFile || noteTrashInProgress) return;
+    await leaveRemovedNote(file, fileNameFromPath(file), keepDraft, reason);
+  } finally {
+    if (noteRemovalInProgress === file) noteRemovalInProgress = "";
+  }
+}
+
+async function handleCurrentNoteMoved(oldFile: string, newFile: string): Promise<void> {
+  if (!oldFile || !newFile || oldFile === newFile || currentFile !== oldFile
+      || noteTrashInProgress || noteRemovalInProgress === oldFile) return;
+  noteRemovalInProgress = oldFile;
+  try {
+    const keepDraft = !commitActiveLiveTexForBoundary(false);
+    if (saveDrain.isActive()) await saveDrain.request();
+    if (currentFile !== oldFile || noteTrashInProgress) return;
+    if (keepDraft || revision !== savedRevision) {
+      await leaveRemovedNote(oldFile, fileNameFromPath(oldFile), true, "moved");
+      setStatus(`File moved to ${newFile}; unsaved edits remain in this detached draft.`);
+      return;
+    }
+    const position = trackCursorPosition();
+    await openFile(newFile);
+    if (currentFile !== newFile) {
+      await leaveRemovedNote(oldFile, fileNameFromPath(oldFile), false, "moved");
+      return;
+    }
+    for (const location of [...navigationBackStack, ...navigationForwardStack, ...cursorPositions]) {
+      if (location.file === oldFile) location.file = newFile;
+    }
+    if (position) restoreCursorPosition(position);
+    setStatus(`File moved to ${newFile}`);
+  } finally {
+    if (noteRemovalInProgress === oldFile) noteRemovalInProgress = "";
+  }
+}
+
 async function trashCurrentNoteTool(): Promise<void> {
+  if (noteTrashInProgress) {
+    setStatus("Move to Trash is already in progress");
+    return;
+  }
   if (!currentFile || currentReadOnly || serverReaderMode) {
     setStatus(currentReadOnly ? "Read-only pane" : "Open a note first");
     return;
@@ -9610,32 +10481,39 @@ async function trashCurrentNoteTool(): Promise<void> {
     label: `Type TRASH to move ${name} to the ${platformLabels.trash}`,
     required: true,
     placeholder: "TRASH",
-    description: revision !== savedRevision
-      ? "This document has unsaved changes. They will not be saved before it is moved."
-      : `The document remains recoverable from the ${platformLabels.trash}.`,
+    description: `Current edits will be saved first. The document remains recoverable from the ${platformLabels.trash}.`,
   }], `Move to ${platformLabels.trash}`);
   if (!result) return;
   if (result.confirm.trim() !== "TRASH") {
     setStatus("Type TRASH exactly to move the document");
     return;
   }
-  setStatus(`Moving ${name} to ${platformLabels.trash}...`);
+  if (currentFile !== deletingFile || currentReadOnly) {
+    setStatus("Move to Trash canceled: the open document changed");
+    return;
+  }
+  if (!commitActiveLiveTexForBoundary(true)) return;
+  noteTrashInProgress = true;
+  host.inert = true;
   try {
+    await save(false);
+    if (currentFile !== deletingFile || revision !== savedRevision) {
+      setStatus("Move to Trash canceled: save the current draft first");
+      return;
+    }
+    setStatus(`Moving ${name} to ${platformLabels.trash}...`);
     const deleted = await api.notes.trash(deletingFile);
-    const remaining = (deleted.notes ?? []).find((note) => note.file && note.file !== deletingFile);
     applyIndexPayload(deleted);
-    revision = 0;
-    savedRevision = 0;
-    currentFile = "";
-    copilotFileChangeHandlers.forEach((handler) => handler());
-    if (remaining?.file) {
-      await openFile(remaining.file);
+    if (currentFile !== deletingFile) {
       setStatus(`${name} moved to ${platformLabels.trash}`);
       return;
     }
-    window.location.assign(new URL("/wiki", window.location.origin));
+    await leaveRemovedNote(deletingFile, name);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Move to Trash failed");
+  } finally {
+    noteTrashInProgress = false;
+    host.inert = false;
   }
 }
 
@@ -10785,6 +11663,32 @@ function mathAtCursor(ctx: ReturnType<typeof editor.cursorContext>): {
       selection: {
         anchor: Math.max(0, Math.min(body.length, selection.anchor - displayMath.contentFrom)),
         head: Math.max(0, Math.min(body.length, selection.head - displayMath.contentFrom)),
+      },
+      rect: geometry.rect,
+      rectEnd: geometry.rectEnd,
+    };
+  }
+
+  const multilineInline = rangeAtPosition(cursor, getMultilineInlineMathRanges(state));
+  if (multilineInline
+    && selection.anchor >= multilineInline.contentFrom
+    && selection.anchor <= multilineInline.contentTo
+    && selection.head >= multilineInline.contentFrom
+    && selection.head <= multilineInline.contentTo) {
+    const body = state.doc.sliceString(multilineInline.contentFrom, multilineInline.contentTo);
+    const geometry = geometryFor(false, multilineInline.from, multilineInline.to);
+    return {
+      tex: body,
+      display: false,
+      from: multilineInline.from,
+      to: multilineInline.to,
+      contentFrom: multilineInline.contentFrom,
+      contentTo: multilineInline.contentTo,
+      doc: state.doc,
+      geometryEpoch: mathPreviewGeometryEpoch,
+      selection: {
+        anchor: Math.max(0, Math.min(body.length, selection.anchor - multilineInline.contentFrom)),
+        head: Math.max(0, Math.min(body.length, selection.head - multilineInline.contentFrom)),
       },
       rect: geometry.rect,
       rectEnd: geometry.rectEnd,
@@ -11975,6 +12879,73 @@ function routeHostKeyToMathEditor(key: VimLiteKey, text?: string, code?: string)
 
 let replayingHostKey = false;
 
+function editLiveTexPaletteSearchFromHost(key: string): boolean {
+  const input = liveTexPaletteSearch;
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? start;
+  if (key === "ArrowLeft" || key === "ArrowRight") {
+    const position = key === "ArrowLeft" ? Math.max(0, start - 1)
+      : Math.min(input.value.length, end + 1);
+    input.setSelectionRange(position, position);
+    return true;
+  }
+  if (key !== "Backspace" && key !== "Delete" && key.length !== 1) return false;
+  const from = key === "Backspace" && start === end ? Math.max(0, start - 1) : start;
+  const to = key === "Delete" && start === end ? Math.min(input.value.length, end + 1) : end;
+  input.setRangeText(key === "Backspace" || key === "Delete" ? "" : key, from, to, "end");
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  return true;
+}
+
+function handleLiveTexPaletteHostKey(key: string, hostKey: VimLiteKey, code: string): boolean {
+  const toggle = hostKey.metaKey && !hostKey.ctrlKey && !hostKey.altKey
+    && (key === "?" || (hostKey.shiftKey && code === "Slash"));
+  if (toggle) {
+    if (liveTexPalette.hidden) {
+      const selection = editor.view.state.selection.main;
+      openIndependentLiveTexPalette(mathTargetAtPosition(selection.head));
+    } else setLiveTexPaletteOpen(false);
+    return true;
+  }
+  if (liveTexPalette.hidden) return false;
+  if (key === "Escape") {
+    setLiveTexPaletteOpen(false);
+    return true;
+  }
+  if (hostKey.metaKey && !hostKey.shiftKey && !hostKey.ctrlKey && !hostKey.altKey
+      && key.toLowerCase() === "f") {
+    liveTexPaletteSearch.focus();
+    liveTexPaletteSearch.select();
+    return true;
+  }
+  // The palette owns every host-recovered key while open. In particular, a
+  // MathLive field must not consume Enter/Tab before the palette sees them.
+  if (hostKey.metaKey || hostKey.ctrlKey || hostKey.altKey) return true;
+  if (document.activeElement === liveTexPaletteSearch) {
+    if (key === "Tab") {
+      if (hostKey.shiftKey) focusLiveTexPaletteCategory();
+      else selectLiveTexPaletteItem(liveTexPaletteSelectedIndex, true);
+      return true;
+    }
+    if (key === "ArrowDown") {
+      selectLiveTexPaletteItem(liveTexPaletteSelectedIndex, true);
+      return true;
+    }
+    if (key === "ArrowUp") {
+      focusLiveTexPaletteCategory();
+      return true;
+    }
+    if (key === "Enter") {
+      insertSelectedLiveTexPaletteItem();
+      return true;
+    }
+    editLiveTexPaletteSearchFromHost(key);
+    return true;
+  }
+  handleLiveTexPaletteNavigation(key, hostKey.shiftKey);
+  return true;
+}
+
 function runHostKey(body: Record<string, unknown>): boolean {
   const rawKey = String(body.key || "");
   const shiftTabAlias = rawKey === "Backtab" || rawKey === "ISO_Left_Tab" || rawKey === "Shift-Tab";
@@ -11991,6 +12962,9 @@ function runHostKey(body: Record<string, unknown>): boolean {
     altKey: Boolean(body.altKey),
     shiftKey: Boolean(body.shiftKey) || shiftTabAlias,
   };
+  if (handleLiveTexPaletteHostKey(key, hostKey, typeof body.code === "string" ? body.code : "")) {
+    return true;
+  }
   if (routeHostKeyToMathEditor(
     hostKey,
     typeof body.text === "string" ? body.text : undefined,
@@ -12066,6 +13040,7 @@ function runHostCommand(detail: unknown): boolean {
     value?: string;
     text?: string;
     file?: string;
+    target?: string;
     hash?: string;
     dom?: string;
     mode?: VimLiteMode;
@@ -12113,6 +13088,18 @@ function runHostCommand(detail: unknown): boolean {
     case "window-hint-clear":
       windowHint.hidden = true;
       windowHint.textContent = "";
+      return true;
+    case "note-trashed":
+      void handleCurrentNoteRemoved(String(body.file || ""), "trash");
+      return true;
+    case "note-file-removed":
+      void handleCurrentNoteRemoved(
+        String(body.file || ""),
+        body.reason === "trash" ? "trash" : body.reason === "deleted" ? "deleted" : "missing",
+      );
+      return true;
+    case "note-file-moved":
+      void handleCurrentNoteMoved(String(body.oldFile || ""), String(body.file || ""));
       return true;
     case "notes-index-changed": {
       const version = typeof body.version === "number" ? body.version : 0;
@@ -12491,6 +13478,9 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     case "rename-tag":
       void renameRoamTagTool();
+      return true;
+    case "move-note":
+      void moveCurrentNoteFromEmacs(body.file, body.target);
       return true;
     case "delete-tag":
       void deleteRoamTagTool();

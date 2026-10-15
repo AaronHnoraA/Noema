@@ -1,0 +1,23 @@
+# name: Markdown · project brief
+# key: project
+# type: regular
+# group: Documents
+# --
+# {{title}}
+
+## Goal
+
+${1:What outcome matters?}
+
+## Scope
+
+- In: ${2:}
+- Out: ${3:}
+
+## Milestones
+
+- [ ] ${4:}
+
+## Risks and decisions
+
+${0:}

@@ -25,6 +25,7 @@ export type SlideDeckController = {
   sync: (kind: string) => void;
   refresh: () => void;
   toggleView: () => void;
+  exitRevealView: () => boolean;
   toggleTheme: () => SlideTheme;
   getTheme: () => SlideTheme;
   isSlides: () => boolean;
@@ -300,6 +301,12 @@ export function createSlideDeckController(options: {
       if (!enabled) return;
       view = view === "reveal" ? "edit" : "reveal";
       applyView();
+    },
+    exitRevealView(): boolean {
+      if (!enabled || view !== "reveal") return false;
+      view = "edit";
+      applyView();
+      return true;
     },
     toggleTheme(): SlideTheme {
       theme = theme === "dark" ? "light" : "dark";

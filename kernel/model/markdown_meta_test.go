@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/aaronhe/noema/kernel/filesys"
-	noemaidentity "github.com/aaronhe/noema/kernel/noema/identity"
 	"github.com/aaronhe/noema/kernel/util"
 )
 
@@ -51,7 +50,7 @@ func stubMarkdownMetaPersistence(t *testing.T) {
 	})
 }
 
-func TestMutateMarkdownMetaUsesEditorSnapshotAndPersistsPortableIdentity(t *testing.T) {
+func TestMutateMarkdownMetaUsesEditorSnapshotWithoutRoamIdentity(t *testing.T) {
 	boxID, path, absPath := setupMarkdownMetaTest(t)
 	stubMarkdownMetaPersistence(t)
 	if err := os.WriteFile(absPath, []byte("# Old disk\n"), 0644); err != nil {
@@ -67,7 +66,7 @@ func TestMutateMarkdownMetaUsesEditorSnapshotAndPersistsPortableIdentity(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Changed || result.Source != "kernel-meta" || !noemaidentity.IsUUIDv7(result.ID) ||
+	if !result.Changed || result.Source != "kernel-meta" || result.ID != "" ||
 		!strings.Contains(result.Markdown, "title: Live editor\n") || !strings.Contains(result.Markdown, "project: source-authority\n") {
 		t.Fatalf("unexpected metadata result: %+v\n%s", result, result.Markdown)
 	}
@@ -104,7 +103,7 @@ func TestMutateMarkdownMetaRejectsInvalidAllocatorIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	newMarkdownMetaID = func() (string, error) { return "legacy-id", nil }
-	_, err := MutateMarkdownMeta(MarkdownMetaMutationRequest{Notebook: boxID, Path: path, Action: "add"})
+	_, err := MutateMarkdownMeta(MarkdownMetaMutationRequest{Notebook: boxID, Path: path, Action: "activate-roam"})
 	if err == nil || !strings.Contains(err.Error(), "non-UUIDv7") {
 		t.Fatalf("expected invalid allocator rejection, got %v", err)
 	}

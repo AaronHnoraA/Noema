@@ -1,0 +1,22 @@
+# name: Roam · claim and evidence
+# key: claim
+# type: roam
+# group: Research
+# --
+# {{title}}
+
+## Claim
+
+${1:State one testable claim.}
+
+## Supporting evidence
+
+- ${2:Source, observation, or result.}
+
+## Counterevidence
+
+- ${3:What challenges the claim?}
+
+## Confidence and next check
+
+${0:What would change your confidence?}

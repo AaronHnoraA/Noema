@@ -1,0 +1,8 @@
+# name: Markdown · plain document
+# key: basic
+# type: regular
+# group: Documents
+# --
+# {{title}}
+
+${0:Write here.}

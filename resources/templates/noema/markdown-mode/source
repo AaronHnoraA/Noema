@@ -1,0 +1,22 @@
+# name: Roam · source card
+# key: source
+# type: roam
+# group: Research
+# --
+# {{title}}
+
+## Citation
+
+${1:Author, title, venue, year, and URL or DOI.}
+
+## Why this matters
+
+${2:Question or project this source informs.}
+
+## Key passages or data
+
+- ${3:Claim with page, section, or timestamp.}
+
+## Reliability and gaps
+
+${0:Method, provenance, and limitations to check.}

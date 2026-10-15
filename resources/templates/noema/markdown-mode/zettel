@@ -1,0 +1,16 @@
+# name: Roam · atomic idea
+# key: zettel
+# type: roam
+# group: Knowledge
+# --
+# {{title}}
+
+${1:State one idea or claim.}
+
+## Reasoning
+
+${2:Why does it hold?}
+
+## Links
+
+- ${0:Connect this idea to another note.}

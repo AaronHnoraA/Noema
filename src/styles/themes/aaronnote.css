@@ -96,7 +96,6 @@
   --aaron-font-heading: "ExcalifontLocal", "Excalifont", var(--aaron-font-latin), var(--aaron-font-chinese), var(--aaron-font-english-fallback), Georgia, serif;
   --aaron-font-title: var(--aaron-font-heading);
   --aaron-font-mono: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --aaron-font-math: "GFS Neohellenic Math", "Libertinus Math", "STIX Two Math", "Times New Roman", serif;
   --aaron-font-sans: system-ui, sans-serif;
   --aaron-role-critical: #e4b3b3;
   --aaron-role-popout: #9de7ff;

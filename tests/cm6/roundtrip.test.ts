@@ -28,7 +28,7 @@ import { createVimLite } from "../../aaronnote/vim-lite.ts";
 import { fixedWidthRowLayout, setVimRowLayoutForTesting } from "../../aaronnote/vim-rows.ts";
 import { SnippetSession } from "../../aaronnote/snippets.ts";
 import { indentMarkdownBlock } from "../../src/cm6/commands/index.ts";
-import { runEditorMovement } from "../../src/cm6/input-commands.ts";
+import { runEditorEnter, runEditorMovement } from "../../src/cm6/input-commands.ts";
 import {
   revealFormulaSource,
   texHighlightScanCount,
@@ -209,6 +209,91 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
     const md = "The value \\(x = 1\\) is given.";
     const { editor, cleanup } = mountCM6(md);
     expect(editor.getMarkdown()).toBe(md);
+    cleanup();
+  });
+
+  test("Enter expands an empty inline formula into editable multiline source", () => {
+    const md = "before \\(\\) after";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.indexOf("\\(") + 2);
+    runEditorEnter(editor.view);
+    expect(editor.getMarkdown()).toBe("before \\(\n\\) after");
+    editor.insertText("x+y");
+    expect(editor.getMarkdown()).toBe("before \\(\nx+y\\) after");
+    editor.setMarkdownSelection(editor.getMarkdown().length);
+    expect(document.querySelectorAll(".cm-math-inline")).toHaveLength(1);
+    expect(document.querySelector(".cm-math-block")).toBeNull();
+    cleanup();
+  });
+
+  test("Enter inside a list formula inserts TeX whitespace without another bullet", () => {
+    const md = "- item \\(\\)";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.indexOf("\\(") + 2);
+    runEditorEnter(editor.view);
+    expect(editor.getMarkdown()).toBe("- item \\(\n\\)");
+    editor.insertText("x");
+    runEditorEnter(editor.view);
+    expect(editor.getMarkdown()).toBe("- item \\(\nx\n\\)");
+    cleanup();
+  });
+
+  test("multiline inline formula stays inline and can be reopened as source", () => {
+    const md = "before \\(\n\\begin{aligned}x&=1\\\\y&=2\\end{aligned}\n\\) after";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.length);
+    const formula = document.querySelector<HTMLElement>(".cm-math-inline");
+    expect(formula).toBeTruthy();
+    expect(formula?.querySelector(".katex")).toBeTruthy();
+    expect(formula?.querySelector(".katex-display")).toBeNull();
+    const nodes: string[] = [];
+    syntaxTree(editor.view.state).iterate({ enter: (node) => { nodes.push(node.name); } });
+    expect(nodes).toContain("InlineMath");
+    formula!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    expect(editor.getMarkdownSelection().from).toBe(md.indexOf("\\(") + 2);
+    expect(editor.getMarkdown()).toBe(md);
+    expect(document.querySelectorAll(".cm-math-inline-source").length).toBeGreaterThanOrEqual(3);
+    expect(document.querySelector(".cm-math-inline-source .cm-tex-environment")).toBeTruthy();
+    expect(document.querySelector(".cm-math-inline-source .cm-tex-align")).toBeTruthy();
+    expect(document.querySelector(".cm-math-inline-source .cm-tex-number")).toBeTruthy();
+    cleanup();
+  });
+
+  test("multiline TeX highlighting scans only the edited formula", () => {
+    const md = "before \\(\n\\frac{1}{2}\n\\) after\nother";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.indexOf("\\frac") + 2);
+    const highlighted = texHighlightScanCount();
+    editor.view.dispatch({ changes: { from: md.length, insert: "!" } });
+    expect(texHighlightScanCount()).toBe(highlighted);
+    editor.view.dispatch({ changes: { from: md.indexOf("1"), insert: "3" } });
+    expect(texHighlightScanCount()).toBeGreaterThan(highlighted);
+    expect(document.querySelector(".cm-math-inline-source .cm-tex-command")).toBeTruthy();
+    cleanup();
+  });
+
+  test("does not turn multiline delimiter examples in fenced code into math", () => {
+    const md = "```tex\n\\(\nx+y\n\\)\n```";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.length);
+    expect(document.querySelector(".cm-math-inline")).toBeNull();
+    cleanup();
+  });
+
+  test("does not pair a delimiter in inline code with later prose", () => {
+    const md = "`\\(`\nx+y\n\\)";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.length);
+    expect(document.querySelector(".cm-math-inline")).toBeNull();
+    cleanup();
+  });
+
+  test("Enter in a code span containing math delimiters retains Markdown list behavior", () => {
+    const md = "- `\\(\\)`";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(md.indexOf("\\(") + 2);
+    runEditorEnter(editor.view);
+    expect(editor.getMarkdown()).toContain("\n- ");
     cleanup();
   });
 
@@ -4107,6 +4192,38 @@ maybeDescribe("cm6 kernel: selection", () => {
     expect(runEditorMovement(editor.view, "ArrowRight")).toBe("cursor");
     expect(editor.view.state.selection.ranges).toHaveLength(2);
     expect(editor.view.state.selection.ranges[1]!.head).toBe(secondLine + 1);
+    cleanup();
+  });
+
+  test("insert-mode left and right arrows enter multiline inline formula source", () => {
+    const md = "A \\(\nx+y\n\\) Z";
+    const from = md.indexOf("\\(");
+    const to = md.indexOf("\\)") + 2;
+    const { editor, cleanup } = mountCM6(md);
+
+    editor.setMarkdownSelection(from);
+    expect(runEditorMovement(editor.view, "ArrowRight")).toBe("formula");
+    expect(editor.getMarkdownSelection().from).toBe(from + 2);
+    expect(document.querySelector(".cm-math-inline")).toBeNull();
+    expect(runEditorMovement(editor.view, "ArrowRight")).toBe("cursor");
+
+    editor.setMarkdownSelection(to);
+    expect(document.querySelector(".cm-math-inline")).toBeTruthy();
+    expect(runEditorMovement(editor.view, "ArrowLeft")).toBe("formula");
+    expect(editor.getMarkdownSelection().from).toBe(to - 2);
+    expect(document.querySelector(".cm-math-inline")).toBeNull();
+    cleanup();
+  });
+
+  test("insert-mode vertical arrows can enter a collapsed multiline inline formula", () => {
+    const md = "abc\nA \\(\nx+y\n\\) Z\nxyz";
+    const { editor, cleanup } = mountCM6(md);
+    editor.setMarkdownSelection(3);
+    expect(runEditorMovement(editor.view, "ArrowDown")).toBe("formula");
+    expect(editor.getMarkdownSelection().from).toBe(md.indexOf("\\(") + 2);
+    editor.setMarkdownSelection(md.indexOf("xyz") + 3);
+    expect(runEditorMovement(editor.view, "ArrowUp")).toBe("formula");
+    expect(editor.getMarkdownSelection().from).toBe(md.indexOf("\\)"));
     cleanup();
   });
 

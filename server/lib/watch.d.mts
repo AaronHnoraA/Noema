@@ -23,3 +23,9 @@ export interface StartNoteWatcherOptions {
 }
 
 export function startNoteWatcher(options: StartNoteWatcherOptions): NoteWatcherHandle;
+
+export function missingOpenNoteFiles(
+  openFiles: Iterable<unknown>,
+  root: string,
+  changedFiles?: string[] | null,
+): string[];

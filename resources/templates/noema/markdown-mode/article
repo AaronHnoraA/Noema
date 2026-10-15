@@ -1,0 +1,22 @@
+# name: Markdown · article draft
+# key: article
+# type: regular
+# group: Writing
+# --
+# {{title}}
+
+## Lead
+
+${1:Who is this for, and what is the main point?}
+
+## Outline
+
+1. ${2:First section.}
+
+## Draft
+
+${3:Write the argument or story here.}
+
+## Sources and fact checks
+
+- ${0:Claim to verify and its source.}

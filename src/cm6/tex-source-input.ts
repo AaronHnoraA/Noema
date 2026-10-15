@@ -9,7 +9,8 @@ import {
 } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { scanInlineMathRanges } from "../inline-math.ts";
-import { blockMathRangeAt } from "./math-ranges.ts";
+import { scanCodeRanges } from "./code-ranges.ts";
+import { blockMathRangeAt, getMultilineInlineMathRanges, rangeAtPosition } from "./math-ranges.ts";
 import { jumpStructuralDelimiter, jumpTexUnit } from "./structural-jump.ts";
 
 type TexMathContentRange = { from: number; to: number };
@@ -133,10 +134,17 @@ const texAutoPairState = StateField.define<readonly TexAutoPair[]>({
   },
 });
 
-function texMathContentRangeAt(state: EditorState, position: number): TexMathContentRange | null {
+export function texMathContentRangeAt(state: EditorState, position: number): TexMathContentRange | null {
   texMathContentRangeLookups++;
   const block = blockMathRangeAt(state, position);
   if (block) return { from: block.contentFrom, to: block.contentTo };
+
+  const multiline = rangeAtPosition(position, getMultilineInlineMathRanges(state));
+  if (multiline && position >= multiline.contentFrom && position <= multiline.contentTo) {
+    if (scanCodeRanges(state, [{ from: multiline.from, to: multiline.to }]).length === 0) {
+      return { from: multiline.contentFrom, to: multiline.contentTo };
+    }
+  }
 
   const line = state.doc.lineAt(position);
   const inline = scanInlineMathRanges(line.text, line.from).find((range) => {
@@ -144,7 +152,8 @@ function texMathContentRangeAt(state: EditorState, position: number): TexMathCon
     const contentTo = range.to - 2;
     return position >= contentFrom && position <= contentTo;
   });
-  return inline ? { from: inline.from + 2, to: inline.to - 2 } : null;
+  return inline && scanCodeRanges(state, [{ from: inline.from, to: inline.to }]).length === 0
+    ? { from: inline.from + 2, to: inline.to - 2 } : null;
 }
 
 /** Whether a source position is in a TeX text-command argument, not math mode. */

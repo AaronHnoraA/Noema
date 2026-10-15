@@ -1,0 +1,24 @@
+# name: Markdown · project README
+# key: readme
+# type: regular
+# group: Documents
+# --
+# {{title}}
+
+${1:One paragraph describing the project and who it is for.}
+
+## Quick start
+
+1. ${2:Install or setup step.}
+
+## Usage
+
+${3:Smallest working example.}
+
+## Configuration
+
+${4:Required settings and where they live.}
+
+## Development and tests
+
+${0:How to run checks and contribute.}

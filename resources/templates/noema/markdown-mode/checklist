@@ -1,0 +1,22 @@
+# name: Markdown · checklist
+# key: checklist
+# type: regular
+# group: Documents
+# --
+# {{title}}
+
+## Scope
+
+${1:When should this checklist be used?}
+
+## Before
+
+- [ ] ${2:Preparation.}
+
+## During
+
+- [ ] ${3:Core check.}
+
+## After
+
+- [ ] ${0:Verification or handoff.}

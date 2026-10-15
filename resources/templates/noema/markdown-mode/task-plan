@@ -1,0 +1,22 @@
+# name: Markdown · task plan
+# key: task-plan
+# type: regular
+# group: Documents
+# --
+# {{title}}
+
+## Outcome
+
+${1:What will be true when this is done?}
+
+## Steps
+
+- [ ] ${2:}
+
+## Blockers
+
+${3:}
+
+## Verification
+
+${0:How will I check the result?}

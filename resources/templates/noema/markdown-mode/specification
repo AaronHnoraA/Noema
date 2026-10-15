@@ -1,0 +1,26 @@
+# name: Markdown · specification
+# key: specification
+# type: regular
+# group: Documents
+# --
+# {{title}}
+
+## Context and goal
+
+${1:Problem, users, and desired outcome.}
+
+## Requirements
+
+- ${2:Observable requirement.}
+
+## Design
+
+${3:Components, data, and interactions.}
+
+## Edge cases and risks
+
+${4:Failure paths and constraints.}
+
+## Acceptance checks
+
+- [ ] ${0:How will this be verified?}

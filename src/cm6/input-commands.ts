@@ -44,6 +44,7 @@ import {
 import {
   deleteTexSourceAutoPair,
   deleteTexSourceAutoPairForward,
+  texMathContentRangeAt,
 } from "./tex-source-input.ts";
 import { nextGraphemePosition, previousGraphemePosition } from "./text-boundaries.ts";
 import {
@@ -412,6 +413,18 @@ export function runEditorEnter(view: EditorView): boolean {
     // Falling back immediately preserves CM6's native multi-selection behavior.
     if (view.state.selection.ranges.length > 1) return insertNewlineAndIndent(view);
 
+    const selection = view.state.selection.main;
+    const math = texMathContentRangeAt(view.state, selection.head);
+    if (math && selection.from >= math.from && selection.to <= math.to) {
+      view.dispatch(view.state.update({
+        changes: { from: selection.from, to: selection.to, insert: "\n" },
+        selection: EditorSelection.cursor(selection.from + 1),
+        scrollIntoView: true,
+        userEvent: "input",
+      }));
+      return true;
+    }
+
     return tableEnterSameColumn(view)
       || explodeCodeBracketsOnEnter(view)
       || closeFencedCodeOnEnter(view)
@@ -458,6 +471,10 @@ export function runEditorSoftBreak(view: EditorView): boolean {
   const state = view.state;
   if (state.selection.ranges.length > 1 || fencedBodyAt(state, state.selection.main.head)) return insertNewlineAndIndent(view);
   const range = state.selection.main;
+  const math = texMathContentRangeAt(state, range.head);
+  if (math && range.from >= math.from && range.to <= math.to) {
+    return runEditorEnter(view);
+  }
   const line = state.doc.lineAt(range.from);
   const insert = `\n${markdownSoftBreakPrefix(line.text)}`;
   view.dispatch(state.update({

@@ -1720,7 +1720,7 @@
   content: var(--orgenv-end, "•");
   display: inline-block;
   padding-right: 0.1rem;
-  font-family: var(--aaron-font-math), var(--aaron-font-body);
+  font-family: var(--aaron-font-body);
   font-size: 0.95em;
 }
 .cm-editor .cm-org-env-block .org-env-heading {
@@ -2011,7 +2011,7 @@
 
 .aaronnote-meta-abstract-title {
   color: var(--aaron-ink, #24201a);
-  font-family: var(--aaron-font-math, "Times New Roman", serif), var(--aaron-font-chinese, serif);
+  font-family: var(--aaron-font-academic-title, "Latin Modern Roman", Georgia, serif);
   font-size: clamp(22px, 1.85vw, 29px);
   font-weight: 650;
   line-height: 1.2;
@@ -2961,11 +2961,6 @@ body.has-diagram-fullscreen {
   text-align: left;
 }
 
-/* KaTeX font in CM6 — applied to math widget elements inside .cm-editor */
-.cm-editor .katex,
-.cm-editor .katex * {
-  font-family: var(--aaron-font-math, KaTeX_Main, "Times New Roman", serif) !important;
-}
 .cm-editor .katex {
   color: inherit;
 }
@@ -2973,10 +2968,6 @@ body.has-diagram-fullscreen {
 .cm-editor .katex .sqrt-line {
   border-color: currentColor;
 }
-.cm-editor .katex .mord.mathnormal {
-  font-family: var(--aaron-font-math, KaTeX_Math, "Times New Roman", serif) !important;
-}
-
 /* Display math is a real block node. The fences are node chrome, so editing
  * the TeX body cannot collapse or move the surrounding `$$` lines. */
 .cm-editor math-block {

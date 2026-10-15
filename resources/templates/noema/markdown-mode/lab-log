@@ -1,0 +1,28 @@
+# name: Markdown · lab log
+# key: lab-log
+# type: regular
+# group: Research
+# --
+# {{title}}
+
+Date: {{date}}
+
+## Objective
+
+${1:What was attempted today?}
+
+## Materials and setup
+
+${2:Inputs, versions, environment, and settings.}
+
+## Procedure
+
+${3:Chronological steps and deviations.}
+
+## Raw observations
+
+${4:Data, links, and unexpected events.}
+
+## Interpretation and next run
+
+${0:Provisional conclusion and next action.}

@@ -97,7 +97,7 @@ import {
 import { createKernelRelationshipOverlay } from "./server/lib/kernel-relationships.mjs";
 import { createKernelSupervisor } from "./server/lib/kernel-supervisor.mjs";
 import { writeHostDescriptor } from "./server/lib/host-descriptor.mjs";
-import { startNoteWatcher } from "./server/lib/watch.mjs";
+import { missingOpenNoteFiles, startNoteWatcher } from "./server/lib/watch.mjs";
 import { workAgendaPlanning } from "./shared/work-agenda.mjs";
 import { validateResearchNotebook } from "./server/lib/research-notebook.mjs";
 import { createAgendaService } from "./server/lib/agenda-service.mjs";
@@ -1033,6 +1033,52 @@ function applyWikiMutationResult(result, options = {}) {
   return result;
 }
 
+function applyRoamTagMutationResult(result) {
+  const applied = applyWikiMutationResult(result);
+  if (Number(applied?.changedCount) > 0) {
+    // A bulk edit is one user action even if it rewrites many notes.  Tell
+    // Emacs once to drop its Roam projections instead of sending one event
+    // per file or making the next tag lookup read stale cached records.
+    gatewayNotify("aaronnote.event", {
+      type: "notes-mutated",
+      payload: { count: applied.changedCount },
+    });
+  }
+  return applied;
+}
+
+function publishTrashedNote(result) {
+  const file = String(result?.file || "");
+  if ((result?.type === "deleted" || result?.type === "fs-trashed")
+      && result?.ok !== false && /\.(?:md|markdown)$/i.test(file)) {
+    broadcast("command", { command: "note-trashed", file });
+    gatewayNotify("aaronnote.event", {
+      type: "note-trashed",
+      payload: { file },
+    });
+  }
+  return result;
+}
+
+const missingOpenNotified = new Set();
+function publishMissingOpenNotes(changedFiles = null) {
+  const openFiles = [...editorClients.values()].map((client) => client.file);
+  const missing = missingOpenNoteFiles(openFiles, noteRoot, changedFiles);
+  const missingSet = new Set(missing);
+  for (const file of changedFiles ?? openFiles) {
+    if (!missingSet.has(file)) missingOpenNotified.delete(file);
+  }
+  for (const file of missing) {
+    if (missingOpenNotified.has(file)) continue;
+    missingOpenNotified.add(file);
+    broadcast("command", { command: "note-file-removed", file, reason: "missing" });
+    gatewayNotify("aaronnote.event", {
+      type: "note-file-removed",
+      payload: { file, reason: "missing" },
+    });
+  }
+}
+
 function withWikiMutationHooks(handlers, { full = [], only = null } = {}) {
   const fullChannels = new Set(full);
   const selectedChannels = only ? new Set(only) : null;
@@ -1040,10 +1086,23 @@ function withWikiMutationHooks(handlers, { full = [], only = null } = {}) {
     channel,
     selectedChannels && !selectedChannels.has(channel)
       ? handler
-      : async (...args) => applyWikiMutationResult(
-          await handler(...args),
-          { full: fullChannels.has(channel) },
-        ),
+      : async (...args) => {
+          const result = applyWikiMutationResult(
+            await handler(...args),
+            { full: fullChannels.has(channel) },
+          );
+          if ((channel === "aaronnote:api:fs:move" || channel === "aaronnote:api:fs:rename")
+              && (result?.type === "fs-moved" || result?.type === "fs-renamed")
+              && /\.(?:md|markdown)$/i.test(String(result.oldFile || ""))) {
+            broadcast("command", { command: "note-file-moved", oldFile: result.oldFile, file: result.file });
+            gatewayNotify("aaronnote.event", {
+              type: "note-moved",
+              payload: { oldFile: result.oldFile, file: result.file },
+            });
+          }
+          if (channel === "aaronnote:api:fs:trash") publishTrashedNote(result);
+          return result;
+        },
   ]));
 }
 
@@ -1325,6 +1384,7 @@ agendaAttention = createAgendaAttention({
   },
 });
 
+const editorClients = new Map();
 const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
   ? startNoteWatcher({
       root: noteRoot,
@@ -1345,6 +1405,7 @@ const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
         const noteFiles = files.filter((file) => notePathWatchRelevant(file));
         const bibFiles = files.filter((file) => bibliographyPathWatchRelevant(file));
         for (const file of noteFiles) markNotesDirty(file);
+        publishMissingOpenNotes(noteFiles);
         if (noteFiles.length > 0) {
           broadcast("command", { command: "notes-index-changed", version: notesIndexVersionValue() });
           // One batch per watcher flush lets open Markdown panes notice agent
@@ -1361,6 +1422,7 @@ const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
         }
       },
       onFullRescan() {
+        publishMissingOpenNotes();
         agendaIndex.invalidate();
         void researchNotebookWatch.fullRescan();
         markNotesDirty();
@@ -1417,7 +1479,6 @@ if (!existsSync(webDir)) {
 // Emacs traffic is routed here and filtered again in the renderer, so sibling
 // xwidgets neither receive nor apply another pane's lifecycle commands.
 const eventClients = new Map();
-const editorClients = new Map();
 const clientLifecycleStates = new Map();
 let shuttingDown = false;
 let shutdownPromise = null;
@@ -2318,8 +2379,12 @@ const apiRouter = new ApiRouter().register({
     return result;
   },
   "aaronnote:api:notes:create-node": async (draft) => applyWikiMutationResult(await createNode(draft || {})),
-  "aaronnote:api:notes:delete": async (file) => applyWikiMutationResult(await deleteNote({ file })),
-  "aaronnote:api:notes:delete-node": async (file) => applyWikiMutationResult(await deleteNote({ file })),
+  "aaronnote:api:notes:delete": async (file) => publishTrashedNote(
+    applyWikiMutationResult(await deleteNote({ file })),
+  ),
+  "aaronnote:api:notes:delete-node": async (file) => publishTrashedNote(
+    applyWikiMutationResult(await deleteNote({ file })),
+  ),
   "aaronnote:api:notes:create-folder": async (path) => applyWikiMutationResult(
     await createFolder({ path }), { full: true },
   ),
@@ -2631,8 +2696,8 @@ const apiRouter = new ApiRouter().register({
     await updateCurrentNoteMeta(body || {}, "add"),
   ),
 
-  "aaronnote:api:roam-tools:rename-tag": async (body) => applyWikiMutationResult(await renameRoamTag(body || {})),
-  "aaronnote:api:roam-tools:delete-tag": async (body) => applyWikiMutationResult(await deleteRoamTag(body || {})),
+  "aaronnote:api:roam-tools:rename-tag": async (body) => applyRoamTagMutationResult(await renameRoamTag(body || {})),
+  "aaronnote:api:roam-tools:delete-tag": async (body) => applyRoamTagMutationResult(await deleteRoamTag(body || {})),
   "aaronnote:api:roam-tools:tag-overlap": () => roamTagOverlapReport(),
   "aaronnote:api:roam-tools:rewrite-path-refs": async (body) => {
     const result = await rewriteMarkdownPathReferences(body || {});

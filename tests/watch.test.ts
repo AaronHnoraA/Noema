@@ -1,13 +1,33 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { startNoteWatcher } from "../server/lib/watch.mjs";
+import { missingOpenNoteFiles, startNoteWatcher } from "../server/lib/watch.mjs";
 // @ts-ignore Headless host module.
 import { noteSelfWrite, noteSelfWriteRecently } from "../server/lib/runtime.mjs";
 
 describe("note watcher", () => {
+  test("checks only open Markdown paths and includes descendants after a directory move", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-watch-open-"));
+    const oldDir = join(root, "topic");
+    const oldNote = join(oldDir, "note.md");
+    const other = join(root, "other.md");
+    const outside = join(tmpdir(), "unrelated.md");
+    try {
+      await mkdir(oldDir);
+      await writeFile(oldNote, "note");
+      await writeFile(other, "other");
+      await rename(oldDir, join(root, "renamed"));
+      const open = [oldNote, oldNote, other, outside, join(root, "draft.txt")];
+      expect(missingOpenNoteFiles(open, root, [other])).toEqual([]);
+      expect(missingOpenNoteFiles(open, root, [oldNote])).toEqual([oldNote]);
+      expect(missingOpenNoteFiles(open, root)).toEqual([oldNote]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("keeps agent edits visible immediately after a host save", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-watch-self-write-"));
     const file = join(root, "note.md");

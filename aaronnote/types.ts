@@ -117,6 +117,7 @@ export type TemplateSummary = {
   name?: string;
   mode?: string;
   kind?: string;
+  nodeType?: "roam" | "regular" | "";
   group?: string;
   body?: string;
   source?: string;

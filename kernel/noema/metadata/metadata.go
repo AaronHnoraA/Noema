@@ -428,7 +428,7 @@ func initialBlock(source, fileName string, request Request, options Options) (st
 		tags = normalizeTags(*request.Tags)
 	}
 	id := ""
-	if request.Action != ActionHideRoam {
+	if request.Action == ActionActivateRoam {
 		if options.NewID == nil {
 			return "", fmt.Errorf("metadata UUIDv7 allocator is required")
 		}
@@ -493,8 +493,7 @@ func Patch(source, fileName string, request Request, options Options) (Result, e
 
 	fields := fieldsIn(source, block)
 	id := scalar(fields, "id")
-	roamOff := strings.EqualFold(strings.TrimSpace(scalar(fields, "roam")), "off") && action != ActionActivateRoam
-	if id == "" && !roamOff && action != ActionHideRoam {
+	if id == "" && action == ActionActivateRoam {
 		if options.NewID == nil {
 			return Result{}, fmt.Errorf("metadata UUIDv7 allocator is required")
 		}

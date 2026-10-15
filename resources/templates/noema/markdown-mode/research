@@ -1,0 +1,22 @@
+# name: Roam · research question
+# key: research
+# type: roam
+# group: Research
+# --
+# {{title}}
+
+## Question
+
+${1:What exactly do I want to know?}
+
+## Current understanding
+
+${2:}
+
+## Evidence to collect
+
+- ${3:}
+
+## Working answer
+
+${0:What would change my mind?}

@@ -6,6 +6,7 @@ import {
   blockMathRangesExtension,
   blockMathRangesOverlapping,
   getBlockMathRanges,
+  getMultilineInlineMathRanges,
   mergeOverlappingRanges,
   positionInsideAnyRange,
   rangeAtPosition,
@@ -16,6 +17,35 @@ import {
 } from "../src/cm6/math-ranges.ts";
 
 describe("block math range queries", () => {
+  test("indexes only genuinely multiline inline math and keeps its delimiters", () => {
+    const source = "before \\(x\\) and \\(\nx+y\n\\) after";
+    const state = EditorState.create({ doc: source, extensions: [blockMathRangesExtension] });
+    const ranges = getMultilineInlineMathRanges(state);
+    expect(ranges).toHaveLength(1);
+    expect(ranges[0]).toMatchObject({
+      from: source.indexOf("\\(\n"),
+      to: source.indexOf("\\) after") + 2,
+      tex: "x+y",
+    });
+    expect(getBlockMathRanges(state)).toHaveLength(0);
+  });
+
+  test("updates multiline inline math locally and leaves blank-line math as source", () => {
+    const state = EditorState.create({
+      doc: "before \\(\nx\n\\) after\nplain",
+      extensions: [blockMathRangesExtension],
+    });
+    const before = getMultilineInlineMathRanges(state)[0]!;
+    const changed = state.update({ changes: { from: before.contentFrom + 1, insert: "+y" } }).state;
+    expect(getMultilineInlineMathRanges(changed)).toMatchObject([{ tex: "+yx" }]);
+    const below = changed.update({ changes: { from: changed.doc.length, insert: "!" } }).state;
+    expect(getMultilineInlineMathRanges(below)).toBe(getMultilineInlineMathRanges(changed));
+    const blank = EditorState.create({
+      doc: "before \\(\n\n\\) after",
+      extensions: [blockMathRangesExtension],
+    });
+    expect(getMultilineInlineMathRanges(blank)).toHaveLength(0);
+  });
   test("finds overlaps, containment, and point hits on sorted ranges", () => {
     const ranges = scanBlockMathRanges("a\n\\[\nx\n\\]\nb\n\\[\ny\n\\]\nc");
 

@@ -46,6 +46,9 @@ button { font: inherit; }
   flex: 0 0 auto; padding: 3px 7px; border: 1px solid var(--aaron-ui-border, #343d50); border-radius: 4px;
   color: var(--aaron-ui-text-muted, #aeb7c8); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+.noema-jupyter-kernel[data-status="disconnected"],
+.noema-jupyter-kernel[data-status="unavailable"] { color: #f3ca8d; border-color: #8c6844; }
+.noema-jupyter-kernel[data-status="dead"] { color: #ff8791; border-color: #9a4853; }
 .noema-jupyter-page button {
   border: 1px solid var(--aaron-ui-border, #374155); border-radius: 4px; padding: 3px 7px;
   background: var(--aaron-ui-surface-raised, #202736); color: inherit; cursor: pointer;

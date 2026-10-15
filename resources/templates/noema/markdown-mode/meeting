@@ -1,0 +1,21 @@
+# name: Markdown · meeting minutes
+# key: meeting
+# type: regular
+# group: Documents
+# --
+# {{title}}
+
+Date: {{date}}
+Attendees: ${1:}
+
+## Agenda
+
+- ${2:}
+
+## Decisions
+
+- ${3:}
+
+## Actions
+
+- [ ] ${0:Owner — action — due date}

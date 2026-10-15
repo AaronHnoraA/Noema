@@ -560,7 +560,6 @@ function mathInlineRule(state: StateInline, silent: boolean): boolean {
   const end = state.src.indexOf("\\)", start + 2);
   if (end < 0 || end === start + 2) return false;
   const tex = state.src.slice(start + 2, end);
-  if (tex.includes("\n")) return false;
   if (silent) { state.pos = end + 2; return true; }
   const token = state.push("math_inline", "span", 0);
   token.content = tex;

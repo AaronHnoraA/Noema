@@ -98,6 +98,7 @@ export interface KernelRecord {
   lastCellId: string;
   totalRuns: number;
   lastError: string | undefined;
+  executedCellRevisions?: Map<string, string>;
   disposed: boolean;
   /** `kernel_info_reply` content captured during the readiness handshake. */
   kernelInfo: unknown | null;
@@ -131,6 +132,7 @@ export function createKernelRegistry(options: {
   baseEnvironment?: Record<string, string>;
 }): {
   get(key: string): KernelRecord | undefined;
+  inspect(key: string): KernelRecord | undefined;
   ensure(key: string, kernelSpecEntry: KernelSpecEntry): Promise<KernelRecord>;
   ensureServer(
     key: string,

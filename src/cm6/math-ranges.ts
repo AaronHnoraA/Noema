@@ -11,6 +11,8 @@ export interface BlockMathRange {
   tex: string;
 }
 
+export interface MultilineInlineMathRange extends BlockMathRange {}
+
 type BlockMathFence = {
   from: number;
   to: number;
@@ -20,6 +22,8 @@ type BlockMathFence = {
 type BlockMathIndex = {
   fences: readonly BlockMathFence[];
   ranges: readonly BlockMathRange[];
+  inlineFences: readonly BlockMathFence[];
+  inlineRanges: readonly MultilineInlineMathRange[];
 };
 
 export function scanBlockMathRanges(text: string, baseOffset = 0): BlockMathRange[] {
@@ -61,11 +65,34 @@ export function scanBlockMathRangesInDoc(doc: Text): BlockMathRange[] {
   return scanBlockMathIndexInDoc(doc).ranges.slice();
 }
 
-function scanBlockMathFencesInLines(
+function inlineFencesOnLine(line: string, base: number): BlockMathFence[] {
+  if (!line.includes("\\(") && !line.includes("\\)")) return [];
+  const fences: BlockMathFence[] = [];
+  let open = -1;
+  for (let position = 0; position + 1 < line.length; position++) {
+    if (line[position] !== "\\" || (line[position + 1] !== "(" && line[position + 1] !== ")")) continue;
+    let precedingSlashes = 0;
+    for (let before = position - 1; before >= 0 && line[before] === "\\"; before--) precedingSlashes++;
+    if (precedingSlashes % 2) continue;
+    if (line[position + 1] === "(") {
+      open = position;
+    } else if (open >= 0) {
+      open = -1; // A complete same-line formula belongs to the inline parser.
+    } else {
+      fences.push({ from: base + position, to: base + position + 2, kind: "close" });
+    }
+    position++;
+  }
+  if (open >= 0) fences.push({ from: base + open, to: base + open + 2, kind: "open" });
+  return fences;
+}
+
+function scanMathFencesInLines(
   doc: Text,
   windows: readonly { from: number; to: number }[],
-): BlockMathFence[] {
+): { fences: BlockMathFence[]; inlineFences: BlockMathFence[] } {
   const fences: BlockMathFence[] = [];
+  const inlineFences: BlockMathFence[] = [];
   for (const window of windows) {
     const firstLine = doc.lineAt(Math.max(0, Math.min(window.from, doc.length))).number;
     const lastLine = doc.lineAt(Math.max(0, Math.min(window.to, doc.length))).number;
@@ -75,10 +102,12 @@ function scanBlockMathFencesInLines(
         fences.push({ from: line.from, to: line.to, kind: "open" });
       } else if (BLOCK_MATH_CLOSE_RE.test(line.text)) {
         fences.push({ from: line.from, to: line.to, kind: "close" });
+      } else {
+        inlineFences.push(...inlineFencesOnLine(line.text, line.from));
       }
     }
   }
-  return fences;
+  return { fences, inlineFences };
 }
 
 /**
@@ -97,6 +126,7 @@ function rangesFromFences(
   previous: readonly BlockMathRange[] = [],
   changes?: ChangeSet,
   firstChangeFrom = 0,
+  inline = false,
 ): BlockMathRange[] {
   // Positions ahead of every change map to themselves, so the common case of
   // editing below a long preamble skips position mapping entirely.
@@ -109,16 +139,15 @@ function rangesFromFences(
   let cursor = 0;
   let open: BlockMathFence | null = null;
   for (const fence of fences) {
-    if (!open) {
-      if (fence.kind === "open") open = fence;
+    if (fence.kind === "open") {
+      if (!open || inline) open = fence;
       continue;
     }
-    if (fence.kind !== "close") continue;
-    const contentFrom = open.to < doc.length ? open.to + 1 : open.to;
+    if (!open) continue;
+    const contentFrom = inline ? open.to : open.to < doc.length ? open.to + 1 : open.to;
     const from = open.from;
     const to = fence.to;
     const contentTo = fence.from;
-
     let reused: BlockMathRange | null = null;
     if (changes) {
       while (cursor < previous.length && mapFrom(previous[cursor]!.from) < from) cursor += 1;
@@ -134,6 +163,14 @@ function rangesFromFences(
       }
     }
 
+    const content = reused ? null : doc.sliceString(contentFrom, contentTo);
+    // A blank line is a paragraph break in TeX math mode. Unchanged ranges
+    // were validated already; never rescan their possibly large body.
+    if (inline && content != null && /\n[ \t]*\n/.test(content)) {
+      open = null;
+      continue;
+    }
+
     if (reused
       && reused.from === from && reused.to === to
       && reused.contentFrom === contentFrom && reused.contentTo === contentTo) {
@@ -144,7 +181,7 @@ function rangesFromFences(
         to,
         contentFrom,
         contentTo,
-        tex: reused ? reused.tex : doc.sliceString(contentFrom, contentTo).trim(),
+        tex: reused ? reused.tex : content!.trim(),
       });
     }
     open = null;
@@ -153,8 +190,13 @@ function rangesFromFences(
 }
 
 function scanBlockMathIndexInDoc(doc: Text): BlockMathIndex {
-  const fences = scanBlockMathFencesInLines(doc, [{ from: 0, to: doc.length }]);
-  return { fences, ranges: rangesFromFences(doc, fences) };
+  const { fences, inlineFences } = scanMathFencesInLines(doc, [{ from: 0, to: doc.length }]);
+  return {
+    fences,
+    ranges: rangesFromFences(doc, fences),
+    inlineFences,
+    inlineRanges: rangesFromFences(doc, inlineFences, [], undefined, 0, true),
+  };
 }
 
 function mergeLineWindows(
@@ -247,32 +289,35 @@ function updateBlockMathIndex(
 ): BlockMathIndex {
   const { oldWindows, newWindows } = changedLineWindows(oldDoc, newDoc, changes);
   const firstChangeFrom = firstChangedOffset(changes);
-  const rescanned = scanBlockMathFencesInLines(newDoc, newWindows);
+  const rescanned = scanMathFencesInLines(newDoc, newWindows);
   const lastFence = index.fences[index.fences.length - 1];
+  const lastInlineFence = index.inlineFences[index.inlineFences.length - 1];
   // Text below every formula cannot move an existing fence or alter its TeX.
   // Keep the index itself when no new delimiter was introduced, avoiding a
   // walk through thousands of formulas to append one ordinary character.
-  if (rescanned.length === 0 && (!lastFence || oldWindows[0]!.from > lastFence.to)) return index;
+  if (rescanned.fences.length === 0 && rescanned.inlineFences.length === 0
+    && (!lastFence || oldWindows[0]!.from > lastFence.to)
+    && (!lastInlineFence || oldWindows[0]!.from > lastInlineFence.to)) return index;
 
   // Surviving fences stay in document order, and a rescan of the changed lines
   // is ordered too, so the two runs merge in linear time. Sorting the whole
   // index instead made every keystroke in a formula-heavy note pay
   // O(fences log fences) — ~21k fences here — for a one-line edit.
-  const surviving: BlockMathFence[] = [];
-  for (const fence of index.fences) {
-    if (overlapsAnyLineWindow(fence, oldWindows)) continue;
-    surviving.push(fence.to < firstChangeFrom
-      ? fence
-      : {
-          from: changes.mapPos(fence.from, -1),
-          to: changes.mapPos(fence.to, 1),
-          kind: fence.kind,
-        });
-  }
-  const fences = mergeFences(surviving, rescanned);
+  const survivors = (oldFences: readonly BlockMathFence[]): BlockMathFence[] => oldFences.flatMap((fence) => {
+    if (overlapsAnyLineWindow(fence, oldWindows)) return [];
+    return [fence.to < firstChangeFrom ? fence : {
+      from: changes.mapPos(fence.from, -1),
+      to: changes.mapPos(fence.to, 1),
+      kind: fence.kind,
+    }];
+  });
+  const fences = mergeFences(survivors(index.fences), rescanned.fences);
+  const inlineFences = mergeFences(survivors(index.inlineFences), rescanned.inlineFences);
   return {
     fences,
     ranges: rangesFromFences(newDoc, fences, index.ranges, changes, firstChangeFrom),
+    inlineFences,
+    inlineRanges: rangesFromFences(newDoc, inlineFences, index.inlineRanges, changes, firstChangeFrom, true),
   };
 }
 
@@ -288,6 +333,11 @@ export const blockMathRangesExtension: Extension = blockMathRangesField;
 
 export function getBlockMathRanges(state: EditorState): readonly BlockMathRange[] {
   return state.field(blockMathRangesField, false)?.ranges ?? scanBlockMathRangesInDoc(state.doc);
+}
+
+export function getMultilineInlineMathRanges(state: EditorState): readonly MultilineInlineMathRange[] {
+  return state.field(blockMathRangesField, false)?.inlineRanges
+    ?? scanBlockMathIndexInDoc(state.doc).inlineRanges;
 }
 
 /** Find the display-math content containing a position without scanning every range. */

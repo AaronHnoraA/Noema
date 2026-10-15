@@ -1,5 +1,25 @@
-import { watch } from "node:fs";
-import { relative } from "node:path";
+import { statSync, watch } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+
+/** Only inspect open local notes when a vault event could have removed them. */
+export function missingOpenNoteFiles(openFiles, root, changedFiles = null) {
+  const rootPath = resolve(root);
+  const changed = changedFiles === null ? null : new Set(changedFiles.map((file) => resolve(file)));
+  return [...new Set(openFiles)].filter((file) => {
+    if (typeof file !== "string" || !isAbsolute(file)) return false;
+    const path = resolve(file);
+    const rel = relative(rootPath, path);
+    if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)
+        || !/\.(?:md|markdown)$/i.test(path) || (changed && !changed.has(path))) return false;
+    try {
+      statSync(path);
+      return false;
+    } catch (error) {
+      // A permission or transport failure must not be reported as deletion.
+      return error?.code === "ENOENT" || error?.code === "ENOTDIR";
+    }
+  });
+}
 
 /**
  * startNoteWatcher — singleton fs.watch wrapper for vault change detection.

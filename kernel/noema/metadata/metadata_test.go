@@ -21,7 +21,7 @@ func testOptions() Options {
 func stringPtr(value string) *string        { return &value }
 func stringsPtr(values ...string) *[]string { return &values }
 
-func TestPatchCreatesPortableMetaWithUUIDv7AndPreservesLineEndings(t *testing.T) {
+func TestPatchAddsMetadataWithoutRoamIdentityAndPreservesLineEndings(t *testing.T) {
 	source := "# Paper\r\n\r\nBody\r\n"
 	project := "iso-2026"
 	result, err := Patch(source, "paper.md", Request{
@@ -30,12 +30,31 @@ func TestPatchCreatesPortableMetaWithUUIDv7AndPreservesLineEndings(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPrefix := "#+begin meta\r\nid: " + testUUID + "\r\ntitle: Paper\r\ndate: 2026-08-26\r\nkind: default\r\nproject: iso-2026\r\ntags: pcp, tcs\r\nrefs:\r\n#+end meta\r\n\r\n"
+	wantPrefix := "#+begin meta\r\ntitle: Paper\r\ndate: 2026-08-26\r\nkind: default\r\nproject: iso-2026\r\ntags: pcp, tcs\r\nrefs:\r\n#+end meta\r\n\r\n"
 	if !result.Changed || !strings.HasPrefix(result.Markdown, wantPrefix) || !strings.HasSuffix(result.Markdown, source) {
 		t.Fatalf("unexpected created metadata:\n%q\n%+v", result.Markdown, result)
 	}
-	if result.ID != testUUID || result.Title != "Paper" || result.Kind != "default" {
+	if result.ID != "" || result.Title != "Paper" || result.Kind != "default" {
 		t.Fatalf("unexpected projection: %+v", result)
+	}
+}
+
+func TestPatchOrdinaryMetadataEditsDoNotActivateRoam(t *testing.T) {
+	source := "#+begin meta\ntitle: Ordinary\n#+end meta\n\n# Ordinary\n"
+	added, err := Patch(source, "ordinary.md", Request{Action: ActionAdd}, testOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagged, err := Patch(added.Markdown, "ordinary.md", Request{Action: ActionTag, Tags: stringsPtr("research")}, testOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added.ID != "" || tagged.ID != "" || strings.Contains(tagged.Markdown, "\nid:") {
+		t.Fatalf("ordinary metadata edit created a Roam identity:\n%s", tagged.Markdown)
+	}
+	active, err := Patch(tagged.Markdown, "ordinary.md", Request{Action: ActionActivateRoam}, testOptions())
+	if err != nil || active.ID != testUUID {
+		t.Fatalf("explicit activation did not allocate identity: %+v, %v", active, err)
 	}
 }
 
@@ -95,7 +114,7 @@ func TestPatchIgnoresLiteralMetaInsideCodeFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(result.Markdown, "#+begin meta\nid: "+testUUID+"\ntitle: Real\n") ||
+	if !strings.HasPrefix(result.Markdown, "#+begin meta\ntitle: Real\n") ||
 		strings.Count(result.Markdown, "title: Fake") != 1 {
 		t.Fatalf("fenced literal was treated as live metadata:\n%s", result.Markdown)
 	}
@@ -113,7 +132,7 @@ func TestPatchRemoveAndUnsupportedAction(t *testing.T) {
 	}
 	brokenOptions := testOptions()
 	brokenOptions.NewID = func() (string, error) { return "", errors.New("entropy unavailable") }
-	_, err = Patch("# New\n", "new.md", Request{Action: ActionAdd}, brokenOptions)
+	_, err = Patch("# New\n", "new.md", Request{Action: ActionActivateRoam}, brokenOptions)
 	if err == nil || err.Error() != "entropy unavailable" {
 		t.Fatalf("expected allocator failure, got %v", err)
 	}

@@ -1,0 +1,22 @@
+# name: Roam · topic map
+# key: map
+# type: roam
+# group: Knowledge
+# --
+# {{title}}
+
+## Start here
+
+${1:What does this collection explain?}
+
+## Core notes
+
+- ${2:Link the main concepts or sources.}
+
+## Open questions
+
+- ${3:What is missing or disputed?}
+
+## Next paths
+
+- ${0:Where should a reader go next?}

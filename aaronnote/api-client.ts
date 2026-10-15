@@ -754,6 +754,9 @@ type NativeApi = {
     tagOverlap?: () => Promise<unknown>;
     rewritePathRefs?: (body: Record<string, unknown>) => Promise<unknown>;
   };
+  fs?: {
+    move?: (body: Record<string, unknown>) => Promise<unknown>;
+  };
   session?: {
     getPositions?: () => Promise<unknown>;
     savePosition?: (position: Partial<CursorPosition> & { file: string }) => Promise<unknown>;
@@ -1723,6 +1726,12 @@ export const api = {
     async rewritePathRefs(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().roamTools?.rewritePathRefs, "Rewrite path refs");
       return ensureOk(await call(body) as Record<string, unknown>, "Rewrite path refs failed");
+    },
+  },
+  fs: {
+    async move(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().fs?.move, "Move note");
+      return ensureOk(await call(body) as Record<string, unknown>, "Move note failed");
     },
   },
   session: {

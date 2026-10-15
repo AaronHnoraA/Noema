@@ -206,6 +206,18 @@ describe("slides deck controller", () => {
     setup.controller.destroy();
   });
 
+  test("back from presentation returns to the Markdown editor before document history", () => {
+    const setup = setupController();
+    setup.controller.sync("slides");
+
+    expect(setup.controller.exitRevealView()).toBe(true);
+    expect(setup.controller.isRevealView()).toBe(false);
+    expect(setup.host.hidden).toBe(false);
+    expect(setup.editor.focus).toHaveBeenCalledTimes(1);
+    expect(setup.controller.exitRevealView()).toBe(false);
+    setup.controller.destroy();
+  });
+
   test("toggles and remembers the presentation palette without rebuilding the editor", () => {
     const setup = setupController();
     setup.controller.sync("slides");

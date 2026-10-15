@@ -470,6 +470,27 @@ describe("server note refs", () => {
     }
   });
 
+  test("ordinary metadata edits keep an idless Markdown document outside Roam", async () => {
+    const root = await setupRoot("aaronnote-idless-meta-");
+    try {
+      const file = join(root, "ordinary.md");
+      await writeFile(file, "#+begin meta\ntitle: Ordinary\n#+end meta\n\n# Ordinary\n", "utf8");
+
+      await updateCurrentNoteMeta({ file, title: "Ordinary", tags: ["research"] }, "add");
+      await updateCurrentNoteMeta({ file, tags: ["new"] }, "tag");
+      const ordinary = await readFile(file, "utf8");
+      expect(ordinary).not.toMatch(/^id:/m);
+      expect((await scanNotes()).find((note: { file: string }) => note.file === file)).toMatchObject({ roam: false });
+
+      await updateCurrentNoteMeta({ file }, "activate-roam");
+      const activated = await readFile(file, "utf8");
+      expect(activated).toMatch(/^id: \S+/m);
+      expect((await scanNotes()).find((note: { file: string }) => note.file === file)).toMatchObject({ roam: true });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("meta update writes and preserves file-level project", async () => {
     const root = await setupRoot("aaronnote-meta-project-");
     try {

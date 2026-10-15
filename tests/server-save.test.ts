@@ -13,6 +13,8 @@ import { getTodos, notesIndexPayload, readNote, roamNotesIndexPayload } from "..
 import { saveNote } from "../server/lib/save.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
 import { createNode } from "../server/lib/fs-ops.mjs";
+// @ts-ignore The server is a Node ESM module outside the TS app graph.
+import { scanTemplates } from "../server/lib/runtime.mjs";
 
 const roots: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -40,6 +42,27 @@ async function setupRoot() {
 }
 
 describe("server save API", () => {
+  test("a stale pane cannot recreate a note after it has been removed", async () => {
+    const { notes } = await setupRoot();
+    const file = join(notes, "removed.md");
+    await writeFile(file, "# Removed\n", "utf8");
+    const base = await stat(file);
+    await rm(file);
+
+    const result = await saveNote({
+      file,
+      content: "# Stale draft\n",
+      clientId: "stale-pane",
+      seq: 1,
+      baseMtimeMs: base.mtimeMs,
+    }) as { ok?: boolean; conflict?: boolean; message?: string };
+
+    expect(result.ok).toBe(false);
+    expect(result.conflict).toBe(true);
+    expect(result.message).toMatch(/moved or deleted/);
+    expect(await readdir(notes)).not.toContain("removed.md");
+  });
+
   test("deferred save returns the current note summary without a full notes list", async () => {
     const { notes } = await setupRoot();
     const file = join(notes, "a.md");
@@ -297,6 +320,40 @@ describe("server save API", () => {
       expect(content.match(/#\+begin summary/g)).toHaveLength(1);
       expect(content).toContain("#+begin summary\n\n#+end summary");
     }
+  });
+
+  test("new note templates distinguish roam nodes from regular documents", async () => {
+    const { root, notes } = await setupRoot();
+    const templates = join(root, "templates", "noema", "markdown-mode");
+    await mkdir(templates, { recursive: true });
+    await writeFile(join(templates, "roam"),
+      "# name: Linked note\n# type: roam\n# --\n# {{title}}\n\n## Connections\n\n$0\n");
+    await writeFile(join(templates, "basic"),
+      "# name: Plain document\n# type: regular\n# --\n# {{title}}\n\n$0\n");
+    configure({
+      root: notes,
+      workspaceRoot: root,
+      templatesRoot: join(root, "templates", "noema"),
+      pluginRoot: join(root, "plugin"),
+    });
+
+    const catalog = await scanTemplates({ force: true });
+    expect(catalog.find((item: { key: string }) => item.key === "roam")?.nodeType).toBe("roam");
+    expect(catalog.find((item: { key: string }) => item.key === "basic")?.nodeType).toBe("regular");
+
+    await createNode({ nodeType: "roam", id: "linked", title: "Linked", path: "linked.md", templateKey: "roam" });
+    await createNode({ nodeType: "regular", title: "Plain", path: "plain.md", templateKey: "basic" });
+    const linked = await readFile(join(notes, "linked.md"), "utf8");
+    const plain = await readFile(join(notes, "plain.md"), "utf8");
+    expect(linked).toContain("id: linked");
+    expect(linked).toContain("## Connections");
+    expect(plain).toContain("roam: off");
+    expect(plain).not.toContain("## Connections");
+    await expect(createNode({ nodeType: "regular", title: "Wrong", path: "wrong.md", templateKey: "roam" }))
+      .rejects.toThrow("for roam notes");
+    await expect(createNode({ nodeType: "roam", title: "Missing", path: "missing/missing.md", templateKey: "missing" }))
+      .rejects.toThrow("Unknown note template");
+    await expect(stat(join(notes, "missing"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
 });

@@ -928,6 +928,36 @@ describe("xwidget key guard", () => {
     }
   });
 
+  test("insert vertical arrows enter a crossed multiline inline formula", () => {
+    const host = withMounted(document.createElement("section"));
+    const markdown = "Before\ntext \\(\nx+y\n\\) here\nAfter";
+    const editor = createEditor(host, { initialContent: markdown });
+    const vim = createVimLite(editor, host);
+    const before = markdown.indexOf("Before");
+    const after = markdown.indexOf("After");
+    const move = vi.spyOn(editor.view, "moveVertically")
+      .mockReturnValueOnce(EditorSelection.cursor(after))
+      .mockReturnValueOnce(EditorSelection.cursor(before));
+    vim.setMode("insert");
+    try {
+      editor.setMarkdownSelection(before);
+      const down = new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true });
+      Object.defineProperty(down, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(down, { editor, editorHost: host, vim })).toBe(true);
+      expect(editor.getMarkdownSelection().from).toBe(markdown.indexOf("\\(") + 2);
+
+      editor.setMarkdownSelection(after);
+      const up = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
+      Object.defineProperty(up, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(up, { editor, editorHost: host, vim })).toBe(true);
+      expect(editor.getMarkdownSelection().from).toBe(markdown.indexOf("\\)"));
+    } finally {
+      move.mockRestore();
+      editor.destroy();
+      host.remove();
+    }
+  });
+
   test("keeps insert-mode Shift-Tab from escaping focus on plain text", () => {
     const host = withMounted(document.createElement("section"));
     const editor = createEditor(host, { initialContent: "plain" });
@@ -998,6 +1028,33 @@ describe("xwidget key guard", () => {
       expect(host.querySelector(".cm-math-inline-editor")).toBeNull();
       expect(host.querySelector(".cm-math-inline")).toBeNull();
       expect(editor.getMarkdownSelection().from).toBe(markdown.indexOf("x") + 1);
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+
+  test("routes insert-mode arrows into multiline inline formula source", () => {
+    const host = withMounted(document.createElement("section"));
+    const markdown = "before \\(\nx+y\n\\) after";
+    const formulaFrom = markdown.indexOf("\\(");
+    const formulaTo = markdown.indexOf("\\)") + 2;
+    const editor = createEditor(host, { initialContent: markdown });
+    const vim = createVimLite(editor, host);
+    vim.setMode("insert");
+    try {
+      editor.setMarkdownSelection(formulaFrom);
+      const right = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+      Object.defineProperty(right, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(right, { editor, editorHost: host, vim })).toBe(true);
+      expect(right.defaultPrevented).toBe(true);
+      expect(editor.getMarkdownSelection().from).toBe(formulaFrom + 2);
+
+      editor.setMarkdownSelection(formulaTo);
+      const left = new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true });
+      Object.defineProperty(left, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(left, { editor, editorHost: host, vim })).toBe(true);
+      expect(editor.getMarkdownSelection().from).toBe(formulaTo - 2);
     } finally {
       editor.destroy();
       host.remove();

@@ -84,7 +84,11 @@ function scheduleReload(): void {
 const lifecycle = new AbortController();
 window.addEventListener("aaronnote:command", (event) => {
   const detail = (event as CustomEvent<{ command?: string; file?: string }>).detail;
-  if (detail?.command === "note-saved" && detail.file === file) scheduleReload();
+  if (["back", "nav-back", "navigation-back"].includes(detail?.command || "")) {
+    // Slide view is a separate page, so browser history has no editor entry.
+    // Ask the Emacs host to focus the existing Markdown pane for this file.
+    if (file) void api.emacs.open({ file });
+  } else if (detail?.command === "note-saved" && detail.file === file) scheduleReload();
   else if (detail?.command === "notes-index-changed") scheduleReload();
 }, { signal: lifecycle.signal });
 document.addEventListener("visibilitychange", () => {

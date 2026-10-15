@@ -16,6 +16,8 @@ import { writeSystemClipboard } from "../src/system-clipboard.ts";
 import { installHostKeyboardBridge, pageClientFromLocation } from "./host-keyboard.ts";
 import { releaseHostInputFocus } from "./host-input-focus.ts";
 import { outputDialogEnterCloses, outputShortcut } from "./jupyter-output-keys.ts";
+import { jupyterKernelLabel } from "./jupyter-kernel-view.ts";
+import type { JupyterKernelView } from "./jupyter-kernel-view.ts";
 
 // Emacs host keys, host-owned keys and focus handoff: the rule every Noema
 // page shares (see host-keyboard.ts).
@@ -58,6 +60,8 @@ type DocumentSnapshot = {
   documentRevision: string;
   document: DocumentRef;
   kernelStatus: string;
+  kernelStateLost?: boolean;
+  kernelError?: string;
   cells: CellSnapshot[];
 };
 
@@ -68,6 +72,8 @@ type TabState = {
   runCellId?: string;
   loading: boolean;
   error: string;
+  kernelView?: JupyterKernelView;
+  lastSnapshotRetryAt?: number;
   runSeq?: number;
   runEvents?: Array<Record<string, unknown>>;
   runTerminal?: boolean;
@@ -97,6 +103,8 @@ let currentDocument: TabState | undefined;
 let runClock: number | null = null;
 let statusTimer = 0;
 let refreshTimer = 0;
+let kernelStatusTimer = 0;
+let kernelStatusInFlight = false;
 const outputDisposers = new Set<() => void>();
 const cellOutputViews = new Map<string, JupyterOutputView>();
 const outputFoldObservers = new WeakMap<HTMLElement, ResizeObserver>();
@@ -133,7 +141,7 @@ app.innerHTML = `
       <span class="noema-jupyter-logo">N</span>
       <strong data-surface-title>Jupyter Output</strong>
     </div>
-    <div class="noema-jupyter-kernel" data-kernel-status></div>
+    <div class="noema-jupyter-kernel" data-kernel-status role="status" aria-live="polite"></div>
     <button type="button" class="noema-jupyter-shortcuts" data-action="shortcuts" title="Output keyboard shortcuts" aria-label="Output keyboard shortcuts">?</button>
     <button type="button" class="noema-jupyter-open-source" data-action="open-source" title="⌘Enter · Open source in Emacs">Open Source in Emacs</button>
   </header>
@@ -270,9 +278,10 @@ async function loadTab(tab: TabState, reveal = true): Promise<void> {
   const generation = tab.loadGeneration = (tab.loadGeneration || 0) + 1;
   const requestedRun = tab.ref.runId;
   const current = () => tab === currentDocument && tab.loadGeneration === generation && tab.ref.runId === requestedRun;
+  const previousError = tab.error;
   tab.loading = true;
   tab.error = "";
-  renderWorkspace();
+  if (!tab.snapshot) renderWorkspace();
   try {
     const liveCell = isResearchDocument(tab.ref) ? runCell(tab) : activeCell(tab);
     const liveOutputs = liveCell?.outputs;
@@ -281,6 +290,8 @@ async function loadTab(tab: TabState, reveal = true): Promise<void> {
     if (!current()) return;
     const snapshot = raw as unknown as DocumentSnapshot;
     tab.snapshot = snapshot;
+    tab.kernelView = { id: snapshot.document.kernelId, status: snapshot.kernelStatus, stateLost: snapshot.kernelStateLost, lastError: snapshot.kernelError };
+    tab.lastSnapshotRetryAt = 0;
     tab.ref = mergeRunRef(tab.ref, snapshot.document);
     if (!snapshot.cells.some((cell) => cell.id === tab.activeCellId)) {
       tab.activeCellId = snapshot.cells[0]?.id || "";
@@ -318,10 +329,20 @@ async function loadTab(tab: TabState, reveal = true): Promise<void> {
       }
     }
   } catch (error) {
-    if (current()) tab.error = error instanceof Error ? error.message : String(error);
+    if (current()) {
+      tab.error = error instanceof Error ? error.message : String(error);
+      if (!tab.snapshot) tab.kernelView = { status: "unavailable", lastError: tab.error };
+    }
   } finally {
     if (!current()) return;
     tab.loading = false;
+    if (tab.error && tab.snapshot) {
+      // A failed Remote refresh must not replace already visible outputs or
+      // remount widget comms. Keep the last snapshot until a later retry works.
+      renderKernelBadge();
+      if (tab.error !== previousError) setStatus(`Output refresh unavailable: ${tab.error}`, true);
+      return;
+    }
     render();
     if (reveal && tab.activeCellId) {
       requestAnimationFrame(() => {
@@ -371,6 +392,13 @@ function openDocument(payload: Partial<DocumentRef> & { cellId?: string }): void
       runEvents: [],
     };
   } else {
+    if (tab.ref.kernel !== ref.kernel || tab.ref.session !== ref.session) {
+      // One document can be rebound to another kernel. Never present the old
+      // runtime's outputs under the newly selected kernel badge.
+      tab.snapshot = undefined;
+      tab.kernelView = undefined;
+      tab.error = "";
+    }
     if (ref.runId && ref.runId !== tab.ref.runId) {
       stopResearchRunStream();
       tab.runSeq = 0;
@@ -387,8 +415,62 @@ function openDocument(payload: Partial<DocumentRef> & { cellId?: string }): void
     if (payload.cellId) tab.activeCellId = text(payload.cellId);
   }
   currentDocument = tab;
+  ensureKernelStatusPolling();
   render();
   void loadTab(tab);
+}
+
+async function pollKernelStatus(): Promise<void> {
+  const tab = currentDocument;
+  if (kernelStatusInFlight || document.hidden || !tab?.snapshot || tab.loading
+      || isResearchDocument(tab.ref) || tab.snapshot.kernelStatus === "no-kernel") return;
+  const { scriptFile, sourceFile, projectRoot, kernel, session } = tab.ref;
+  kernelStatusInFlight = true;
+  try {
+    const result = await api.jupyterCell.kernelStatus({
+      file: sourceFile || scriptFile, scriptFile, projectRoot, kernel, session,
+    });
+    if (tab !== currentDocument || tab.ref.kernel !== kernel || tab.ref.session !== session) return;
+    const previous = tab.kernelView?.status || tab.snapshot.kernelStatus;
+    const previousId = tab.kernelView?.id ?? tab.snapshot.document.kernelId;
+    const status = text(result.status) || "unknown";
+    tab.kernelView = {
+      id: text(result.id),
+      status,
+      stateLost: result.stateLost === true,
+      lastError: text(result.lastError),
+    };
+    renderKernelBadge();
+    // Only a recovered or newly started runtime needs a full output refresh.
+    // Ordinary status checks leave mounted OutputAreas and widget comms alone.
+    if ((previousId !== tab.kernelView.id && Boolean(tab.kernelView.id))
+        || (["disconnected", "dead", "unavailable", "not-started"].includes(previous)
+          && !["disconnected", "dead", "unavailable", "not-started"].includes(status))
+        || (tab.error && Date.now() - (tab.lastSnapshotRetryAt || 0) >= 15_000)) {
+      tab.lastSnapshotRetryAt = Date.now();
+      void loadTab(tab, false);
+    }
+  } catch (error) {
+    if (tab !== currentDocument) return;
+    tab.kernelView = {
+      status: "unavailable",
+      stateLost: tab.kernelView?.stateLost,
+      lastError: error instanceof Error ? error.message : String(error),
+    };
+    renderKernelBadge();
+  } finally {
+    kernelStatusInFlight = false;
+  }
+}
+
+function ensureKernelStatusPolling(): void {
+  if (isResearchDocument(currentDocument?.ref)) {
+    window.clearInterval(kernelStatusTimer);
+    kernelStatusTimer = 0;
+    return;
+  }
+  if (kernelStatusTimer) return;
+  kernelStatusTimer = window.setInterval(() => void pollKernelStatus(), 5_000);
 }
 
 function stopResearchRunStream(): void {
@@ -942,15 +1024,27 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
   return card;
 }
 
+function renderKernelBadge(): void {
+  const tab = activeTab();
+  const research = isResearchDocument(tab?.ref);
+  kernelStatusEl.hidden = research;
+  const view = tab?.kernelView || (tab?.snapshot
+    ? { id: tab.snapshot.document.kernelId, status: tab.snapshot.kernelStatus, stateLost: tab.snapshot.kernelStateLost, lastError: tab.snapshot.kernelError }
+    : undefined);
+  const label = research ? "" : tab && view
+    ? jupyterKernelLabel(tab.ref.kernel, tab.ref.session, view)
+    : "No kernel";
+  if (kernelStatusEl.textContent !== label) kernelStatusEl.textContent = label;
+  kernelStatusEl.dataset.status = view?.status || "";
+  kernelStatusEl.title = view?.lastError || "";
+}
+
 function renderWorkspace(): void {
   disposeOutputs();
   const tab = activeTab();
   const research = isResearchDocument(tab?.ref);
   surfaceTitleEl.textContent = research ? "Work Output" : "Jupyter Output";
-  kernelStatusEl.hidden = research;
-  kernelStatusEl.textContent = research ? "" : tab?.snapshot
-    ? `${tab.ref.kernel} · ${tab.ref.session} · ${tab.snapshot.kernelStatus === "error" ? "last run error" : tab.snapshot.kernelStatus}`
-    : "No kernel";
+  renderKernelBadge();
   if (!tab) {
     workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>No output selected</strong><span>Open a work block in Emacs and run it with C-c C-c.</span></div>`;
     return;
@@ -959,7 +1053,7 @@ function renderWorkspace(): void {
     workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>Loading outputs…</strong></div>`;
     return;
   }
-  if (tab.error) {
+  if (tab.error && !tab.snapshot) {
     workspaceEl.innerHTML = `<div class="noema-jupyter-empty is-error"><strong>Unable to load document</strong><span></span></div>`;
     workspaceEl.querySelector("span")!.textContent = tab.error;
     return;
@@ -1121,9 +1215,12 @@ window.addEventListener("aaronnote:jupyter-session", (event) => {
   if (!tab || !snapshot?.document) return;
   tab.loadGeneration = (tab.loadGeneration || 0) + 1;
   tab.loading = false;
+  tab.error = "";
+  tab.lastSnapshotRetryAt = 0;
   window.clearTimeout(refreshTimer);
   refreshTimer = 0;
   tab.snapshot = snapshot;
+  tab.kernelView = { id: snapshot.document.kernelId, status: snapshot.kernelStatus, stateLost: snapshot.kernelStateLost, lastError: snapshot.kernelError };
   tab.ref = mergeRunRef(tab.ref, snapshot.document);
   if (!snapshot.cells.some((cell) => cell.id === tab.activeCellId)) {
     tab.activeCellId = snapshot.cells[0]?.id || "";
@@ -1138,6 +1235,10 @@ window.addEventListener("aaronnote:connection", (event) => {
   // synchronization is carried by jupyter-cell/jupyter-session events.
   const tab = currentDocument;
   if (tab) void loadTab(tab, false);
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) void pollKernelStatus();
 });
 
 const query = new URLSearchParams(location.search);
@@ -1194,6 +1295,7 @@ function ensureRunClock(): void {
 }
 
 window.addEventListener("beforeunload", () => {
+  window.clearInterval(kernelStatusTimer);
   stopRunClock();
   stopResearchRunStream();
   dialogOutputDispose?.();

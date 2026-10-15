@@ -1,0 +1,23 @@
+# name: Roam · decision record
+# key: decision
+# type: roam
+# group: Research
+# --
+# {{title}}
+
+## Context
+
+${1:What needs deciding, and why now?}
+
+## Options
+
+1. ${2:}
+2. 
+
+## Decision
+
+${3:Chosen option and reason.}
+
+## Consequences
+
+${0:Tradeoffs, follow-up, and review date.}

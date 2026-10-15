@@ -252,6 +252,14 @@ export function createKernelRegistry({
     try { record.socket?.dispose(); } catch { /* already disconnected */ }
   }
 
+  function forgetKernelExecution(record) {
+    record.executedCellRevisions = new Map();
+    record.executionCount = null;
+    record.lastCellId = "";
+    record.lastStatus = "idle";
+    record.variableBaseline = null;
+  }
+
   async function handleHeartbeatFailure(record, token, error) {
     if (record.disposed || record.heartbeatToken !== token) return;
     const reason = error?.message || "kernel stopped answering its heartbeat";
@@ -734,6 +742,7 @@ export function createKernelRegistry({
     record.hostGeneration = Number(generation || 1);
     record.widgetGeneration += 1;
     record.stateLost = Boolean(stateLost);
+    if (record.stateLost) forgetKernelExecution(record);
     record.id = newId();
     record.status = "starting";
     record.kernelInfo = null;
@@ -754,6 +763,11 @@ export function createKernelRegistry({
       return record && record.status !== "dead" && record.status !== "disconnected"
         ? record
         : undefined;
+    },
+
+    /** Read-only status lookup, including records awaiting recovery or replacement. */
+    inspect(key) {
+      return records.get(key);
     },
 
     /**
@@ -863,8 +877,7 @@ export function createKernelRegistry({
         if (!serverRegistry) throw new Error("No Jupyter server registry is configured");
         await serverRegistry.restartKernel(record.serverId, record.serverKernelId);
         record.stateLost = true;
-        record.executionCount = null;
-        record.variableBaseline = null;
+        forgetKernelExecution(record);
         record.needsRebind = true;
         return await refreshServerRecord(record);
       }
@@ -895,6 +908,7 @@ export function createKernelRegistry({
       await disposeRecord(record);
       const next = await launchOwned(key, kernelSpecEntry);
       next.widgetGeneration = record.widgetGeneration + 1;
+      next.stateLost = true;
       for (const property of ["sourceFile", "scriptFile", "session", "language"]) {
         if (record[property] != null) next[property] = record[property];
       }

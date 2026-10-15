@@ -92,6 +92,7 @@ describe("remote Jupyter kernel reconnect", () => {
     const target = { serverId: "lab", kernelSpecName: "python3" };
     const first = await registry.ensureServer("note\0server:lab:python3", "python3", target);
     expect(first.status).toBe("idle");
+    first.executedCellRevisions = new Map([["cell-a", "revision-a"]]);
 
     await expect(
       registry.ensureServer("note\0server:lab:python3", "python3", target),
@@ -99,6 +100,8 @@ describe("remote Jupyter kernel reconnect", () => {
     expect(first.status).toBe("disconnected");
     expect(first.serverKernelId).toBe("kernel-stable");
     expect(registry.get("note\0server:lab:python3")).toBeUndefined();
+    expect(registry.inspect("note\0server:lab:python3")).toBe(first);
+    expect(registry.inspect("note\0server:lab:python3")?.status).toBe("disconnected");
     expect(starts).toBe(1);
 
     const rebound = await registry.ensureServer(
@@ -109,6 +112,7 @@ describe("remote Jupyter kernel reconnect", () => {
     expect(registry.get("note\0server:lab:python3")).toBe(rebound);
     expect(rebound.serverKernelId).toBe("kernel-stable");
     expect(rebound.stateLost).not.toBe(true);
+    expect(rebound.executedCellRevisions?.get("cell-a")).toBe("revision-a");
     expect(starts).toBe(1);
     expect(connects).toBe(2);
 
@@ -116,6 +120,7 @@ describe("remote Jupyter kernel reconnect", () => {
     expect(restarted).toBe(first);
     expect(restarted.status).toBe("idle");
     expect(restarted.stateLost).toBe(true);
+    expect(restarted.executedCellRevisions?.size).toBe(0);
     expect(restarted.serverKernelId).toBe("kernel-stable");
     expect(connects).toBe(3);
     expect(recovered.disposed).toBe(1);

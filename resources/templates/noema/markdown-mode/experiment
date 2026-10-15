@@ -1,0 +1,28 @@
+# name: Roam · experiment
+# key: experiment
+# type: roam
+# group: Research
+# --
+# {{title}}
+
+Date: {{date}}
+
+## Question and hypothesis
+
+${1:What is being tested, and what do you expect?}
+
+## Setup and method
+
+${2:Inputs, tools, controls, and steps.}
+
+## Observations
+
+${3:Record the result before interpreting it.}
+
+## Interpretation and limits
+
+${4:What follows, and what remains uncertain?}
+
+## Reproduce or follow up
+
+${0:Link data and write the next experiment.}

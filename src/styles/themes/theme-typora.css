@@ -953,15 +953,6 @@
   display: none;
 }
 
-.cm-editor .katex,
-.cm-editor .katex * {
-  font-family: var(--aaron-font-math), var(--aaron-font-chinese) !important;
-}
-
-.cm-editor .katex .mord.mathnormal {
-  font-family: var(--aaron-font-math) !important;
-}
-
 /* ─── CM6 kernel: Paper-theme equivalents ────────────────────────── */
 /* Heading refinements beyond the size scale in widgets.css */
 .cm-editor .cm-md-h1 {
@@ -1038,13 +1029,4 @@
 .cm-editor .cm-md-blockquote {
   border-left-color: var(--aaron-paper-line, #b7ad9e);
   color: var(--aaron-muted, #4e554f);
-}
-
-/* KaTeX fonts */
-.cm-editor .katex,
-.cm-editor .katex * {
-  font-family: var(--aaron-font-math), var(--aaron-font-chinese) !important;
-}
-.cm-editor .katex .mord.mathnormal {
-  font-family: var(--aaron-font-math) !important;
 }

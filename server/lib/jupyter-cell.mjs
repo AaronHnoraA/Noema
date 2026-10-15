@@ -745,9 +745,7 @@ export function createJupyterCellService({
       kernel: record?.kernelName || "",
       session: record?.session || "default",
       language: record?.language || record?.kernelSpec?.language || "",
-      status: record?.status === "dead" || record?.status === "disconnected"
-        ? record.status
-        : (running > 0 ? "running" : (record?.lastStatus || "idle")),
+      status: kernelDisplayStatus(record, "running"),
       running,
       owned: Boolean(record?.owned),
       attached: Boolean(record?.attached),
@@ -772,6 +770,12 @@ export function createJupyterCellService({
       protected: running > 0,
       ttlMs: kernelIdleTtlMs,
     };
+  }
+
+  function kernelDisplayStatus(record, busyLabel = "running") {
+    if (!record) return "not-started";
+    if (["dead", "disconnected", "starting"].includes(record.status)) return record.status;
+    return Number(record.running || 0) > 0 ? busyLabel : (record.lastStatus || "idle");
   }
 
   function isPythonFamilyKernel(kernel) {
@@ -1997,16 +2001,19 @@ export function createJupyterCellService({
     const { kernel, session, key } = runtimeForBody(body || {});
     const registry = await getRegistry();
     const existing = registry.get(key);
+    const observed = registry.inspect(key);
     return {
       ok: true,
       kernel,
       session,
-      status: existing?.id ? (Number(existing.running || 0) > 0 ? "running" : (existing.lastStatus || "idle")) : "not-started",
+      status: kernelDisplayStatus(observed),
       attached: Boolean(existing?.attached),
       kind: existing?.kind || "",
       kernelState: existing?.kernelState || "",
       id: existing?.id || "",
       key: existing?.id ? key : "",
+      stateLost: Boolean(observed?.stateLost),
+      lastError: observed?.lastError || "",
       ...(existing?.kernelInfo ? { kernelInfo: describeKernelInfo(existing.kernelInfo) } : {}),
     };
   }
@@ -2324,7 +2331,11 @@ export function createJupyterCellService({
     const registry = await getRegistry();
     const key = kernelKey({ file: context.scriptFile, kernel: context.kernel });
     const record = context.detached ? undefined : registry.get(key);
-    const revisions = executedRevisions(record);
+    const observed = context.detached ? undefined : registry.inspect(key);
+    // A broken transport does not invalidate executed source revisions. A
+    // confirmed dead kernel does, even though its record remains inspectable.
+    const currentExecution = observed?.status === "dead" ? undefined : observed;
+    const revisions = executedRevisions(currentExecution);
     let line = 1;
     const cells = [];
     for (const cell of context.notebook.cells || []) {
@@ -2345,7 +2356,7 @@ export function createJupyterCellService({
         line,
         revision,
         code,
-        stale: !record?.id || revisions.get(cell.id) !== revision,
+        stale: !currentExecution?.id || revisions.get(cell.id) !== revision,
         status: String(saved.status || (record?.lastCellId === cell.id ? record.lastStatus : "idle") || "idle"),
         executionCount: cell.execution_count ?? null,
         outputs: Array.isArray(cell.outputs) ? cell.outputs : [],
@@ -2372,9 +2383,9 @@ export function createJupyterCellService({
         sessionName: context.session,
         sessionId: context.sessionId,
       },
-      kernelStatus: context.detached ? "no-kernel"
-        : record?.id ? (Number(record.running || 0) > 0 ? "busy" : (record.lastStatus || "idle"))
-          : "not-started",
+      kernelStatus: context.detached ? "no-kernel" : kernelDisplayStatus(observed, "busy"),
+      kernelStateLost: Boolean(observed?.stateLost),
+      kernelError: observed?.lastError || "",
       cells,
     };
   }

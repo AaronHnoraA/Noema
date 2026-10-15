@@ -1,0 +1,23 @@
+# name: Roam · reading note
+# key: reading
+# type: roam
+# group: Research
+# --
+# {{title}}
+
+## Source
+
+- Author / venue / year: ${1:}
+- URL or DOI: ${2:}
+
+## Main claim
+
+${3:}
+
+## Evidence and method
+
+${4:}
+
+## My take
+
+${0:What is useful, uncertain, or worth testing?}

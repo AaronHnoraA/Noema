@@ -77,9 +77,18 @@
 
 (defun my/noema--xwidget-key-name (event)
   "Return the browser KeyboardEvent key name represented by Emacs EVENT."
-  (let ((basic (event-basic-type event)))
+  (let ((basic (event-basic-type event))
+        (description (key-description (vector event))))
     (cond
+     ;; Emacs represents TAB and RET as the control characters C-i and C-m.
+     ;; Check the original event before `event-basic-type' turns them into
+     ;; printable i/m with a synthetic Control modifier.
+     ((and (integerp event) (= (logand event 127) 9)) "Tab")
+     ((and (integerp event) (= (logand event 127) 13)) "Enter")
+     ((and (integerp event) (= (logand event 127) 27)) "Escape")
+     ((and (integerp event) (= (logand event 127) 127)) "Backspace")
      ((integerp basic) (char-to-string basic))
+     ((alist-get description my/noema--xwidget-recovery-special-keys nil nil #'equal))
      ((alist-get (key-description (vector basic))
                  my/noema--xwidget-recovery-special-keys nil nil #'equal))
      ((pcase basic
@@ -97,6 +106,7 @@
    ((string-match-p "\\`[0-9]\\'" key) (concat "Digit" key))
    ((equal key " ") "Space")
    ((equal key "/") "Slash")
+   ((equal key "?") "Slash")
    ((equal key "[") "BracketLeft")
    ((equal key "]") "BracketRight")
    ((member key '("=" "+")) "Equal")
@@ -110,13 +120,18 @@
 (defun my/noema--xwidget-recovery-detail (event)
   "Return the shared Noema key payload for Emacs EVENT."
   (when-let* ((key (my/noema--xwidget-key-name event)))
-    (let ((modifiers (event-modifiers event)))
+    (let ((modifiers (event-modifiers event))
+          (control-character (and (integerp event)
+                                  (memq (logand event 127) '(9 13 27)))))
       `((key . ,key)
         (code . ,(my/noema--xwidget-key-code key))
         (metaKey . ,(and (memq 'meta modifiers) t))
-        (ctrlKey . ,(and (memq 'control modifiers) t))
+        (ctrlKey . ,(and (memq 'control modifiers)
+                         (not control-character) t))
         (altKey . ,(and (or (memq 'alt modifiers) (memq 'hyper modifiers)) t))
-        (shiftKey . ,(and (memq 'shift modifiers) t))))))
+        ;; Emacs reports M-? as a question-mark character with no separate
+        ;; shift modifier, though the browser chord is Cmd+Shift+Slash.
+        (shiftKey . ,(and (or (memq 'shift modifiers) (equal key "?")) t))))))
 
 (defun my/noema--forward-recovery-key (buffer detail)
   "Forward DETAIL for Noema BUFFER outside the originating Emacs key command."

@@ -51,7 +51,7 @@ import { markdownContinuationPrefix } from "../src/cm6/commands/index.ts";
 import { getFencedCodeRanges, scanCodeRanges } from "../src/cm6/code-ranges.ts";
 import { readImageTrailingAttrs } from "../src/image-attrs.ts";
 import { writeSystemClipboard } from "../src/system-clipboard.ts";
-import { getBlockMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
+import { getBlockMathRanges, getMultilineInlineMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
 import { scanInlineMathRanges } from "../src/inline-math.ts";
 import { getOrgEnvHeadingRanges, setTikzSourceEditing } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
 import { cancelPointerSelection } from "../src/cm6/extensions/visual/selection.ts";
@@ -394,6 +394,7 @@ function visualCharEndPosition(text: Text, pos: number): number {
 
 type FormulaIndex = {
   blocks: ReturnType<typeof getBlockMathRanges>;
+  multilineInline: ReturnType<typeof getMultilineInlineMathRanges>;
   inlineByLine: Map<number, readonly Scope[]>;
 };
 const formulaIndexes = new WeakMap<EditorState, FormulaIndex>();
@@ -401,7 +402,11 @@ const formulaIndexes = new WeakMap<EditorState, FormulaIndex>();
 function formulaIndex(state: EditorState): FormulaIndex {
   let index = formulaIndexes.get(state);
   if (!index) {
-    index = { blocks: getBlockMathRanges(state), inlineByLine: new Map() };
+    index = {
+      blocks: getBlockMathRanges(state),
+      multilineInline: getMultilineInlineMathRanges(state),
+      inlineByLine: new Map(),
+    };
     formulaIndexes.set(state, index);
   }
   return index;
@@ -418,6 +423,9 @@ function staticMathObjectAtPosition(
   const block = rangeAtPosition(safePos, index.blocks);
   if (block) return formulaSourceRangeAtPosition(editor.view, safePos)
     ? null : { from: block.from, to: block.to, block: true };
+  const multiline = rangeAtPosition(safePos, index.multilineInline);
+  if (multiline) return formulaSourceRangeAtPosition(editor.view, safePos)
+    ? null : { from: multiline.from, to: multiline.to, block: false };
   const line = state.doc.lineAt(safePos);
   let ranges = index.inlineByLine.get(line.from);
   if (!ranges) {

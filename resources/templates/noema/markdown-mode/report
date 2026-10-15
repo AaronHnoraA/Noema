@@ -1,0 +1,22 @@
+# name: Markdown · report
+# key: report
+# type: regular
+# group: Documents
+# --
+# {{title}}
+
+## Summary
+
+${1:Key finding and recommendation.}
+
+## Evidence
+
+${2:}
+
+## Limitations
+
+${3:}
+
+## Next steps
+
+${0:}

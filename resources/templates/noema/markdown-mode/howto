@@ -1,0 +1,26 @@
+# name: Markdown · how-to guide
+# key: howto
+# type: regular
+# group: Documents
+# --
+# {{title}}
+
+## Goal
+
+${1:What will the reader be able to do?}
+
+## Prerequisites
+
+- ${2:Required access, tools, or inputs.}
+
+## Steps
+
+1. ${3:First action.}
+
+## Verify
+
+${4:What result confirms success?}
+
+## Troubleshooting
+
+${0:Common failure and recovery.}

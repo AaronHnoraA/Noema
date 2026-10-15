@@ -1382,12 +1382,11 @@ function buildMetaBlock(fields, options = {}) {
   return lines.join("\n");
 }
 
-function metaFieldsForFile(file, content, patch = {}) {
+function metaFieldsForFile(file, content, patch = {}, { activateRoam = false } = {}) {
   const current = noteMetadata(content);
   const title = String(patch.title || current.title || titleFromContent(file, content) || basename(file, extname(file)) || "Untitled").trim();
   const hasPatchId = Object.prototype.hasOwnProperty.call(patch, "id");
-  const keepsNoRoamId = !current.id && roamOffFromMeta({ ...current, ...patch });
-  const id = String(hasPatchId ? patch.id : (current.id || (keepsNoRoamId ? "" : `${timestampId()}-${slugifyTitle(title)}`))).trim();
+  const id = String(hasPatchId ? patch.id : (current.id || (activateRoam ? `${timestampId()}-${slugifyTitle(title)}` : ""))).trim();
   return {
     ...current,
     ...patch,
@@ -1407,8 +1406,8 @@ function removeMetaBlock(content) {
   return `${content.slice(0, range.from)}${content.slice(range.to)}`.replace(/^\s+/, "");
 }
 
-function upsertMetaBlock(file, content, patch = {}) {
-  const nextMeta = buildMetaBlock(metaFieldsForFile(file, content, patch));
+function upsertMetaBlock(file, content, patch = {}, options = {}) {
+  const nextMeta = buildMetaBlock(metaFieldsForFile(file, content, patch, options));
   const body = removeMetaBlock(content);
   return `${nextMeta}\n${body.replace(/^\s+/, "")}`;
 }
@@ -5991,7 +5990,9 @@ function templateIdentity(rootDir, file, headers) {
     if (parts[1] === "markdown-mode") mode = parts[1];
   }
   const key = kind ? `${kind}/${fileKey}` : fileKey;
-  return { key, name: headers.get("name") || fileKey, mode, kind };
+  const nodeType = ["roam", "regular"].includes(headers.get("type"))
+    ? headers.get("type") : "";
+  return { key, name: headers.get("name") || fileKey, mode, kind, nodeType };
 }
 
 export async function scanTemplates(options = {}) {
@@ -8133,7 +8134,6 @@ export async function createNode(body) {
     throw err;
   }
   const dir = dirname(file);
-  await mkdir(dir, { recursive: true });
   if (existsSync(file)) {
     const err = new Error(`Node already exists: ${file}`);
     err.statusCode = 409;
@@ -8142,6 +8142,16 @@ export async function createNode(body) {
   let selection = null;
   let content = "";
   const template = await templateByKey(body.templateKey || body.template || "");
+  if ((body.templateKey || body.template) && !template) {
+    const err = new Error(`Unknown note template: ${body.templateKey || body.template}`);
+    err.statusCode = 400;
+    throw err;
+  }
+  if (template?.nodeType && template.nodeType !== nodeType) {
+    const err = new Error(`Template ${template.key} is for ${template.nodeType} notes`);
+    err.statusCode = 400;
+    throw err;
+  }
   if (template) {
     const relPath = displayPathForScanRoot(file, noteScanRoot);
     const expanded = expandTemplateBody(template.body, templateVarsForNode({
@@ -8196,6 +8206,7 @@ export async function createNode(body) {
       "",
     ].join("\n");
   }
+  await mkdir(dir, { recursive: true });
   await writeMarkdownFile(file, content);
   markNotesDirty(file);
   const opened = await readNote(file, { includeIndex: true });
@@ -8275,16 +8286,17 @@ export function runtimeDebugSnapshot() {
 export async function deleteNote(body) {
   const file = safeOpenFile(body.file);
   noteScanRoot = scanRootForOpenFile(file);
-  let trashedTo = "";
-  let info = null;
-  try {
-    info = await stat(file);
-  } catch {}
-  try {
-    trashedTo = await moveToTrash(file);
-  } catch (err) {
-    if (err?.code !== "ENOENT") throw err;
-  }
+  // Wait for an already accepted save of this file before moving it.  Saves
+  // that arrive afterwards run behind the move and must pass their version
+  // check against the now-missing source path.
+  const trashedTo = await enqueueSaveWrite(file, async () => {
+    try {
+      return await moveToTrash(file);
+    } catch (err) {
+      if (err?.code === "ENOENT") return "";
+      throw err;
+    }
+  });
   markNotesDirty(file);
   const index = await notesIndexPayload();
   return { type: "deleted", ok: true, file, trashedTo, ...index };
@@ -8701,7 +8713,7 @@ export async function updateCurrentNoteMeta(body, action) {
   } else if (action === "hide-roam") {
     next = upsertMetaBlock(file, content, { roam: "off" });
   } else if (action === "activate-roam") {
-    next = upsertMetaBlock(file, content, { roam: "" });
+    next = upsertMetaBlock(file, content, { roam: "" }, { activateRoam: true });
   } else {
     const patch = {
       title: body.title,
@@ -9387,6 +9399,16 @@ export async function saveNote(body) {
   const baseVersion = String(body.baseVersion || "");
   const wrote = await enqueueSaveWrite(file, async () => {
     if (!acceptSaveRequest(file, body)) return false;
+    if (!force && (baseVersion || baseMtimeMs > 0 || incrementalChanges)) {
+      try {
+        await stat(file);
+      } catch (err) {
+        if (err?.code === "ENOENT") {
+          return { conflict: true, message: "File was moved or deleted. Reopen it before saving." };
+        }
+        throw err;
+      }
+    }
     // Incremental changes have no meaning without their exact source
     // version, including an explicit force request. Full-source force saves
     // may still intentionally omit the precondition.
@@ -9485,7 +9507,7 @@ export async function saveNote(body) {
     };
   });
   if (wrote && typeof wrote === "object" && wrote.conflict) {
-    return { type: "saved", ok: false, file, conflict: true, message: "File changed on disk. Review before overwriting.", mtimeMs: wrote.mtimeMs, size: wrote.size, version: wrote.version };
+    return { type: "saved", ok: false, file, conflict: true, message: String(wrote.message || "File changed on disk. Review before overwriting."), mtimeMs: wrote.mtimeMs, size: wrote.size, version: wrote.version };
   }
   if (wrote && typeof wrote === "object" && (wrote.rejected || wrote.ok === false)) {
     return {

@@ -1,7 +1,8 @@
 // Inline math detection shared by CM6 widgets and floating preview.
 // Inline math uses explicit LaTeX bracket delimiters `\( … \)`. Unlike the old
-// single-dollar syntax these are unambiguous and never occur in ordinary prose,
-// so no prose heuristics are needed: a `\( … \)` span on a single line is math.
+// single-dollar syntax these are unambiguous and never occur in ordinary prose.
+// The fast scanner below intentionally stays single-line. Multiline pairs use
+// the indexed fence path so ordinary typing never scans across the document.
 
 import type { InlineContext, MarkdownConfig } from "@lezer/markdown";
 
@@ -31,10 +32,6 @@ function inlineMathEnds(cx: InlineContext): Map<number, number> {
   let open = -1;
   for (let pos = cx.offset; pos < cx.end; pos++) {
     const ch = cx.char(pos);
-    if (ch === 10 /* \n */) {
-      open = -1;
-      continue;
-    }
     if (open < 0) {
       if (ch === 92 /* \\ */ && cx.char(pos + 1) === 40 /* ( */) {
         open = pos;

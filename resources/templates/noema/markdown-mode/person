@@ -1,0 +1,22 @@
+# name: Roam · person
+# key: person
+# type: roam
+# group: Knowledge
+# --
+# {{title}}
+
+## Context
+
+${1:How do I know this person or their work?}
+
+## Relevant work
+
+- ${2:Paper, project, or contribution.}
+
+## Connections
+
+- ${3:People, topics, or projects connected to them.}
+
+## Follow up
+
+${0:Question or next contact, if useful.}

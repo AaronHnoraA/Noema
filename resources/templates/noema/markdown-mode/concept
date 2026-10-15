@@ -1,0 +1,22 @@
+# name: Roam · concept
+# key: concept
+# type: roam
+# group: Knowledge
+# --
+# {{title}}
+
+## In one sentence
+
+${1:Define the concept in your own words.}
+
+## Examples
+
+- ${2:A concrete example.}
+
+## Boundaries
+
+${3:What is often confused with this concept?}
+
+## Related ideas
+
+- ${0:Link a parent, child, or contrasting idea.}

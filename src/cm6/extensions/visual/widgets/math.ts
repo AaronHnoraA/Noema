@@ -35,8 +35,11 @@ import {
   blockMathRangeSpanning,
   blockMathRangesOverlapping,
   getBlockMathRanges,
+  getMultilineInlineMathRanges,
+  rangeAtPosition,
   rangeOverlapsAny,
   type BlockMathRange,
+  type MultilineInlineMathRange,
 } from "../../../math-ranges.ts";
 import { scanCodeRanges } from "../../../code-ranges.ts";
 import { scanTexSource, texTokenClass } from "../../../tex-highlight.ts";
@@ -2049,6 +2052,130 @@ const mathInlineAtomicExtension = EditorView.atomicRanges.of((view) => (
   view.plugin(mathInlineExtension)?.atomicRanges ?? Decoration.none
 ));
 
+type MultilineInlineFieldValue = {
+  decorations: DecorationSet;
+  atomicRanges: DecorationSet;
+  selectedKey: string;
+};
+
+function selectedMultilineInlineKey(state: EditorState): string {
+  if (state.selection.ranges.length !== 1) return "";
+  const selection = state.selection.main;
+  const range = rangeAtPosition(selection.head, getMultilineInlineMathRanges(state));
+  return range && rangeContainsSelection(state, range) ? `${range.from}:${range.to}` : "";
+}
+
+function multilineInlineDecoItems(
+  state: EditorState,
+  range: MultilineInlineMathRange,
+  selectedKey: string,
+): { decorations: Range<Decoration>[]; atomicRanges: Range<Decoration>[] } {
+  if (rangeOverlapsAny(range.from, range.to, getBlockMathRanges(state))
+    || scanCodeRanges(state, [{ from: range.from, to: range.to }]).some((code) => (
+      code.from < range.to && code.to > range.from
+    ))) return { decorations: [], atomicRanges: [] };
+  if (`${range.from}:${range.to}` === selectedKey) {
+    const decorations = [Decoration.mark({ class: "cm-math-inline-source" }).range(range.from, range.to)];
+    addTexHighlightDecos(decorations, state, range.contentFrom, range.contentTo);
+    return { decorations, atomicRanges: [] };
+  }
+  return {
+    decorations: [Decoration.replace({ widget: new InlineMathWidget(range.tex, range.from, range.to) })
+      .range(range.from, range.to)],
+    atomicRanges: [Decoration.mark({}).range(range.from, range.to)],
+  };
+}
+
+function buildMultilineInlineField(state: EditorState): MultilineInlineFieldValue {
+  const selectedKey = selectedMultilineInlineKey(state);
+  const items = getMultilineInlineMathRanges(state)
+    .map((range) => multilineInlineDecoItems(state, range, selectedKey));
+  return {
+    decorations: Decoration.set(items.flatMap((item) => item.decorations), true),
+    atomicRanges: Decoration.set(items.flatMap((item) => item.atomicRanges), true),
+    selectedKey,
+  };
+}
+
+function patchMultilineInlineField(
+  value: MultilineInlineFieldValue,
+  state: EditorState,
+  keys: readonly string[],
+): MultilineInlineFieldValue {
+  const windows = mergeWindows(keys.map(rangeFromKey)
+    .filter((range): range is { from: number; to: number } => Boolean(range)));
+  let decorations = value.decorations;
+  let atomicRanges = value.atomicRanges;
+  const add: Range<Decoration>[] = [];
+  const addAtomic: Range<Decoration>[] = [];
+  const ranges = getMultilineInlineMathRanges(state);
+  const selectedKey = selectedMultilineInlineKey(state);
+  for (const window of windows) {
+    decorations = decorations.update({
+      filterFrom: window.from, filterTo: window.to,
+      filter: (from, to) => to <= window.from || from >= window.to,
+    });
+    atomicRanges = atomicRanges.update({
+      filterFrom: window.from, filterTo: window.to,
+      filter: (from, to) => to <= window.from || from >= window.to,
+    });
+    for (const range of ranges) {
+      if (range.to <= window.from || range.from >= window.to) continue;
+      const items = multilineInlineDecoItems(state, range, selectedKey);
+      add.push(...items.decorations);
+      addAtomic.push(...items.atomicRanges);
+    }
+  }
+  return {
+    decorations: decorations.update({ add, sort: true }),
+    atomicRanges: atomicRanges.update({ add: addAtomic, sort: true }),
+    selectedKey,
+  };
+}
+
+const mathMultilineInlineField = StateField.define<MultilineInlineFieldValue>({
+  create: buildMultilineInlineField,
+  update(value, tr) {
+    if (!tr.docChanged && !tr.selection) return value;
+    const selectedKey = selectedMultilineInlineKey(tr.state);
+    if (!tr.docChanged) {
+      return selectedKey === value.selectedKey ? value
+        : patchMultilineInlineField(value, tr.state, [value.selectedKey, selectedKey]);
+    }
+    const before = getMultilineInlineMathRanges(tr.startState);
+    const after = getMultilineInlineMathRanges(tr.state);
+    if (before.length !== after.length) return buildMultilineInlineField(tr.state);
+    const mappedDecorations = value.decorations.map(tr.changes);
+    const mappedAtomic = value.atomicRanges.map(tr.changes);
+    const mappedSelection = rangeFromKey(value.selectedKey);
+    const previousSelectedKey = mappedSelection
+      ? `${tr.changes.mapPos(mappedSelection.from, -1)}:${tr.changes.mapPos(mappedSelection.to, 1)}` : "";
+    const changed: string[] = previousSelectedKey === selectedKey
+      ? [] : [previousSelectedKey, selectedKey];
+    for (let index = 0; index < before.length; index++) {
+      const old = before[index]!;
+      const next = after[index]!;
+      const oldFrom = tr.changes.mapPos(old.from, -1);
+      const oldTo = tr.changes.mapPos(old.to, 1);
+      if (oldFrom !== next.from || oldTo !== next.to || old.tex !== next.tex) {
+        changed.push(`${oldFrom}:${oldTo}`, `${next.from}:${next.to}`);
+      }
+    }
+    const mapped: MultilineInlineFieldValue = {
+      decorations: mappedDecorations,
+      atomicRanges: mappedAtomic,
+      selectedKey: previousSelectedKey,
+    };
+    return changed.some(Boolean) ? patchMultilineInlineField(mapped, tr.state, changed)
+      : { ...mapped, selectedKey };
+  },
+  provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
+});
+
+const mathMultilineInlineAtomicExtension = EditorView.atomicRanges.of((view) => (
+  view.state.field(mathMultilineInlineField, false)?.atomicRanges ?? Decoration.none
+));
+
 function activateAdjacentInlineMath(view: EditorView, direction: "forward" | "backward"): boolean {
   // Opening one formula source is a single-caret interaction. With multiple
   // cursors, let CM6 move every range atomically; collapsing the selection to
@@ -2058,6 +2185,22 @@ function activateAdjacentInlineMath(view: EditorView, direction: "forward" | "ba
       || view.state.selection.ranges.length !== 1
       || !view.state.selection.main.empty) return false;
   const position = view.state.selection.main.head;
+  const multiline = rangeAtPosition(
+    direction === "backward" ? position - 1 : position,
+    getMultilineInlineMathRanges(view.state),
+  );
+  if (multiline
+    && (direction === "forward"
+      ? position >= multiline.from && position < multiline.to
+      : position > multiline.from && position <= multiline.to)
+    && `${multiline.from}:${multiline.to}` !== selectedMultilineInlineKey(view.state)) {
+    view.dispatch({
+      selection: { anchor: direction === "forward" ? multiline.contentFrom : multiline.contentTo },
+      scrollIntoView: true,
+      userEvent: "select",
+    });
+    return true;
+  }
   const range = inlineMathRangesOnSelectionLines(view.state).find((candidate) =>
     direction === "forward"
       ? position >= candidate.from && position < candidate.to
@@ -2106,6 +2249,37 @@ function displayMathCrossedByVerticalMove(
     : null;
 }
 
+function multilineInlineCrossedByVerticalMove(
+  view: EditorView,
+  start: number,
+  target: number,
+  forward: boolean,
+): MultilineInlineMathRange | null {
+  const ranges = getMultilineInlineMathRanges(view.state);
+  let low = 0;
+  let high = ranges.length;
+  if (forward) {
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (ranges[middle]!.from <= start) low = middle + 1;
+      else high = middle;
+    }
+    const range = ranges[low];
+    return range && target >= range.from
+      && scanCodeRanges(view.state, [{ from: range.from, to: range.to }]).length === 0
+      && !rangeOverlapsAny(range.from, range.to, getBlockMathRanges(view.state)) ? range : null;
+  }
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (ranges[middle]!.to < start) low = middle + 1;
+    else high = middle;
+  }
+  const range = ranges[low - 1];
+  return range && target <= range.to
+    && scanCodeRanges(view.state, [{ from: range.from, to: range.to }]).length === 0
+    && !rangeOverlapsAny(range.from, range.to, getBlockMathRanges(view.state)) ? range : null;
+}
+
 export type InsertDisplayLineMoveResult = false | "cursor" | "formula";
 
 /** CM6-native vertical motion, treating only display math as an editable row. */
@@ -2120,7 +2294,12 @@ export function moveInsertLineWithDisplayMathEntry(
   if (moved.head === start) moved = view.moveToLineBoundary(selection.main, forward);
 
   const display = displayMathCrossedByVerticalMove(view, start, moved.head, forward);
-  if (display && activateBlockMath(view, display.from, display.to, { kind: forward ? "start" : "end" })) {
+  const inline = multilineInlineCrossedByVerticalMove(view, start, moved.head, forward);
+  const enterDisplay = display && (!inline || (forward ? display.from < inline.from : display.to > inline.to));
+  if (enterDisplay && activateBlockMath(view, display.from, display.to, { kind: forward ? "start" : "end" })) {
+    return "formula";
+  }
+  if (inline && activateInlineMath(view, inline.from, inline.to, { kind: forward ? "start" : "end" })) {
     return "formula";
   }
 
@@ -2136,6 +2315,14 @@ export function activateInlineMath(
   to: number,
   entry: VisualTexInlineEntry = { kind: "start" },
 ): boolean {
+  const multiline = getMultilineInlineMathRanges(view.state)
+    .find((range) => range.from === from && range.to === to);
+  if (multiline) {
+    const offset = entry.kind === "end" ? multiline.contentTo - multiline.contentFrom
+      : entry.kind === "source" ? entry.offset : 0;
+    view.dispatch({ selection: { anchor: multiline.contentFrom + Math.max(0, Math.min(offset, multiline.contentTo - multiline.contentFrom)) } });
+    return true;
+  }
   const raw = view.state.doc.sliceString(from, to);
   const range = raw.startsWith("\\(") && raw.endsWith("\\)")
     ? { from, to, tex: raw.slice(2, -2) }
@@ -2159,6 +2346,10 @@ export function formulaSourceRangeAtPosition(
   if (block && position >= block.from && position <= block.to) return block;
   const inline = view.plugin(mathInlineExtension)?.revealedSourceRange() ?? null;
   if (inline && position >= inline.from && position <= inline.to) return inline;
+  const multiline = rangeAtPosition(position, getMultilineInlineMathRanges(view.state));
+  if (multiline && `${multiline.from}:${multiline.to}` === selectedMultilineInlineKey(view.state)) {
+    return { from: multiline.from, to: multiline.to };
+  }
   return null;
 }
 
@@ -2203,6 +2394,16 @@ export function formulaRangeAtWidgetPosition(
       contentTo: block.contentTo,
     };
   }
+  const multiline = rangeAtPosition(position, getMultilineInlineMathRanges(state));
+  if (multiline) {
+    return {
+      display: false,
+      from: multiline.from,
+      to: multiline.to,
+      contentFrom: multiline.contentFrom,
+      contentTo: multiline.contentTo,
+    };
+  }
   const line = state.doc.lineAt(Math.max(0, Math.min(position, state.doc.length)));
   const inline = scanInlineMathRanges(line.text, line.from)
     .find((range) => position >= range.from && position <= range.to);
@@ -2227,6 +2428,13 @@ export function revealFormulaSource(
   if (blockRange) {
     return view.plugin(mathBlockSessionExtension)?.revealRangeSource(view, blockRange, sourceOffset) ?? false;
   }
+  const multiline = getMultilineInlineMathRanges(view.state)
+    .find((range) => range.from === from && range.to === to);
+  if (multiline) {
+    view.dispatch({ selection: { anchor: Math.max(multiline.contentFrom,
+      Math.min(multiline.contentFrom + sourceOffset, multiline.contentTo)) } });
+    return true;
+  }
   const raw = view.state.doc.sliceString(from, to);
   if (!raw.startsWith("\\(") || !raw.endsWith("\\)")) return false;
   return view.plugin(mathInlineExtension)?.revealRangeSource(
@@ -2242,6 +2450,8 @@ export function revealFormulaSource(
 
 export const mathExtension = [
   persistentVisualStateField(mathBlockField, createMathBlockField),
+  mathMultilineInlineField,
+  mathMultilineInlineAtomicExtension,
   mathBlockAtomicExtension,
   mathBlockViewportExtension,
   mathBlockSessionExtension,

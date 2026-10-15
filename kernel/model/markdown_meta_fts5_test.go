@@ -64,7 +64,7 @@ func TestMutateMarkdownMetaWritesAndReindexesCanonicalUUIDv7(t *testing.T) {
 	}
 	tags := []string{"kernel", "metadata"}
 	result, err := MutateMarkdownMeta(MarkdownMetaMutationRequest{
-		Notebook: boxID, Path: path, Action: "add", Tags: &tags,
+		Notebook: boxID, Path: path, Action: "activate-roam", Tags: &tags,
 	})
 	if err != nil {
 		t.Fatal(err)
