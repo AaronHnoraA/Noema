@@ -65,8 +65,17 @@ type RowBand = { top: number; bottom: number };
 /** Graphemes examined on either side of a row for text that has no height. */
 const HIDDEN_RUN_PROBE_LIMIT = 32;
 
+/**
+ * The vertical band where the character at POS is drawn.  It is read from the
+ * character's own end edge: `coordsAtPos(pos, 1)` is the caret slot before
+ * it, and CodeMirror puts that slot at the end of the previous row when POS
+ * starts a wrapped row with a widget (an inline formula, an image).
+ */
 function bandAt(view: EditorView, pos: number): RowBand | null {
-  const coords = view.coordsAtPos(pos, 1);
+  const doc = view.state.doc;
+  const coords = pos < doc.lineAt(pos).to
+    ? view.coordsAtPos(nextGraphemePosition(doc, pos), -1) ?? view.coordsAtPos(pos, 1)
+    : view.coordsAtPos(pos, 1);
   return coords ? { top: coords.top, bottom: coords.bottom } : null;
 }
 
@@ -118,6 +127,22 @@ export const domRowLayout: VimRowLayout = {
     const line = doc.lineAt(clamp(pos, 0, doc.length));
     let from = measuredStart(view, pos, assoc);
     let to = measuredEnd(view, pos, assoc);
+    // CodeMirror attaches the slot before a row-opening widget or hidden
+    // marker to the previous row, even with assoc 1.  When the character at
+    // POS is drawn below that row, POS opens the next row: it runs from POS to
+    // the end of the row CodeMirror reports for the first offset past it.
+    if (assoc > 0 && to === pos && from < pos && pos < line.to) {
+      const prior = visibleBand(view, from, previousGraphemePosition(doc, pos));
+      if (prior && !onBand(view, pos, prior)) {
+        let inner = nextGraphemePosition(doc, pos);
+        for (let probe = 0; probe < HIDDEN_RUN_PROBE_LIMIT && inner < line.to; probe++) {
+          if (measuredStart(view, inner, 1) > from) break;
+          inner = nextGraphemePosition(doc, inner);
+        }
+        from = pos;
+        to = Math.max(pos, measuredEnd(view, inner, 1));
+      }
+    }
     if (from > pos || to < pos) {
       // An answer that misses POS and leaves its line is a measuring failure
       // (the line is outside the rendered viewport, or the DOM is mid-update).
@@ -133,25 +158,32 @@ export const domRowLayout: VimRowLayout = {
     // CodeMirror's "end of visual line" can stop before a hanging wrap space.
     // Rows must partition the line, so extend TO until it is the next row's
     // start — otherwise that space belongs to no row and stepping over rows
-    // makes no progress.
+    // makes no progress.  CodeMirror also reports the slot before a widget
+    // opening the next row as this row's, so stop at anything drawn below.
+    const rowBand = visibleBand(view, from, to);
     for (let probe = 0; probe < ROW_END_PROBE_LIMIT && to < line.to; probe++) {
       if (measuredStart(view, to, 1) !== from) break;
+      if (rowBand && !onBand(view, to, rowBand)) break;
       to = nextGraphemePosition(doc, to);
     }
     // Take in what is drawn on the same row but was measured as another one:
     // a hidden marker before the row, or the text after a hidden marker.
     const band = visibleBand(view, from, to);
     if (!band) return { from, to };
+    // A measured boundary is taken only when it is itself drawn on this row:
+    // a hidden marker opening a wrapped row is measured with the row above.
     for (let probe = 0; probe < HIDDEN_RUN_PROBE_LIMIT && to < line.to; probe++) {
       if (!onBand(view, to, band)) break;
-      const end = measuredEnd(view, to, 1);
-      to = end > to ? Math.min(end, line.to) : nextGraphemePosition(doc, to);
+      const end = Math.min(measuredEnd(view, to, 1), line.to);
+      to = end > to && onBand(view, previousGraphemePosition(doc, end), band)
+        ? end
+        : nextGraphemePosition(doc, to);
     }
     for (let probe = 0; probe < HIDDEN_RUN_PROBE_LIMIT && from > line.from; probe++) {
       const previous = previousGraphemePosition(doc, from);
       if (!onBand(view, previous, band)) break;
-      const start = measuredStart(view, previous, 1);
-      from = start < previous ? Math.max(start, line.from) : previous;
+      const start = Math.max(measuredStart(view, previous, 1), line.from);
+      from = start < previous && onBand(view, start, band) ? start : previous;
     }
     return { from, to };
   },

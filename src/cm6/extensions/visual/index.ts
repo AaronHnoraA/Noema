@@ -32,6 +32,7 @@ import { visualTypographyExtension } from "./typography.ts";
 import { blockMoveGutterExtension } from "../../block-move.ts";
 import { visualTypingBurstExtension } from "./typing-burst.ts";
 import { optimalLinebreakExtension } from "./optimal-linebreak.ts";
+import { constructsPinnedField } from "./constructs/index.ts";
 
 export function createVisualMarkdownExtensions(): Extension {
   return [
@@ -61,6 +62,8 @@ export function createVisualMarkdownExtensions(): Extension {
 
 export function createVisualMarkdownEditingExtensions(): Extension {
   return [
+    // Outside the visual-mode compartment: Vim's pinning outlives a toggle.
+    constructsPinnedField,
     leanPlaceholderEditingExtension,
     noteCodeEditingExtension,
     leanExtension,

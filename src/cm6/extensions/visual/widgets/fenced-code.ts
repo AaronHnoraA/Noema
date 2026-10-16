@@ -30,11 +30,18 @@ import type { Range } from "@codemirror/state";
 import { highlightCodeForEditor, onCodeHighlightReady } from "../../../../code-highlight-async.ts";
 import { supportedDiagramLang } from "../../../../diagram-langs.ts";
 import { writeSystemClipboard } from "../../../../system-clipboard.ts";
-import { getBlockMathRanges, rangeInsideAny, rangeOverlapsAny } from "../../../math-ranges.ts";
+import { getBlockMathRanges, rangeAtPosition, rangeInsideAny, rangeOverlapsAny } from "../../../math-ranges.ts";
 import { applyLayoutAttrs, layoutFromAttrs, layoutIsDefault, readLayoutAttrsLine, type LayoutAttrs } from "../../../../layout-attrs.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import {
+  constructSources,
+  selectionOpensSource,
+  transactionChangesPinning,
+  type ConstructSource,
+  type RenderedConstruct,
+} from "../constructs/index.ts";
 import {
   persistentVisualStateField,
   rememberPersistentVisualPluginState,
@@ -210,9 +217,7 @@ class CodeFoldPlaceholderWidget extends MeasuredWidget {
 function codeFoldDecorations(state: EditorState, folds: readonly CodeFold[]): DecorationSet {
   const decorations: Range<Decoration>[] = [];
   for (const fold of folds) {
-    const from = state.doc.lineAt(Math.max(0, Math.min(fold.from, state.doc.length))).from;
-    const endPosition = Math.max(from, Math.min(Math.max(fold.from, fold.to - 1), state.doc.length));
-    const to = state.doc.lineAt(endPosition).to;
+    const { from, to } = codeFoldRange(state, fold);
     if (from >= to) continue;
     decorations.push(Decoration.replace({
       widget: new CodeFoldPlaceholderWidget(fold.lines),
@@ -638,15 +643,13 @@ function buildMermaidDecoRanges(
   to = state.doc.length,
 ): Range<Decoration>[] {
   const decos: Range<Decoration>[] = [];
-  const sel = state.selection.main;
   const blocks = state.field(mermaidBlocksField, false) ?? collectMermaidBlocks(state);
 
   for (const block of blocks) {
     if (block.to < from || block.from > to) continue;
     // Only a caret opens a diagram's source; a range keeps it rendered, as
     // `activeMermaidBlockKey` assumes when it ignores range selections.
-    const cursorInBlock = sel.empty && sel.from > block.from && sel.from < block.to;
-    if (!cursorInBlock) {
+    if (!diagramOpened(state, block)) {
       decos.push(
         Decoration.replace({
           widget: new MermaidWidget(block.source, block.lang, block.from, block.to, block.sourceFrom, block.layout),
@@ -673,14 +676,16 @@ function buildMermaidDecos(state: EditorState): DecorationSet {
   return Decoration.set(buildMermaidDecoRanges(state), true);
 }
 
+/** A diagram is an object: it opens for a caret strictly inside, outside Vim's Normal and Visual modes. */
+function diagramOpened(state: EditorState, block: { from: number; to: number }): boolean {
+  return selectionOpensSource(state, block.from, block.to, "caret-interior", "object");
+}
+
 function activeMermaidBlockKey(state: EditorState): string {
   const sel = state.selection.main;
   if (!sel.empty) return "";
-  const blocks = state.field(mermaidBlocksField, false) ?? collectMermaidBlocks(state);
-  for (const block of blocks) {
-    if (sel.from < block.to && sel.to > block.from) return `${block.from}:${block.to}`;
-  }
-  return "";
+  const block = rangeAtPosition(sel.head, state.field(mermaidBlocksField, false) ?? collectMermaidBlocks(state));
+  return block && diagramOpened(state, block) ? `${block.from}:${block.to}` : "";
 }
 
 function mermaidRangeFromKey(key: string): { from: number; to: number } | null {
@@ -736,7 +741,7 @@ const mermaidField = StateField.define<DecorationSet>({
       }
       return buildMermaidDecos(tr.state);
     }
-    if (tr.selection != null) {
+    if (tr.selection != null || transactionChangesPinning(tr)) {
       const oldKey = activeMermaidBlockKey(tr.startState);
       const newKey = activeMermaidBlockKey(tr.state);
       if (oldKey !== newKey) return patchMermaidDecosForSelectionChange(tr.state, value, oldKey, newKey);
@@ -977,7 +982,30 @@ const fencedCodeViewPlugin = ViewPlugin.fromClass(FencedCodePlugin, {
 // Public export — both parts together
 // ---------------------------------------------------------------------------
 
+/** The source range a code fold hides: whole lines, as its placeholder replaces them. */
+function codeFoldRange(state: EditorState, fold: CodeFold): { from: number; to: number } {
+  const from = state.doc.lineAt(Math.max(0, Math.min(fold.from, state.doc.length))).from;
+  const end = Math.max(from, Math.min(Math.max(fold.from, fold.to - 1), state.doc.length));
+  return { from, to: state.doc.lineAt(end).to };
+}
+
+/** Diagrams and folded code blocks as rendered constructs. A fold opens only by its toggle. */
+const fencedCodeConstructSource: ConstructSource = {
+  kind: "fenced-code",
+  at(state, pos) {
+    const found: RenderedConstruct[] = [];
+    for (const fold of state.field(codeFoldField, false)?.folds ?? []) {
+      const range = codeFoldRange(state, fold);
+      if (range.from <= pos && pos < range.to) found.push({ ...range, block: true, kind: "code-fold", reveal: "never" });
+    }
+    const diagram = rangeAtPosition(pos, state.field(mermaidBlocksField, false) ?? []);
+    if (diagram) found.push({ from: diagram.from, to: diagram.to, block: true, kind: "diagram", reveal: "caret-interior" });
+    return found;
+  },
+};
+
 export const fencedCodeExtension = [
+  constructSources.of(fencedCodeConstructSource),
   persistentVisualStateField(mermaidBlocksField, collectMermaidBlocks),
   persistentVisualStateField(mermaidField, buildMermaidDecos),
   persistentVisualStateField(codeFoldField, createCodeFoldState),

@@ -46,7 +46,14 @@ import { scanTexSource, texTokenClass } from "../../../tex-highlight.ts";
 import { orgEnvContextForRange, type OrgEnvContext } from "./block-extras.ts";
 import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
-import { vimKeepsRenderedObjects } from "../vim-objects.ts";
+import {
+  anySelectionRevealsSource,
+  constructSources,
+  renderedConstructsPinned,
+  selectionRevealsSource,
+  type ConstructSource,
+  type RenderedConstruct,
+} from "../constructs/index.ts";
 import {
   isPointerSelecting,
   transactionHasPointerSelection,
@@ -78,11 +85,9 @@ function setSourceRange(el: HTMLElement, from: number, to: number, openSource = 
 // Regex patterns
 // ---------------------------------------------------------------------------
 
-function selectionTouchesRange(state: EditorState, from: number, to: number): boolean {
-  return state.selection.ranges.some((sel) => {
-    if (sel.empty) return sel.from > from && sel.from < to;
-    return sel.from < to && sel.to > from;
-  });
+/** Whether any selection range reaches inside the formula source [FROM, TO]. */
+function anySelectionInFormula(state: EditorState, from: number, to: number): boolean {
+  return anySelectionRevealsSource(state.selection, from, to, "interior");
 }
 
 function addActiveBlockSourceLineDecos(
@@ -547,7 +552,7 @@ function blockMathAtSelection(state: EditorState): BlockMathRange | null {
   if (state.selection.ranges.length !== 1 || !state.selection.main.empty) return null;
   // Binary search, not a linear scan: this runs on every selection change.
   const range = blockMathRangeSpanning(state, state.selection.main.from);
-  return range && rangeContainsSelection(state, range) ? range : null;
+  return range && selectionInFormula(state, range) ? range : null;
 }
 
 function blockSelectionEntry(state: EditorState, range: BlockMathRange): VisualTexInlineEntry {
@@ -644,7 +649,7 @@ function buildBlockMathDecoRanges(
     if (range.from > to) break;
     const tex = range.tex;
     const key = blockMathKey(range);
-    const cursorInside = rangeContainsSelection(state, range);
+    const cursorInside = selectionInFormula(state, range);
     const editing = active?.from === range.from
       && active.to === range.to;
     if (editing) {
@@ -780,7 +785,7 @@ function activeBlockMathKey(state: EditorState): string {
   // a multi-megabyte note pay for the whole document on every mouse move.
   if (state.selection.ranges.length === 1 && state.selection.main.empty) {
     const range = blockMathRangeSpanning(state, state.selection.main.from);
-    return range && selectionTouchesRange(state, range.from, range.to)
+    return range && anySelectionInFormula(state, range.from, range.to)
       ? blockMathKey(range)
       : "";
   }
@@ -792,7 +797,7 @@ function activeBlockMathKey(state: EditorState): string {
   for (const selection of state.selection.ranges) {
     if (!selection.empty) continue;
     const range = blockMathRangeSpanning(state, selection.from);
-    if (range && selectionTouchesRange(state, range.from, range.to)) return blockMathKey(range);
+    if (range && anySelectionInFormula(state, range.from, range.to)) return blockMathKey(range);
   }
   return "";
 }
@@ -1553,7 +1558,7 @@ class MathBlockPlugin {
     // below it. Mid-drag that moves the document out from under the pointer,
     // so wait for the gesture to finish and enter once from where it ended.
     if (this.pendingActivation || view.state.readOnly || isPointerSelecting(view.state)
-        || vimKeepsRenderedObjects(view)) return;
+        || renderedConstructsPinned(view.state)) return;
     const field = view.state.field(mathBlockField, false);
     const range = blockMathAtSelection(view.state);
     if (!range || field?.suppressedKey === blockMathKey(range)) return;
@@ -1561,7 +1566,7 @@ class MathBlockPlugin {
     queueMicrotask(() => {
       this.pendingActivation = false;
       if (!view.dom.isConnected || view.state.field(mathBlockField, false)?.active
-          || vimKeepsRenderedObjects(view)) return;
+          || renderedConstructsPinned(view.state)) return;
       const current = blockMathAtSelection(view.state);
       if (!current) return;
       if (view.state.field(mathBlockField, false)?.suppressedKey === blockMathKey(current)) return;
@@ -1673,10 +1678,9 @@ function inlineMathRangesOnSelectionLines(state: EditorState): InlineMathRange[]
   return ranges;
 }
 
-function rangeContainsSelection(state: EditorState, range: { from: number; to: number }): boolean {
-  const selection = state.selection.main;
-  if (selection.empty) return selection.from > range.from && selection.from < range.to;
-  return selection.from < range.to && selection.to > range.from;
+/** Whether the main selection reaches inside the formula source RANGE. */
+function selectionInFormula(state: EditorState, range: { from: number; to: number }): boolean {
+  return selectionRevealsSource(state.selection, range.from, range.to, "interior");
 }
 
 function rangeContainsWholeSelection(state: EditorState, range: { from: number; to: number }): boolean {
@@ -1688,7 +1692,7 @@ function rangeContainsWholeSelection(state: EditorState, range: { from: number; 
 function inlineMathAtSelection(state: EditorState): InlineMathRange | null {
   if (state.selection.ranges.length !== 1 || !state.selection.main.empty) return null;
   return inlineMathRangesOnSelectionLines(state)
-    .find((range) => rangeContainsSelection(state, range)) ?? null;
+    .find((range) => selectionInFormula(state, range)) ?? null;
 }
 
 function buildInlineMathDecos(
@@ -1710,7 +1714,7 @@ function buildInlineMathDecos(
       if (rangeOverlapsAny(from, to, blockRanges)) continue;
       if (rangeOverlapsAny(from, to, codeRanges)) continue;
 
-      const selected = rangeContainsSelection(view.state, { from, to });
+      const selected = selectionInFormula(view.state, { from, to });
       const key = `${from}:${to}`;
       if (selected && suppressedKey === key) {
         decos.push(Decoration.mark({ class: "cm-math-inline-source" }).range(from, to));
@@ -1769,7 +1773,7 @@ class MathInlinePlugin {
     }
     const selected = inlineMathAtSelection(view.state);
     this.selectionKey = selected ? `${selected.from}:${selected.to}` : "";
-    if (selected && !view.state.readOnly && !vimKeepsRenderedObjects(view)) {
+    if (selected && !view.state.readOnly && !renderedConstructsPinned(view.state)) {
       this.suppressedKey = this.selectionKey;
     }
     ({ decorations: this.decorations, atomicRanges: this.atomicRanges } = buildInlineMathDecos(
@@ -1863,7 +1867,7 @@ class MathInlinePlugin {
         rebuild = true;
       }
     } else if (!aborted && selected && !update.view.state.readOnly
-        && !vimKeepsRenderedObjects(update.view) && nextSelectionKey !== this.suppressedKey) {
+        && !renderedConstructsPinned(update.view.state) && nextSelectionKey !== this.suppressedKey) {
       this.suppressedKey = nextSelectionKey;
       rebuild = true;
     }
@@ -2062,7 +2066,7 @@ function selectedMultilineInlineKey(state: EditorState): string {
   if (state.selection.ranges.length !== 1) return "";
   const selection = state.selection.main;
   const range = rangeAtPosition(selection.head, getMultilineInlineMathRanges(state));
-  return range && rangeContainsSelection(state, range) ? `${range.from}:${range.to}` : "";
+  return range && selectionInFormula(state, range) ? `${range.from}:${range.to}` : "";
 }
 
 function multilineInlineDecoItems(
@@ -2448,7 +2452,49 @@ export function revealFormulaSource(
 // Public export — both parts together
 // ---------------------------------------------------------------------------
 
+/** Single-line `\(...\)` formulas on a line, outside display math and code; by state. */
+const inlineFormulasByLine = new WeakMap<EditorState, Map<number, readonly { from: number; to: number }[]>>();
+
+function inlineFormulasOnLine(state: EditorState, pos: number): readonly { from: number; to: number }[] {
+  const line = state.doc.lineAt(pos);
+  let byLine = inlineFormulasByLine.get(state);
+  if (!byLine) inlineFormulasByLine.set(state, byLine = new Map());
+  let ranges = byLine.get(line.from);
+  if (!ranges) {
+    const blocks = getBlockMathRanges(state);
+    const code = line.text.includes("\\(") ? scanCodeRanges(state, [{ from: line.from, to: line.to }]) : [];
+    ranges = line.text.includes("\\(")
+      ? scanInlineMathRanges(line.text, line.from).filter((range) => (
+        !rangeOverlapsAny(range.from, range.to, blocks) && !rangeOverlapsAny(range.from, range.to, code)))
+      : [];
+    byLine.set(line.from, ranges);
+  }
+  return ranges;
+}
+
+function formulaConstruct(from: number, to: number, block: boolean): RenderedConstruct {
+  return { from, to, block, kind: "math", reveal: "interior" };
+}
+
+/**
+ * Formulas in the construct registry. A formula's source is opened by its
+ * editing session, not by the selection alone, so the session decides.
+ */
+const mathConstructSource: ConstructSource = {
+  kind: "math",
+  at(state, pos) {
+    const block = rangeAtPosition(pos, getBlockMathRanges(state));
+    if (block) return [formulaConstruct(block.from, block.to, true)];
+    const multiline = rangeAtPosition(pos, getMultilineInlineMathRanges(state));
+    if (multiline) return [formulaConstruct(multiline.from, multiline.to, false)];
+    const inline = inlineFormulasOnLine(state, pos).find((range) => pos >= range.from && pos < range.to);
+    return inline ? [formulaConstruct(inline.from, inline.to, false)] : [];
+  },
+  revealed: (view, construct) => formulaSourceRangeAtPosition(view, construct.from) != null,
+};
+
 export const mathExtension = [
+  constructSources.of(mathConstructSource),
   persistentVisualStateField(mathBlockField, createMathBlockField),
   mathMultilineInlineField,
   mathMultilineInlineAtomicExtension,

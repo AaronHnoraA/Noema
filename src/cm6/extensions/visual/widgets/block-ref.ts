@@ -14,17 +14,9 @@
  * real lookup on demand instead.
  */
 
-import { syntaxTree } from "@codemirror/language";
-import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
-import { vimKeepsRenderedObjects } from "../vim-objects.ts";
-import type { Range } from "@codemirror/state";
-import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeInsideAny } from "../../../math-ranges.ts";
-import { scanInlineMathRanges } from "../../../../inline-math.ts";
-import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { WidgetType } from "@codemirror/view";
 import { BLOCK_REFERENCE_ID_SOURCE, shortBlockId } from "../../../../../shared/block-identity.mjs";
-import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
-import { isCoalescedVisualTyping } from "../typing-burst.ts";
-import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
+import { inlineConstruct } from "../constructs/index.ts";
 
 const BLOCK_REF_RE = new RegExp(
   String.raw`\(\((${BLOCK_REFERENCE_ID_SOURCE})(?:\s+(["'])((?:\\.|(?!\2)[\s\S])*)\2)?\)\)`,
@@ -71,101 +63,18 @@ class BlockRefWidget extends WidgetType {
   ignoreEvent(): boolean { return true; }
 }
 
-function excludedRanges(view: EditorView): Array<{ from: number; to: number }> {
-  const ranges = blockMathRangesOverlapping(view.state, view.visibleRanges)
-    .map(({ from, to }) => ({ from, to }));
-  for (const visible of view.visibleRanges) {
-    ranges.push(...scanInlineMathRanges(view.state.doc.sliceString(visible.from, visible.to), visible.from));
-    syntaxTree(view.state).iterate({
-      from: visible.from,
-      to: visible.to,
-      enter(node) {
-        if (["FencedCode", "CodeBlock", "IndentedCode", "InlineCode"].includes(node.name)) {
-          ranges.push({ from: node.from, to: node.to });
-          return false;
-        }
-        return true;
-      },
-    });
-  }
-  return mergeOverlappingRanges(ranges);
-}
-
-function selectionTouches(view: EditorView, from: number, to: number): boolean {
-  const selection = view.state.selection.main;
-  return selection.empty
-    ? selection.from >= from && selection.from <= to
-    : selection.from < to && selection.to > from;
-}
-
-function buildBlockRefDecorations(view: EditorView): DecorationSet {
-  const decorations: Range<Decoration>[] = [];
-  const excluded = excludedRanges(view);
-  const seenLines = new Set<number>();
-  let count = 0;
-
-  for (const visible of view.visibleRanges) {
-    const first = view.state.doc.lineAt(visible.from).number;
-    const last = view.state.doc.lineAt(Math.min(visible.to, view.state.doc.length)).number;
-    for (let lineNumber = first; lineNumber <= last && count < MAX_VIEWPORT_REFS; lineNumber++) {
-      if (seenLines.has(lineNumber)) continue;
-      seenLines.add(lineNumber);
-      const line = view.state.doc.line(lineNumber);
-      BLOCK_REF_RE.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while (count < MAX_VIEWPORT_REFS && (match = BLOCK_REF_RE.exec(line.text)) !== null) {
-        const from = line.from + match.index;
-        const to = from + match[0].length;
-        if (rangeInsideAny(from, to, excluded)
-          || (!vimKeepsRenderedObjects(view) && selectionTouches(view, from, to))) continue;
-        decorations.push(Decoration.replace({
-          widget: new BlockRefWidget(match[1]!, match[3]),
-          vimAtomic: true,
-        }).range(from, to));
-        count++;
-      }
+export const blockRefExtension = inlineConstruct({
+  kind: "block-ref",
+  reveal: "edge",
+  maxPerViewport: MAX_VIEWPORT_REFS,
+  *match(line) {
+    if (!line.text.includes("((")) return;
+    BLOCK_REF_RE.lastIndex = 0;
+    for (let match = BLOCK_REF_RE.exec(line.text); match; match = BLOCK_REF_RE.exec(line.text)) {
+      const from = line.from + match.index;
+      const id = match[1]!;
+      const title = match[3];
+      yield { from, to: from + match[0].length, widget: () => new BlockRefWidget(id, title) };
     }
-  }
-
-  decorations.sort((a, b) => a.from - b.from || a.to - b.to);
-  return Decoration.set(decorations, true);
-}
-
-const blockRefPluginCacheKey = {};
-
-class BlockRefPlugin {
-  decorations: DecorationSet;
-  private readonly view: EditorView;
-
-  constructor(view: EditorView) {
-    this.view = view;
-    this.decorations = restorePersistentVisualPluginState<DecorationSet>(
-      view.state,
-      blockRefPluginCacheKey,
-    ) ?? buildBlockRefDecorations(view);
-  }
-
-  update(update: ViewUpdate): void {
-    if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
-    if (isCoalescedVisualTyping(update)) {
-      this.decorations = this.decorations.map(update.changes);
-      return;
-    }
-    if (update.selectionSet && !update.docChanged && !update.viewportChanged
-        && isPointerSelecting(update.state)) return;
-    const pointerSelectionFinished = updateHasPointerSelectionEffect(update)
-      && !isPointerSelecting(update.state);
-    if (update.docChanged || update.viewportChanged || update.selectionSet
-        || pointerSelectionFinished || hasViewportDecorationRefresh(update)) {
-      this.decorations = buildBlockRefDecorations(update.view);
-    }
-  }
-
-  destroy(): void {
-    rememberPersistentVisualPluginState(this.view, blockRefPluginCacheKey, this.decorations);
-  }
-}
-
-export const blockRefExtension = ViewPlugin.fromClass(BlockRefPlugin, {
-  decorations: (plugin) => plugin.decorations,
+  },
 });

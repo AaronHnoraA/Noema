@@ -85,4 +85,22 @@ describe("inline @@scomment widget", () => {
       cleanup();
     }
   });
+
+  test("reuses the card DOM when an edit before it shifts its offsets", () => {
+    const md = String.raw`Claim @@scomment [Use \(u\).] after`;
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      editor.setMarkdownSelection(md.length);
+      const view = editor.view;
+      const before = document.querySelector<HTMLElement>(".inline-side-comment-widget")!;
+      const card = before.querySelector(".inline-side-comment-card")!;
+      view.dispatch({ changes: { from: 0, insert: "New " } });
+      const after = document.querySelector<HTMLElement>(".inline-side-comment-widget")!;
+      expect(after).toBe(before);
+      expect(after.querySelector(".inline-side-comment-card")).toBe(card);
+      expect(after.dataset.cmSourceFrom).toBe(String(md.indexOf("@@scomment") + 4));
+    } finally {
+      cleanup();
+    }
+  });
 });

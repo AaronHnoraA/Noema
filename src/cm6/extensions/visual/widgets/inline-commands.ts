@@ -21,6 +21,7 @@ import { revisionKindOf } from "../../../../revision-kinds.ts";
 import { findInlineCommandClose, isEscapedCommandStart, parseCommandArgs, scanInlineCommands, type InlineCommand } from "../../../../command-syntax.ts";
 import { renderMarkdownHTML } from "../../../../render-html.ts";
 import { StateField, type Range, type Text, type Transaction } from "@codemirror/state";
+import { selectionOpensSource } from "../constructs/index.ts";
 import { blockMathRangesOverlapping, mergeOverlappingRanges, positionInsideAnyRange } from "../../../math-ranges.ts";
 import { scanCodeRanges } from "../../../code-ranges.ts";
 import { scanInlineMathRanges } from "../../../../inline-math.ts";
@@ -926,7 +927,7 @@ class SideCommentWidget extends MeasuredWidget {
       && this.cmd.fullTo === other.cmd.fullTo;
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement("span");
     wrap.className = "inline-side-comment-widget inline-command-token";
     wrap.dataset.cmSourceFrom = String(this.cmd.fullFrom);
@@ -950,7 +951,24 @@ class SideCommentWidget extends MeasuredWidget {
     anchor.append(connector);
     wrap.append(anchor, card);
 
+    view.plugin(sideCommentLayoutPlugin)?.schedule();
     return wrap;
+  }
+
+  // Typing elsewhere shifts the source offsets and a decoration refresh then
+  // rebuilds this widget. Reusing the DOM keeps the card where it was placed
+  // instead of redrawing it at the default position and re-rendering math.
+  updateDOM(dom: HTMLElement, view: EditorView, previous: SideCommentWidget): boolean {
+    if (!dom.classList.contains("inline-side-comment-widget")) return false;
+    dom.dataset.cmSourceFrom = String(this.cmd.fullFrom);
+    dom.dataset.cmSourceTo = String(this.cmd.fullTo);
+    if (previous.cmd.context !== this.cmd.context) {
+      const card = dom.querySelector<HTMLElement>(".inline-side-comment-card");
+      if (!card) return false;
+      card.innerHTML = inlineTodoBodyHTML(this.cmd.context.trim());
+    }
+    view.plugin(sideCommentLayoutPlugin)?.schedule();
+    return true;
   }
 
   ignoreEvent(): boolean { return false; }
@@ -991,7 +1009,6 @@ function buildInlineCommandDecos(
   excludedRanges: Array<{ from: number; to: number }>,
 ): DecorationSet {
   const decos: Range<Decoration>[] = [];
-  const sel = view.state.selection.main;
   const doc = view.state.doc;
 
   for (const { from: vFrom, to: vTo } of view.visibleRanges) {
@@ -1002,8 +1019,8 @@ function buildInlineCommandDecos(
       const blockTo = vFrom + (cmd.blockTo ?? cmd.fullTo);
       if (positionInsideAnyRange(from, excludedRanges)) continue;
       // A range keeps commands rendered, as `activeInlineCommandKey` assumes;
-      // only a caret opens one's source.
-      const cursorInside = sel.empty && sel.from <= blockTo && sel.from >= from;
+      // only a caret opens one's source. Vim edits commands as text.
+      const cursorInside = selectionOpensSource(view.state, from, blockTo, "caret-edge", "structure");
       if (cmd.name === "itodo" && !cursorInside) {
         if (cmd.blockBodyFrom !== undefined && cmd.blockTo !== undefined) {
           decos.push(Decoration.line({ class: "cm-itodo-block-anchor-line" }).range(doc.lineAt(from).from));
@@ -1120,7 +1137,7 @@ function activeInlineCommandKey(view: EditorView): string {
     const from = scanFrom + cmd.fullFrom;
     const to = scanFrom + (cmd.blockTo ?? cmd.fullTo);
     if (positionInsideAnyRange(from, localInlineMathRanges)) continue;
-    if (sel.from <= to && sel.to >= from) keys.push(`${from}:${to}`);
+    if (selectionOpensSource(view.state, from, to, "caret-edge", "structure")) keys.push(`${from}:${to}`);
   }
   if (keys.length > 0) return keys.join("|");
 
@@ -1282,7 +1299,7 @@ class SideCommentLayout {
       || update.heightChanged || update.selectionSet || update.focusChanged) this.schedule();
   }
 
-  private schedule(): void {
+  schedule(): void {
     this.view.requestMeasure({ key: this, read: () => this.read(), write: (layout) => this.write(layout) });
   }
 
@@ -1317,9 +1334,12 @@ class SideCommentLayout {
       setPx(wrap, "--side-comment-card-left", cardLeft);
       setPx(wrap, "--side-comment-connector-width", connectorWidth);
       setPx(wrap, "--side-comment-shift", shift);
+      if (!wrap.dataset.placed) wrap.dataset.placed = "true";
     }
   }
 
 }
 
-export const sideCommentLayoutExtension = [sideCommentRailField, ViewPlugin.fromClass(SideCommentLayout)];
+const sideCommentLayoutPlugin = ViewPlugin.fromClass(SideCommentLayout);
+
+export const sideCommentLayoutExtension = [sideCommentRailField, sideCommentLayoutPlugin];

@@ -1,21 +1,12 @@
-import {
-  Decoration,
-  EditorView,
-  ViewPlugin,
-  type DecorationSet,
-  type ViewUpdate,
-} from "@codemirror/view";
-import type { Range } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
 import { api } from "../../../../../aaronnote/api-client.ts";
 import { highlightCodeForEditor, onCodeHighlightReady } from "../../../../code-highlight-async.ts";
-import { hasViewportDecorationRefresh, scheduleViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { scheduleViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { parseNoteCodeLine } from "../../../../../shared/note-code.mjs";
 import { sourceEditorName } from "../../../../../aaronnote/host-mode.ts";
 import { noemaPlatformLabels } from "../../../../platform-compat.ts";
-import { isPointerSelecting, selectionRevealsSource, updateHasPointerSelectionEffect } from "../selection.ts";
-import { isCoalescedVisualTyping } from "../typing-burst.ts";
-import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
+import { inlineConstruct } from "../constructs/index.ts";
 
 type NoteCodeLine = {
   commandFrom: number;
@@ -233,72 +224,20 @@ class NoteCodeWidget extends MeasuredWidget {
   ignoreEvent(): boolean { return true; }
 }
 
-function buildNoteCodeDecos(view: EditorView): DecorationSet {
-  const decos: Range<Decoration>[] = [];
-  const sel = view.state.selection.main;
-  const notePath = currentNotePath();
-  for (const { from, to } of view.visibleRanges) {
-    let line = view.state.doc.lineAt(from);
-    while (line.from <= to) {
-      const parsed = parseNoteCodeLine(line.text) as NoteCodeLine | null;
-      if (parsed) {
-        const commandFrom = line.from + parsed.commandFrom;
-        const commandTo = line.from + parsed.commandTo;
-        const cursorInside = selectionRevealsSource(sel, commandFrom, commandTo);
-        if (!cursorInside) {
-          decos.push(
-            Decoration.replace({
-              widget: new NoteCodeWidget(notePath, parsed, commandFrom, commandTo),
-            }).range(commandFrom, commandTo),
-          );
-        }
-      }
-      if (line.to >= view.state.doc.length) break;
-      line = view.state.doc.line(line.number + 1);
-    }
-  }
-  return Decoration.set(decos, true);
-}
-
-const noteCodePluginCacheKey = {};
-
-class NoteCodePlugin {
-  decorations: DecorationSet;
-  private readonly view: EditorView;
-  private cleanup: () => void;
-
-  constructor(view: EditorView) {
-    this.view = view;
-    this.decorations = restorePersistentVisualPluginState<DecorationSet>(
-      view.state,
-      noteCodePluginCacheKey,
-    ) ?? buildNoteCodeDecos(view);
-    this.cleanup = onCodeHighlightReady(() => scheduleViewportDecorationRefresh(view));
-  }
-
-  update(update: ViewUpdate): void {
-    if (isCoalescedVisualTyping(update)) {
-      this.decorations = this.decorations.map(update.changes);
-      return;
-    }
-    if (update.selectionSet && !update.docChanged && !update.viewportChanged
-        && isPointerSelecting(update.state)) return;
-    const pointerSelectionFinished = updateHasPointerSelectionEffect(update)
-      && !isPointerSelecting(update.state);
-    if (update.docChanged || update.selectionSet || update.viewportChanged
-        || pointerSelectionFinished || hasViewportDecorationRefresh(update)) {
-      this.decorations = buildNoteCodeDecos(update.view);
-    }
-  }
-
-  destroy(): void {
-    rememberPersistentVisualPluginState(this.view, noteCodePluginCacheKey, this.decorations);
-    this.cleanup();
-  }
-}
-
-export const noteCodePreviewExtension = ViewPlugin.fromClass(NoteCodePlugin, {
-  decorations: (plugin) => plugin.decorations,
+export const noteCodePreviewExtension = inlineConstruct({
+  kind: "note-code",
+  reveal: "edge",
+  maxPerViewport: 2_000,
+  *match(line) {
+    const parsed = parseNoteCodeLine(line.text) as NoteCodeLine | null;
+    if (!parsed) return;
+    const from = line.from + parsed.commandFrom;
+    const to = line.from + parsed.commandTo;
+    yield { from, to, widget: () => new NoteCodeWidget(currentNotePath(), parsed, from, to) };
+  },
+  // Code drawn before its highlighter loaded is drawn again once it has.
+  setup: (view) => onCodeHighlightReady(() => scheduleViewportDecorationRefresh(view)),
 });
+
 
 export const noteCodeEditingExtension = [];

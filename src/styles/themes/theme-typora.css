@@ -799,6 +799,13 @@
   .cm-editor.has-side-comments .cm-scroller .cm-content.cm-content {
     overflow-x: visible;
   }
+
+  /* A new card stays hidden until its first placement, so it never flashes
+     at the default position. */
+  .cm-editor .inline-side-comment-widget:not([data-placed]) .inline-side-comment-card,
+  .cm-editor .inline-side-comment-widget:not([data-placed]) .inline-side-comment-connector {
+    visibility: hidden;
+  }
 }
 
 .cm-editor .inline-side-comment-widget {

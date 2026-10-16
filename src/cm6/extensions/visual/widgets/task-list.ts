@@ -13,21 +13,11 @@
  *                        with a visual checkbox span
  */
 
-import {
-  Decoration,
-  EditorView,
-  ViewPlugin,
-  type DecorationSet,
-  type ViewUpdate,
-} from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
-import { vimKeepsRenderedObjects } from "../vim-objects.ts";
-import { syntaxTree } from "@codemirror/language";
-import type { Range } from "@codemirror/state";
-import { getBlockMathRanges, rangeInsideAny } from "../../../math-ranges.ts";
-import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
-import { isCoalescedVisualTyping } from "../typing-burst.ts";
-import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
+import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import type { EditorState, Line } from "@codemirror/state";
+import { inlineConstruct } from "../constructs/index.ts";
 
 // ---------------------------------------------------------------------------
 // Widget
@@ -83,100 +73,48 @@ class TaskCheckboxWidget extends MeasuredWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Decoration builder
+// Construct family
 // ---------------------------------------------------------------------------
 
-function buildTaskDecorations(view: EditorView): DecorationSet {
-  const decos: Range<Decoration>[] = [];
-  const sel = view.state.selection.main;
-  const doc = view.state.doc;
-  const cursorLine = doc.lineAt(sel.from).number;
-  const blockMathRanges = getBlockMathRanges(view.state);
+/** A task marker without the editor's tree: list item prefix, optionally quoted. */
+const TASK_MARKER_RE = /^((?:[ \t]*>)*[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+)(\[[ xX]\])/;
 
-  for (const { from: vFrom, to: vTo } of view.visibleRanges) {
-    syntaxTree(view.state).iterate({
-      from: vFrom,
-      to: vTo,
+/** The `[ ]`/`[x]` marker on LINE, from the editor's tree when it has reached the line. */
+function taskMarkerOnLine(state: EditorState, line: Line): { from: number; to: number } | null {
+  if (!line.text.includes("[")) return null;
+  if (syntaxTreeAvailable(state, line.to)) {
+    let marker: { from: number; to: number } | null = null;
+    syntaxTree(state).iterate({
+      from: line.from,
+      to: line.to,
       enter(node) {
-        if (rangeInsideAny(node.from, node.to, blockMathRanges)) return false;
+        if (marker) return false;
         if (node.name !== "TaskMarker") return;
-        // Keep raw source when cursor is on the same line
-        if (!vimKeepsRenderedObjects(view) && doc.lineAt(node.from).number === cursorLine) return false;
-
-        const raw = doc.sliceString(node.from, node.to);
-        const checked = /\[x\]/i.test(raw);
-        // Replace marker + trailing space so the content starts cleanly
-        const to = node.to;
-        decos.push(
-          Decoration.replace({
-            widget: new TaskCheckboxWidget(checked, node.from, to),
-            vimAtomic: true,
-          }).range(node.from, to),
-        );
+        marker = { from: node.from, to: node.to };
         return false;
       },
     });
+    return marker;
   }
-
-  decos.sort((a, b) => a.from - b.from || a.to - b.to);
-  return Decoration.set(decos, true);
+  const match = TASK_MARKER_RE.exec(line.text);
+  return match ? { from: line.from + match[1]!.length, to: line.from + match[1]!.length + 3 } : null;
 }
 
-const TASK_MARKER_LINE_RE = /^\s*(?:[-+*]|\d+[.)])\s+\[[ xX]\]/;
-
-function activeTaskMarkerLineKey(view: EditorView): string {
-  if (vimKeepsRenderedObjects(view)) return "";
-  const line = view.state.doc.lineAt(view.state.selection.main.from);
-  return TASK_MARKER_LINE_RE.test(line.text) ? String(line.number) : "";
-}
-
-// ---------------------------------------------------------------------------
-// ViewPlugin export
-// ---------------------------------------------------------------------------
-
-type TaskListPluginSnapshot = { decorations: DecorationSet; activeLineKey: string };
-const taskListPluginCacheKey = {};
-
-class TaskListPlugin {
-  decorations: DecorationSet;
-  private readonly view: EditorView;
-  private activeLineKey: string;
-
-  constructor(view: EditorView) {
-    this.view = view;
-    const cached = restorePersistentVisualPluginState<TaskListPluginSnapshot>(
-      view.state,
-      taskListPluginCacheKey,
-    );
-    this.activeLineKey = cached?.activeLineKey ?? activeTaskMarkerLineKey(view);
-    this.decorations = cached?.decorations ?? buildTaskDecorations(view);
-  }
-
-  update(update: ViewUpdate): void {
-    if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
-    if (isCoalescedVisualTyping(update)) {
-      this.decorations = this.decorations.map(update.changes);
-      return;
-    }
-    if (update.docChanged || update.viewportChanged || hasViewportDecorationRefresh(update)) {
-      this.activeLineKey = activeTaskMarkerLineKey(update.view);
-      this.decorations = buildTaskDecorations(update.view);
-    } else if (update.selectionSet) {
-      const nextLineKey = activeTaskMarkerLineKey(update.view);
-      if (nextLineKey === this.activeLineKey) return;
-      this.activeLineKey = nextLineKey;
-      this.decorations = buildTaskDecorations(update.view);
-    }
-  }
-
-  destroy(): void {
-    rememberPersistentVisualPluginState(this.view, taskListPluginCacheKey, {
-      decorations: this.decorations,
-      activeLineKey: this.activeLineKey,
-    } satisfies TaskListPluginSnapshot);
-  }
-}
-
-export const taskListExtension = ViewPlugin.fromClass(TaskListPlugin, {
-  decorations: (v) => v.decorations,
+export const taskListExtension = inlineConstruct({
+  kind: "task-marker",
+  // The marker opens while the caret is anywhere on its line, so the item's
+  // whole Markdown is visible while it is being edited.
+  reveal: "edge",
+  maxPerViewport: 2_000,
+  *match(line, state) {
+    const marker = taskMarkerOnLine(state, line);
+    if (!marker) return;
+    const checked = /\[x\]/i.test(state.doc.sliceString(marker.from, marker.to));
+    yield {
+      from: marker.from,
+      to: marker.to,
+      widget: () => new TaskCheckboxWidget(checked, marker.from, marker.to),
+      revealRegion: { from: line.from, to: line.to },
+    };
+  },
 });

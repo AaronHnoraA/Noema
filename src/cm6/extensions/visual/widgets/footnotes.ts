@@ -6,15 +6,9 @@
  * immutable Text identity.  Both decoration and click-time scans have caps.
  */
 
-import { syntaxTree } from "@codemirror/language";
-import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
-import { vimKeepsRenderedObjects } from "../vim-objects.ts";
-import type { Range, Text } from "@codemirror/state";
-import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeInsideAny } from "../../../math-ranges.ts";
-import { scanInlineMathRanges } from "../../../../inline-math.ts";
-import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
-import { isCoalescedVisualTyping } from "../typing-burst.ts";
-import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
+import { EditorView, WidgetType } from "@codemirror/view";
+import type { Text } from "@codemirror/state";
+import { inlineConstruct } from "../constructs/index.ts";
 
 const FOOTNOTE_RE = /\[\^([^\]\n]{1,128})\]/g;
 const FOOTNOTE_DEFINITION_RE = /^\s*\[\^([^\]\n]{1,128})\]:/;
@@ -169,152 +163,29 @@ class FootnoteDefinitionWidget extends WidgetType {
   ignoreEvent(): boolean { return true; }
 }
 
-function excludedRanges(view: EditorView): Array<{ from: number; to: number }> {
-  const ranges = blockMathRangesOverlapping(view.state, view.visibleRanges)
-    .map(({ from, to }) => ({ from, to }));
-  for (const visible of view.visibleRanges) {
-    ranges.push(...scanInlineMathRanges(view.state.doc.sliceString(visible.from, visible.to), visible.from));
-    syntaxTree(view.state).iterate({
-      from: visible.from,
-      to: visible.to,
-      enter(node) {
-        if (["FencedCode", "CodeBlock", "IndentedCode", "InlineCode"].includes(node.name)) {
-          ranges.push({ from: node.from, to: node.to });
-          return false;
-        }
-        return true;
-      },
-    });
-  }
-  return mergeOverlappingRanges(ranges);
-}
-
-function selectionTouches(view: EditorView, from: number, to: number): boolean {
-  const selection = view.state.selection.main;
-  return selection.empty
-    ? selection.from >= from && selection.from <= to
-    : selection.from < to && selection.to > from;
-}
-
-function activeFootnoteSourceKey(view: EditorView): string {
-  const selection = view.state.selection.main;
-  // Range selection keeps the rendered reference while CM6 selects its
-  // underlying Markdown. A changing `wide:from:to` key rebuilt every visible
-  // footnote on every drag transaction once the selection crossed 64 lines.
-  if (!selection.empty) return "";
-  const firstLine = view.state.doc.lineAt(selection.from).number;
-  const lastLine = view.state.doc.lineAt(selection.to).number;
-  const touched: string[] = [];
-  for (let lineNumber = firstLine; lineNumber <= lastLine; lineNumber++) {
-    const line = view.state.doc.line(lineNumber);
+export const footnoteExtension = inlineConstruct({
+  kind: "footnote",
+  reveal: "edge",
+  maxPerViewport: MAX_VIEWPORT_FOOTNOTES,
+  *match(line) {
+    if (!line.text.includes("[^")) return;
+    const definition = FOOTNOTE_DEFINITION_RE.exec(line.text);
+    const definitionEnd = definition ? definition[0].length : 0;
+    if (definition && definitionEnd > 0) {
+      const label = definition[1]!;
+      yield {
+        from: line.from + definition[0].indexOf("[^"),
+        to: line.from + definitionEnd,
+        widget: () => new FootnoteDefinitionWidget(label),
+      };
+    }
     FOOTNOTE_RE.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = FOOTNOTE_RE.exec(line.text)) !== null) {
+    for (let match = FOOTNOTE_RE.exec(line.text); match; match = FOOTNOTE_RE.exec(line.text)) {
+      // The definition's own `[^label]` is part of the definition construct.
+      if (match.index < definitionEnd) continue;
       const from = line.from + match.index;
-      const to = from + match[0].length;
-      if (selection.empty
-        ? selection.from >= from && selection.from <= to
-        : selection.from < to && selection.to > from) {
-        touched.push(`${from}:${to}`);
-      }
+      const label = match[1]!;
+      yield { from, to: from + match[0].length, widget: () => new FootnoteReferenceWidget(label, from) };
     }
-  }
-  return touched.join(",");
-}
-
-function buildFootnoteDecorations(view: EditorView): DecorationSet {
-  const decorations: Range<Decoration>[] = [];
-  const excluded = excludedRanges(view);
-  const seenLines = new Set<number>();
-  let count = 0;
-
-  for (const visible of view.visibleRanges) {
-    const first = view.state.doc.lineAt(visible.from).number;
-    const last = view.state.doc.lineAt(Math.min(visible.to, view.state.doc.length)).number;
-    for (let lineNumber = first; lineNumber <= last && count < MAX_VIEWPORT_FOOTNOTES; lineNumber++) {
-      if (seenLines.has(lineNumber)) continue;
-      seenLines.add(lineNumber);
-      const line = view.state.doc.line(lineNumber);
-      const definition = FOOTNOTE_DEFINITION_RE.exec(line.text);
-      const definitionEnd = definition ? (definition[0]?.length ?? 0) : 0;
-      if (definition && definitionEnd > 0) {
-        const from = line.from + definition[0]!.indexOf("[^");
-        const to = line.from + definitionEnd;
-        if (!rangeInsideAny(from, to, excluded)
-          && (vimKeepsRenderedObjects(view) || !selectionTouches(view, from, to))) {
-          decorations.push(Decoration.replace({
-            widget: new FootnoteDefinitionWidget(definition[1]!),
-            vimAtomic: true,
-          }).range(from, to));
-          count++;
-        }
-      }
-
-      FOOTNOTE_RE.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while (count < MAX_VIEWPORT_FOOTNOTES && (match = FOOTNOTE_RE.exec(line.text)) !== null) {
-        if (definition && match.index < definitionEnd) continue;
-        const from = line.from + match.index;
-        const to = from + match[0].length;
-        if (rangeInsideAny(from, to, excluded)
-          || (!vimKeepsRenderedObjects(view) && selectionTouches(view, from, to))) continue;
-        decorations.push(Decoration.replace({
-          widget: new FootnoteReferenceWidget(match[1]!, from),
-          vimAtomic: true,
-        }).range(from, to));
-        count++;
-      }
-    }
-  }
-
-  decorations.sort((a, b) => a.from - b.from || a.to - b.to);
-  return Decoration.set(decorations, true);
-}
-
-type FootnotePluginSnapshot = { decorations: DecorationSet; activeSourceKey: string };
-const footnotePluginCacheKey = {};
-
-class FootnotePlugin {
-  decorations: DecorationSet;
-  activeSourceKey: string;
-  private readonly view: EditorView;
-
-  constructor(view: EditorView) {
-    this.view = view;
-    const cached = restorePersistentVisualPluginState<FootnotePluginSnapshot>(
-      view.state,
-      footnotePluginCacheKey,
-    );
-    this.decorations = cached?.decorations ?? buildFootnoteDecorations(view);
-    this.activeSourceKey = cached?.activeSourceKey ?? activeFootnoteSourceKey(view);
-  }
-
-  update(update: ViewUpdate): void {
-    if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
-    if (isCoalescedVisualTyping(update)) {
-      this.decorations = this.decorations.map(update.changes);
-      return;
-    }
-    const nextSourceKey = update.selectionSet || update.docChanged
-      ? activeFootnoteSourceKey(update.view)
-      : this.activeSourceKey;
-    if (update.docChanged
-      || update.viewportChanged
-      || nextSourceKey !== this.activeSourceKey
-      || hasViewportDecorationRefresh(update)) {
-      this.decorations = buildFootnoteDecorations(update.view);
-    }
-    this.activeSourceKey = nextSourceKey;
-  }
-
-  destroy(): void {
-    rememberPersistentVisualPluginState(this.view, footnotePluginCacheKey, {
-      decorations: this.decorations,
-      activeSourceKey: this.activeSourceKey,
-    } satisfies FootnotePluginSnapshot);
-  }
-}
-
-export const footnoteExtension = ViewPlugin.fromClass(FootnotePlugin, {
-  decorations: (plugin) => plugin.decorations,
+  },
 });

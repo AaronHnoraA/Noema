@@ -21,11 +21,17 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
-import { vimKeepsRenderedObjects } from "../vim-objects.ts";
-import { syntaxTree } from "@codemirror/language";
-import type { Range } from "@codemirror/state";
-import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeInsideAny } from "../../../math-ranges.ts";
-import { scanInlineMathRanges } from "../../../../inline-math.ts";
+import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
+import type { EditorState, Line, Range } from "@codemirror/state";
+import { parser as markdownParser } from "@lezer/markdown";
+import { rangeInsideAny } from "../../../math-ranges.ts";
+import {
+  constructSources,
+  literalRangesOnLine,
+  renderedConstructsPinned,
+  selectionOpensSource,
+  type ConstructSource,
+} from "../constructs/index.ts";
 import {
   applyImageLayout,
   imageLayoutFromAttrs,
@@ -522,184 +528,152 @@ function buildImageToolbar(
 const IMAGE_RE = /^!\[([^\]]*)\]\(([^)]*)\)/;
 const EMPTY_HTML_LINK_EMBED_RE = /\[\]\(([^)\n]+)\)/g;
 
-function rangeOverlaps(from: number, to: number, ranges: ReadonlyArray<{ from: number; to: number }>): boolean {
-  return ranges.some((range) => from < range.to && to > range.from);
+/** One image on a line: its Markdown source, any trailing `{...}` layout, and what to draw. */
+type ImageMatch = {
+  from: number;
+  /** End of the image syntax itself. */
+  to: number;
+  /** End including the trailing layout attributes. */
+  fullTo: number;
+  alt: string;
+  src: string;
+  layout: ImageLayoutAttrs;
+  /** A Markdown `![...](...)` image, as opposed to an `[](page.html)` embed. */
+  markdown: boolean;
+};
+
+const imagesByLine = new WeakMap<EditorState, Map<number, readonly ImageMatch[]>>();
+
+/** Markdown Image nodes inside LINE: from the editor's tree, or a parse of the line when the tree has not reached it. */
+function imageNodesOnLine(state: EditorState, line: Line): Array<{ from: number; to: number; labelEnd: number | null; url: { from: number; to: number } | null }> {
+  const nodes: Array<{ from: number; to: number; labelEnd: number | null; url: { from: number; to: number } | null }> = [];
+  const parsed = syntaxTreeAvailable(state, line.to);
+  const tree = parsed ? syntaxTree(state) : markdownParser.parse(line.text);
+  const offset = parsed ? 0 : line.from;
+  tree.iterate({
+    from: parsed ? line.from : 0,
+    to: parsed ? line.to : line.text.length,
+    enter(node) {
+      if (node.name !== "Image") return;
+      const from = node.from + offset;
+      const to = node.to + offset;
+      // `![alt⏎](src)` is one image to Markdown, but CodeMirror refuses a
+      // plugin decoration that replaces a line break: the whole view update
+      // throws and the document cannot be opened. Such an image stays source.
+      if (from < line.from || to > line.to) return false;
+      // The syntax tree knows where the label ends and what the destination
+      // is. Cutting the source at the first `)` truncated every path with a
+      // parenthesis in it: `fig(1).png`, `<image (1).png>`.
+      const close = node.node.getChildren("LinkMark")
+        .find((mark) => line.text.slice(mark.from + offset - line.from, mark.to + offset - line.from) === "]");
+      const url = node.node.getChild("URL");
+      nodes.push({
+        from,
+        to,
+        labelEnd: close ? close.from + offset : null,
+        url: url ? { from: url.from + offset, to: url.to + offset } : null,
+      });
+      return false;
+    },
+  });
+  return nodes;
 }
 
-function imageExcludedRanges(view: EditorView): Array<{ from: number; to: number }> {
-  const visibleRanges = view.visibleRanges;
-  const ranges: Array<{ from: number; to: number }> = blockMathRangesOverlapping(view.state, visibleRanges)
-    .map(({ from, to }) => ({ from, to }));
-  for (const { from, to } of visibleRanges) {
-    ranges.push(...scanInlineMathRanges(view.state.doc.sliceString(from, to), from));
+/** The images drawn on LINE, outside code and math, in source order; cached by state. */
+function imagesOnLine(state: EditorState, line: Line): readonly ImageMatch[] {
+  let byLine = imagesByLine.get(state);
+  if (!byLine) imagesByLine.set(state, byLine = new Map());
+  const cached = byLine.get(line.from);
+  if (cached) return cached;
+  const images: ImageMatch[] = [];
+  if (line.text.includes("](")) {
+    const literal = literalRangesOnLine(state, line);
+    const trailingAttrs = (to: number) => {
+      const trailing = readImageTrailingAttrs(line.text.slice(to - line.from), 0);
+      return { fullTo: trailing ? to + trailing.to : to, layout: imageLayoutFromAttrs(trailing?.attrs ?? {}) };
+    };
+    for (const node of imageNodesOnLine(state, line)) {
+      if (rangeInsideAny(node.from, node.to, literal)) continue;
+      const raw = line.text.slice(node.from - line.from, node.to - line.from);
+      const m = raw.match(IMAGE_RE);
+      const alt = node.labelEnd != null ? line.text.slice(node.from + 2 - line.from, node.labelEnd - line.from) : m?.[1] ?? "";
+      const src = node.url
+        ? markdownLinkDestination(line.text.slice(node.url.from - line.from, node.url.to - line.from), { stripTitle: false })
+        : markdownLinkDestination(m?.[2] ?? "");
+      images.push({ from: node.from, to: node.to, alt, src, markdown: true, ...trailingAttrs(node.to) });
+    }
+    EMPTY_HTML_LINK_EMBED_RE.lastIndex = 0;
+    for (const match of line.text.matchAll(EMPTY_HTML_LINK_EMBED_RE)) {
+      if (line.text[(match.index ?? 0) - 1] === "!") continue;
+      const src = markdownLinkDestination(match[1] ?? "");
+      if (visualAttachmentKind(src) !== "html") continue;
+      const from = line.from + (match.index ?? 0);
+      const to = from + (match[0] ?? "").length;
+      if (rangeInsideAny(from, to, literal) || images.some((image) => from < image.fullTo && to > image.from)) continue;
+      images.push({ from, to, alt: "", src, markdown: false, ...trailingAttrs(to) });
+    }
+    images.sort((left, right) => left.from - right.from);
   }
-  for (const { from, to } of visibleRanges) {
-    syntaxTree(view.state).iterate({
-      from,
-      to,
-      enter(node) {
-        if (["FencedCode", "CodeBlock", "IndentedCode", "InlineCode"].includes(node.name)) {
-          ranges.push({ from: node.from, to: node.to });
-          return false;
-        }
-        return true;
-      },
-    });
-  }
-  return mergeOverlappingRanges(ranges);
+  byLine.set(line.from, images);
+  return images;
+}
+
+/** Images as rendered constructs. Only a caret opens one; a range keeps it rendered. */
+const imageConstructSource: ConstructSource = {
+  kind: "image",
+  at(state, pos) {
+    return imagesOnLine(state, state.doc.lineAt(pos))
+      .filter((image) => image.from <= pos && pos < image.fullTo)
+      .map((image) => ({ from: image.from, to: image.fullTo, block: false, kind: "image", reveal: "caret-edge" }));
+  },
+};
+
+function imageOpened(state: EditorState, image: ImageMatch): boolean {
+  return selectionOpensSource(state, image.from, image.fullTo, "caret-edge", "object");
 }
 
 function buildImageDecorations(view: EditorView): DecorationSet {
   const decos: Range<Decoration>[] = [];
-  const occupied: Array<{ from: number; to: number }> = [];
-  const sel = view.state.selection.main;
-  const doc = view.state.doc;
-  const visibleRanges = view.visibleRanges;
-  const excludedRanges = imageExcludedRanges(view);
-
-  for (const { from: vFrom, to: vTo } of visibleRanges) {
-    syntaxTree(view.state).iterate({
-      from: vFrom,
-      to: vTo,
-      enter(node) {
-        if (rangeInsideAny(node.from, node.to, excludedRanges)) return false;
-        if (node.name !== "Image") return;
-        const line = doc.lineAt(node.to);
-        // `![alt⏎](src)` is one image to Markdown, but CodeMirror refuses a
-        // plugin decoration that replaces a line break: the whole view update
-        // throws and the document cannot be opened. Such an image stays source.
-        if (node.from < line.from) return false;
-        const trailing = readImageTrailingAttrs(doc.sliceString(node.to, line.to), 0);
-        const fullTo = trailing ? node.to + trailing.to : node.to;
-        // Only a caret opens an image's source. A range keeps it rendered,
-        // as `activeImageSourceKey` already assumes: a rebuild during a range
-        // selection (scroll, resize) used to reveal every crossed image.
-        const cursorInside = !vimKeepsRenderedObjects(view)
-          && sel.empty && sel.from <= fullTo && sel.from >= node.from;
-
-        const raw = doc.sliceString(node.from, node.to);
-        const m = raw.match(IMAGE_RE);
-        // The syntax tree already knows where the label ends and what the
-        // destination is. Cutting the source at the first `)` truncated every
-        // path with a parenthesis in it: `fig(1).png`, `<image (1).png>`.
-        const labelClose = node.node.getChildren("LinkMark")
-          .find((mark) => doc.sliceString(mark.from, mark.to) === "]");
-        const urlNode = node.node.getChild("URL");
-        const alt = labelClose ? doc.sliceString(node.from + 2, labelClose.from) : m?.[1] ?? "";
-        const src = urlNode
-          ? markdownLinkDestination(doc.sliceString(urlNode.from, urlNode.to), { stripTitle: false })
-          : markdownLinkDestination(m?.[2] ?? "");
-        const layout = imageLayoutFromAttrs(trailing?.attrs ?? {});
-        if (cursorInside) {
-          // Editing the source of an image that has a line to itself keeps the
-          // picture under it, as MarkText and Typora show source and image
-          // together. Replacing the picture with one line of source collapsed
-          // the page every time the caret passed an image.
-          if (!line.text.slice(0, node.from - line.from).trim() && !line.text.slice(fullTo - line.from).trim()) {
-            decos.push(
-              Decoration.widget({
-                widget: new ImageWidget(src, alt, node.from, node.to, fullTo, layout,
-                  Boolean(imageRowAt(view.state, node.from)), joinNextImage(view, node.from, false)),
-                side: 1,
-              }).range(fullTo),
-            );
-          }
-          return false; // editable source
+  const state = view.state;
+  let previousLine = 0;
+  for (const { from: vFrom, to: vTo } of view.visibleRanges) {
+    for (let pos = vFrom; pos <= vTo;) {
+      const line = state.doc.lineAt(pos);
+      pos = line.to + 1;
+      if (line.number <= previousLine) continue;
+      previousLine = line.number;
+      for (const image of imagesOnLine(state, line)) {
+        const widget = () => image.markdown
+          ? new ImageWidget(image.src, image.alt, image.from, image.to, image.fullTo, image.layout,
+            Boolean(imageRowAt(state, image.from)), joinNextImage(view, image.from, false))
+          : new ImageWidget(image.src, image.alt, image.from, image.to, image.fullTo, image.layout);
+        if (!imageOpened(state, image)) {
+          decos.push(Decoration.replace({ widget: widget(), vimAtomic: true }).range(image.from, image.fullTo));
+          continue;
         }
-
-        decos.push(
-          Decoration.replace({
-            widget: new ImageWidget(src, alt, node.from, node.to, fullTo, layout,
-              Boolean(imageRowAt(view.state, node.from)), joinNextImage(view, node.from, false)),
-            vimAtomic: true,
-          }).range(node.from, fullTo),
-        );
-        occupied.push({ from: node.from, to: fullTo });
-        return false;
-      },
-    });
-  }
-
-  const seenLines = new Set<number>();
-  for (const { from: vFrom, to: vTo } of visibleRanges) {
-    for (let line = doc.lineAt(vFrom); line.from <= vTo; line = doc.line(line.number + 1)) {
-      if (!seenLines.has(line.number)) {
-        seenLines.add(line.number);
-        EMPTY_HTML_LINK_EMBED_RE.lastIndex = 0;
-        for (const match of line.text.matchAll(EMPTY_HTML_LINK_EMBED_RE)) {
-          const matchText = match[0] ?? "";
-          if (line.text[(match.index ?? 0) - 1] === "!") continue;
-          const alt = "";
-          const src = markdownLinkDestination(match[1] ?? "");
-          if (visualAttachmentKind(src) !== "html") continue;
-          const from = line.from + (match.index ?? 0);
-          const to = from + matchText.length;
-          if (rangeInsideAny(from, to, excludedRanges) || rangeOverlaps(from, to, occupied)) continue;
-          const trailing = readImageTrailingAttrs(doc.sliceString(to, line.to), 0);
-          const fullTo = trailing ? to + trailing.to : to;
-          const cursorInside = !vimKeepsRenderedObjects(view)
-            && sel.empty && sel.from <= fullTo && sel.from >= from;
-          if (cursorInside) continue;
-          const layout = imageLayoutFromAttrs(trailing?.attrs ?? {});
-          decos.push(
-            Decoration.replace({
-              widget: new ImageWidget(src, alt, from, to, fullTo, layout),
-              vimAtomic: true,
-            }).range(from, fullTo),
-          );
-          occupied.push({ from, to: fullTo });
+        // Editing the source of an image that has a line to itself keeps the
+        // picture under it, as MarkText and Typora show source and image
+        // together. Replacing the picture with one line of source collapsed
+        // the page every time the caret passed an image.
+        if (image.markdown
+            && !line.text.slice(0, image.from - line.from).trim()
+            && !line.text.slice(image.fullTo - line.from).trim()) {
+          decos.push(Decoration.widget({ widget: widget(), side: 1 }).range(image.fullTo));
         }
       }
-      if (line.to >= vTo || line.number >= doc.lines) break;
     }
   }
-
-  decos.sort((a, b) => a.from - b.from || a.to - b.to);
   return Decoration.set(decos, true);
 }
 
+/** The images the caret has opened; only the caret's line can hold one. */
 function activeImageSourceKey(view: EditorView): string {
-  const sel = view.state.selection.main;
-  // A range selects the image's Markdown source without turning every crossed
-  // image back into source. The old position-bearing `wide` key changed on
-  // every pointer move and forced a full visible-image redecoration each time.
-  if (!sel.empty) return "";
-  const doc = view.state.doc;
-  const firstLine = doc.lineAt(sel.from).number;
-  const lastLine = doc.lineAt(Math.min(sel.to, doc.length)).number;
-  const keys: string[] = [];
-
-  for (let lineNum = firstLine; lineNum <= lastLine; lineNum++) {
-    const line = doc.line(lineNum);
-    const inlineMathRanges = scanInlineMathRanges(line.text, line.from);
-    syntaxTree(view.state).iterate({
-      from: line.from,
-      to: line.to,
-      enter(node) {
-        if (rangeInsideAny(node.from, node.to, inlineMathRanges)) return false;
-        if (node.name !== "Image") return;
-        const trailing = readImageTrailingAttrs(doc.sliceString(node.to, line.to), 0);
-        const fullTo = trailing ? node.to + trailing.to : node.to;
-        if (sel.from <= fullTo && sel.to >= node.from) keys.push(`${node.from}:${fullTo}`);
-        return false;
-      },
-    });
-
-    EMPTY_HTML_LINK_EMBED_RE.lastIndex = 0;
-    let link: RegExpExecArray | null;
-    while ((link = EMPTY_HTML_LINK_EMBED_RE.exec(line.text)) !== null) {
-      if (line.text[(link.index ?? 0) - 1] === "!") continue;
-      const src = markdownLinkDestination(link[1] ?? "");
-      if (visualAttachmentKind(src) !== "html") continue;
-      const from = line.from + (link.index ?? 0);
-      const to = from + (link[0] ?? "").length;
-      if (rangeInsideAny(from, to, inlineMathRanges)) continue;
-      const trailing = readImageTrailingAttrs(line.text.slice((link.index ?? 0) + (link[0] ?? "").length), 0);
-      const fullTo = trailing ? to + trailing.to : to;
-      if (sel.from <= fullTo && sel.to >= from) keys.push(`${from}:${fullTo}`);
-    }
-  }
-  return keys.join("|");
+  const state = view.state;
+  if (!state.selection.main.empty || renderedConstructsPinned(state)) return "";
+  return imagesOnLine(state, state.doc.lineAt(state.selection.main.head))
+    .filter((image) => imageOpened(state, image))
+    .map((image) => `${image.from}:${image.fullTo}`)
+    .join("|");
 }
 
 // ---------------------------------------------------------------------------
@@ -770,4 +744,5 @@ class ImagePlugin {
 
 export const imageExtension = ViewPlugin.fromClass(ImagePlugin, {
   decorations: (v) => v.decorations,
+  provide: () => constructSources.of(imageConstructSource),
 });

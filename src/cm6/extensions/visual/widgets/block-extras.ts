@@ -78,6 +78,12 @@ import {
 import { hasViewportDecorationRefresh, refreshViewportDecorations } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import { persistentVisualStateField } from "../visual-mode.ts";
+import {
+  selectionOpensSource,
+  transactionChangesPinning,
+  type ConstructRole,
+  type RevealPolicy,
+} from "../constructs/index.ts";
 import { preserveEditorViewport } from "../../../viewport-stability.ts";
 import { AttributeViewWidget } from "./attribute-view.ts";
 import { EmbedQueryWidget } from "./embed-query.ts";
@@ -92,17 +98,6 @@ import { newNoemaId } from "../../../../../shared/identity.mjs";
 
 export const tocFoldEffect = StateEffect.define<{ key: string; folded: boolean }>();
 
-/** Vim toggles this when entering/leaving Insert; editors without Vim edit normally. */
-export const setTikzSourceEditing = StateEffect.define<boolean>();
-const tikzSourceEditingField = StateField.define<boolean>({
-  create: () => true,
-  update(value, transaction) {
-    for (const effect of transaction.effects) {
-      if (effect.is(setTikzSourceEditing)) value = effect.value;
-    }
-    return value;
-  },
-});
 
 function tocFoldReducer(state: Map<string, boolean>, effects: readonly StateEffect<unknown>[]): Map<string, boolean> {
   let next: Map<string, boolean> | undefined;
@@ -3976,20 +3971,38 @@ class HorizontalRuleWidget extends MeasuredWidget {
   ignoreEvent(): boolean { return false; }
 }
 
-function selectionTouchesRange(state: EditorState, from: number, to: number): boolean {
-  const sel = state.selection.main;
-  if (sel.empty) return sel.from >= from && sel.from <= to;
-  return sel.from < to && sel.to > from;
+/**
+ * Whether the selection opens the source of [FROM, TO]. Every construct here
+ * opens for a caret only: a range selects rendered content, so a drag or
+ * Select All neither reveals the blocks it crosses nor scales with how many
+ * there are.
+ *
+ * Block headings, delimiters, rules and the TOC are structure: Vim lands on a
+ * heading to edit its title. A TikZ picture is an object.
+ */
+function opensSource(
+  state: EditorState,
+  from: number,
+  to: number,
+  policy: RevealPolicy = "caret-edge",
+  role: ConstructRole = "structure",
+): boolean {
+  return selectionOpensSource(state, from, to, policy, role);
 }
 
+/**
+ * Front matter opens only for a caret strictly inside: a note opens with the
+ * caret at offset 0, which must not unfold its metadata.
+ */
+const FRONT_MATTER_REVEAL: RevealPolicy = "caret-interior";
+
+/** A TikZ block opens for a caret at or inside it, short of its very end. */
 function tikzSourceActive(state: EditorState, block: OrgEnvBlock): boolean {
-  const sel = state.selection.main;
-  return (state.field(tikzSourceEditingField, false) ?? true)
-    && sel.empty && sel.from >= block.from && sel.from < block.to;
+  return opensSource(state, block.from, block.to - 1, "caret-edge", "object");
 }
 
 function orgEnvCloseBoundaryActive(state: EditorState, block: OrgEnvBlock): boolean {
-  return selectionTouchesRange(state, block.closeFrom, block.closeTo)
+  return opensSource(state, block.closeFrom, block.closeTo)
     && state.selection.main.from > block.closeFrom;
 }
 
@@ -3998,7 +4011,7 @@ function addOrgEnvBoundaryDecos(
   state: EditorState,
   block: OrgEnvBlock,
 ): void {
-  const openActive = selectionTouchesRange(state, block.openFrom, block.openTo);
+  const openActive = opensSource(state, block.openFrom, block.openTo);
   const closeActive = orgEnvCloseBoundaryActive(state, block);
 
   if (!openActive) {
@@ -4069,7 +4082,7 @@ const orgEnvBlocksField = StateField.define<readonly OrgEnvBlock[]>({
 
 // Source mode keeps this incremental block index so TikZ edits can be tracked
 // without scanning the whole note when Preview returns.
-export const orgEnvBlocksExtension: Extension = [tikzSourceEditingField, orgEnvBlocksField];
+export const orgEnvBlocksExtension: Extension = orgEnvBlocksField;
 
 function orgEnvBlocksFromState(state: EditorState): readonly OrgEnvBlock[] {
   return state.field(orgEnvBlocksField, false) ?? scanOrgEnvDocument(state);
@@ -4330,7 +4343,7 @@ function buildOrgEnvBodyLineDecoRanges(
 
   for (const block of orgEnvBlocksFromState(state)) {
     if (block.kind === "meta") continue;
-    if (block.kind === "fold" && !selectionTouchesRange(state, block.from, block.to)) continue;
+    if (block.kind === "fold" && !opensSource(state, block.from, block.to)) continue;
     if (block.bodyTo < windowFrom || block.bodyFrom > windowTo) continue;
     const fromLine = doc.lineAt(Math.max(block.bodyFrom, windowFrom));
     const toLine = doc.lineAt(Math.min(block.bodyTo, windowTo));
@@ -4503,7 +4516,7 @@ function addOrgEnvBlockExtraDecos(
     occupied?.push([block.from, block.to]);
     return;
   }
-  if (block.kind === "layout" && !selectionTouchesRange(state, block.from, block.to)) {
+  if (block.kind === "layout" && !opensSource(state, block.from, block.to)) {
     decos.push(
       Decoration.replace({
         widget: new LayoutGroupWidget(block.title, block.body, block.from, block.to, block.bodyFrom),
@@ -4513,7 +4526,7 @@ function addOrgEnvBlockExtraDecos(
     occupied?.push([block.from, block.to]);
     return;
   }
-  if (block.kind === "av" && !selectionTouchesRange(state, block.from, block.to)) {
+  if (block.kind === "av" && !opensSource(state, block.from, block.to)) {
     decos.push(
       Decoration.replace({
         widget: new AttributeViewWidget(block.title, block.body, block.from, block.to),
@@ -4523,7 +4536,7 @@ function addOrgEnvBlockExtraDecos(
     occupied?.push([block.from, block.to]);
     return;
   }
-  if (block.kind === "embed" && !selectionTouchesRange(state, block.from, block.to)) {
+  if (block.kind === "embed" && !opensSource(state, block.from, block.to)) {
     decos.push(
       Decoration.replace({
         widget: new EmbedQueryWidget(block.title, block.body, block.from, block.to),
@@ -4533,7 +4546,7 @@ function addOrgEnvBlockExtraDecos(
     occupied?.push([block.from, block.to]);
     return;
   }
-  if (block.kind === "comment" && !selectionTouchesRange(state, block.from, block.to)) {
+  if (block.kind === "comment" && !opensSource(state, block.from, block.to)) {
     decos.push(
       Decoration.replace({
         widget: new CommentWidget(block.title, block.body, block.from, block.to, block.depth),
@@ -4543,7 +4556,7 @@ function addOrgEnvBlockExtraDecos(
     occupied?.push([block.from, block.to]);
     return;
   }
-  if (block.kind === "fold" && !selectionTouchesRange(state, block.from, block.to)) {
+  if (block.kind === "fold" && !opensSource(state, block.from, block.to)) {
     decos.push(
       Decoration.replace({
         widget: new FoldWidget(block.title, block.body, block.from, block.to, block.depth),
@@ -4563,7 +4576,6 @@ function buildBlockExtraDecoRanges(
 ): CMRange<Decoration>[] {
   const decos: CMRange<Decoration>[] = [];
   const occupied: Array<[number, number]> = [];
-  const sel = state.selection.main;
   const excludedRanges = blockExtraExcludedRanges(state);
   const headings = tocHeadingsFromState(state);
   const ranges = state.field(blockExtraRangesField, false) ?? scanBlockExtraRanges(state.doc, excludedRanges);
@@ -4573,7 +4585,7 @@ function buildBlockExtraDecoRanges(
   for (const range of ranges.toc) {
     if (range.to < windowFrom || range.from > windowTo) continue;
     if (rangeOverlapsAny(range.from, range.to, excludedRanges)) continue;
-    if (!(sel.from <= range.to && sel.to >= range.from)) {
+    if (!opensSource(state, range.from, range.to)) {
       decos.push(
         Decoration.replace({ widget: new TocWidget(headings, foldState), block: true }).range(range.from, range.to),
       );
@@ -4586,7 +4598,7 @@ function buildBlockExtraDecoRanges(
     if (range.to < windowFrom || range.from > windowTo) continue;
     if (rangeOverlapsAny(range.from, range.to, excludedRanges)) continue;
     if (occupied.some(([from, to]) => range.from < to && range.to > from)) continue;
-    if (sel.from >= range.from && sel.from <= range.to) {
+    if (opensSource(state, range.from, range.to)) {
       decos.push(Decoration.mark({ class: "syntax-hint" }).range(range.from, range.to));
       continue;
     }
@@ -4620,7 +4632,8 @@ function buildBlockExtraDecoRanges(
   const frontMatter = ranges.frontMatter;
   if (frontMatter) {
     const { from, to, body } = frontMatter;
-    if (to >= windowFrom && from <= windowTo && !rangeOverlapsAny(from, to, excludedRanges) && !(sel.from < to && sel.to > from)) {
+    if (to >= windowFrom && from <= windowTo && !rangeOverlapsAny(from, to, excludedRanges)
+        && !opensSource(state, from, to, FRONT_MATTER_REVEAL)) {
       decos.push(
         Decoration.replace({ widget: new FrontMatterWidget(body, from, to), block: true }).range(from, to),
       );
@@ -4633,7 +4646,7 @@ function buildBlockExtraDecoRanges(
     if (range.to < windowFrom || range.from > windowTo) continue;
     if (rangeOverlapsAny(range.from, range.to, excludedRanges)) continue;
     if (occupied.some(([from, to]) => range.from < to && range.to > from)) continue;
-    if (sel.from >= range.from && sel.from <= range.to) {
+    if (opensSource(state, range.from, range.to)) {
       decos.push(Decoration.mark({ class: "syntax-hint" }).range(range.from, range.to));
       continue;
     }
@@ -4657,13 +4670,12 @@ function buildTocWidgetDecoRanges(
 ): CMRange<Decoration>[] {
   if (ranges.length === 0) return [];
   const decos: CMRange<Decoration>[] = [];
-  const sel = state.selection.main;
   const excludedRanges = blockExtraExcludedRanges(state);
   const headings = tocHeadingsFromState(state);
   const foldState = state.field(tocFoldField, false) ?? new Map<string, boolean>();
   for (const range of ranges) {
     if (rangeOverlapsAny(range.from, range.to, excludedRanges)) continue;
-    if (sel.from <= range.to && sel.to >= range.from) continue;
+    if (opensSource(state, range.from, range.to)) continue;
     decos.push(
       Decoration.replace({ widget: new TocWidget(headings, foldState), block: true }).range(range.from, range.to),
     );
@@ -4693,7 +4705,7 @@ function markEditedTikzBlocks(state: EditorState, changes: ChangeSet, blocks: re
   const selection = state.selection.main;
   for (const block of blocks) {
     if (block.from > selection.to) break;
-    if (block.kind !== "tikz" || !selectionTouchesRange(state, block.from, block.to)
+    if (block.kind !== "tikz" || selection.from > block.to || selection.to < block.from
         || !changesTouchRange(changes, block.from, block.to)) continue;
     const id = splitTikzTitle(block.title).head.split(/\s+/)[0];
     if (id) markTikzDirty(tikzSourceCacheKey(currentNoteFile(), id));
@@ -4712,27 +4724,27 @@ function activeBlockExtraKey(state: EditorState): string {
   const blocks = orgEnvBlocksFromState(state);
 
   for (const range of ranges.toc) {
-    if (sel.from <= range.to && sel.to >= range.from) parts.push(`toc:${range.from}:${range.to}`);
+    if (opensSource(state, range.from, range.to)) parts.push(`toc:${range.from}:${range.to}`);
   }
   for (const range of ranges.semanticHeadings) {
-    if (sel.from <= range.to && sel.to >= range.from) parts.push(`semantic:${range.from}:${range.to}`);
+    if (opensSource(state, range.from, range.to)) parts.push(`semantic:${range.from}:${range.to}`);
   }
   for (const range of ranges.ceilCommands) {
-    if (sel.from <= range.to && sel.to >= range.from) parts.push(`ceilcmd:${range.from}:${range.to}`);
+    if (opensSource(state, range.from, range.to)) parts.push(`ceilcmd:${range.from}:${range.to}`);
   }
-  if (ranges.frontMatter && sel.from < ranges.frontMatter.to && sel.to > ranges.frontMatter.from) {
+  if (ranges.frontMatter && opensSource(state, ranges.frontMatter.from, ranges.frontMatter.to, FRONT_MATTER_REVEAL)) {
     parts.push(`front:${ranges.frontMatter.from}:${ranges.frontMatter.to}`);
   }
   for (const range of ranges.hrs) {
-    if (sel.from >= range.from && sel.from <= range.to) parts.push(`hr:${range.from}:${range.to}`);
+    if (opensSource(state, range.from, range.to)) parts.push(`hr:${range.from}:${range.to}`);
   }
   for (const block of blocks) {
-    if (((block.kind === "comment" || block.kind === "fold" || block.kind === "av" || block.kind === "embed" || block.kind === "layout") && selectionTouchesRange(state, block.from, block.to))
+    if (((block.kind === "comment" || block.kind === "fold" || block.kind === "av" || block.kind === "embed" || block.kind === "layout") && opensSource(state, block.from, block.to))
         || (block.kind === "tikz" && tikzSourceActive(state, block))) {
       parts.push(`${block.kind}:${block.from}:${block.to}`);
       continue;
     }
-    if (selectionTouchesRange(state, block.openFrom, block.openTo)) {
+    if (opensSource(state, block.openFrom, block.openTo)) {
       parts.push(`org-open:${block.openFrom}:${block.openTo}:${block.from}:${block.to}`);
     }
     if (orgEnvCloseBoundaryActive(state, block)) {
@@ -4871,9 +4883,9 @@ function patchBlockExtraDecosForOrgEnvTitleChange(
   const fullBlockWidgetActive = block.kind === "meta"
     || block.kind === "html"
     || (block.kind === "tikz" && !tikzSourceActive(state, block))
-    || (block.kind === "av" && !selectionTouchesRange(state, block.from, block.to))
-    || (block.kind === "embed" && !selectionTouchesRange(state, block.from, block.to))
-    || ((block.kind === "comment" || block.kind === "fold" || block.kind === "layout") && !selectionTouchesRange(state, block.from, block.to));
+    || (block.kind === "av" && !opensSource(state, block.from, block.to))
+    || (block.kind === "embed" && !opensSource(state, block.from, block.to))
+    || ((block.kind === "comment" || block.kind === "fold" || block.kind === "layout") && !opensSource(state, block.from, block.to));
   let next = fullBlockWidgetActive
     ? mapped.update({ filterFrom: block.from, filterTo: block.to, filter: () => false })
     : mapped
@@ -4934,7 +4946,7 @@ const blockExtrasDecorations = StateField.define<DecorationSet>({
       // unrelated block widgets.
       return buildBlockExtraDecos(tr.state);
     }
-    if (tr.effects.some((effect) => effect.is(setTikzSourceEditing))) {
+    if (transactionChangesPinning(tr)) {
       const oldKey = activeBlockExtraKey(tr.startState);
       const newKey = activeBlockExtraKey(tr.state);
       return oldKey === newKey

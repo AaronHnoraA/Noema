@@ -92,6 +92,7 @@ import {
   isPointerSelecting,
   updateHasPointerSelectionEffect,
 } from "./extensions/visual/selection.ts";
+import { selectionOpensSource } from "./extensions/visual/constructs/index.ts";
 import { isStableWikiHref, scanWikiLinks } from "../../shared/wiki-link.mjs";
 import {
   isCoalescedVisualTyping,
@@ -2960,13 +2961,17 @@ class HtmlBlockWidget extends MeasuredWidget {
   ignoreEvent(): boolean { return true; }
 }
 
+/** An HTML block is structure: a caret at or inside it opens its source, in every mode. */
+function htmlBlockOpened(state: EditorState, block: { from: number; to: number }): boolean {
+  return selectionOpensSource(state, block.from, block.to, "caret-edge", "structure");
+}
+
 function collectHtmlBlockDecoRanges(
   state: EditorState,
   from = 0,
   to = state.doc.length,
 ): Range<Decoration>[] {
   const decos: Range<Decoration>[] = [];
-  const sel = state.selection.main;
   const fencedRanges = getFencedCodeRanges(state);
   const mathRanges = getBlockMathRanges(state);
 
@@ -2981,7 +2986,7 @@ function collectHtmlBlockDecoRanges(
       if (orgEnvContextForRange(state, node.from, node.to)) return false;
       // Only a caret reveals the source; a range keeps the block rendered, as
       // `activeHtmlBlockKey` assumes when it ignores range selections.
-      if (sel.empty && sel.from >= node.from && sel.from <= node.to) return false;
+      if (htmlBlockOpened(state, node)) return false;
       const source = state.doc.sliceString(node.from, node.to);
       decos.push(
         Decoration.replace({
@@ -3038,7 +3043,7 @@ function activeHtmlBlockKey(state: EditorState): string {
       if (rangeOverlapsAny(node.from, node.to, fencedRanges)) return false;
       if (rangeOverlapsAny(node.from, node.to, mathRanges)) return false;
       if (orgEnvContextForRange(state, node.from, node.to)) return false;
-      keys.push(`${node.from}:${node.to}`);
+      if (htmlBlockOpened(state, node)) keys.push(`${node.from}:${node.to}`);
       return false;
     },
   });

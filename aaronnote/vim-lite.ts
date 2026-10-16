@@ -30,9 +30,8 @@ import {
   type Text,
   type TransactionSpec,
 } from "@codemirror/state";
-import { EditorView, type DecorationSet } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { matchBrackets } from "@codemirror/language";
-import { parser as markdownParser } from "@lezer/markdown";
 import {
   isolateHistory,
   redoDepth,
@@ -48,13 +47,14 @@ import {
   previousGraphemePosition,
 } from "../src/cm6/text-boundaries.ts";
 import { markdownContinuationPrefix } from "../src/cm6/commands/index.ts";
-import { getFencedCodeRanges, scanCodeRanges } from "../src/cm6/code-ranges.ts";
-import { readImageTrailingAttrs } from "../src/image-attrs.ts";
 import { writeSystemClipboard } from "../src/system-clipboard.ts";
-import { getBlockMathRanges, getMultilineInlineMathRanges, rangeAtPosition, rangeOverlapsAny } from "../src/cm6/math-ranges.ts";
-import { scanInlineMathRanges } from "../src/inline-math.ts";
-import { getOrgEnvHeadingRanges, setTikzSourceEditing } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
+import { getOrgEnvHeadingRanges } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
 import { cancelPointerSelection } from "../src/cm6/extensions/visual/selection.ts";
+import {
+  constructsPinnedField,
+  renderedConstructAt,
+  setConstructsPinned,
+} from "../src/cm6/extensions/visual/constructs/index.ts";
 import {
   formulaRangeAtWidgetPosition,
   formulaSourceRangeAtPosition,
@@ -88,6 +88,30 @@ import {
 } from "./vim-text-objects.ts";
 
 export type VimLiteMode = "insert" | "normal" | "visual" | "visual-line";
+
+/**
+ * Mark MODE on the editor DOM, which themes and the host style by, and pin
+ * rendered constructs in editor state outside Insert mode. Moving between
+ * Normal and Visual changes no construct and dispatches nothing. Null clears
+ * both when Vim is torn down.
+ */
+function publishMode(editor: Editor, mode: VimLiteMode | null): void {
+  const view = editor.view;
+  if (mode) view.dom.dataset.vimMode = mode;
+  else delete view.dom.dataset.vimMode;
+  const pinned = mode !== null && mode !== "insert";
+  const tracked = view.state.field(constructsPinnedField, false);
+  if (tracked === undefined || tracked === pinned) return;
+  if (mode !== null) {
+    view.dispatch({ effects: setConstructsPinned.of(pinned) });
+    return;
+  }
+  // Vim is torn down from teardown paths, often in the same task as the
+  // editor; release the constructs only if the editor outlives it.
+  queueMicrotask(() => {
+    if (view.dom.isConnected) view.dispatch({ effects: setConstructsPinned.of(false) });
+  });
+}
 export type VimLiteFoldAction = "close" | "open" | "toggle" | "close-all" | "open-all";
 
 export type VimLiteKey = {
@@ -392,140 +416,14 @@ function visualCharEndPosition(text: Text, pos: number): number {
   return end;
 }
 
-type FormulaIndex = {
-  blocks: ReturnType<typeof getBlockMathRanges>;
-  multilineInline: ReturnType<typeof getMultilineInlineMathRanges>;
-  inlineByLine: Map<number, readonly Scope[]>;
-};
-const formulaIndexes = new WeakMap<EditorState, FormulaIndex>();
-
-function formulaIndex(state: EditorState): FormulaIndex {
-  let index = formulaIndexes.get(state);
-  if (!index) {
-    index = {
-      blocks: getBlockMathRanges(state),
-      multilineInline: getMultilineInlineMathRanges(state),
-      inlineByLine: new Map(),
-    };
-    formulaIndexes.set(state, index);
-  }
-  return index;
-}
-
-function staticMathObjectAtPosition(
-  editor: Editor,
-  pos: number,
-): RenderedObject | null {
-  if (!editor.view.dom.classList.contains("aaronnote-visual-typography")) return null;
-  const state = editor.view.state;
-  const safePos = clamp(pos, 0, state.doc.length);
-  const index = formulaIndex(state);
-  const block = rangeAtPosition(safePos, index.blocks);
-  if (block) return formulaSourceRangeAtPosition(editor.view, safePos)
-    ? null : { from: block.from, to: block.to, block: true };
-  const multiline = rangeAtPosition(safePos, index.multilineInline);
-  if (multiline) return formulaSourceRangeAtPosition(editor.view, safePos)
-    ? null : { from: multiline.from, to: multiline.to, block: false };
-  const line = state.doc.lineAt(safePos);
-  let ranges = index.inlineByLine.get(line.from);
-  if (!ranges) {
-    const codeRanges = scanCodeRanges(state, [{ from: line.from, to: line.to }]);
-    ranges = scanInlineMathRanges(line.text, line.from).filter((range) => (
-      !rangeOverlapsAny(range.from, range.to, index.blocks)
-      && !rangeOverlapsAny(range.from, range.to, codeRanges)
-    ));
-    index.inlineByLine.set(line.from, ranges);
-  }
-  const inline = ranges.find((range) => safePos >= range.from && safePos < range.to);
-  return inline && !formulaSourceRangeAtPosition(editor.view, safePos)
-    ? { from: inline.from, to: inline.to, block: false } : null;
-}
-
-type WidgetIndex = {
-  state: EditorState;
-  from: number;
-  to: number;
-  objects: RenderedObject[];
-  maxTo: number[];
-};
-const widgetIndexes = new WeakMap<EditorView, WidgetIndex>();
-const offscreenImageIndexes = new WeakMap<Text, Map<number, RenderedObject[]>>();
-
-/** Resolve standard images on an unmounted line without parsing the whole note. */
-function offscreenImageAtPosition(editor: Editor, pos: number): RenderedObject | null {
-  const state = editor.view.state;
-  const line = state.doc.lineAt(pos);
-  let byLine = offscreenImageIndexes.get(state.doc);
-  if (!byLine) {
-    byLine = new Map();
-    offscreenImageIndexes.set(state.doc, byLine);
-  }
-  let objects = byLine.get(line.from);
-  if (!objects) {
-    objects = [];
-    if (line.text.includes("![")
-        && !rangeAtPosition(line.from, getFencedCodeRanges(state))) {
-      const tree = markdownParser.parse(line.text);
-      tree.iterate({
-        enter(node) {
-          if (node.name !== "Image") return;
-          const trailing = readImageTrailingAttrs(line.text.slice(node.to), 0);
-          objects!.push({
-            from: line.from + node.from,
-            to: line.from + node.to + (trailing?.to ?? 0),
-            block: false,
-          });
-        },
-      });
-    }
-    if (byLine.size >= 128) byLine.delete(byLine.keys().next().value!);
-    byLine.set(line.from, objects);
-  }
-  return objects.find((object) => pos >= object.from && pos < object.to) ?? null;
-}
-
-/** Whitelisted rendered objects: math and image widgets, not inline code. */
+/**
+ * The rendered construct at POS that Vim treats as one character: a formula,
+ * an image, a reference chip. The construct registry knows what is drawn
+ * where, on screen or not; a construct whose source is open is plain text.
+ */
 function renderedObjectAtPosition(editor: Editor, pos: number): RenderedObject | null {
-  const formula = staticMathObjectAtPosition(editor, pos);
-  if (formula) return formula;
-  const view = editor.view;
-  if (!view.dom.classList.contains("aaronnote-visual-typography")) return null;
-  if (pos < view.viewport.from || pos >= view.viewport.to) {
-    return offscreenImageAtPosition(editor, pos);
-  }
-  let index = widgetIndexes.get(view);
-  if (!index || index.state !== view.state
-    || index.from !== view.viewport.from || index.to !== view.viewport.to) {
-    const objects: RenderedObject[] = [];
-    for (const source of view.state.facet(EditorView.decorations)) {
-      const decorations: DecorationSet = typeof source === "function" ? source(view) : source;
-      decorations.between(view.viewport.from, view.viewport.to, (from, to, value) => {
-        if (value.spec.vimAtomic === true) objects.push({ from, to, block: Boolean(value.spec.block) });
-      });
-    }
-    objects.sort((left, right) => left.from - right.from || right.to - left.to);
-    const maxTo: number[] = [];
-    let maximum = 0;
-    for (const object of objects) {
-      maximum = Math.max(maximum, object.to);
-      maxTo.push(maximum);
-    }
-    index = { state: view.state, from: view.viewport.from, to: view.viewport.to, objects, maxTo };
-    widgetIndexes.set(view, index);
-  }
-  let low = 0;
-  let high = index.objects.length;
-  while (low < high) {
-    const middle = (low + high) >> 1;
-    if (index.objects[middle]!.from <= pos) low = middle + 1;
-    else high = middle;
-  }
-  let found: RenderedObject | null = null;
-  for (let at = low - 1; at >= 0 && index.maxTo[at]! > pos; at--) {
-    const object = index.objects[at]!;
-    if (pos < object.to && (!found || object.to - object.from > found.to - found.from)) found = object;
-  }
-  return found;
+  const construct = renderedConstructAt(editor.view, pos);
+  return construct ? { from: construct.from, to: construct.to, block: construct.block } : null;
 }
 
 function visualObjectEndPosition(editor: Editor, pos: number): number {
@@ -1377,7 +1275,7 @@ export function createVimLite(
   options: VimLiteOptions = {},
 ): VimLiteController {
   let mode: VimLiteMode = "insert";
-  editor.view.dom.dataset.vimMode = mode;
+  publishMode(editor, mode);
   /** Per-caret goal columns of the last vertical motion; cleared by any other motion. */
   let goals: VerticalGoal[] | null = null;
   let countBuffer = "";
@@ -2711,12 +2609,7 @@ export function createVimLite(
     const exitHead = leavingVisual ? (visualHead ?? currentHead(editor)) : currentHead(editor);
     if (leavingVisual && next !== previous) rememberVisual();
     mode = next;
-    editor.view.dom.dataset.vimMode = next;
-    if (changed && (next === "insert" || previous === "insert")) {
-      // Only the TikZ block under the caret changes between its source and
-      // widget. The block-extra field patches that block for this effect.
-      editor.view.dispatch({ effects: setTikzSourceEditing.of(next === "insert") });
-    }
+    publishMode(editor, next);
     cancelJump();
     visualHead = null;
     visualCharStates = null;
@@ -2749,7 +2642,7 @@ export function createVimLite(
     rememberVisual();
     const changed = mode !== "normal";
     mode = "normal";
-    editor.view.dom.dataset.vimMode = mode;
+    publishMode(editor, mode);
     cancelJump();
     visualHead = null;
     visualCharStates = null;
@@ -3006,7 +2899,7 @@ export function createVimLite(
     }));
     const changed = mode !== "visual-line";
     mode = "visual-line";
-    editor.view.dom.dataset.vimMode = mode;
+    publishMode(editor, mode);
     resetMotionMemory();
     renderVisualLineStates(states);
     if (changed) options.onModeChange?.(mode);
@@ -3021,7 +2914,7 @@ export function createVimLite(
     }));
     const changed = mode !== "visual";
     mode = "visual";
-    editor.view.dom.dataset.vimMode = mode;
+    publishMode(editor, mode);
     visualLineStates = null;
     resetMotionMemory();
     renderVisualCharStates(states);
@@ -3183,7 +3076,7 @@ export function createVimLite(
     });
     if (linewise && mode !== "visual-line") {
       mode = "visual-line";
-      editor.view.dom.dataset.vimMode = mode;
+      publishMode(editor, mode);
       options.onModeChange?.(mode);
     }
     resetMotionMemory();
@@ -3446,7 +3339,7 @@ export function createVimLite(
     const text = doc(editor);
     setInsertCursors(editor, editor.view.state.selection.ranges.map((range) => {
       const pos = normalCharPosition(text, range.head);
-      const object = staticMathObjectAtPosition(editor, pos);
+      const object = renderedObjectAtPosition(editor, pos);
       if (object?.from === pos) return { pos: object.to };
       return { pos: Math.min(text.lineAt(pos).to, graphemeEndPosition(text, pos)) };
     }));
@@ -4395,7 +4288,7 @@ export function createVimLite(
     destroy(): void {
       if (destroyed) return;
       destroyed = true;
-      delete editor.view.dom.dataset.vimMode;
+      publishMode(editor, null);
       asyncEpoch += 1;
       cancelJump();
       stopWatchingDocumentReset();
