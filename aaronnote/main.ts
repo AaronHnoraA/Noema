@@ -146,7 +146,6 @@ import {
 import {
   PROSE_CATEGORY_LABELS,
   PROSE_CATEGORY_ORDER,
-  adjacentProseDiagnostic,
   allProseDiagnostics,
   proseDiagnosticCategory,
   proseDiagnosticLabel,
@@ -373,8 +372,6 @@ root.innerHTML = `
             aria-expanded="false">
         <span data-writing-stats aria-live="polite"></span>
       </span>
-      <span class="aaronnote-status-pill aaronnote-prose-badge" data-prose-badge
-            role="button" tabindex="0" hidden></span>
     </aside>
     <section class="aaronnote-focused-editor" data-editor></section>
   </main>
@@ -430,7 +427,6 @@ const toolsButton = shellControl("Tools");
 const sourceButton = shellControl("Source");
 const saveButton = shellControl("Save");
 
-const proseBadge = root.querySelector<HTMLElement>("[data-prose-badge]")!;
 const prosePopover = document.createElement("div");
 prosePopover.className = "aaronnote-prose-popover";
 prosePopover.hidden = true;
@@ -1530,15 +1526,11 @@ let languageToolHealth = "Not tested";
 let languageToolRevision = "";
 let languageToolLoadSequence = 0;
 let activeProseDiagnostic: ProseDiagnostic | null = null;
-// Whether the open card came from the keyboard; only then do digit keys pick
-// a suggestion, so typing after a click never edits through the card.
-let proseCardFromKeyboard = false;
 // "Ignore" survives later checks for the same rule, word and surrounding text,
 // as the official clients' ignore does; edits elsewhere do not bring it back.
 const proseIgnoredKeys = new Set<string>();
 const PROSE_IGNORED_LIMIT = 1_000;
-let proseCheckedFile = "";
-let proseBadgeKey = "";
+
 let cursorPositionsLoaded = false;
 let cursorPositionsLoadPromise: Promise<CursorPosition[]> | null = null;
 let cursorPositions: CursorPosition[] = [];
@@ -2136,7 +2128,6 @@ const editor = createEditor(host, {
       proseLifecycle.invalidate("document-edited");
       scheduleAutomaticProseCheck();
     }
-    renderProseBadge();
     slideDeck?.refresh();
   },
   onSelectionChange: () => {
@@ -7068,38 +7059,6 @@ function setProseDiagnostics(view: EditorView, diagnostics: readonly ProseDiagno
     ? diagnostics
     : diagnostics.filter((diagnostic) => !proseIgnoredKeys.has(proseIgnoreKey(diagnostic)));
   setProseDiagnosticsField(view, visible);
-  renderProseBadge();
-}
-
-/** One static pill: a coloured count per LanguageTool class present. */
-function renderProseBadge(): void {
-  const counts = proseCategoryCounts();
-  const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
-  const checked = proseCheckedFile === currentFile && !!currentFile;
-  const hidden = currentReadOnly || (!checked && total === 0);
-  const key = `${hidden}|${[...counts].map(([category, count]) => `${category}${count}`).join(",")}`;
-  if (key === proseBadgeKey) return;
-  proseBadgeKey = key;
-  proseBadge.hidden = hidden;
-  proseBadge.dataset.proseCategory = counts.keys().next().value ?? "clean";
-  if (total === 0) {
-    proseBadge.textContent = "✓";
-    proseBadge.title = "No writing issues in the checked text";
-    return;
-  }
-  const parts: HTMLElement[] = [];
-  for (const [category, count] of counts) {
-    const dot = document.createElement("i");
-    dot.className = "aaronnote-prose-badge-dot cm-prose-" + category;
-    dot.style.background = "var(--prose-issue)";
-    const number = document.createElement("span");
-    number.textContent = String(count);
-    parts.push(dot, number);
-  }
-  proseBadge.replaceChildren(...parts);
-  proseBadge.title = [...counts]
-    .map(([category, count]) => `${count} ${PROSE_CATEGORY_LABELS[category].toLowerCase()}`)
-    .join(" · ") + " — click for the next issue";
 }
 
 function hideProsePopover(): void {
@@ -7107,7 +7066,6 @@ function hideProsePopover(): void {
   prosePopover.replaceChildren();
   if (activeProseDiagnostic) setActiveProseDiagnostic(editor.view, null);
   activeProseDiagnostic = null;
-  proseCardFromKeyboard = false;
 }
 
 function proseCheckInput(automatic: boolean): ProseCheckInput {
@@ -7214,7 +7172,6 @@ function applyProseCheck(result: ProseCheckRunResult, context: ProseCheckContext
   if (result.input.file !== currentFile || result.input.revision !== revision) return false;
   if (result.empty) {
     if (context.kind === "manual" && context.id === proseBusyRequestId) {
-      proseCheckedFile = result.input.file;
       setProseDiagnostics(editor.view, []);
       setStatus("Nothing to check");
     }
@@ -7241,7 +7198,6 @@ function applyProseCheck(result: ProseCheckRunResult, context: ProseCheckContext
     }
   }
   const diagnostics = (response.diagnostics ?? []) as ProseDiagnostic[];
-  proseCheckedFile = result.input.file;
   setProseDiagnostics(editor.view, diagnostics);
   if (context.kind === "manual" && context.id === proseBusyRequestId) {
     const partial = response.scope?.partial ? " (bounded scope)" : "";
@@ -7402,9 +7358,8 @@ function proseCardButton(label: string, action: string, value = ""): HTMLButtonE
  * The diagnostic card: class and title, the explanation, suggestions as
  * buttons, then the quieter actions.  It is built only when opened.
  */
-function showProsePopover(diagnostic: ProseDiagnostic, x: number, y: number, fromKeyboard = false): void {
+function showProsePopover(diagnostic: ProseDiagnostic, x: number, y: number): void {
   activeProseDiagnostic = diagnostic;
-  proseCardFromKeyboard = fromKeyboard;
   setActiveProseDiagnostic(editor.view, diagnostic);
   const category = proseDiagnosticCategory(diagnostic);
   prosePopover.dataset.proseCategory = category;
@@ -7415,14 +7370,6 @@ function showProsePopover(diagnostic: ProseDiagnostic, x: number, y: number, fro
   label.className = "aaronnote-prose-category";
   label.textContent = proseDiagnosticLabel(diagnostic);
   header.append(label);
-  const diagnostics = allProseDiagnostics(editor.view);
-  const index = diagnostics.findIndex((entry) => entry.from === diagnostic.from && entry.to === diagnostic.to);
-  if (diagnostics.length > 1 && index >= 0) {
-    const position = document.createElement("span");
-    position.className = "aaronnote-prose-position";
-    position.textContent = `${index + 1}/${diagnostics.length}`;
-    header.append(position, proseCardButton("‹", "previous"), proseCardButton("›", "next"));
-  }
 
   const nodes: HTMLElement[] = [header];
   if (diagnostic.title && diagnostic.title !== diagnostic.message) {
@@ -7436,31 +7383,13 @@ function showProsePopover(diagnostic: ProseDiagnostic, x: number, y: number, fro
   message.textContent = diagnostic.message;
   nodes.push(message);
 
-  // The sentence as it would read with the first suggestion applied.
-  const context = proseDiagnosticContext(diagnostic, 40);
-  const preview = document.createElement("div");
-  preview.className = "aaronnote-prose-context";
-  const removed = document.createElement("del");
-  removed.textContent = context.text;
-  preview.append(`${context.before.length >= 40 ? "…" : ""}${context.before}`, removed);
-  const first = diagnostic.suggestions?.[0];
-  if (first !== undefined && first !== "") {
-    const inserted = document.createElement("ins");
-    inserted.textContent = first;
-    preview.append(inserted);
-  }
-  preview.append(`${context.after}${context.after.length >= 40 ? "…" : ""}`);
-  nodes.push(preview);
-
   const suggestions = (diagnostic.suggestions ?? []).slice(0, 6);
   if (suggestions.length > 0) {
     const row = document.createElement("div");
     row.className = "aaronnote-prose-suggestions";
-    suggestions.forEach((suggestion, position) => {
-      const button = proseCardButton(suggestion || "(remove)", "replace", suggestion);
-      if (fromKeyboard && position < 9) button.title = `Key ${position + 1}`;
-      row.append(button);
-    });
+    for (const suggestion of suggestions) {
+      row.append(proseCardButton(suggestion || "(remove)", "replace", suggestion));
+    }
     nodes.push(row);
   }
 
@@ -7479,15 +7408,6 @@ function showProsePopover(diagnostic: ProseDiagnostic, x: number, y: number, fro
   }
   if (diagnostic.url) actions.append(proseCardButton("Explain", "explain", diagnostic.url));
   nodes.push(actions);
-  if (diagnostic.rule) {
-    const rule = document.createElement("div");
-    rule.className = "aaronnote-prose-rule";
-    rule.textContent = [diagnostic.categoryLabel, diagnostic.ruleDescription, diagnostic.rule]
-      .filter((part, index, parts) => part && parts.indexOf(part) === index)
-      .join(" · ");
-    nodes.push(rule);
-  }
-
   prosePopover.replaceChildren(...nodes);
   prosePopover.hidden = false;
   const width = prosePopover.offsetWidth || 320;
@@ -7496,48 +7416,6 @@ function showProsePopover(diagnostic: ProseDiagnostic, x: number, y: number, fro
   prosePopover.style.top = `${y + 8 + height > window.innerHeight - 8
     ? Math.max(8, y - height - 24)
     : y + 8}px`;
-}
-
-/** Move to the next or previous issue and open its card at the text. */
-function openAdjacentProseIssue(direction: 1 | -1): boolean {
-  const from = activeProseDiagnostic
-    ? (direction > 0 ? activeProseDiagnostic.from : activeProseDiagnostic.to)
-    : editor.view.state.selection.main.head;
-  const diagnostic = adjacentProseDiagnostic(editor.view, from, direction);
-  if (!diagnostic) {
-    setStatus(proseCheckedFile === currentFile ? "No prose issues" : "No prose check yet — Cmd-Shift-C checks");
-    return false;
-  }
-  openProseCard(diagnostic, true);
-  return true;
-}
-
-function openProseCard(diagnostic: ProseDiagnostic, fromKeyboard: boolean): void {
-  editor.view.dispatch({
-    selection: { anchor: diagnostic.from },
-    effects: EditorView.scrollIntoView(diagnostic.from, { y: "center" }),
-  });
-  // Coordinates are valid only after CM6 has laid out the scroll.
-  editor.view.requestMeasure({
-    read: (view) => view.coordsAtPos(diagnostic.from),
-    write: (coords) => {
-      if (!coords) return;
-      showProsePopover(diagnostic, coords.left, coords.bottom, fromKeyboard);
-    },
-  });
-}
-
-/** Digits pick a suggestion on a card opened from the keyboard. */
-function runProseCardKey(event: KeyboardEvent): boolean {
-  if (prosePopover.hidden || !proseCardFromKeyboard || !activeProseDiagnostic) return false;
-  if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return false;
-  if (!/^[1-9]$/.test(event.key)) return false;
-  const suggestion = activeProseDiagnostic.suggestions?.[Number(event.key) - 1];
-  if (suggestion === undefined) return false;
-  event.preventDefault();
-  event.stopPropagation();
-  applyProseSuggestion(activeProseDiagnostic, suggestion);
-  return true;
 }
 
 function applyProseSuggestion(diagnostic: ProseDiagnostic, suggestion: string): void {
@@ -13513,12 +13391,6 @@ function runHostCommand(detail: unknown): boolean {
     case "spell-check":
       void runProseCheck();
       return true;
-    case "prose-next":
-      openAdjacentProseIssue(1);
-      return true;
-    case "prose-previous":
-      openAdjacentProseIssue(-1);
-      return true;
     case "back":
     case "nav-back":
     case "navigation-back":
@@ -14117,16 +13989,6 @@ host.addEventListener("click", (event) => {
   event.stopPropagation();
   showProsePopover(diagnostic, event.clientX, event.clientY);
 });
-// Capture phase, so a digit picks a suggestion before Vim reads it as a count.
-window.addEventListener("keydown", (event) => {
-  if (runProseCardKey(event)) event.stopImmediatePropagation();
-}, { capture: true });
-proseBadge.addEventListener("mousedown", (event) => event.preventDefault());
-proseBadge.addEventListener("click", (event) => {
-  event.preventDefault();
-  if (allProseDiagnostics(editor.view).length === 0) runProseCheck(false);
-  else openAdjacentProseIssue(1);
-});
 prosePopover.addEventListener("mousedown", (event) => event.preventDefault());
 prosePopover.addEventListener("click", (event) => {
   const button = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-prose-action]");
@@ -14137,10 +13999,6 @@ prosePopover.addEventListener("click", (event) => {
   const action = button.dataset.proseAction;
   if (action === "replace") {
     applyProseSuggestion(diagnostic, button.dataset.value ?? "");
-    return;
-  }
-  if (action === "next" || action === "previous") {
-    openAdjacentProseIssue(action === "next" ? 1 : -1);
     return;
   }
   if (action === "ignore") {

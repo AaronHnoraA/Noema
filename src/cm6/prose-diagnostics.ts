@@ -140,24 +140,6 @@ export function setActiveProseDiagnostic(view: EditorView, diag: ProseDiagnostic
   view.dispatch({ effects: setActiveProseDiagnosticEffect.of(diag ? { from: diag.from, to: diag.to } : null) });
 }
 
-/**
- * The diagnostic after (or before) POS, wrapping around the document.  A
- * diagnostic that contains POS is skipped so repeating the command advances.
- */
-export function adjacentProseDiagnostic(
-  view: EditorView,
-  pos: number,
-  direction: 1 | -1,
-): ProseDiagnostic | null {
-  const diagnostics = view.state.field(proseDiagnosticsField, false) ?? [];
-  if (diagnostics.length === 0) return null;
-  if (direction > 0) return diagnostics.find((diag) => diag.from > pos) ?? diagnostics[0]!;
-  for (let index = diagnostics.length - 1; index >= 0; index--) {
-    if (diagnostics[index]!.to < pos) return diagnostics[index]!;
-  }
-  return diagnostics[diagnostics.length - 1]!;
-}
-
 export function setProseDiagnostics(view: EditorView, diagnostics: readonly ProseDiagnostic[]): void {
   view.dispatch({ effects: setProseDiagnosticsEffect.of(diagnostics) });
 }
