@@ -1,7 +1,9 @@
 /**
- * Keyboard movement inside the rendered table (MarkText TableCellContent):
- * arrows and Backspace at a cell's text edge move between cells and, past the
- * table, back into the document; Mod-Enter adds a row below.
+ * Keyboard movement in a table (MarkText TableCellContent). A table is edited
+ * as its Markdown source with the main editor; the keys keep the cell model:
+ * arrows at a cell's text edge move between cells and, past the table, back
+ * into the document; Backspace at a cell's start never deletes a pipe;
+ * Mod-Enter adds a row below; Shift-Enter breaks a line inside the cell.
  */
 
 import { afterEach, describe, expect, it } from "@voidzero-dev/vite-plus-test";
@@ -15,123 +17,144 @@ afterEach(() => {
 });
 
 const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** CodeMirror's `Mod`: Command on macOS, Control elsewhere. */
+const MOD = /Mac/.test(navigator.platform) ? "metaKey" : "ctrlKey";
 
+/** Open DOC and click cell (ROW, COL) of its rendered table: the source opens with the caret there. */
 function open(doc = markdown, row = 1, col = 0) {
   const host = document.createElement("div");
   document.body.append(host);
   const editor = createEditor(host, { kernel: "cm6", initialContent: doc });
   editors.push(editor);
   const cell = host.querySelector<HTMLTableElement>("table")!.rows[row]!.cells[col] as HTMLTableCellElement;
-  cell.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-  const input = cell.querySelector<HTMLInputElement>("input")!;
-  input.focus();
-  return { editor, host, input };
+  cell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+  document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+  return { editor, host };
 }
 
-function key(target: HTMLElement, init: KeyboardEventInit) {
+function press(editor: Editor, init: KeyboardEventInit) {
   const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-  target.dispatchEvent(event);
+  editor.view.contentDOM.dispatchEvent(event);
   return event;
 }
 
-async function settle() {
-  await tick();
-  await frame();
-  await tick();
+/** The table cell holding the caret, by rendered row (header is 0) and column, and the caret's offset in its text. */
+function caretCell(editor: Editor): { row: number; col: number; offset: number } | null {
+  const state = editor.view.state;
+  const head = state.selection.main.head;
+  const line = state.doc.lineAt(head);
+  if (!/^\s*\|.*\|\s*$/.test(line.text)) return null;
+  let first = line.number;
+  while (first > 1 && /^\s*\|.*\|\s*$/.test(state.doc.line(first - 1).text)) first--;
+  const sourceRow = line.number - first;
+  const row = sourceRow === 0 ? 0 : sourceRow - 1;
+  const before = line.text.slice(0, head - line.from);
+  const col = (before.match(/\|/g)?.length ?? 1) - 1;
+  const cellStart = before.lastIndexOf("|") + 1;
+  const offset = before.slice(cellStart).replace(/^ /, "").length;
+  return { row, col, offset };
 }
 
-function activeCell(host: HTMLElement): { row: number; col: number; caret: number } | null {
-  const input = document.activeElement;
-  if (!(input instanceof HTMLInputElement) || !host.contains(input)) return null;
-  const cell = input.closest("td, th") as HTMLTableCellElement;
-  return { row: Number(cell.dataset.row), col: Number(cell.dataset.col), caret: input.selectionStart ?? -1 };
-}
-
-describe("table keyboard movement", () => {
-  it("ArrowDown and ArrowUp move to the same column", async () => {
-    const { host, input } = open(markdown, 1, 1);
-    expect(key(input, { key: "ArrowDown" }).defaultPrevented).toBe(true);
-    await settle();
-    expect(activeCell(host)).toMatchObject({ row: 2, col: 1, caret: 0 });
-    key(document.activeElement as HTMLElement, { key: "ArrowUp" });
-    await settle();
-    expect(activeCell(host)).toMatchObject({ row: 1, col: 1, caret: 3 });
-  });
-
-  it("ArrowRight at a cell's end enters the next cell; inside text it stays native", async () => {
-    const { host, input } = open();
-    input.setSelectionRange(1, 1);
-    expect(key(input, { key: "ArrowRight" }).defaultPrevented).toBe(false);
-    input.setSelectionRange(3, 3);
-    key(input, { key: "ArrowRight" });
-    await settle();
-    expect(activeCell(host)).toMatchObject({ row: 1, col: 1, caret: 0 });
-  });
-
-  it("ArrowLeft and Backspace at a cell's start enter the previous cell's end", async () => {
-    const { host, input } = open(markdown, 2, 0);
-    input.setSelectionRange(0, 0);
-    key(input, { key: "Backspace" });
-    await settle();
-    expect(activeCell(host)).toMatchObject({ row: 1, col: 1, caret: 3 });
-    const next = document.activeElement as HTMLInputElement;
-    next.setSelectionRange(0, 0);
-    key(next, { key: "ArrowLeft" });
-    await settle();
-    expect(activeCell(host)).toMatchObject({ row: 1, col: 0, caret: 3 });
-  });
-
-  it("ArrowDown from the last row returns the caret to the line below", async () => {
-    const { editor, host, input } = open(markdown, 2, 0);
-    key(input, { key: "ArrowDown" });
-    await settle();
-    expect(activeCell(host)).toBeNull();
-    const pos = editor.getMarkdownSelection().from;
-    expect(editor.view.state.doc.lineAt(pos).text).toBe("");
+describe("table cells are edited in the source", () => {
+  it("clicking a cell opens the table's source with the caret in that cell", () => {
+    const { editor, host } = open(markdown, 1, 1);
+    expect(caretCell(editor)).toMatchObject({ row: 1, col: 1, offset: 3 });
+    expect(host.querySelector(".cm-table-block")).toBeNull();
     expect(editor.getMarkdown()).toBe(markdown);
   });
 
-  it("ArrowUp from the header returns the caret above, keeping a typed edit", async () => {
-    const { editor, host, input } = open(markdown, 0, 0);
-    input.value = "Head";
-    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    input.setSelectionRange(0, 0);
-    key(input, { key: "ArrowUp" });
-    await settle();
-    expect(activeCell(host)).toBeNull();
-    expect(editor.getMarkdown()).toContain("| Head | B |");
-    expect(editor.getMarkdownSelection().from).toBe("before\n".length);
+  it("leaving the table renders it again", () => {
+    const { editor, host } = open(markdown, 1, 1);
+    editor.view.dispatch({ selection: { anchor: editor.getMarkdown().length } });
+    expect(host.querySelector(".cm-table-block table")).toBeTruthy();
+  });
+});
+
+describe("table keyboard movement", () => {
+  it("ArrowDown and ArrowUp move to the same column", () => {
+    const { editor } = open(markdown, 1, 1);
+    expect(press(editor, { key: "ArrowDown" }).defaultPrevented).toBe(true);
+    expect(caretCell(editor)).toMatchObject({ row: 2, col: 1, offset: 0 });
+    press(editor, { key: "ArrowUp" });
+    expect(caretCell(editor)).toMatchObject({ row: 1, col: 1, offset: 3 });
   });
 
-  it("leaving a table that ends the note opens a line below it", async () => {
+  it("ArrowUp from the first body row skips the delimiter row", () => {
+    const { editor } = open(markdown, 1, 0);
+    press(editor, { key: "ArrowUp" });
+    expect(caretCell(editor)).toMatchObject({ row: 0, col: 0 });
+  });
+
+  it("ArrowRight at a cell's end enters the next cell; inside text it stays native", () => {
+    const { editor } = open(markdown, 1, 0);
+    const end = editor.view.state.selection.main.head;
+    editor.view.dispatch({ selection: { anchor: end - 1 } });
+    press(editor, { key: "ArrowRight" });
+    expect(caretCell(editor)).toMatchObject({ row: 1, col: 0, offset: 3 });
+    editor.view.dispatch({ selection: { anchor: end } });
+    press(editor, { key: "ArrowRight" });
+    expect(caretCell(editor)).toMatchObject({ row: 1, col: 1, offset: 0 });
+  });
+
+  it("ArrowLeft and Backspace at a cell's start enter the previous cell's end", () => {
+    const { editor } = open(markdown, 2, 0);
+    const cell = caretCell(editor)!;
+    editor.view.dispatch({ selection: { anchor: editor.view.state.selection.main.head - cell.offset } });
+    press(editor, { key: "Backspace" });
+    expect(caretCell(editor)).toMatchObject({ row: 1, col: 1, offset: 3 });
+    expect(editor.getMarkdown()).toBe(markdown);
+    editor.view.dispatch({ selection: { anchor: editor.view.state.selection.main.head - 3 } });
+    press(editor, { key: "ArrowLeft" });
+    expect(caretCell(editor)).toMatchObject({ row: 1, col: 0, offset: 3 });
+  });
+
+  it("ArrowDown from the last row leaves the table as text movement does", () => {
+    const { editor } = open(markdown, 2, 0);
+    press(editor, { key: "ArrowDown" });
+    expect(caretCell(editor)).toBeNull();
+    expect(editor.getMarkdown()).toBe(markdown);
+  });
+
+  it("leaving a table that ends the note opens a line below it", () => {
     const doc = "| A | B |\n| --- | --- |\n| one | two |";
-    const { editor, input } = open(doc, 1, 1);
-    key(input, { key: "ArrowDown" });
-    await settle();
+    const { editor } = open(doc, 1, 1);
+    press(editor, { key: "ArrowDown" });
     expect(editor.getMarkdown()).toBe(`${doc}\n`);
     expect(editor.getMarkdownSelection().from).toBe(doc.length + 1);
   });
 
-  it("Mod-Enter inserts an empty row below and edits its first cell", async () => {
-    const { editor, host, input } = open(markdown, 1, 1);
-    key(input, { key: "Enter", metaKey: true });
-    await settle();
-    expect(editor.getMarkdown()).toContain("| one | two |\n|  |  |\n| three | four |");
-    expect(activeCell(host)).toMatchObject({ row: 2, col: 0 });
+  it("Mod-Enter inserts an empty row below and puts the caret in its first cell", () => {
+    const { editor } = open(markdown, 1, 1);
+    press(editor, { key: "Enter", [MOD]: true });
+    expect(editor.getMarkdown()).toMatch(/\| one +\| two +\|\n\| +\| +\|\n\| three +\| four +\|/);
+    expect(caretCell(editor)).toMatchObject({ row: 2, col: 0 });
+  });
+
+  it("Shift-Enter breaks a line inside the cell instead of ending the row", () => {
+    const { editor } = open(markdown, 1, 0);
+    press(editor, { key: "Enter", shiftKey: true });
+    expect(editor.getMarkdown()).toContain("| one<br> | two |");
   });
 });
 
 describe("selected cell movement", () => {
-  it("arrows move focus between selected cells without editing", async () => {
-    const { host, input } = open(markdown, 1, 0);
-    key(input, { key: "Escape" });
-    const cell = document.activeElement as HTMLTableCellElement;
-    expect(cell.tagName).toBe("TD");
-    key(cell, { key: "ArrowRight" });
+  it("arrows move focus between selected cells without opening the source", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: markdown });
+    editors.push(editor);
+    const cell = host.querySelector<HTMLTableElement>("table")!.rows[1]!.cells[0] as HTMLTableCellElement;
+    cell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, shiftKey: true }));
+    await frame();
+    expect((document.activeElement as HTMLElement).tagName).toBe("TD");
+    const key = (target: Element, name: string) =>
+      target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
+    key(document.activeElement!, "Escape");
+    key(document.activeElement!, "ArrowRight");
     expect((document.activeElement as HTMLElement).dataset.col).toBe("1");
-    key(document.activeElement as HTMLElement, { key: "ArrowDown" });
+    key(document.activeElement!, "ArrowDown");
     expect((document.activeElement as HTMLElement).dataset.row).toBe("2");
-    expect(host.querySelector("input")).toBeNull();
+    expect(host.querySelector(".cm-table-block table")).toBeTruthy();
+    expect(editor.getMarkdown()).toBe(markdown);
   });
 });

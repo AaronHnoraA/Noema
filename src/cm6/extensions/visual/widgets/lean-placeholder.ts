@@ -113,6 +113,8 @@ class LeanPlaceholderWidget extends MeasuredWidget {
 export const leanPlaceholderPreviewExtension = inlineConstruct({
   kind: "lean-placeholder",
   reveal: "edge",
+  // An `@@` command: Vim opens it as text, like every other command.
+  role: "structure",
   maxPerViewport: 2_000,
   *match(line) {
     if (!line.text.includes("@@lean4")) return;

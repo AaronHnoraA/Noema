@@ -12,6 +12,7 @@ import { normalizedEditorKey } from "../src/cm6/focus-quiescence.ts";
 import { historyChordKind } from "../src/keymap/shortcut-router.ts";
 import { hostInputFocusReleased, pageHasNativeKeyboard, releaseHostInputFocus } from "./host-input-focus.ts";
 import { FRAME_KEY_RELAY_MESSAGE } from "../src/frame-key-relay.ts";
+import { EMBEDDED_SURFACE_SELECTOR } from "../src/cm6/embedded-surface.ts";
 
 type XwidgetControlKey = "Escape" | "Delete" | "Backspace";
 type XwidgetSpecialKey =
@@ -130,7 +131,7 @@ function dispatchMathHostKey(detail: MathHostKeyDetail): boolean {
 function isTextEditingTarget(target: EventTarget | null, editorHost: HTMLElement): boolean {
   const element = targetElement(target);
   if (!element) return false;
-  if (element.closest("[data-aaronnote-vim='native']")) return true;
+  if (element.closest(EMBEDDED_SURFACE_SELECTOR)) return true;
   if (element.closest("input, textarea, select")) return true;
   const editable = element.closest<HTMLElement>("[contenteditable]");
   if (!editable || editable.contentEditable === "false") return false;
@@ -806,7 +807,7 @@ export function claimsXwidgetEmacsKeyEarly(event: KeyboardEvent, editor: HTMLEle
   if (!shouldForwardToEmacs(event)) return false;
   const target = targetElement(event.target);
   if (!target || !editor.contains(target)) return false;
-  if (target.closest("[data-aaronnote-vim='native'], input, textarea, select")) return false;
+  if (target.closest(`${EMBEDDED_SURFACE_SELECTOR}, input, textarea, select`)) return false;
   return !visualMathEditingTarget(event.target);
 }
 

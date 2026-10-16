@@ -1152,7 +1152,7 @@ function cellOffset(row: string, colIdx: number): number {
  * files.md's `tableEnterCell` and prosemirror-tables' `goToNextCell` all
  * select the next cell's content — or the caret inside an empty cell.
  */
-function cellTarget(row: string, colIdx: number): { anchor: number; head: number } {
+export function cellTarget(row: string, colIdx: number): { anchor: number; head: number } {
   const pipes = tablePipeOffsets(row);
   const open = pipes[colIdx];
   if (open == null) {
@@ -1391,6 +1391,132 @@ function createTableFromHeaderRow(view: EditorView, info: TableInfo): boolean {
     selection: { anchor: cursor },
     scrollIntoView: true,
   });
+  return true;
+}
+
+/** The table cell holding the caret: its row's line, column, and text span (absolute). */
+type CaretTableCell = {
+  info: TableInfo;
+  separator: number;
+  rowLine: { from: number; text: string };
+  col: number;
+  colCount: number;
+  text: { from: number; to: number };
+};
+
+function caretTableCell(view: EditorView): CaretTableCell | null {
+  const range = view.state.selection.main;
+  if (!range.empty || view.state.selection.ranges.length > 1) return null;
+  const info = findTableInfo(view);
+  if (!info) return null;
+  const separator = info.lines.findIndex(isSeparatorRow);
+  if (separator < 0 || info.currentRowIdx === separator) return null;
+  const line = view.state.doc.line(info.startLineNum + info.currentRowIdx);
+  const target = cellTarget(line.text, info.currentColIdx);
+  return {
+    info,
+    separator,
+    rowLine: { from: line.from, text: line.text },
+    col: info.currentColIdx,
+    colCount: splitCells(info.lines[0] ?? "").length,
+    text: { from: line.from + Math.min(target.anchor, target.head), to: line.from + Math.max(target.anchor, target.head) },
+  };
+}
+
+/** Put the caret in cell COL of table row ROW (an index into INFO.lines), at the cell text's START or end. */
+function moveToTableCell(view: EditorView, info: TableInfo, row: number, col: number, atStart: boolean): boolean {
+  const line = view.state.doc.line(info.startLineNum + row);
+  const target = cellTarget(line.text, col);
+  const at = line.from + (atStart ? Math.min(target.anchor, target.head) : Math.max(target.anchor, target.head));
+  view.dispatch({ selection: { anchor: at }, scrollIntoView: true, userEvent: "select" });
+  return true;
+}
+
+/**
+ * ArrowDown/ArrowUp in a table cell: the same column of the next or previous
+ * row, skipping the delimiter row — the caret at the cell's start going down
+ * and its end going up, as MarkText's table cells move. Past the first or last
+ * row it returns false and the caret leaves the table as text does; below a
+ * table that ends the note it opens a line.
+ */
+export function tableMoveVertical(view: EditorView, dir: 1 | -1): boolean {
+  const cell = caretTableCell(view);
+  if (!cell) return false;
+  let row = cell.info.currentRowIdx + dir;
+  if (row === cell.separator) row += dir;
+  if (row >= cell.info.lines.length) {
+    // A table that ends the note gets a line to land on, as MarkText appends
+    // a paragraph when ArrowDown leaves its last block.
+    const doc = view.state.doc;
+    if (cell.info.startLineNum + cell.info.lines.length - 1 !== doc.lines) return false;
+    view.dispatch({
+      changes: { from: doc.length, insert: "\n" },
+      selection: { anchor: doc.length + 1 },
+      scrollIntoView: true,
+      userEvent: "input",
+    });
+    return true;
+  }
+  if (row < 0) return false;
+  return moveToTableCell(view, cell.info, row, cell.col, dir > 0);
+}
+
+/**
+ * ArrowRight at a cell text's end enters the next cell's start; ArrowLeft at
+ * its start enters the previous cell's end, wrapping between rows. Elsewhere
+ * the caret moves through the text natively.
+ */
+export function tableMoveHorizontal(view: EditorView, dir: 1 | -1): boolean {
+  const cell = caretTableCell(view);
+  if (!cell) return false;
+  const head = view.state.selection.main.head;
+  if (dir > 0 ? head < cell.text.to : head > cell.text.from) return false;
+  let row = cell.info.currentRowIdx;
+  let col = cell.col + dir;
+  if (col < 0 || col >= cell.colCount) {
+    row += dir;
+    if (row === cell.separator) row += dir;
+    if (row < 0 || row >= cell.info.lines.length) return false;
+    col = dir > 0 ? 0 : cell.colCount - 1;
+  }
+  return moveToTableCell(view, cell.info, row, col, dir > 0);
+}
+
+/**
+ * Backspace at a cell text's start: the previous cell's end, never the pipe
+ * between them, which would break the table. In the first cell it does nothing.
+ */
+export function tableBackspaceAtCellStart(view: EditorView): boolean {
+  const cell = caretTableCell(view);
+  if (!cell || view.state.selection.main.head > cell.text.from) return false;
+  return tableMoveHorizontal(view, -1) || true;
+}
+
+/**
+ * Shift-Enter in a table cell: a line break inside the cell. A newline would
+ * end the row, so the cell gets `<br>`, as GFM tables and MarkText write it.
+ */
+export function tableCellLineBreak(view: EditorView): boolean {
+  const info = findTableInfo(view);
+  if (!info || !info.lines.some(isSeparatorRow)) return false;
+  const { from, to } = view.state.selection.main;
+  view.dispatch({
+    changes: { from, to, insert: "<br>" },
+    selection: { anchor: from + 4 },
+    scrollIntoView: true,
+    userEvent: "input",
+  });
+  return true;
+}
+
+/** Mod-Enter in a table: a new body row below the current one, caret in its first cell. */
+export function tableInsertRowBelow(view: EditorView): boolean {
+  const info = findTableInfo(view);
+  if (!info || !info.lines.some(isSeparatorRow)) return false;
+  if (!runTableCommandCM6(view, "table-insert-row")) return false;
+  const row = view.state.doc.lineAt(view.state.selection.main.head);
+  const target = cellTarget(row.text, 0);
+  view.dispatch({ selection: { anchor: row.from + target.anchor, head: row.from + target.head }, scrollIntoView: true });
   return true;
 }
 

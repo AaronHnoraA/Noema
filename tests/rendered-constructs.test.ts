@@ -4,9 +4,11 @@ import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 
 import { createEditor } from "../src/editor-api.ts";
+import { createVimLite } from "../aaronnote/vim-lite.ts";
 import {
   rangeRevealsSource,
   renderedConstructAt,
+  selectionOpensSource,
   setConstructsPinned,
 } from "../src/cm6/extensions/visual/constructs/index.ts";
 
@@ -41,6 +43,21 @@ function mount(text: string) {
   const view = editor.view as unknown as EditorView;
   return { view, done: () => { editor.destroy(); host.remove(); } };
 }
+
+describe("roles under Vim pinning", () => {
+  test("an object stays rendered under a pinned caret; structure still opens", () => {
+    const { view, done } = mount("one @@lean4 [tag] two");
+    try {
+      view.dispatch({ selection: { anchor: 6 }, effects: setConstructsPinned.of(true) });
+      expect(selectionOpensSource(view.state, 4, 17, "edge", "object")).toBe(false);
+      expect(selectionOpensSource(view.state, 4, 17, "edge", "structure")).toBe(true);
+      view.dispatch({ effects: setConstructsPinned.of(false) });
+      expect(selectionOpensSource(view.state, 4, 17, "edge", "object")).toBe(true);
+    } finally {
+      done();
+    }
+  });
+});
 
 describe("construct registry", () => {
   const text = "See [^note] and ((019a0000-0000-7000-8000-000000000000)) here.\n\n`[^code]` \\([^math]\\)";
@@ -87,6 +104,53 @@ describe("construct registry", () => {
       expect(renderedConstructAt(view, text.indexOf("[^math]") + 2)?.kind).not.toBe("footnote");
     } finally {
       done();
+    }
+  });
+});
+
+describe("a table is edited as text", () => {
+  test("an editable rendered table is an embedded surface, so selected cells keep focus and keys", async () => {
+    const { isInEmbeddedSurface } = await import("../src/cm6/embedded-surface.ts");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: "x\n\n| a | b |\n|---|---|\n| c | d |" });
+    try {
+      const cell = host.querySelector(".cm-table-block td")!;
+      expect(isInEmbeddedSurface(cell)).toBe(true);
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+
+  const md = "Above\n\n| a | b |\n|---|---|\n| c | d |\n\nBelow";
+
+  test("Vim j onto a table opens its source and moves through it row by row", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: md });
+    const vim = createVimLite(editor, host);
+    try {
+      vim.setMode("normal");
+      editor.setSelection(0, 0);
+      vim.syncSelectionFromEditor();
+      const line = () => editor.view.state.doc.lineAt(editor.view.state.selection.main.head).text;
+      expect(host.querySelector(".cm-table-block table")).toBeTruthy();
+      vim.handleKey({ key: "j" });
+      vim.handleKey({ key: "j" });
+      expect(line()).toBe("| a | b |");
+      expect(host.querySelector(".cm-table-block")).toBeNull();
+      vim.handleKey({ key: "j" });
+      vim.handleKey({ key: "j" });
+      expect(line()).toBe("| c | d |");
+      vim.handleKey({ key: "j" });
+      vim.handleKey({ key: "j" });
+      expect(line()).toBe("Below");
+      expect(host.querySelector(".cm-table-block table")).toBeTruthy();
+    } finally {
+      vim.destroy();
+      editor.destroy();
+      host.remove();
     }
   });
 });

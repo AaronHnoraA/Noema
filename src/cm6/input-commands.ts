@@ -38,7 +38,11 @@ import {
   exitEmptyMarkdownBlock,
   insertLineBeforeHeading,
   indentMarkdownBlock,
+  tableBackspaceAtCellStart,
+  tableCellLineBreak,
   tableEnterSameColumn,
+  tableMoveHorizontal,
+  tableMoveVertical,
   tableNavigateCell,
 } from "./commands/index.ts";
 import {
@@ -150,8 +154,12 @@ export function runEditorMovement(
   extend = false,
 ): EditorMovementResult {
   if (!extend && (key === "ArrowLeft" || key === "ArrowRight")
+      && tableMoveHorizontal(view, key === "ArrowRight" ? 1 : -1)) return "cursor";
+  if (!extend && (key === "ArrowLeft" || key === "ArrowRight")
       && activateInlineMathFromArrow(view, key)) return "formula";
 
+  if (!extend && (key === "ArrowUp" || key === "ArrowDown")
+      && tableMoveVertical(view, key === "ArrowDown" ? 1 : -1)) return "cursor";
   if (!extend && (key === "ArrowUp" || key === "ArrowDown")) {
     const moved = moveInsertLineWithDisplayMathEntry(view, key === "ArrowDown");
     if (moved) return moved;
@@ -388,7 +396,8 @@ export function runEditorDelete(
   }
 
   if (direction === "backward") {
-    return deleteTexSourceAutoPair(view)
+    return tableBackspaceAtCellStart(view)
+      || deleteTexSourceAutoPair(view)
       || selectImageBeforeDelete(view, direction)
       || deleteBracketPair(view)
       || deleteTaskBoxBackward(view)
@@ -475,6 +484,7 @@ export function runEditorSoftBreak(view: EditorView): boolean {
   if (math && range.from >= math.from && range.to <= math.to) {
     return runEditorEnter(view);
   }
+  if (tableCellLineBreak(view)) return true;
   const line = state.doc.lineAt(range.from);
   const insert = `\n${markdownSoftBreakPrefix(line.text)}`;
   view.dispatch(state.update({

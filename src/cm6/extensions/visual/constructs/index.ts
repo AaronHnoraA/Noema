@@ -21,6 +21,7 @@ export { literalRangesOnLine } from "./literal-ranges.ts";
 export {
   constructRevealedBySelection,
   constructSources,
+  drawnConstructSource,
   renderedConstructAt,
   type ConstructSource,
   type RenderedConstruct,

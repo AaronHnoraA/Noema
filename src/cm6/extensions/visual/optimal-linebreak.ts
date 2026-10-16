@@ -28,6 +28,7 @@ import { mixedCjkItems } from "../../../linebreak/mixed-cjk.ts";
 import { waitForParser } from "../parser-watcher.ts";
 import { hasViewportDecorationRefresh } from "../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "./typing-burst.ts";
+import { constructSources, drawnConstructSource } from "./constructs/index.ts";
 
 type AppliedLayout = {
   doc: Text;
@@ -655,5 +656,9 @@ const optimalLinebreakPlugin = ViewPlugin.fromClass(OptimalLinebreakPlugin);
 
 export const optimalLinebreakExtension: Extension = [
   optimalLinebreakDecorations,
+  // Line breaks and spacing laid over whitespace: structure, so Vim and the
+  // caret move through the text they stand for.
+  constructSources.of(drawnConstructSource(
+    "layout-spacing", "structure", (state) => state.field(optimalLinebreakDecorations, false))),
   optimalLinebreakPlugin,
 ];

@@ -1,5 +1,6 @@
 import type { EditorView } from "@codemirror/view";
 import type { RendererActivityState } from "../renderer-activity.ts";
+import { EMBEDDED_SURFACE_SELECTOR } from "./embedded-surface.ts";
 
 /**
  * The smallest editor surface needed by the focus quiescence adapter.
@@ -218,7 +219,7 @@ function eventElement(target: EventTarget | null): Element | null {
 function isNativeInputElement(element: Element | null, contentDOM: HTMLElement): boolean {
   if (!element || element === contentDOM) return false;
   const input = element.closest(
-    "input, textarea, select, button, a, [contenteditable='true'], [data-aaronnote-vim='native']",
+    `input, textarea, select, button, a, [contenteditable='true'], ${EMBEDDED_SURFACE_SELECTOR}`,
   );
   return Boolean(input && input !== contentDOM);
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "@voidzero-dev/vite-plus-test";
-import { inlineTodoBodyHTML } from "../src/cm6/extensions/visual/widgets/inline-commands.ts";
+import { renderInlineMarkdownHTML as inlineTodoBodyHTML } from "../src/render-html.ts";
 
-describe("inlineTodoBodyHTML", () => {
+describe("renderInlineMarkdownHTML (todo chips, table cells, side comments)", () => {
   it("renders inline math inside a @@todo body", () => {
     const html = inlineTodoBodyHTML("solve \\(x^2\\) now");
     expect(html).toContain("katex");

@@ -31,6 +31,9 @@ separate editor implementation.
 | `src/cm6/table-rect-selection.ts` | Rectangular table cell selection model (copy as GFM sub-table, two-stage delete); the table widget in `live-preview.ts` owns the DOM. |
 | `src/emoji-shortcodes.ts` | `:name:` emoji rendering and completion from export's markdown-it-emoji table. See `docs/marker-marktext-filesmd-study.md`. |
 | `src/cjk-emphasis.ts` | CJK-friendly emphasis flanking shared by the Lezer editor grammar and the markdown-it renderer; strictly additive over CommonMark. |
+| `src/cm6/extensions/visual/constructs/` | The rendered-construct layer: reveal policies and roles, Vim pinning as state, literal (code/math) ranges, the construct registry, and the `inlineConstruct` factory. See `docs/architecture/rendered-constructs.md`. |
+| `src/cm6/embedded-surface.ts` | Marks and recognizes elements inside the editor that take their own keys and focus (MathLive, the diagram lightbox, a rendered table's cell selection), for Vim, focus, scrolling and Emacs key forwarding. |
+| `aaronnote/vim-rows.ts` | Vim's screen rows (soft-wrapped lines) measured from the DOM, including rows that open with a widget or a hidden marker. |
 | `src/cm6/extensions/visual/widgets/*.ts` | Math, code fence, image, task, TOC, org-env, and related widgets. `block-extras.ts` hosts the `@@cell` Jupyter widget; it renders cell output through the shared JupyterLab stack (lazy-loaded). |
 | `src/jupyter-rendermime.ts` | Shared JupyterLab render stack for cell output — the same `@jupyterlab/rendermime` + `@jupyterlab/outputarea` pipeline VS Code Jupyter uses. Adds a KaTeX LaTeX typesetter, an HTML renderer that sandboxes script-bearing HTML in an auto-sizing iframe (and routes math-only HTML to KaTeX), and a widget-view renderer bridging to the live kernel manager. Loaded lazily (large). |
 | `src/jupyter-widget-runtime.ts` | ipywidgets frontend: a `KernelWidgetManager` subclass over the live kernel (via `server/lib/jupyter-kernel-ws.mjs`). Mounts kernel-state-first (`restoreWidgets`), replays captured comm messages only as a fallback, and seeds Output widgets with server-captured outputs. Shares the render stack above. Lazy chunk. |
@@ -110,6 +113,29 @@ with `-- %% <cellId>` separators rather than notebook JSON — the same file
 `lean-mode` and the Lean LSP open. A store still written as `.ipynb` is read once
 and rewritten in the new format on the next save.
 
+## Rendered constructs
+
+Every piece of Markdown the visual editor draws as something else — formula,
+image, footnote, reference, task box, table, diagram, org-env block, `@@`
+command, HTML block — goes through one layer,
+`src/cm6/extensions/visual/constructs/`. Read
+`docs/architecture/rendered-constructs.md` before adding or changing one.
+
+- Decide the role first: an **object** (Vim moves over it, it stays rendered
+  in Normal/Visual) or **structure** (syntax Vim edits as text).
+- Choose a reveal policy from `constructs/reveal.ts` and decide every "show the
+  source?" question with `selectionOpensSource(state, from, to, policy, role)`.
+  The rebuild key and the decoration builder call the same predicate.
+- An inline family is one `inlineConstruct({ kind, reveal, role, match })`;
+  a block family keeps its own incremental field and registers with
+  `constructSources.of(...)` so Vim and the caret know what is drawn.
+- The Vim mode reaches widgets only as state (`renderedConstructsPinned`);
+  an element that edits text with its own editor calls `markEmbeddedSurface`.
+- Markdown inside a widget renders through `src/render-html.ts`
+  (`renderMarkdownHTML`, `renderInlineMarkdownHTML`).
+- `tests/architecture-constructs.test.ts` enforces these rules, with no
+  allowlist. Fix the code when it fails; change the rule in the doc first.
+
 ## Widget Rules
 
 All CM6 widgets that contribute vertical height must extend `MeasuredWidget`
@@ -188,6 +214,9 @@ this controller rather than creating its own iframe lifecycle.
    editor compatibility selectors.
 6. Widget height re-measurement on window resize is handled by `MeasuredWidget`'s
    `ResizeObserver`; widgets must not add their own `window.resize` listeners.
+7. "When does this show its source" and "what is drawn here" have one answer
+   each, in `src/cm6/extensions/visual/constructs/`. Widgets choose a policy;
+   they never compare the selection by hand or scan for other widgets.
 
 ## Testing
 

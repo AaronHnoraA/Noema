@@ -12,6 +12,7 @@ import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeOverlapsAny } 
 import { scanCodeRanges } from "./code-ranges.ts";
 import { scanInlineMathRanges } from "../inline-math.ts";
 import { hasViewportDecorationRefresh } from "./viewport-refresh.ts";
+import { anySelectionRevealsSource, constructSources, drawnConstructSource } from "./extensions/visual/constructs/index.ts";
 import { isStableWikiHref, scanWikiLinks, splitWikiFragmentTarget } from "../../shared/wiki-link.mjs";
 
 const BARE_ROAM_RE = /\broam:\/\/[^\s<>)\]]+/gi;
@@ -154,8 +155,9 @@ function buildBrokenLinkDecorations(view: EditorView): LinkStatusBuild {
           decos.push(mark.range(from, to));
         } else if (!wiki.explicitLabel) {
           titled = true;
-          // The raw ID stays editable while the selection touches the link.
-          if (selection.ranges.some((range) => range.from <= wiki.to && range.to >= wiki.from)) continue;
+          // The raw ID is editable while a caret touches the link or a range
+          // ends inside it; a range that only crosses it keeps the title.
+          if (anySelectionRevealsSource(selection, wiki.from, wiki.to, "edge")) continue;
           decos.push(Decoration.replace({
             widget: new WikiPageTitleWidget(title, splitWikiFragmentTarget(wiki.target).fragment),
           }).range(from, to));
@@ -212,6 +214,9 @@ class RoamLinkStatusPlugin {
 
 const roamLinkStatusPlugin = ViewPlugin.fromClass(RoamLinkStatusPlugin, {
   decorations: (plugin) => plugin.decorations,
+  // Wiki links drawn as their page title.
+  provide: (plugin) => constructSources.of(drawnConstructSource(
+    "wiki-title", "structure", (_state, view) => view?.plugin(plugin)?.decorations)),
 });
 
 export const roamLinkStatusExtension = [knownRoamRefsField, wikiPageTitlesField, roamLinkStatusPlugin];

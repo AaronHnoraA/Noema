@@ -227,6 +227,8 @@ class NoteCodeWidget extends MeasuredWidget {
 export const noteCodePreviewExtension = inlineConstruct({
   kind: "note-code",
   reveal: "edge",
+  // An `@@` command: Vim opens it as text, like every other command.
+  role: "structure",
   maxPerViewport: 2_000,
   *match(line) {
     const parsed = parseNoteCodeLine(line.text) as NoteCodeLine | null;

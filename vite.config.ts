@@ -20,7 +20,7 @@ export default defineConfig(({ command }) => ({
     root: ".",
     include: ["tests/**/*.test.ts"],
     // Keep the host machine's global Skills/MCPs out of every suite.
-    setupFiles: ["tests/setup/global-capability-scope.ts"],
+    setupFiles: ["tests/setup/global-capability-scope.ts", "tests/setup/dom-hygiene.ts"],
     environment: "happy-dom",
   },
 }));

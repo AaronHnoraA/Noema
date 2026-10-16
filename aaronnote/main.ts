@@ -171,7 +171,6 @@ import {
   mathLiveSnippetTemplate,
   matchingSnippetsAtTokenBoundary,
   matchingSnippetsForPrefix,
-  inputSnippetEditor,
   SnippetSession,
   SnippetUsageStore,
   snippetDetail,
@@ -180,7 +179,6 @@ import {
   snippetScore,
 } from "./snippets.ts";
 import { MathSnippetIndex } from "./math-snippet-index.ts";
-import { tableCellSnippetContext, type TableCellCompletionDetail } from "../src/cm6/table-cell-assist.ts";
 import { collectTagSuggestions, createTagPicker } from "./tag-picker.ts";
 import {
   metadataTagsFromMarkdown,
@@ -283,6 +281,7 @@ import {
   type KnowledgeDock,
 } from "./knowledge-dock.ts";
 import { refreshAgendaView, refreshAgendaAttention } from "./agenda-view.ts";
+import { EMBEDDED_SURFACE_ATTRIBUTE, EMBEDDED_SURFACE_SELECTOR, EMBEDDED_SURFACE_VALUE } from "../src/cm6/embedded-surface.ts";
 
 // Before every other key listener: a key offered to this page while it lacks
 // native focus is Emacs' (see host-input-focus.ts).
@@ -1128,7 +1127,7 @@ liveTexStudio.innerHTML = `
       </div>
     </nav>
     <main class="aaronnote-livetex-stage" data-livetex-stage data-align="center">
-      <div class="aaronnote-livetex-editor" data-livetex-editor data-aaronnote-vim="native" data-cm-visual-math="active"></div>
+      <div class="aaronnote-livetex-editor" data-livetex-editor ${EMBEDDED_SURFACE_ATTRIBUTE}="${EMBEDDED_SURFACE_VALUE}" data-cm-visual-math="active"></div>
     </main>
     <section class="aaronnote-livetex-palette" id="aaronnote-livetex-palette" data-livetex-palette role="dialog" aria-modal="false" aria-label="公式快速输入" hidden>
       <div class="aaronnote-livetex-palette-head">
@@ -3300,7 +3299,7 @@ function activateEditorFromPointer(event: PointerEvent | MouseEvent): void {
   const target = event.target;
   if (!(target instanceof Node) || !host.contains(target)) return;
   const element = target instanceof Element ? target : target.parentElement;
-  if (element?.closest("input, textarea, select, button, a, [data-aaronnote-vim='native']")) return;
+  if (element?.closest(`input, textarea, select, button, a, ${EMBEDDED_SURFACE_SELECTOR}`)) return;
   window.clearTimeout(editorPointerFocusTimer);
   // Let CM6 process the pointer and establish its clicked selection first.
   // Focusing synchronously here reveals the previous cursor before CM6's own
@@ -3354,92 +3353,6 @@ document.addEventListener("keydown", (event) => {
 }, { capture: true });
 const snippetSession = new SnippetSession(editor);
 const mathSnippetIndex = new MathSnippetIndex(editor);
-let tableSnippetInput: HTMLInputElement | null = null;
-let tableSnippetSession: SnippetSession | null = null;
-let tableSnippetApplying = false;
-let tableSnippetSuppressedPrefix = "";
-function tableSnippetSessionFor(input: HTMLInputElement): SnippetSession {
-  if (tableSnippetInput !== input || !tableSnippetSession) {
-    tableSnippetInput = input;
-    tableSnippetSession = new SnippetSession(inputSnippetEditor(input));
-    tableSnippetSuppressedPrefix = "";
-  }
-  return tableSnippetSession;
-}
-document.addEventListener("aaronnote:table-cell-completion-request", (event) => {
-  const input = (event as CustomEvent<TableCellCompletionDetail>).detail?.input;
-  if (!input || !host.contains(input) || document.activeElement !== input || tableSnippetApplying || currentReadOnly) return;
-  tableSnippetSessionFor(input);
-  const { prefix, mode } = tableCellSnippetContext(input.value, input.selectionStart ?? input.value.length);
-  if (!prefix || prefix === tableSnippetSuppressedPrefix || input.selectionStart !== input.selectionEnd) {
-    if (snippetPopupChooseHandler) hideSnippetPopup();
-    return;
-  }
-  const math = mode === "tex-mode";
-  const candidates = math ? mathSnippetCandidates() : snippets;
-  const options = {
-    kind: currentSnippetKind(), mode, limit: 10,
-    allowFuzzy: math && (prefix.startsWith("\\") || prefix.startsWith("@")),
-    context: math ? "math" as const : undefined,
-    usage: snippetUsage,
-    documentFrequency: mathSnippetIndex.frequencies(),
-  };
-  const match = math
-    ? matchingSnippetsAtTokenBoundary(candidates, prefix, options)
-    : { prefix, deleteBefore: prefix.length, matches: matchingSnippetsForPrefix(candidates, prefix, options) };
-  const visible = match.matches.filter((snippet) => {
-    if (snippet.context === "org-meta") return false;
-    if (snippet.context?.startsWith("math")) return math;
-    return true;
-  });
-  if (visible.length === 0) {
-    if (snippetPopupChooseHandler) hideSnippetPopup();
-    return;
-  }
-  const rect = input.getBoundingClientRect();
-  showSnippetPopup(match.prefix, visible, match.deleteBefore, { left: rect.left, top: rect.top, bottom: rect.bottom }, (snippet) => {
-    if (!input.isConnected || document.activeElement !== input) return false;
-    const caret = input.selectionStart ?? input.value.length;
-    const live = tableCellSnippetContext(input.value, caret);
-    if (input.selectionStart !== input.selectionEnd || live.mode !== mode
-      || !input.value.slice(0, caret).endsWith(match.prefix)) return false;
-    tableSnippetApplying = true;
-    try {
-      const inserted = tableSnippetSessionFor(input).insert(snippet, match.deleteBefore);
-      if (inserted) input.focus();
-      return inserted;
-    } finally { tableSnippetApplying = false; }
-  });
-});
-document.addEventListener("aaronnote:table-cell-completion-key", (event) => {
-  const detail = (event as CustomEvent<TableCellCompletionDetail & {
-    key?: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; isComposing?: boolean;
-  }>).detail;
-  const input = detail?.input;
-  if (!input || input !== tableSnippetInput || document.activeElement !== input) return;
-  if (!snippetPopup.hidden && snippetPopupChooseHandler) {
-    const action = snippetPopupKeyAction({
-      key: detail.key || "", shiftKey: detail.shiftKey, ctrlKey: detail.ctrlKey,
-      commandKey: detail.metaKey && !detail.ctrlKey, altKey: detail.altKey,
-      isComposing: detail.isComposing, acceptEnter: true,
-    });
-    if (action.type === "dismiss") tableSnippetSuppressedPrefix = snippetPopup.dataset.prefix ?? "";
-    const handled = applySnippetPopupKeyAction(action);
-    if (handled) { event.preventDefault(); event.stopPropagation(); return; }
-  }
-  if (detail.key !== "Tab" || detail.isComposing || detail.ctrlKey || detail.metaKey || detail.altKey) return;
-  const moved = detail.shiftKey ? tableSnippetSession?.previous() : tableSnippetSession?.next();
-  if (moved) { event.preventDefault(); event.stopPropagation(); }
-});
-document.addEventListener("aaronnote:table-cell-completion-close", (event) => {
-  const input = (event as CustomEvent<TableCellCompletionDetail>).detail?.input;
-  if (input !== tableSnippetInput) return;
-  tableSnippetSession?.clear();
-  tableSnippetSession = null;
-  tableSnippetInput = null;
-  tableSnippetSuppressedPrefix = "";
-  if (snippetPopupChooseHandler) hideSnippetPopup();
-});
 const MATH_EDITOR_LAYOUT_ALIASES: Record<string, string> = {
   alig: "ali",
   align: "ali",
@@ -10986,7 +10899,7 @@ function editorSurfaceVisible(): boolean {
 function editorOwnsActiveSurface(): boolean {
   const active = document.activeElement;
   if (!active || !host.contains(active)) return false;
-  if (active.closest("[data-aaronnote-vim='native']")) return false;
+  if (active.closest(EMBEDDED_SURFACE_SELECTOR)) return false;
   const editable = active.closest<HTMLElement>("input, textarea, select, [contenteditable='true']");
   return !editable || editable.classList.contains("cm-content");
 }
@@ -13811,7 +13724,7 @@ function eventTargetsNativeWidgetInput(target: EventTarget | null): boolean {
     : target instanceof Node
       ? target.parentElement
       : null;
-  return Boolean(element?.closest("[data-aaronnote-vim='native']"));
+  return Boolean(element?.closest(EMBEDDED_SURFACE_SELECTOR));
 }
 
 // Emacs host chords must reach the gate before CM6's own keymap, which binds

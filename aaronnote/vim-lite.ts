@@ -86,6 +86,7 @@ import {
   wordObject,
   type TextObjectRange,
 } from "./vim-text-objects.ts";
+import { EMBEDDED_SURFACE_SELECTOR } from "../src/cm6/embedded-surface.ts";
 
 export type VimLiteMode = "insert" | "normal" | "visual" | "visual-line";
 
@@ -341,7 +342,7 @@ function editableEventTarget(host: HTMLElement, target: EventTarget | null): HTM
 function targetUsesNativeInput(host: HTMLElement, target: EventTarget | null): boolean {
   if (!(target instanceof Node) || !host.contains(target)) return false;
   const element = target instanceof Element ? target : target.parentElement;
-  return Boolean(element?.closest("[data-aaronnote-vim='native']"));
+  return Boolean(element?.closest(EMBEDDED_SURFACE_SELECTOR));
 }
 
 function selectionInEditable(editable: HTMLElement): Selection | null {
@@ -423,7 +424,10 @@ function visualCharEndPosition(text: Text, pos: number): number {
  */
 function renderedObjectAtPosition(editor: Editor, pos: number): RenderedObject | null {
   const construct = renderedConstructAt(editor.view, pos);
-  return construct ? { from: construct.from, to: construct.to, block: construct.block } : null;
+  // Structure (a table, a block heading, an `@@` command) opens where the
+  // caret lands and is edited as text; only an object is one character.
+  if (!construct || (construct.role ?? "object") !== "object") return null;
+  return { from: construct.from, to: construct.to, block: construct.block };
 }
 
 function visualObjectEndPosition(editor: Editor, pos: number): number {

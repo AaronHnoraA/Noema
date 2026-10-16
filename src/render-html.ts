@@ -1711,6 +1711,25 @@ export function markdownTopLevelBlocks(markdown: string): Array<{ from: number; 
   return topLevelBlocksFromTokens(markdown, markdownItForRender().parse(isolateBlockLayoutAttrLines(markdown), {}));
 }
 
+/**
+ * Render inline Markdown inside a widget — a table cell, a todo chip, a side
+ * comment card — through the one shared renderer, without the paragraph that
+ * wraps it. Raw `<img>` tags become Markdown images so they get the shared
+ * image renderer and its asset resolution.
+ */
+export function renderInlineMarkdownHTML(markdown: string): string {
+  const preprocessed = markdown.includes("<img")
+    ? markdown.replace(/<img\b([^>]*)>/gi, (_tag, attrs: string) => {
+        const src = /\bsrc=["']([^"']+)["']/i.exec(attrs)?.[1] ?? "";
+        const alt = /\balt=["']([^"']*?)["']/i.exec(attrs)?.[1] ?? "";
+        return src ? `![${alt}](${src})` : "";
+      })
+    : markdown;
+  const html = renderMarkdownHTML(preprocessed);
+  const match = /^<p>([\s\S]*)<\/p>\n?$/.exec(html.trim());
+  return match ? match[1]! : html;
+}
+
 export function renderMarkdownHTML(
   markdown: string,
   options?: RenderMarkdownHTMLOptions,

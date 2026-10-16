@@ -6,6 +6,7 @@ import type {
 import { EditorView } from "@codemirror/view";
 import { normalizedEditorKey } from "./focus-quiescence.ts";
 import { invalidatePersistentVisualState } from "./extensions/visual/visual-mode.ts";
+import { EMBEDDED_SURFACE_SELECTOR } from "./embedded-surface.ts";
 
 type ViewportSnapshot = {
   anchorPos: number;
@@ -307,7 +308,7 @@ export class EditorViewportStabilizer {
     });
     scrollHost.ownerDocument.addEventListener("keydown", (event) => {
       const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest("[data-aaronnote-vim='native']")) return;
+      if (target?.closest(EMBEDDED_SURFACE_SELECTOR)) return;
       if (isViewportScrollKey(event)) {
         beginScrollInteraction();
       }

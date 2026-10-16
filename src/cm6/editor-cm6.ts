@@ -49,6 +49,9 @@ import {
   runCommandCM6,
   getBlockContextCM6,
   createQuickInsertRegistry,
+  tableInsertRowBelow,
+  tableMoveHorizontal,
+  tableMoveVertical,
 } from "./commands/index.ts";
 import {
   pasteDataTransfer,
@@ -1362,8 +1365,11 @@ function buildExtensions(
       { key: "Delete", run: (view) => runEditorDelete(view, "forward") },
       { key: "Enter", run: runEditorEnter },
       { key: "Shift-Enter", run: runEditorSoftBreak },
-      { key: "Mod-Enter", run: (view) => exitCurrentOrgEnv(view) || exitFencedCode(view) },
-      { key: "ArrowDown", run: openLineAfterTrailingBlock },
+      { key: "Mod-Enter", run: (view) => tableInsertRowBelow(view) || exitCurrentOrgEnv(view) || exitFencedCode(view) },
+      { key: "ArrowDown", run: (view) => tableMoveVertical(view, 1) || openLineAfterTrailingBlock(view) },
+      { key: "ArrowUp", run: (view) => tableMoveVertical(view, -1) },
+      { key: "ArrowRight", run: (view) => tableMoveHorizontal(view, 1) },
+      { key: "ArrowLeft", run: (view) => tableMoveHorizontal(view, -1) },
       { key: "Tab", run: (view) => runEditorTab(view) },
       { key: "Shift-Tab", run: (view) => runEditorTab(view, true) },
       { key: "Mod-d", run: selectNextMarkdownOccurrence },

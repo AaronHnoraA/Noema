@@ -327,6 +327,28 @@ authoring/control-plane replacement for Emacs.
   before finding planning block boundaries; reject writes that put a new
   command inside code or metadata summaries before persisting source.
 
+## Editor constructs
+
+Before adding or changing anything the visual editor renders over Markdown
+(a widget, a decoration that replaces source, a Vim motion over rendered
+content), read `docs/architecture/rendered-constructs.md` and the
+"Rendered constructs" section of `CLAUDE.md`. Every construct takes its
+reveal rule, Vim behaviour and registry entry from
+`src/cm6/extensions/visual/constructs/`; `tests/architecture-constructs.test.ts`
+rejects code that compares the selection by hand, reads the Vim mode from the
+DOM, or teaches Vim about widgets any other way.
+
+## Editor constructs
+
+Before adding or changing anything the visual editor renders over Markdown
+(a widget, a decoration that replaces source, a Vim motion over rendered
+content), read `docs/architecture/rendered-constructs.md` and the
+"Rendered constructs" section of `CLAUDE.md`. Every construct takes its
+reveal rule, Vim behaviour and registry entry from
+`src/cm6/extensions/visual/constructs/`; `tests/architecture-constructs.test.ts`
+rejects code that compares the selection by hand, reads the Vim mode from the
+DOM, or teaches Vim about widgets any other way.
+
 ## Required checks
 
 Tests must stay independent of the developer's machine: global Skills and MCPs

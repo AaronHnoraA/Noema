@@ -9,95 +9,83 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-function open() {
+const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+
+function mount() {
   const host = document.createElement("div");
   document.body.append(host);
   const editor = createEditor(host, { kernel: "cm6", initialContent: markdown });
   editors.push(editor);
-  const cell = host.querySelector<HTMLTableCellElement>("tbody td")!;
-  cell.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-  return { editor, host, cell, input: cell.querySelector<HTMLInputElement>("input")! };
+  return { editor, host };
 }
 
-const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
-function type(input: HTMLInputElement, value: string, isComposing = false) {
-  input.value = value;
-  input.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing }));
+/** Click a rendered cell: the table's source opens with the caret in it. */
+function clickCell(host: HTMLElement, row: number, col: number) {
+  const cell = host.querySelector<HTMLTableElement>(".cm-table-block table")!.rows[row]!.cells[col] as HTMLTableCellElement;
+  cell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+  document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
 }
+
 function key(target: HTMLElement, init: KeyboardEventInit) {
   const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
   target.dispatchEvent(event);
   return event;
 }
 
-describe("table cell input and history", () => {
-  it.each(["Enter", "Tab", "Escape"])("leaves composing %s to the input method", (name) => {
-    const { editor, input } = open();
-    type(input, "中文", true);
-    expect(key(input, { key: name, isComposing: true }).defaultPrevented).toBe(false);
-    expect(document.activeElement).toBe(input);
-    expect(input.isConnected).toBe(true);
-    expect(editor.getMarkdown()).toBe(markdown);
-  });
+/** Type TEXT at the caret as the main editor's input does. */
+function type(editor: Editor, text: string) {
+  const { from, to } = editor.view.state.selection.main;
+  editor.view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length }, userEvent: "input.type" });
+}
 
-  it("tracks composition events and Safari's 229 key without opening completion", () => {
-    const { editor, input, host } = open();
-    let requests = 0;
-    host.addEventListener("aaronnote:table-cell-completion-request", () => requests++);
-    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    type(input, "中文");
-    expect(key(input, { key: "Enter" }).defaultPrevented).toBe(false);
-    expect(requests).toBe(0);
-    input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "中文" }));
-    expect(requests).toBe(1);
-    expect(key(input, { key: "Enter", keyCode: 229 }).defaultPrevented).toBe(false);
-    expect(document.activeElement).toBe(input);
-    expect(editor.getMarkdown()).toBe(markdown);
-  });
-
-  it("Shift-Enter inserts a cell line break at the selection without navigating", () => {
-    const { editor, input } = open();
-    input.setSelectionRange(1, 2);
-    key(input, { key: "Enter", shiftKey: true });
-    expect(input.value).toBe("o<br>e");
-    expect(document.activeElement).toBe(input);
-    expect(input.selectionStart).toBe(5);
-    expect(editor.getMarkdown()).toBe(markdown);
-    input.blur();
+// A table cell is document text: input-method composition, completion and
+// snippets are the main editor's (tests/vim-input-method.test.ts,
+// tests/host-input-focus.test.ts, tests/snippets.test.ts), not the table's.
+describe("table cells edited through the main editor", () => {
+  it("Shift-Enter replaces the selection in a cell with a line break, staying in the cell", () => {
+    const { editor, host } = mount();
+    clickCell(host, 1, 0);
+    // Keyboard handling, not focus, is under test; a focused view would make
+    // happy-dom report the written selection back synchronously.
+    (document.activeElement as HTMLElement | null)?.blur();
+    const one = editor.getMarkdown().indexOf("one");
+    editor.view.dispatch({ selection: { anchor: one + 1, head: one + 2 } });
+    key(editor.view.contentDOM, { key: "Enter", shiftKey: true });
     expect(editor.getMarkdown()).toContain("| o<br>e | two |");
+    expect(editor.view.state.selection.main.head).toBe(one + 5);
   });
 
-  it("committing two cells creates two reversible steps even within 500 ms", async () => {
-    const { editor, host, input } = open();
-    type(input, "first edit");
-    input.blur();
-    const second = host.querySelectorAll<HTMLTableCellElement>("tbody td")[1]!;
-    key(second, { key: "Enter" });
-    const nextInput = second.querySelector<HTMLInputElement>("input")!;
-    type(nextInput, "second edit");
-    nextInput.blur();
+  it("edits in two cells are two reversible steps even within 500 ms", () => {
+    const { editor, host } = mount();
+    clickCell(host, 1, 0);
+    type(editor, " edit");
+    const two = editor.getMarkdown().indexOf("two") + 3;
+    editor.view.dispatch({ selection: { anchor: two } });
+    type(editor, " more");
     expect(undoDepth(editor.view.state)).toBe(2);
     expect(editor.undo()).toBe(true);
-    expect(editor.getMarkdown()).toContain("| first edit | two |");
+    expect(editor.getMarkdown()).toContain("| one edit | two |");
     expect(editor.undo()).toBe(true);
     expect(editor.getMarkdown()).toBe(markdown);
     expect(editor.redo()).toBe(true);
-    expect(editor.getMarkdown()).toContain("| first edit | two |");
-    await frame();
+    expect(editor.getMarkdown()).toContain("| one edit | two |");
   });
 
-  it.each([{ metaKey: true }, { ctrlKey: true }])("undo and redo work from the cell preview: %j", async (modifier) => {
-    const { editor, cell, input } = open();
-    type(input, "changed");
-    input.blur();
+  it.each([{ metaKey: true }, { ctrlKey: true }])("undo works from a selected rendered cell and returns the caret to the edit: %j", async (modifier) => {
+    const { editor, host } = mount();
+    clickCell(host, 1, 0);
+    type(editor, " changed");
+    editor.view.dispatch({ selection: { anchor: 0 } });
+    const cell = host.querySelector<HTMLTableElement>(".cm-table-block table")!.rows[1]!.cells[0] as HTMLTableCellElement;
     cell.focus();
     expect(key(cell, { key: "z", ...modifier }).defaultPrevented).toBe(true);
     await frame();
     expect(editor.getMarkdown()).toBe(markdown);
-    expect(document.activeElement).toBe(cell);
-    key(cell, { key: "z", shiftKey: true, ...modifier });
-    await frame();
-    expect(editor.getMarkdown()).toContain("| changed | two |");
-    expect(document.activeElement).toBe(cell);
+    // As everywhere in the document, undo puts the caret back at the change:
+    // inside the table, which therefore shows its source.
+    const head = editor.view.state.selection.main.head;
+    expect(editor.view.state.doc.lineAt(head).text).toBe("| one | two |");
+    expect(editor.redo()).toBe(true);
+    expect(editor.getMarkdown()).toContain("| one changed | two |");
   });
 });

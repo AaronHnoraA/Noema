@@ -74,6 +74,7 @@ import {
   type VisualTexInlineEntry,
   type VisualTexInlineMoveDirection,
 } from "./visualtex-inline.ts";
+import { markEmbeddedSurface } from "../../../embedded-surface.ts";
 
 function setSourceRange(el: HTMLElement, from: number, to: number, openSource = false): void {
   el.dataset.cmSourceFrom = String(from);
@@ -183,7 +184,7 @@ class InlineMathEditorWidget extends MeasuredWidget {
   toDOM(view: EditorView): HTMLElement {
     const span = document.createElement("span");
     span.className = "cm-math-inline-editor";
-    span.dataset.aaronnoteVim = "native";
+    markEmbeddedSurface(span);
     span.dataset.cmInlineMath = "active";
     span.dataset.cmVisualMath = "active";
     setSourceRange(span, this.session.from, this.session.to);
@@ -282,7 +283,7 @@ class BlockMathEditorWidget extends MeasuredWidget {
   toDOM(view: EditorView): HTMLElement {
     const div = document.createElement("div");
     div.className = "cm-math-block-editor";
-    div.dataset.aaronnoteVim = "native";
+    markEmbeddedSurface(div);
     div.dataset.cmVisualMath = "active";
     setSourceRange(div, this.session.from, this.session.to);
     if (this.orgEnv) {

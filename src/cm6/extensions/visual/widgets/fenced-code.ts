@@ -222,7 +222,6 @@ function codeFoldDecorations(state: EditorState, folds: readonly CodeFold[]): De
     decorations.push(Decoration.replace({
       widget: new CodeFoldPlaceholderWidget(fold.lines),
       block: true,
-      vimAtomic: true,
     }).range(from, to));
   }
   return Decoration.set(decorations, true);
@@ -654,7 +653,6 @@ function buildMermaidDecoRanges(
         Decoration.replace({
           widget: new MermaidWidget(block.source, block.lang, block.from, block.to, block.sourceFrom, block.layout),
           block: true,
-          vimAtomic: true,
         }).range(block.from, block.to),
       );
     } else {

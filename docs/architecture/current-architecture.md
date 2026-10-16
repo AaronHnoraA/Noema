@@ -17,6 +17,10 @@ src/cm6/
   editor-cm6.ts             稳定 Editor facade 与 Emacs-owned host adapter
 ```
 
+所有渲染组件（公式、图片、引用、表格、块环境……）经由同一层
+`extensions/visual/constructs/`：显示源码的规则、Vim 的模式与"哪里画着什么"各有唯一
+答案。规范见 `rendered-constructs.md`，由 `tests/architecture-constructs.test.ts` 守护。
+
 `editor-cm6.ts` 只决定宿主策略（history、editable、DOM event、callback）；语言、
 feature 顺序和 visual mode 由 composition root 决定。Visual mode 使用
 `StateField + StateEffect + Compartment`，不再依赖闭包状态。

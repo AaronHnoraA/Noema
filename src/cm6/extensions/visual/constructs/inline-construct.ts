@@ -20,7 +20,7 @@ import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState
 import { literalRangesOnLine } from "./literal-ranges.ts";
 import { renderedConstructsPinned, transactionChangesPinning } from "./mode.ts";
 import { constructSources, type ConstructSource, type RenderedConstruct } from "./registry.ts";
-import { revealProbeOffsets, selectionOpensSource, type RevealPolicy } from "./reveal.ts";
+import { revealProbeOffsets, selectionOpensSource, type ConstructRole, type RevealPolicy } from "./reveal.ts";
 
 export type InlineConstructMatch = {
   from: number;
@@ -34,6 +34,8 @@ export type InlineConstructMatch = {
 export interface InlineConstructSpec {
   kind: string;
   reveal: RevealPolicy;
+  /** Default `object`: Vim keeps it rendered. `structure` is syntax Vim edits as text (an `@@` command). */
+  role?: ConstructRole;
   /** Cap on constructs drawn in one viewport. */
   maxPerViewport: number;
   /** The family's constructs on LINE in source order. Literal code and math are filtered out afterwards. */
@@ -44,6 +46,7 @@ export interface InlineConstructSpec {
 
 /** An inline construct family: its decorations, and its source in the construct registry. */
 export function inlineConstruct(spec: InlineConstructSpec): Extension {
+  const role: ConstructRole = spec.role ?? "object";
   const byState = new WeakMap<EditorState, Map<number, readonly InlineConstructMatch[]>>();
 
   const matchesOn = (state: EditorState, line: Line): readonly InlineConstructMatch[] => {
@@ -63,12 +66,13 @@ export function inlineConstruct(spec: InlineConstructSpec): Extension {
   };
 
   const toConstruct = (match: InlineConstructMatch): RenderedConstruct => ({
-    from: match.from, to: match.to, block: false, kind: spec.kind, reveal: spec.reveal, revealRegion: match.revealRegion,
+    from: match.from, to: match.to, block: false, kind: spec.kind, reveal: spec.reveal, role,
+    revealRegion: match.revealRegion,
   });
 
   const opens = (state: EditorState, match: InlineConstructMatch): boolean => {
     const region = match.revealRegion ?? match;
-    return selectionOpensSource(state, region.from, region.to, spec.reveal, "object");
+    return selectionOpensSource(state, region.from, region.to, spec.reveal, role);
   };
 
   const source: ConstructSource = {
@@ -85,7 +89,7 @@ export function inlineConstruct(spec: InlineConstructSpec): Extension {
    * can hold one: a reveal region never extends past its construct's line.
    */
   const revealKey = (state: EditorState): string => {
-    if (renderedConstructsPinned(state)) return "pinned";
+    if (role === "object" && renderedConstructsPinned(state)) return "pinned";
     const opened: string[] = [];
     const seen = new Set<number>();
     for (const offset of revealProbeOffsets(state)) {
@@ -111,7 +115,7 @@ export function inlineConstruct(spec: InlineConstructSpec): Extension {
           for (const match of matchesOn(state, line)) {
             if (decorations.length >= spec.maxPerViewport) break;
             if (opens(state, match)) continue;
-            decorations.push(Decoration.replace({ widget: match.widget(), vimAtomic: true }).range(match.from, match.to));
+            decorations.push(Decoration.replace({ widget: match.widget() }).range(match.from, match.to));
           }
         }
         pos = line.to + 1;

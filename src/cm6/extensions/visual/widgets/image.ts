@@ -648,7 +648,7 @@ function buildImageDecorations(view: EditorView): DecorationSet {
             Boolean(imageRowAt(state, image.from)), joinNextImage(view, image.from, false))
           : new ImageWidget(image.src, image.alt, image.from, image.to, image.fullTo, image.layout);
         if (!imageOpened(state, image)) {
-          decos.push(Decoration.replace({ widget: widget(), vimAtomic: true }).range(image.from, image.fullTo));
+          decos.push(Decoration.replace({ widget: widget() }).range(image.from, image.fullTo));
           continue;
         }
         // Editing the source of an image that has a line to itself keeps the

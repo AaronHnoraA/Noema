@@ -19,9 +19,9 @@ import { MeasuredWidget } from "./measured-widget.ts";
 import { decodeRevisionAttribute, decodeRevisionContext } from "../../../../authoring-syntax.ts";
 import { revisionKindOf } from "../../../../revision-kinds.ts";
 import { findInlineCommandClose, isEscapedCommandStart, parseCommandArgs, scanInlineCommands, type InlineCommand } from "../../../../command-syntax.ts";
-import { renderMarkdownHTML } from "../../../../render-html.ts";
+import { renderInlineMarkdownHTML } from "../../../../render-html.ts";
 import { StateField, type Range, type Text, type Transaction } from "@codemirror/state";
-import { selectionOpensSource } from "../constructs/index.ts";
+import { constructSources, drawnConstructSource, selectionOpensSource } from "../constructs/index.ts";
 import { blockMathRangesOverlapping, mergeOverlappingRanges, positionInsideAnyRange } from "../../../math-ranges.ts";
 import { scanCodeRanges } from "../../../code-ranges.ts";
 import { scanInlineMathRanges } from "../../../../inline-math.ts";
@@ -66,18 +66,6 @@ type TodoCommand = InlineCommand & {
 };
 
 type PlanningUiCommand = TodoCommand;
-
-/**
- * Render a @@todo body as inline HTML so embedded markdown — notably inline math
- * `\(…\)` — renders inside the chip. The body sits in a replaced widget, so the
- * usual live-preview math decoration cannot reach it; we render it here instead,
- * via the same shared renderer the table cells use, and unwrap the `<p>`.
- */
-export function inlineTodoBodyHTML(markdown: string): string {
-  const html = renderMarkdownHTML(markdown);
-  const match = /^<p>([\s\S]*)<\/p>\n?$/.exec(html.trim());
-  return match ? match[1] : html;
-}
 
 const STATUS_LABELS: Record<string, string> = {
   todo: "TODO",
@@ -389,7 +377,7 @@ class TodoWidget extends MeasuredWidget {
       lBracket.textContent = "[";
       const body = document.createElement("span");
       body.className = "inline-todo-text-body";
-      body.innerHTML = inlineTodoBodyHTML(cmd.context.trim());
+      body.innerHTML = renderInlineMarkdownHTML(cmd.context.trim());
       const rBracket = document.createElement("span");
       rBracket.className = "inline-todo-bracket";
       rBracket.setAttribute("aria-hidden", "true");
@@ -498,7 +486,7 @@ class PlanningBlockWidget extends MeasuredWidget {
 
     const title = document.createElement("span");
     title.className = "inline-planning-title";
-    title.innerHTML = inlineTodoBodyHTML(cmd.context.trim());
+    title.innerHTML = renderInlineMarkdownHTML(cmd.context.trim());
     head.append(title);
     wrap.append(head);
 
@@ -657,7 +645,7 @@ class InlineCommentWidget extends MeasuredWidget {
       label.textContent = "COMMENT:";
       const content = document.createElement("span");
       content.className = "inline-comment-display-content";
-      content.innerHTML = context ? inlineTodoBodyHTML(context) : "";
+      content.innerHTML = context ? renderInlineMarkdownHTML(context) : "";
       wrap.append(label, content);
       return wrap;
     }
@@ -691,7 +679,7 @@ class InlineCommentWidget extends MeasuredWidget {
     const content = document.createElement("span");
     content.className = "org-env-content";
     content.hidden = true;
-    content.innerHTML = context ? inlineTodoBodyHTML(context) : "";
+    content.innerHTML = context ? renderInlineMarkdownHTML(context) : "";
     content.addEventListener("mousedown", stopWidgetEventPropagation);
 
     wrap.append(button, content);
@@ -738,7 +726,7 @@ class RevisionWidget extends MeasuredWidget {
 
     const shown = document.createElement("span");
     shown.className = "aaronnote-revision-original";
-    shown.innerHTML = inlineTodoBodyHTML(original);
+    shown.innerHTML = renderInlineMarkdownHTML(original);
     shown.tabIndex = 0;
 
     const card = document.createElement("span");
@@ -747,7 +735,7 @@ class RevisionWidget extends MeasuredWidget {
     label.textContent = kind.label;
     const replacement = document.createElement("span");
     replacement.className = "aaronnote-revision-advice";
-    replacement.innerHTML = advice ? inlineTodoBodyHTML(advice) : "Missing advice";
+    replacement.innerHTML = advice ? renderInlineMarkdownHTML(advice) : "Missing advice";
     card.append(label, replacement);
     if (reason) {
       const why = document.createElement("span");
@@ -946,7 +934,7 @@ class SideCommentWidget extends MeasuredWidget {
 
     const card = document.createElement("span");
     card.className = "inline-side-comment-card";
-    card.innerHTML = inlineTodoBodyHTML(this.cmd.context.trim());
+    card.innerHTML = renderInlineMarkdownHTML(this.cmd.context.trim());
 
     anchor.append(connector);
     wrap.append(anchor, card);
@@ -965,7 +953,7 @@ class SideCommentWidget extends MeasuredWidget {
     if (previous.cmd.context !== this.cmd.context) {
       const card = dom.querySelector<HTMLElement>(".inline-side-comment-card");
       if (!card) return false;
-      card.innerHTML = inlineTodoBodyHTML(this.cmd.context.trim());
+      card.innerHTML = renderInlineMarkdownHTML(this.cmd.context.trim());
     }
     view.plugin(sideCommentLayoutPlugin)?.schedule();
     return true;
@@ -1230,6 +1218,8 @@ class TodoPlugin {
 
 export const inlineCommandsExtension = ViewPlugin.fromClass(TodoPlugin, {
   decorations: (v) => v.decorations,
+  provide: (plugin) => constructSources.of(drawnConstructSource(
+    "inline-command", "structure", (_state, view) => view?.plugin(plugin)?.decorations)),
 });
 
 // ---------------------------------------------------------------------------

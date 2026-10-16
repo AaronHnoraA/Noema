@@ -79,6 +79,8 @@ import { hasViewportDecorationRefresh, refreshViewportDecorations } from "../../
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import { persistentVisualStateField } from "../visual-mode.ts";
 import {
+  constructSources,
+  drawnConstructSource,
   selectionOpensSource,
   transactionChangesPinning,
   type ConstructRole,
@@ -91,6 +93,7 @@ import { getKatexMacrosVersion } from "../../../../katex-macros.ts";
 import { renderTocInlineMath } from "../../../../toc-inline-math.ts";
 import { prepareTikzSvg, renderTikzBrowser, sanitizedTikzSvg, type BrowserTikzResult } from "../../../../tikz-browser.ts";
 import { newNoemaId } from "../../../../../shared/identity.mjs";
+import { markEmbeddedSurface } from "../../../embedded-surface.ts";
 
 // ---------------------------------------------------------------------------
 // TOC fold state (session-level, not editor history)
@@ -3844,7 +3847,7 @@ function renderMetaProperties(
   if (orgMetaSummarySourceRange(body)) {
     const summaryEditor = document.createElement("div");
     summaryEditor.className = "aaronnote-meta-summary-editor";
-    summaryEditor.dataset.aaronnoteVim = "native";
+    markEmbeddedSurface(summaryEditor);
     const parsed = parseOrgMetaDocument(body).summary;
     const title = document.createElement("input");
     title.value = parsed?.title ?? "";
@@ -5034,6 +5037,8 @@ export const blockExtrasExtension: Extension = [
   persistentVisualStateField(blockExtraRangesField, createBlockExtraRanges),
   persistentVisualStateField(tocFoldField, createTocFoldState),
   persistentVisualStateField(blockExtrasDecorations, buildBlockExtraDecos),
+  // Org environments, TOC, rules, front matter, cells: whatever the field draws.
+  constructSources.of(drawnConstructSource("block-extra", "structure", (state) => state.field(blockExtrasDecorations, false))),
   persistentVisualStateField(orgEnvBodyLineDecorations, buildOrgEnvBodyLineDecos),
   orgEnvRailExtension,
   ceilCellReloadExtension,

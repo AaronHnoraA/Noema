@@ -12,6 +12,7 @@ import type { MathfieldElement, Selector } from "mathlive";
 import "mathlive/fonts.css";
 import { normalizeVisualTexLatex } from "../../../../tex-compat.ts";
 import { assertMathLiveSourceSafe } from "./mathlive-source-safety.ts";
+import { markEmbeddedSurface } from "../../../embedded-surface.ts";
 
 export { normalizeVisualTexLatex } from "../../../../tex-compat.ts";
 
@@ -3745,7 +3746,7 @@ export function mountVisualTexInlineEditor(
       field = next;
       Constructor.locale = "zh-cn";
       next.className = "noema-visualtex-mathfield";
-      next.dataset.aaronnoteVim = "native";
+      markEmbeddedSurface(next);
       initializeNoemaMathfield(next, draft, options.macros);
       next.setAttribute("aria-label", "编辑行内公式");
       next.removeAttribute("placeholder");
@@ -3846,7 +3847,7 @@ export function mountVisualTexInlineEditor(
 
       const shell = document.createElement("span");
       shell.className = "noema-visualtex-inline-shell";
-      shell.dataset.aaronnoteVim = "native";
+      markEmbeddedSurface(shell);
       shell.append(quickbar.element, next);
       host.replaceChildren(shell);
       if (typeof ResizeObserver !== "undefined") {
@@ -3916,7 +3917,7 @@ function mountVisualTexSingleDisplayEditor(
       shell.className = options.advanced
         ? "noema-visualtex-live is-advanced"
         : "noema-visualtex-live is-simple";
-      shell.dataset.aaronnoteVim = "native";
+      markEmbeddedSurface(shell);
 
       const toolbar = document.createElement("div");
       toolbar.className = "noema-visualtex-toolbar";
@@ -3952,7 +3953,7 @@ function mountVisualTexSingleDisplayEditor(
       const next = createNoemaMathfield(Constructor);
       field = next;
       next.className = "noema-visualtex-mathfield noema-visualtex-display-mathfield";
-      next.dataset.aaronnoteVim = "native";
+      markEmbeddedSurface(next);
       initializeNoemaMathfield(next, draft, options.macros);
       next.setAttribute("aria-label", "LiveTeX 独立公式编辑器");
       next.removeAttribute("placeholder");
@@ -4307,7 +4308,7 @@ function mountVisualTexAdvancedDisplayEditor(
 
       const shell = document.createElement("div");
       shell.className = "noema-visualtex-live is-advanced";
-      shell.dataset.aaronnoteVim = "native";
+      markEmbeddedSurface(shell);
 
       const toolbar = document.createElement("div");
       toolbar.className = "noema-visualtex-toolbar";
@@ -4430,7 +4431,7 @@ function mountVisualTexAdvancedDisplayEditor(
         number.className = "noema-visualtex-row-number";
         const next = createNoemaMathfield(Constructor);
         next.className = "noema-visualtex-mathfield noema-visualtex-display-mathfield";
-        next.dataset.aaronnoteVim = "native";
+        markEmbeddedSurface(next);
         next.removeAttribute("placeholder");
         initializeNoemaMathfield(next, latex, options.macros);
         element.append(number, next);

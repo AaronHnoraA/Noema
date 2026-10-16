@@ -3,6 +3,7 @@ import { getKatexMacros } from "./katex-macros.ts";
 import { ensureMathStyles } from "./math-render.ts";
 import { katexCompatibleLatex } from "./tex-compat.ts";
 import { safeHref } from "./url-safety.ts";
+import { markEmbeddedSurface } from "./cm6/embedded-surface.ts";
 export { supportedDiagramLang } from "./diagram-langs.ts";
 export { sanitizeDiagramSvg } from "./diagram-sanitize.ts";
 
@@ -772,7 +773,7 @@ export function openDiagramLightbox(origin: HTMLElement): void {
   overlay.setAttribute("role", "dialog");
   overlay.setAttribute("aria-modal", "true");
   overlay.setAttribute("aria-label", "Expanded diagram");
-  overlay.setAttribute("data-aaronnote-vim", "native");
+  markEmbeddedSurface(overlay);
   overlay.setAttribute("data-noema-gesture-scope", "diagram");
 
   const stage = document.createElement("div");
