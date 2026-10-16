@@ -67,6 +67,8 @@ export type VisualTexPreviewState = {
 export type VisualTexPreview = {
   readonly ready: Promise<void>;
   update(state: VisualTexPreviewState): void;
+  /** Reparse the resident field with a changed macro dictionary. */
+  setMacros(macros: Record<string, string>): void;
   /** Refit and realign overlays after an external viewport/layout change. */
   refreshLayout(): void;
   /** Stop all deferred synchronization while retaining the reusable field. */
@@ -2132,6 +2134,25 @@ type NoemaMathfieldInitializationTarget = Pick<MathfieldElement, "setValue" | "r
   macros: MathfieldElement["macros"];
 };
 
+// A note installs a fresh macro map only when its definitions change. Reuse
+// MathLive's adapted dictionary across mirrors and editors opened for that
+// note; parsing each formula still uses MathLive's normal macro expansion.
+const noemaMathfieldMacroCache = new WeakMap<Record<string, string>, MathfieldElement["macros"]>();
+
+function noemaMathfieldMacros(field: object, macros: Record<string, string>): MathfieldElement["macros"] {
+  const cached = noemaMathfieldMacroCache.get(macros);
+  if (cached) return cached;
+  const dictionary: MathfieldElement["macros"] = {
+    ...visualTexMathLiveDefaultMacros(field),
+    ...visualTexMathLiveMacros(macros),
+    [VISUAL_TEX_SOURCE_SPACE_MACRO_NAME]: VISUAL_TEX_SOURCE_SPACE_MACRO,
+    [VISUAL_TEX_SNIPPET_START_MACRO_NAME]: VISUAL_TEX_SNIPPET_MARKER_MACRO,
+    [VISUAL_TEX_SNIPPET_END_MACRO_NAME]: VISUAL_TEX_SNIPPET_MARKER_MACRO,
+  };
+  noemaMathfieldMacroCache.set(macros, dictionary);
+  return dictionary;
+}
+
 let visualTexMathLiveDefaultMacroCache: MathfieldElement["macros"] | null = null;
 
 /**
@@ -2202,13 +2223,7 @@ export function initializeNoemaMathfield(
     installVisualTexSnippetInsertAdapter(field as MathfieldElement);
     installVisualTexHistoryInputBridge(field as MathfieldElement);
   }
-  field.macros = {
-    ...visualTexMathLiveDefaultMacros(field),
-    ...visualTexMathLiveMacros(macros),
-    [VISUAL_TEX_SOURCE_SPACE_MACRO_NAME]: VISUAL_TEX_SOURCE_SPACE_MACRO,
-    [VISUAL_TEX_SNIPPET_START_MACRO_NAME]: VISUAL_TEX_SNIPPET_MARKER_MACRO,
-    [VISUAL_TEX_SNIPPET_END_MACRO_NAME]: VISUAL_TEX_SNIPPET_MARKER_MACRO,
-  };
+  field.macros = noemaMathfieldMacros(field, macros);
   // `mode` is deliberate: without it MathLive inherits the mode of whatever
   // position the field's caret currently sits in, which turns a reused field
   // into a literal-text renderer once a `\text{` group has been open.
@@ -3205,6 +3220,8 @@ export function mountVisualTexPreview(
   let suspended = false;
   let Constructor: MathLiveModule["MathfieldElement"] | null = null;
   let field: MathfieldElement | null = null;
+  let macros = options.macros;
+  let macrosDirty = false;
   let pending: VisualTexPreviewState | null = null;
   let valueKey = "";
   let renderedDisplay: boolean | null = null;
@@ -3245,8 +3262,9 @@ export function mountVisualTexPreview(
     // Initialize the detached field exactly once. Appending an empty field and
     // immediately calling setValue() again can race MathLive's WebKit render
     // queue and leave its temporary LaTeX source layer visible.
-    initializeNoemaMathfield(next, latex, options.macros, { readOnlyMirror: true });
+    initializeNoemaMathfield(next, latex, macros, { readOnlyMirror: true });
     field = next;
+    macrosDirty = false;
     renderedDisplay = display;
     positionIndex = null;
     overlayLayoutInvalidated = true;
@@ -3363,37 +3381,22 @@ export function mountVisualTexPreview(
   };
 
   /**
-   * Whether MathLive actually holds the value it was last given.
-   *
-   * It has not always. Before 0.110 (#2964) `setValue(…, { insertionMode:
-   * "replaceAll" })` left an atom from the previous content behind — an accent
-   * whose argument was still being typed: after `sssss\bar` → `sssss`,
-   * `getValue()` came back as `sssss\bar`, so the stray overline stayed on
-   * screen forever, and only a fresh element dislodged it. Keep the check as a
-   * guard against the same class of model/render desynchronization. `mathfield.dirty` is checked alongside because
-   * `requestUpdate()` refuses to schedule any repaint while it is set and only
-   * clears it at the very end of `render()`, so an interrupted render freezes
-   * the DOM the same way.
+   * Wait for MathLive's paint, and only rebuild a field whose render remains
+   * stuck. Comparing getValue("latex") to the source here was invalid:
+   * MathLive canonicalizes source such as x^{a}_{b} into x_{b}^{a} when a
+   * user macro is present. That harmless difference rebuilt the field after
+   * every keystroke and made macro formulas flash. MathLive 0.110 also fixed
+   * the old accent replaceAll bug that motivated that comparison.
    */
-  const commitStatus = (active: MathfieldElement): "pending" | "applied" | "failed" => {
-    if (Boolean((active as unknown as { _mathfield?: { dirty?: boolean } })._mathfield?.dirty)) {
-      return "pending";
-    }
-    // Compare ignoring whitespace and MathLive's synthesized placeholders: an
-    // over-strict check would rebuild the field on ordinary input, which is
-    // worse than the fault it guards against.
-    const collapse = (value: string): string => (
-      stripVisualTexPlaceholders(normalizeVisualTexLatex(value)).replace(/\s+/g, "")
-    );
-    return collapse(active.getValue("latex")) === collapse(valueKey) ? "applied" : "failed";
-  };
+  const commitStatus = (active: MathfieldElement): "pending" | "applied" => (
+    Boolean((active as unknown as { _mathfield?: { dirty?: boolean } })._mathfield?.dirty)
+      ? "pending" : "applied"
+  );
 
   /**
-   * Rebuild the mirror around the value that failed to apply. Nothing short of
-   * a new element recovers the cases above, so there is no point retrying the
-   * assignment first. One fresh element is the recovery budget for a commit;
-   * if it also disagrees, keep a usable frame instead of entering a rebuild
-   * loop.
+   * Rebuild a mirror whose MathLive render stays dirty across frames. One
+   * fresh element is the recovery budget for a commit; a second failure keeps
+   * a usable frame instead of entering a rebuild loop.
    */
   const recoverPreviewField = (): boolean => {
     // Giving up must still leave a usable frame: the caller falls through to
@@ -3451,6 +3454,13 @@ export function mountVisualTexPreview(
     const draft = buildVisualTexPreviewDraft(state.latex, state.placeholders, state.selection);
     renderedDraft = draft;
     try {
+      if (macrosDirty) {
+        active.macros = noemaMathfieldMacros(active, macros);
+        macrosDirty = false;
+        // MathLive does not reparse existing atoms when its dictionary changes.
+        // Keep the current field visible until its next render replaces them.
+        valueKey = "";
+      }
       const displayChanged = renderedDisplay !== state.display;
       if (displayChanged) {
         active.classList.toggle("is-display", state.display);
@@ -3541,6 +3551,13 @@ export function mountVisualTexPreview(
 
   return {
     ready,
+    setMacros(next) {
+      if (destroyed) return;
+      macros = next;
+      if (!field) return;
+      macrosDirty = true;
+      if (pending && !suspended) render(pending);
+    },
     update(state) {
       if (destroyed) return;
       const wasSuspended = suspended;

@@ -8,6 +8,20 @@ export type AssistUpdateOptions = {
 
 export type AssistUpdateFlags = Required<AssistUpdateOptions>;
 
+/** A caret reveal is a scroll event, but it must not dismiss active assists. */
+export function assistScrollPolicy(state: {
+  recentUserScroll: boolean;
+  editorActive: boolean;
+  completionActive: boolean;
+  mathPreviewVisible: boolean;
+}): { keepCompletion: boolean; keepMathPreview: boolean } {
+  const caretReveal = !state.recentUserScroll && state.editorActive;
+  return {
+    keepCompletion: caretReveal && state.completionActive,
+    keepMathPreview: caretReveal && state.mathPreviewVisible,
+  };
+}
+
 type FrameApi = {
   requestAnimationFrame: (callback: FrameRequestCallback) => number;
   cancelAnimationFrame: (handle: number) => void;

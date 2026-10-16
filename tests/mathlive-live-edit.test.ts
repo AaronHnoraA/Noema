@@ -488,6 +488,45 @@ describe("LiveTeX custom macro writeback", () => {
     host.remove();
   });
 
+  test("keeps a macro formula's preview field while its source changes", async () => {
+    const bootstrap = new MathfieldElement();
+    patchHappyDomMathfieldHostSelector(bootstrap);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const macro = { "\\Mon": String.raw`\operatorname{Mon}` };
+    // MathLive may canonicalize the order of ^ and _ after expanding \Mon.
+    // That is a valid render and must never trigger a field recovery.
+    const source = String.raw`\Mon_{n}(\mathbb{F}^{\times}_{q})`;
+    const preview = mountVisualTexPreview(host, {
+      macros: macro,
+      syncIdleMs: 0,
+      loadMathLive: async () => ({ MathfieldElement } as unknown as typeof import("mathlive")),
+    });
+    preview.update({ latex: source, display: false, selection: { anchor: source.length, head: source.length }, placeholders: [] });
+    await preview.ready;
+    await nextAnimationFrame();
+    const field = host.querySelector(".noema-visualtex-preview-field");
+    const recoveries = visualTexPreviewRecoveryCount();
+    for (const latex of [source + "x", source + "xy", source + "xyz"]) {
+      preview.update({ latex, display: false, selection: { anchor: latex.length, head: latex.length }, placeholders: [] });
+      await nextAnimationFrame();
+      await nextAnimationFrame();
+    }
+    expect(host.querySelector(".noema-visualtex-preview-field")).toBe(field);
+    expect(visualTexPreviewRecoveryCount()).toBe(recoveries);
+    const before = (field as InstanceType<typeof MathfieldElement>).getValue("latex-expanded");
+    preview.setMacros({ "\\Mon": String.raw`\mathsf{Mon}` });
+    // Updating a note macro must keep the old formula mounted until the new
+    // parse is rendered; it must not clear and recreate the floating preview.
+    expect(host.querySelector(".noema-visualtex-preview-field")).toBe(field);
+    await nextAnimationFrame();
+    await nextAnimationFrame();
+    expect(host.querySelector(".noema-visualtex-preview-field")).toBe(field);
+    expect((field as InstanceType<typeof MathfieldElement>).getValue("latex-expanded")).not.toBe(before);
+    preview.destroy();
+    host.remove();
+  });
+
   test("reports caret-only frames so the host can skip re-measuring", async () => {
     const bootstrap = new MathfieldElement();
     patchHappyDomMathfieldHostSelector(bootstrap);
@@ -636,17 +675,19 @@ describe("LiveTeX custom macro writeback", () => {
     host.remove();
   });
 
-  test("rebuilds the mirror when MathLive keeps an atom the source no longer has", async () => {
+  test("rebuilds the mirror when MathLive remains dirty across frames", async () => {
     const { host, preview, currentField, type } = await mountLivePreview("sssss");
     const field = currentField();
     const quiet = visualTexPreviewRecoveryCount();
 
-    // Pin the stale-model fault the verification guards against, independent
-    // of whichever MathLive release currently reproduces it.
-    const getValue = field.getValue.bind(field);
-    field.getValue = ((...args: Parameters<typeof field.getValue>) => (
-      args[0] === "latex" ? String.raw`sssss\bar` : getValue(...args)
-    )) as typeof field.getValue;
+    // A render stuck with dirty=true cannot schedule another paint. The
+    // mirror gets one new field after its grace frames, without a rebuild loop.
+    const internal = field as unknown as { _mathfield: { dirty: boolean } };
+    Object.defineProperty(internal._mathfield, "dirty", {
+      configurable: true,
+      get: () => true,
+      set: () => {},
+    });
     await type("ssssss");
     await type("sssssss");
 

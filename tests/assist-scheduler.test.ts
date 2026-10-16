@@ -1,7 +1,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AssistScheduler, type AssistUpdateFlags } from "../aaronnote/assist-scheduler.ts";
+import { AssistScheduler, assistScrollPolicy, type AssistUpdateFlags } from "../aaronnote/assist-scheduler.ts";
 
 function createFrameApi() {
   let nextHandle = 1;
@@ -41,16 +41,33 @@ describe("AssistScheduler", () => {
     expect(schedulerIndex).toBeLessThan(firstModeUpdateIndex);
   });
 
-  test("caret reveal keeps completion open while user scrolling closes it", () => {
+  test("caret reveal keeps completion and the resident formula preview open", () => {
     const source = readFileSync(join(process.cwd(), "aaronnote/main.ts"), "utf8");
     const start = source.indexOf('window.addEventListener("scroll", (event) => {');
     const end = source.indexOf('}, { capture: true, passive: true });', start);
     const handler = source.slice(start, end);
-    expect(handler).toContain("performance.now() - lastUserEditorScrollAt > 350");
-    expect(handler).toContain('keepCompletion\n    ? ["prose-popover", "context-menu"]\n    : ["snippet-popup", "math-preview", "prose-popover", "context-menu"]');
-    expect(handler).toContain("scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true })");
+    expect(handler).toContain("assistScrollPolicy({");
+    expect(handler).toContain("mathPreviewVisible: !mathPreview.hidden");
+    expect(handler).toContain('...(!keepMathPreview ? ["math-preview"] : [])');
+    expect(handler).toContain("scheduleAssistUpdate({ snippets: keepCompletion, mathPreview: keepMathPreview, cursor: true })");
     expect(handler).toContain("snippetCompletionArmed = false");
     expect(handler).not.toContain("selectionTool: true");
+  });
+
+  test("auto scroll retains visible assists; user scroll and editor blur dismiss them", () => {
+    const active = {
+      recentUserScroll: false,
+      editorActive: true,
+      completionActive: true,
+      mathPreviewVisible: true,
+    };
+    expect(assistScrollPolicy(active)).toEqual({ keepCompletion: true, keepMathPreview: true });
+    expect(assistScrollPolicy({ ...active, completionActive: false }))
+      .toEqual({ keepCompletion: false, keepMathPreview: true });
+    expect(assistScrollPolicy({ ...active, recentUserScroll: true }))
+      .toEqual({ keepCompletion: false, keepMathPreview: false });
+    expect(assistScrollPolicy({ ...active, editorActive: false }))
+      .toEqual({ keepCompletion: false, keepMathPreview: false });
   });
 
   test("coalesces repeated identical schedules without replacing the frame", () => {

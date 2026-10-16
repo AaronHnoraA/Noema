@@ -123,7 +123,11 @@ describe("note macro runtime", () => {
   function runtime() {
     const installs: Record<string, string>[] = [];
     const rerender = vi.fn();
-    const loadNote = vi.fn(async () => ({ project: { "\\P": "\\mathsf{P}" }, files: ["../assignment.cls"], errors: [] }));
+    const loadNote = vi.fn(async (): Promise<{
+      project: Record<string, string>;
+      files: string[];
+      errors: { file: string; message: string }[];
+    }> => ({ project: { "\\P": "\\mathsf{P}" }, files: ["../assignment.cls"], errors: [] }));
     const api = createNoteMacroRuntime({
       loadGlobal: async () => ({ shared: { "\\R": "\\mathbb{R}", "\\Mon": "shared" }, user: { macros: { "\\U": "u" } } }),
       saveUser: async (macros) => ({ shared: { "\\R": "\\mathbb{R}" }, user: { macros } }),
@@ -153,18 +157,47 @@ describe("note macro runtime", () => {
     expect(rerender).not.toHaveBeenCalled();
   });
 
+  test("a failed project refresh retains the last usable definitions", async () => {
+    const { api, installs, rerender, loadNote } = runtime();
+    await api.loadGlobal();
+    await api.prepare("/notes/a.md", NOTE);
+    const installed = installs.length;
+    loadNote.mockRejectedValueOnce(new Error("temporarily unavailable"));
+    await api.reloadProject();
+    expect(api.layers().project).toEqual({ "\\P": "\\mathsf{P}" });
+    expect(api.layers().errors.at(-1)?.message).toBe("temporarily unavailable");
+    expect(installs).toHaveLength(installed);
+    expect(rerender).not.toHaveBeenCalled();
+  });
+
+  test("an incomplete project refresh retains the last complete definitions", async () => {
+    const { api, installs, rerender, loadNote } = runtime();
+    await api.loadGlobal();
+    await api.prepare("/notes/a.md", NOTE);
+    const installed = installs.length;
+    loadNote.mockResolvedValueOnce({ project: {}, files: [], errors: [{ file: "notation.sty", message: "missing" }] });
+    await api.reloadProject();
+    expect(api.layers().project).toEqual({ "\\P": "\\mathsf{P}" });
+    expect(api.layers().errors.at(-1)?.message).toBe("missing");
+    expect(installs).toHaveLength(installed);
+    expect(rerender).not.toHaveBeenCalled();
+  });
+
   test("edits outside the meta block cost nothing; a macro edit re-renders once", async () => {
     vi.useFakeTimers();
     try {
-      const { api, rerender } = runtime();
+      const { api, rerender, loadNote } = runtime();
       await api.loadGlobal();
       await api.prepare("/notes/a.md", NOTE);
       let doc = Text.of(NOTE.split("\n"));
       const bodyAt = NOTE.indexOf("# Body") + 6;
-      const bodyEdit = ChangeSet.of({ from: bodyAt, insert: " text" }, doc.length);
-      doc = bodyEdit.apply(doc);
-      api.noteEdited(bodyEdit, doc);
+      for (const text of [" t", "e", "x", "t"]) {
+        const bodyEdit = ChangeSet.of({ from: bodyAt, insert: text }, doc.length);
+        doc = bodyEdit.apply(doc);
+        api.noteEdited(bodyEdit, doc);
+      }
       await vi.advanceTimersByTimeAsync(1000);
+      expect(loadNote).toHaveBeenCalledTimes(1);
       expect(rerender).not.toHaveBeenCalled();
 
       const at = doc.toString().indexOf("\\operatorname{Mon}");

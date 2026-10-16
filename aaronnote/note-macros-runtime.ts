@@ -116,6 +116,8 @@ export function createNoteMacroRuntime(deps: NoteMacroRuntimeDeps) {
 
   async function refreshProject(key: string, force = false): Promise<void> {
     if (!from.length) {
+      // A previous note may still have a project-file request in flight.
+      epoch++;
       project = {};
       projectFiles = [];
       projectKey = key;
@@ -123,12 +125,22 @@ export function createNoteMacroRuntime(deps: NoteMacroRuntimeDeps) {
     }
     if (key === projectKey && !force) return;
     const ticket = ++epoch;
+    const previousProject = projectKey === key ? project : {};
+    const previousFiles = projectKey === key ? projectFiles : [];
     const result = await deps.loadNote(file, from).catch((error: unknown) => ({
-      project: {}, files: [], errors: [{ file: from.join(", "), message: error instanceof Error ? error.message : String(error) }],
+      // A failed refresh is not a new macro set. Keep the last usable one for
+      // this note until a later refresh succeeds.
+      project: previousProject,
+      files: previousFiles,
+      errors: [{ file: from.join(", "), message: error instanceof Error ? error.message : String(error) }],
     }) as NoteKatexMacrosResult);
     if (ticket !== epoch) return;
-    project = result.project ?? {};
-    projectFiles = result.files ?? [];
+    // The host can resolve some files and report errors for others. That is
+    // still an incomplete refresh: keep the last complete dictionary for the
+    // same note until all referenced files load successfully.
+    const keepPrevious = projectKey === key && Boolean(result.errors?.length);
+    project = keepPrevious ? previousProject : result.project ?? {};
+    projectFiles = keepPrevious ? previousFiles : result.files ?? [];
     projectKey = key;
     errors = [...errors, ...(result.errors ?? [])];
   }
@@ -170,7 +182,7 @@ export function createNoteMacroRuntime(deps: NoteMacroRuntimeDeps) {
       file = nextFile;
       const { key } = readHead(content, null);
       if (key === projectKey || !from.length) {
-        if (!from.length) { project = {}; projectFiles = []; projectKey = key; }
+        if (!from.length) { epoch++; project = {}; projectFiles = []; projectKey = key; }
         apply(false);
         return;
       }

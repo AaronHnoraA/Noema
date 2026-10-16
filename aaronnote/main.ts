@@ -93,7 +93,7 @@ import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
 import { previewPlacement } from "./preview-placement.ts";
 import { blobToBase64 } from "../src/paste.ts";
 import { collectFindMatches, createFindPattern, findMatchIndexFrom, replacementText, type FindMatch, type FindOptions } from "./find.ts";
-import { AssistScheduler, type AssistUpdateFlags, type AssistUpdateOptions } from "./assist-scheduler.ts";
+import { AssistScheduler, assistScrollPolicy, type AssistUpdateFlags, type AssistUpdateOptions } from "./assist-scheduler.ts";
 import { hostCommandTargetsClient } from "./host-command-target.ts";
 import {
   hostInputFocusEventTypes,
@@ -2158,11 +2158,9 @@ const noteMacros = createNoteMacroRuntime({
   loadNote: (file, paths) => api.config.noteKatexMacros(file, paths),
   install: (macros) => {
     setKatexMacros(macros);
-    // The resident MathLive preview copied the old dictionary when it mounted;
-    // the next preview frame mounts a fresh one. Pop editors read the set when
-    // they open.
-    liveTexPreview?.destroy();
-    liveTexPreview = null;
+    // Reparse the resident mirror with the new definitions. Its previous DOM
+    // remains visible until MathLive paints the update.
+    liveTexPreview?.setMacros(macros);
   },
   rerender: () => {
     editor.rerenderPreview();
@@ -6754,7 +6752,9 @@ async function openFile(
     // load.  Gate only installation so I/O overlaps without a KaTeX/theme
     // first-paint flash.
     if (beforeApply) await beforeApply;
-    await noteMacros.prepare(String(opened.file || target || ""), String(opened.content ?? ""));
+    // An explicit open is the boundary at which project macro files may have
+    // changed on disk, even if this note was visited earlier in this session.
+    await noteMacros.prepare(String(opened.file || target || ""), String(opened.content ?? ""), true);
     applyOpenedNote(opened, target, positions);
   } catch (error) {
     applyingContent = false;
@@ -14214,17 +14214,24 @@ window.addEventListener("scroll", (event) => {
     || (target instanceof Node && host.contains(target));
   if (!editorViewportScrolled) return;
   mathPreviewGeometryEpoch++;
-  // CM6 also emits scroll while revealing the caret after typing. Only a
-  // wheel/touch scroll ends the completion session; caret reveal relocates it.
-  const keepCompletion = snippetCompletionArmed && editorOwnsActiveSurface()
-    && (!snippetPopup.hidden || completionRequestPending)
-    && performance.now() - lastUserEditorScrollAt > 350;
-  transientSurfaces.close(keepCompletion
-    ? ["prose-popover", "context-menu"]
-    : ["snippet-popup", "math-preview", "prose-popover", "context-menu"], "viewport");
-  if (keepCompletion) {
-    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
-  } else {
+  // CM6 also emits scroll while revealing the caret after typing. Keep the
+  // resident formula preview alive during that scroll and re-anchor it after
+  // CM6 has settled; hiding it here made long formulas flash on every key.
+  const { keepCompletion, keepMathPreview } = assistScrollPolicy({
+    recentUserScroll: performance.now() - lastUserEditorScrollAt <= 350,
+    editorActive: editorOwnsActiveSurface(),
+    completionActive: snippetCompletionArmed && (!snippetPopup.hidden || completionRequestPending),
+    mathPreviewVisible: !mathPreview.hidden,
+  });
+  transientSurfaces.close([
+    ...(!keepCompletion ? ["snippet-popup"] : []),
+    ...(!keepMathPreview ? ["math-preview"] : []),
+    "prose-popover", "context-menu",
+  ], "viewport");
+  if (keepCompletion || keepMathPreview) {
+    scheduleAssistUpdate({ snippets: keepCompletion, mathPreview: keepMathPreview, cursor: true });
+  }
+  if (!keepCompletion) {
     snippetCompletionArmed = false;
     clearCompletionCache();
   }
