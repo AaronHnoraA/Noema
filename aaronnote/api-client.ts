@@ -153,13 +153,19 @@ type ProseCheckMsg = {
     from: number;
     to: number;
     severity?: "info" | "warning" | "error";
+    category?: "spelling" | "grammar" | "punctuation" | "typography" | "word" | "style";
+    categoryLabel?: string;
+    title?: string;
     message: string;
     rule?: string;
+    ruleDescription?: string;
+    url?: string;
     word?: string;
     suggestions?: string[];
   }>;
   tools?: Array<{ source?: string; ok?: boolean; message?: string; partial?: boolean; optional?: boolean }>;
-  scope?: { checkedChars?: number; totalChars?: number; partial?: boolean };
+  scope?: { checkedChars?: number; totalChars?: number; partial?: boolean; paragraphs?: number; cachedParagraphs?: number };
+  disabledRules?: string[];
 };
 export type JupyterCellOutput = {
   output_type?: string;
@@ -782,6 +788,7 @@ type NativeApi = {
   proseCheck?: {
     run?: (body: ProseCheckBody) => Promise<unknown>;
     acceptWord?: (word: string) => Promise<unknown>;
+    disableRule?: (rule: string, disabled?: boolean) => Promise<unknown>;
     cancel?: (requestId: string) => Promise<unknown>;
     settings?: () => Promise<unknown>;
     updateSettings?: (body: LanguageToolSettingsUpdate) => Promise<unknown>;
@@ -1862,6 +1869,10 @@ export const api = {
     async acceptWord(word: string): Promise<{ ok?: boolean; word?: string }> {
       const call = requireMethod(nativeApi().proseCheck?.acceptWord, "Prose dictionary");
       return ensureOk(await call(word) as { ok?: boolean; word?: string }, "Adding word failed");
+    },
+    async disableRule(rule: string, disabled = true): Promise<{ ok?: boolean; rule?: string; disabledRules?: string[] }> {
+      const call = requireMethod(nativeApi().proseCheck?.disableRule, "LanguageTool rules");
+      return ensureOk(await call(rule, disabled) as { ok?: boolean; rule?: string; disabledRules?: string[] }, "Changing the rule failed");
     },
     async cancel(requestId: string): Promise<void> {
       const call = nativeApi().proseCheck?.cancel;

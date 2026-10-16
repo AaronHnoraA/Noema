@@ -156,6 +156,7 @@ import {
 } from "./server/lib/copilot.mjs";
 import {
   acceptProseWord,
+  setProseRuleDisabled,
   cancelExternalProseCheck,
   cancelAllExternalProseChecks,
   cancelExternalProseChecksForClient,
@@ -2746,6 +2747,7 @@ const apiRouter = new ApiRouter().register({
   ...createProseApiHandlers({
     runExternalProseChecks,
     acceptProseWord,
+    setProseRuleDisabled,
     cancelExternalProseCheck,
     getLanguageToolSettings,
     languageToolSettingsRevision,
@@ -3450,6 +3452,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     proseCheck: {
       run: function(body) { return call("aaronnote:api:prose-check:run", [body || {}]); },
       acceptWord: function(word) { return call("aaronnote:api:prose-check:accept-word", [String(word || "")]); },
+      disableRule: function(rule, disabled) { return call("aaronnote:api:prose-check:disable-rule", [{rule: String(rule || ""), disabled: disabled !== false}]); },
       cancel: function(requestId) { return call("aaronnote:api:prose-check:cancel", [String(requestId || "")]); },
       cancelKeepalive: function(requestId) { callKeepalive("aaronnote:api:prose-check:cancel", [String(requestId || "")]); },
       settings: function() { return call("aaronnote:api:prose-check:settings", []); },

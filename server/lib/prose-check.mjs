@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -24,6 +25,14 @@ const MAX_CHUNKS_PER_TOOL = 6;
 const WORKSPACE_ROOT = process.env.AARONNOTE_WORKSPACE_ROOT || join(homedir(), ".config", "emacs");
 const USER_WORDS_FILE = process.env.AARONNOTE_PROSE_WORDS
   || join(WORKSPACE_ROOT, "etc", "prose-accepted-words.txt");
+// Rules the user turned off from a diagnostic card.  The file sits beside the
+// accepted-word list so Emacs' Flymake backend reads the same two files.
+const DISABLED_RULES_FILE = process.env.AARONNOTE_PROSE_DISABLED_RULES
+  || join(dirname(USER_WORDS_FILE), "prose-disabled-rules.txt");
+// Paragraph results keyed by language, level and exact paragraph text.  An
+// edit therefore re-sends only the paragraph it touched, as the official
+// LanguageTool extension does, instead of the whole visible scope.
+const PARAGRAPH_CACHE_LIMIT = 4_000;
 const GUI_TOOL_PATHS = [
   process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, "Programs"),
   join(homedir(), ".local", "bin"),
@@ -46,6 +55,8 @@ const TOOL_ENV = {
 };
 const activeChecks = new Map();
 let userWordsCache = { expiresAt: 0, words: new Set() };
+let disabledRulesCache = { expiresAt: 0, rules: new Set() };
+const paragraphCache = new Map();
 const USER_WORDS_CACHE_MS = 30_000;
 
 function createSemaphore(limit) {
@@ -314,6 +325,34 @@ function languageToolSeverity(item) {
   return "info";
 }
 
+const STYLE_ISSUE_TYPES = new Set(["style", "register", "locale-violation", "inconsistency"]);
+const STYLE_CATEGORIES = new Set(["STYLE", "REDUNDANCY", "PLAIN_ENGLISH", "REPETITIONS_STYLE", "WIKIPEDIA", "GENDER_NEUTRALITY", "MISC"]);
+const WORD_CHOICE_CATEGORIES = new Set(["CONFUSED_WORDS", "SEMANTICS", "COLLOCATIONS", "NONSTANDARD_PHRASES", "FALSE_FRIENDS", "COMPOUNDING"]);
+const TYPOGRAPHY_CATEGORIES = new Set(["TYPOGRAPHY", "CASING"]);
+
+/**
+ * The classes LanguageTool's own clients colour separately: spelling,
+ * grammar, punctuation, typography, word choice and style.
+ */
+export function languageToolCategory(item) {
+  const issueType = String(item?.rule?.issueType || "").toLowerCase();
+  const category = String(item?.rule?.category?.id || "").toUpperCase();
+  if (issueType === "misspelling" || category === "TYPOS") return "spelling";
+  if (category === "PUNCTUATION") return "punctuation";
+  if (TYPOGRAPHY_CATEGORIES.has(category) || issueType === "whitespace" || issueType === "typographical") {
+    return "typography";
+  }
+  if (WORD_CHOICE_CATEGORIES.has(category)) return "word";
+  if (STYLE_ISSUE_TYPES.has(issueType) || STYLE_CATEGORIES.has(category)) return "style";
+  return "grammar";
+}
+
+function firstRuleUrl(item) {
+  const urls = Array.isArray(item?.rule?.urls) ? item.rule.urls : [];
+  const value = String(urls[0]?.value || "");
+  return /^https?:\/\//i.test(value) ? value : "";
+}
+
 const CJK_SCRIPT_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
 function diagnosticMatchesLanguage(masked, range, language) {
@@ -350,8 +389,13 @@ export function parseLanguageToolDiagnostics(stdout, masked, language = "") {
       from: range.from,
       to: range.to,
       severity: languageToolSeverity(item),
+      category: languageToolCategory(item),
+      categoryLabel: String(item?.rule?.category?.name || ""),
+      title: String(item?.shortMessage || ""),
       message: String(item?.message || item?.shortMessage || "LanguageTool issue"),
       rule: String(item?.rule?.id || ""),
+      ruleDescription: String(item?.rule?.description || ""),
+      url: firstRuleUrl(item),
       word: masked.slice(range.from, range.to),
       suggestions,
     });
@@ -401,6 +445,98 @@ export async function acceptProseWord(value) {
     words: new Set(sorted.map(normalizedAcceptedWord).filter(Boolean)),
   };
   return { ok: true, word };
+}
+
+function normalizedRuleId(value) {
+  const rule = String(value || "").trim();
+  return /^[A-Za-z0-9_.:-]{1,128}$/.test(rule) ? rule : "";
+}
+
+async function readDisabledRules() {
+  if (Date.now() < disabledRulesCache.expiresAt) return new Set(disabledRulesCache.rules);
+  let rules = new Set();
+  try {
+    rules = new Set((await readFile(DISABLED_RULES_FILE, "utf8"))
+      .split(/\r?\n/)
+      .map((line) => normalizedRuleId(line.replace(/#.*$/, "")))
+      .filter(Boolean));
+  } catch {
+    // No rule has been turned off yet.
+  }
+  disabledRulesCache = { expiresAt: Date.now() + USER_WORDS_CACHE_MS, rules };
+  return new Set(rules);
+}
+
+/** Turn a LanguageTool rule off (or back on) for Noema and Emacs alike. */
+export async function setProseRuleDisabled(value, disabled = true) {
+  const rule = normalizedRuleId(value);
+  if (!rule) return { ok: false, message: "Not a LanguageTool rule id" };
+  disabledRulesCache.expiresAt = 0;
+  const rules = await readDisabledRules();
+  if (disabled) rules.add(rule);
+  else rules.delete(rule);
+  const sorted = [...rules].sort();
+  await mkdir(dirname(DISABLED_RULES_FILE), { recursive: true });
+  const temporary = `${DISABLED_RULES_FILE}.${process.pid}.tmp`;
+  await writeFile(temporary, sorted.length ? `${sorted.join("\n")}\n` : "", "utf8");
+  await rename(temporary, DISABLED_RULES_FILE);
+  disabledRulesCache = { expiresAt: Date.now() + USER_WORDS_CACHE_MS, rules: new Set(sorted) };
+  return { ok: true, rule, disabled: !!disabled, disabledRules: sorted };
+}
+
+/** Split check chunks at blank lines so each paragraph caches on its own. */
+function paragraphPieces(chunks) {
+  const pieces = [];
+  for (const chunk of chunks) {
+    const source = chunk.sourceText || chunk.text;
+    const separator = /\n[ \t]*\n/g;
+    let start = 0;
+    const push = (from, to) => {
+      if (to <= from || !rangeHasCheckedText(chunk.text, from, to)) return;
+      pieces.push({
+        from: chunk.from + from,
+        to: chunk.from + to,
+        text: chunk.text.slice(from, to),
+        sourceText: source.slice(from, to),
+      });
+    };
+    // Split where the source has a blank line: masking blanks display math,
+    // which must stay one piece.
+    for (let match = separator.exec(source); match; match = separator.exec(source)) {
+      push(start, match.index);
+      start = match.index + match[0].length;
+    }
+    push(start, chunk.text.length);
+  }
+  return pieces;
+}
+
+function paragraphCacheKey(settings, piece) {
+  return createHash("sha1")
+    .update(`${settings.language}\0${settings.level}\0${piece.text}\0${piece.sourceText}`)
+    .digest("base64");
+}
+
+function cachedParagraph(key) {
+  const entry = paragraphCache.get(key);
+  if (!entry) return null;
+  // Map order doubles as recency for the bounded LRU.
+  paragraphCache.delete(key);
+  paragraphCache.set(key, entry);
+  return entry;
+}
+
+function rememberParagraph(key, diagnostics) {
+  paragraphCache.set(key, diagnostics);
+  while (paragraphCache.size > PARAGRAPH_CACHE_LIMIT) {
+    paragraphCache.delete(paragraphCache.keys().next().value);
+  }
+}
+
+export function clearProseParagraphCache() {
+  paragraphCache.clear();
+  disabledRulesCache = { expiresAt: 0, rules: new Set() };
+  userWordsCache = { expiresAt: 0, words: new Set() };
 }
 
 function combineLanguageToolChunks(chunks) {
@@ -574,7 +710,70 @@ async function runLanguageToolCli(combined, sourceLength, settings, signal) {
   }
 }
 
+/**
+ * Answer cached paragraphs locally and send only the rest.  A result is cached
+ * only when the tool succeeded without truncation, so a failure or a capped
+ * answer is asked again next time.
+ */
 async function runLanguageTool(chunks, sourceLength, allowLocalFallback, interactive, settings, signal) {
+  const pieces = paragraphPieces(chunks);
+  const keys = pieces.map((piece) => paragraphCacheKey(settings, piece));
+  const diagnostics = [];
+  const missing = [];
+  pieces.forEach((piece, index) => {
+    const cached = cachedParagraph(keys[index]);
+    if (!cached) {
+      missing.push(index);
+      return;
+    }
+    for (const diagnostic of cached) {
+      diagnostics.push({ ...diagnostic, from: piece.from + diagnostic.from, to: piece.from + diagnostic.to });
+    }
+  });
+  const cachedCount = pieces.length - missing.length;
+  if (missing.length === 0) {
+    return {
+      source: "languagetool",
+      ok: true,
+      diagnostics: diagnostics.sort((a, b) => a.from - b.from || a.to - b.to),
+      message: "",
+      partial: false,
+      cached: cachedCount,
+      sent: 0,
+    };
+  }
+  const result = await runLanguageToolUncached(
+    missing.map((index) => pieces[index]),
+    sourceLength,
+    allowLocalFallback,
+    interactive,
+    settings,
+    signal,
+  );
+  if (result.ok && !result.partial) {
+    const fresh = missing.map(() => []);
+    for (const diagnostic of result.diagnostics) {
+      const slot = missing.findIndex((index) => (
+        diagnostic.from >= pieces[index].from && diagnostic.to <= pieces[index].to
+      ));
+      if (slot >= 0) {
+        const piece = pieces[missing[slot]];
+        fresh[slot].push({ ...diagnostic, from: diagnostic.from - piece.from, to: diagnostic.to - piece.from });
+      }
+    }
+    missing.forEach((index, slot) => rememberParagraph(keys[index], fresh[slot]));
+  }
+  return {
+    ...result,
+    diagnostics: [...diagnostics, ...result.diagnostics]
+      .sort((a, b) => a.from - b.from || a.to - b.to)
+      .slice(0, MAX_DIAGNOSTICS_PER_TOOL),
+    cached: cachedCount,
+    sent: missing.length,
+  };
+}
+
+async function runLanguageToolUncached(chunks, sourceLength, allowLocalFallback, interactive, settings, signal) {
   const combined = combineLanguageToolChunks(chunks);
   try {
     throwIfAborted(signal);
@@ -686,7 +885,7 @@ export async function runExternalProseChecks({
       chunkInfo = createCheckChunks(masked, ranges);
       for (const chunk of chunkInfo.chunks) chunk.sourceText = source.slice(chunk.from, chunk.to);
     }
-    const [result, userWords] = await Promise.all([
+    const [result, userWords, disabledRules] = await Promise.all([
       runLanguageTool(
         chunkInfo.chunks,
         chunkInfo.totalChars,
@@ -696,6 +895,7 @@ export async function runExternalProseChecks({
         controller.signal,
       ),
       readUserWords(),
+      readDisabledRules(),
     ]);
     throwIfAborted(controller.signal);
     const acceptedWords = new Set([
@@ -703,7 +903,8 @@ export async function runExternalProseChecks({
       ...userWords,
     ]);
     const diagnostics = (result.diagnostics ?? [])
-      .filter((diagnostic) => !acceptedWords.has(normalizedAcceptedWord(diagnostic.word)));
+      .filter((diagnostic) => !acceptedWords.has(normalizedAcceptedWord(diagnostic.word)))
+      .filter((diagnostic) => !disabledRules.has(diagnostic.rule));
     const { source: toolSource, ok, message, partial } = result;
     return {
       ok: true,
@@ -714,7 +915,10 @@ export async function runExternalProseChecks({
         checkedChars: chunkInfo.checkedChars,
         totalChars: chunkInfo.totalChars,
         partial: chunkInfo.partial || !!result.partial,
+        paragraphs: (result.cached ?? 0) + (result.sent ?? 0),
+        cachedParagraphs: result.cached ?? 0,
       },
+      disabledRules: [...disabledRules],
       acceptedWords: [...acceptedWords],
     };
   } finally {

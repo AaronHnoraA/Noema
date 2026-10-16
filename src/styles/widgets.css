@@ -376,12 +376,24 @@
   text-underline-offset: 3px;
 }
 
-.cm-editor .cm-prose-diagnostic-languagetool {
-  text-decoration-color: rgba(217, 119, 6, 0.95);
+/* LanguageTool's classes, coloured as its own clients do. */
+.cm-editor .cm-prose-diagnostic {
+  --prose-issue: rgb(217, 119, 6);
+  text-decoration-color: var(--prose-issue);
+  cursor: pointer;
 }
 
-.cm-editor .cm-prose-diagnostic-browser {
-  text-decoration-color: color-mix(in srgb, var(--aaron-link, #9de7ff), transparent 4%);
+.cm-editor .cm-prose-spelling { --prose-issue: rgb(229, 72, 77); }
+.cm-editor .cm-prose-grammar { --prose-issue: rgb(217, 119, 6); }
+.cm-editor .cm-prose-punctuation { --prose-issue: rgb(202, 138, 4); }
+.cm-editor .cm-prose-typography { --prose-issue: rgb(13, 148, 136); }
+.cm-editor .cm-prose-word { --prose-issue: rgb(139, 92, 246); }
+.cm-editor .cm-prose-style { --prose-issue: rgb(59, 130, 246); }
+
+.cm-editor .cm-prose-diagnostic:hover,
+.cm-editor .cm-prose-diagnostic-active {
+  background: color-mix(in srgb, var(--prose-issue), transparent 84%);
+  border-radius: 2px;
 }
 
 .cm-editor .cm-vim-jump-label,

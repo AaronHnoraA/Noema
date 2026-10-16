@@ -5545,8 +5545,48 @@ html.aaronnote-paused *::after {
 }
 
 .aaronnote-prose-popover[hidden] { display: none; }
-.aaronnote-prose-message { margin: 0 0 7px; font-size: 0.86rem; }
-.aaronnote-prose-popover button { margin: 2px 4px 2px 0; }
+.aaronnote-prose-popover { --prose-issue: rgb(217, 119, 6); border-left: 3px solid var(--prose-issue); }
+.aaronnote-prose-popover[data-prose-category="spelling"] { --prose-issue: rgb(229, 72, 77); }
+.aaronnote-prose-popover[data-prose-category="punctuation"] { --prose-issue: rgb(202, 138, 4); }
+.aaronnote-prose-popover[data-prose-category="typography"] { --prose-issue: rgb(13, 148, 136); }
+.aaronnote-prose-popover[data-prose-category="word"] { --prose-issue: rgb(139, 92, 246); }
+.aaronnote-prose-popover[data-prose-category="style"] { --prose-issue: rgb(59, 130, 246); }
+.aaronnote-prose-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.aaronnote-prose-category { flex: 1; color: var(--prose-issue); font: 600 0.72rem/1.2 var(--aaron-font-sans); letter-spacing: 0.04em; text-transform: uppercase; }
+.aaronnote-prose-position { color: var(--aaron-faint); font: 0.72rem/1 var(--aaron-font-mono); font-variant-numeric: tabular-nums; }
+.aaronnote-prose-header button { min-width: 20px; padding: 0 4px; border: 0; background: transparent; color: var(--aaron-faint); cursor: pointer; }
+.aaronnote-prose-header button:hover { color: var(--aaron-ink); }
+.aaronnote-prose-title { margin: 0 0 2px; font-weight: 600; font-size: 0.86rem; }
+.aaronnote-prose-message { margin: 0 0 7px; font-size: 0.84rem; color: var(--aaronnote-muted, inherit); }
+.aaronnote-prose-suggestions { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 7px; }
+.aaronnote-prose-suggestions button {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--prose-issue), transparent 82%);
+  color: var(--aaron-ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+.aaronnote-prose-suggestions button:hover { background: color-mix(in srgb, var(--prose-issue), transparent 65%); }
+.aaronnote-prose-actions { display: flex; flex-wrap: wrap; gap: 10px; padding-top: 6px; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+.aaronnote-prose-actions button { padding: 0; border: 0; background: transparent; color: var(--aaron-faint); font-size: 0.78rem; cursor: pointer; }
+.aaronnote-prose-actions button:hover { color: var(--aaron-ink); text-decoration: underline; }
+
+.aaronnote-prose-badge { cursor: pointer; pointer-events: auto; font-variant-numeric: tabular-nums; color: var(--aaron-faint); }
+.aaronnote-prose-badge[hidden] { display: none; }
+.aaronnote-prose-badge[data-prose-category="spelling"] { color: rgb(229, 72, 77); }
+.aaronnote-prose-badge[data-prose-category="grammar"] { color: rgb(217, 119, 6); }
+.aaronnote-prose-badge[data-prose-category="punctuation"] { color: rgb(202, 138, 4); }
+.aaronnote-prose-badge[data-prose-category="typography"] { color: rgb(13, 148, 136); }
+.aaronnote-prose-badge[data-prose-category="word"] { color: rgb(139, 92, 246); }
+.aaronnote-prose-badge[data-prose-category="style"] { color: rgb(59, 130, 246); }
+.aaronnote-prose-badge-dot { display: inline-block; width: 6px; height: 6px; margin-right: 3px; border-radius: 50%; vertical-align: 1px; }
+.aaronnote-prose-badge-dot + span { margin-right: 6px; }
+.aaronnote-prose-context { margin: 0 0 7px; padding: 4px 6px; border-radius: 4px; background: color-mix(in srgb, currentColor 6%, transparent); font-size: 0.82rem; line-height: 1.45; overflow-wrap: anywhere; }
+.aaronnote-prose-context del { color: var(--prose-issue); text-decoration-color: var(--prose-issue); }
+.aaronnote-prose-context ins { text-decoration: none; font-weight: 600; background: color-mix(in srgb, var(--prose-issue), transparent 82%); border-radius: 2px; padding: 0 2px; }
+.aaronnote-prose-rule { margin: 6px 0 0; color: var(--aaron-faint); font-size: 0.72rem; }
 
 .inline-cite-widget {
   display: inline-flex;

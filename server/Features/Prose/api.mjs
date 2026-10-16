@@ -1,6 +1,7 @@
 export function createProseApiHandlers({
   runExternalProseChecks,
   acceptProseWord,
+  setProseRuleDisabled,
   cancelExternalProseCheck,
   getLanguageToolSettings,
   languageToolSettingsRevision,
@@ -12,6 +13,10 @@ export function createProseApiHandlers({
   return {
     "aaronnote:api:prose-check:run": (body) => runExternalProseChecks(body || {}),
     "aaronnote:api:prose-check:accept-word": (word) => acceptProseWord(word),
+    "aaronnote:api:prose-check:disable-rule": (body) => setProseRuleDisabled(
+      body?.rule ?? body,
+      body?.disabled !== false,
+    ),
     "aaronnote:api:prose-check:cancel": (requestId) => cancelExternalProseCheck(requestId),
     "aaronnote:api:prose-check:settings": async () => {
       const settings = await getLanguageToolSettings();
