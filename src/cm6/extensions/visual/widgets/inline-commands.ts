@@ -20,7 +20,7 @@ import { decodeRevisionAttribute, decodeRevisionContext } from "../../../../auth
 import { revisionKindOf } from "../../../../revision-kinds.ts";
 import { findInlineCommandClose, isEscapedCommandStart, parseCommandArgs, scanInlineCommands, type InlineCommand } from "../../../../command-syntax.ts";
 import { renderMarkdownHTML } from "../../../../render-html.ts";
-import type { Range } from "@codemirror/state";
+import { StateField, type Range, type Text, type Transaction } from "@codemirror/state";
 import { blockMathRangesOverlapping, mergeOverlappingRanges, positionInsideAnyRange } from "../../../math-ranges.ts";
 import { scanCodeRanges } from "../../../code-ranges.ts";
 import { scanInlineMathRanges } from "../../../../inline-math.ts";
@@ -903,37 +903,11 @@ export function createInteractiveCiteElement(cmd: InlineCommand): HTMLElement {
   return wrap;
 }
 
-function visualLineTextRight(line: HTMLElement, anchorRect: DOMRect, ignored: HTMLElement): number {
-  const doc = line.ownerDocument;
-  const win = doc.defaultView;
-  if (!win) return anchorRect.right;
-  const filter = {
-    acceptNode(node: Node): number {
-      if (!node.textContent?.trim()) return win.NodeFilter.FILTER_REJECT;
-      const parent = node.parentElement;
-      if (parent && ignored.contains(parent)) return win.NodeFilter.FILTER_REJECT;
-      return win.NodeFilter.FILTER_ACCEPT;
-    },
-  };
-  const walker = doc.createTreeWalker(line, win.NodeFilter.SHOW_TEXT, filter);
-  const range = doc.createRange();
-  const yPad = 3;
-  let right = anchorRect.right;
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    range.selectNodeContents(node);
-    for (const rect of Array.from(range.getClientRects())) {
-      const sameVisualRow = rect.bottom >= anchorRect.top - yPad && rect.top <= anchorRect.bottom + yPad;
-      if (sameVisualRow) right = Math.max(right, rect.right);
-    }
-  }
-  range.detach();
-  return right;
-}
-
 /**
  * `@@scomment [text]` — an always-visible side annotation. On wide layouts the
- * card is absolutely positioned and therefore does not alter CM6's height map;
- * CSS switches it back into flow on narrow layouts.
+ * card is absolutely positioned to the right of the text column (placed by
+ * `sideCommentLayoutExtension`), so it does not alter CM6's height map; CSS
+ * switches it back into flow on narrow layouts.
  */
 class SideCommentWidget extends MeasuredWidget {
   cmd: InlineCommand;
@@ -952,7 +926,7 @@ class SideCommentWidget extends MeasuredWidget {
       && this.cmd.fullTo === other.cmd.fullTo;
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  toDOM(): HTMLElement {
     const wrap = document.createElement("span");
     wrap.className = "inline-side-comment-widget inline-command-token";
     wrap.dataset.cmSourceFrom = String(this.cmd.fullFrom);
@@ -975,36 +949,6 @@ class SideCommentWidget extends MeasuredWidget {
 
     anchor.append(connector);
     wrap.append(anchor, card);
-
-    view.requestMeasure({
-      read: () => {
-        if (!wrap.isConnected) return null;
-        const line = wrap.closest(".cm-line") as HTMLElement | null;
-        const scroll = wrap.closest(".cm-scroller") as HTMLElement | null;
-        const lineRect = line?.getBoundingClientRect();
-        const scrollRect = scroll?.getBoundingClientRect() ?? view.dom.getBoundingClientRect();
-        const wrapRect = wrap.getBoundingClientRect();
-        const anchorRect = anchor.getBoundingClientRect();
-        const connectorRect = connector.getBoundingClientRect();
-        const cardRect = card.getBoundingClientRect();
-        if (!line || !lineRect || !cardRect.width || !anchorRect.width) return null;
-
-        const gap = 14;
-        const minLeft = anchorRect.right + gap;
-        const preferredRailLeft = scrollRect.right - cardRect.width - 120;
-        const textSafeLeft = visualLineTextRight(line, anchorRect, card) + gap;
-        const cardLeft = Math.max(minLeft, preferredRailLeft, textSafeLeft);
-        return {
-          cardLeft: cardLeft - wrapRect.left,
-          connectorWidth: Math.max(12, cardLeft - connectorRect.left),
-        };
-      },
-      write: (placement) => {
-        if (!placement) return;
-        wrap.style.setProperty("--side-comment-card-left", `${Math.round(placement.cardLeft)}px`);
-        wrap.style.setProperty("--side-comment-connector-width", `${Math.round(placement.connectorWidth)}px`);
-      },
-    });
 
     return wrap;
   }
@@ -1270,3 +1214,112 @@ class TodoPlugin {
 export const inlineCommandsExtension = ViewPlugin.fromClass(TodoPlugin, {
   decorations: (v) => v.decorations,
 });
+
+// ---------------------------------------------------------------------------
+// Side-comment layout
+// ---------------------------------------------------------------------------
+
+const SIDE_COMMENT_GAP_PX = 10;
+const SIDE_COMMENT_NARROW = "(max-width: 900px)";
+
+function setPx(el: HTMLElement, name: string, value: number): void {
+  const next = `${Math.round(value)}px`;
+  if (el.style.getPropertyValue(name) !== next) el.style.setProperty(name, next);
+}
+
+function docHasSideComment(doc: Text): boolean {
+  for (const iter = doc.iterLines(); !iter.next().done;) {
+    if (iter.value.includes("@@scomment")) return true;
+  }
+  return false;
+}
+
+/** Whether an edit's changed lines, before or after, mention a side comment. */
+function editTouchesSideComment(tr: Transaction): boolean {
+  let hit = false;
+  const touches = (doc: Text, from: number, to: number) =>
+    doc.sliceString(doc.lineAt(from).from, doc.lineAt(to).to).includes("scomment");
+  tr.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (!hit) hit = touches(tr.startState.doc, fromA, toA) || touches(tr.newDoc, fromB, toB);
+  });
+  return hit;
+}
+
+/**
+ * Whether the note has side comments, and so lets the page scroll sideways to
+ * reach cards past the text column. The class goes through `editorAttributes` because CM6 owns the editor's class
+ * attribute and rewrites it on focus and other updates. The full scan runs
+ * only at startup and when an edit touches `@@scomment`.
+ */
+const sideCommentRailField = StateField.define<boolean>({
+  create: (state) => docHasSideComment(state.doc),
+  update: (on, tr) => (tr.docChanged && editTouchesSideComment(tr) ? docHasSideComment(tr.newDoc) : on),
+  provide: (field) => EditorView.editorAttributes.from(field, (on): Record<string, string> => (on ? { class: "has-side-comments" } : {})),
+});
+
+/**
+ * Lays out every visible `@@scomment` card in one pass, just right of the
+ * text column so no card covers prose. Cards keep their line's height when
+ * they can and are pushed down just far enough to clear the card above when
+ * they cannot.
+ */
+class SideCommentLayout {
+  private view: EditorView;
+
+  constructor(view: EditorView) {
+    this.view = view;
+    this.schedule();
+  }
+
+  private get hasRail(): boolean {
+    return this.view.state.field(sideCommentRailField);
+  }
+
+  update(update: ViewUpdate): void {
+    if (!this.hasRail) return;
+    // Selection matters because a card turns back into source under the cursor.
+    if (update.docChanged || update.viewportChanged || update.geometryChanged
+      || update.heightChanged || update.selectionSet || update.focusChanged) this.schedule();
+  }
+
+  private schedule(): void {
+    this.view.requestMeasure({ key: this, read: () => this.read(), write: (layout) => this.write(layout) });
+  }
+
+  private read() {
+    if (!this.hasRail) return null;
+    const win = this.view.dom.ownerDocument.defaultView;
+    if (win?.matchMedia(SIDE_COMMENT_NARROW).matches) return null;
+    const widgets = Array.from(this.view.contentDOM.querySelectorAll<HTMLElement>(".inline-side-comment-widget"));
+    let floor = -Infinity;
+    return widgets.flatMap((wrap) => {
+      const line = wrap.closest(".cm-line");
+      const card = wrap.querySelector<HTMLElement>(".inline-side-comment-card");
+      const connector = wrap.querySelector<HTMLElement>(".inline-side-comment-connector");
+      if (!line || !card || !connector) return [];
+      const shift = parseFloat(wrap.style.getPropertyValue("--side-comment-shift")) || 0;
+      const cardRect = card.getBoundingClientRect();
+      const naturalTop = cardRect.top - shift;
+      const nextShift = Math.max(0, floor + SIDE_COMMENT_GAP_PX - naturalTop);
+      floor = naturalTop + nextShift + cardRect.height;
+      const cardLeft = line.getBoundingClientRect().right + 1.5 * SIDE_COMMENT_GAP_PX;
+      return [{
+        wrap,
+        cardLeft: cardLeft - wrap.getBoundingClientRect().left,
+        connectorWidth: Math.max(12, cardLeft - connector.getBoundingClientRect().left),
+        shift: nextShift,
+      }];
+    });
+  }
+
+  private write(layout: ReturnType<SideCommentLayout["read"]>): void {
+    for (const { wrap, cardLeft, connectorWidth, shift } of layout ?? []) {
+      setPx(wrap, "--side-comment-card-left", cardLeft);
+      setPx(wrap, "--side-comment-connector-width", connectorWidth);
+      setPx(wrap, "--side-comment-shift", shift);
+    }
+  }
+
+}
+
+export const sideCommentLayoutExtension = [sideCommentRailField, ViewPlugin.fromClass(SideCommentLayout)];

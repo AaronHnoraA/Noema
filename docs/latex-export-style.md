@@ -50,21 +50,22 @@ than failing.
 | `@@revision(kind) [original] {advice: "..."; reason: "..."}` | `\\aaronrevision[kind]{original}{advice}{reason}` — the original stays underlined inline, the suggestion goes to the margin |
 | `@@todo(...) [title] {...}` / `@@itodo` | `\\aarontodo{title}` — an orange margin note. The planning attribute block is **never** exported |
 | `@@comment [text]` | `\\aaroncomment{text}` — inline, pink, prefixed `COMMENT:` |
-| `@@scomment [text]` | `\\sidecomment{text}` — an orange margin note with no prefix |
+| `@@scomment [text]` | `\\sidecomment{text}` — a small in-text aside behind a thin orange rule, no prefix; breaks across pages |
 | `@@project` / `@@milestone` / `@@clock` | **dropped** (planning bookkeeping, never exported) |
 | `#+begin meta ... #+end meta` | consumed for title/date/`annotations`; not emitted |
 | `#+begin tikz [id] ... #+end tikz` | native `tikzpicture` in the LaTeX body |
 
 ### Review annotations
 
-Todos, comments, side comments, and revisions are **exported by default** as an
-annotation column in the margin. Each kind is distinguishable by colour and
+Todos, comments, side comments, and revisions are **exported by default**. Todos
+and revisions form an annotation column in the margin; a side comment is an
+explanatory aside, so it stays in the text flow where it can break across pages. Each kind is distinguishable by colour and
 prefix, so a reviewed PDF can be read without the source:
 
 | Source | Placement | Colour | Prefix |
 |---|---|---|---|
 | `@@todo` / `@@itodo` | margin | orange | `TODO:` |
-| `@@scomment` | margin | orange | none |
+| `@@scomment` | in-text aside | orange rule | none |
 | `@@comment` | inline | pink | `COMMENT:` |
 | `@@revision(suggest)` | margin + inline underline | indigo | `REV:` |
 | `@@revision(question)` | margin + inline underline | amber | `Q:` |

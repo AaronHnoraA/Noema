@@ -255053,14 +255053,14 @@ this is hard
 
 Some prose introducing the executable cells used by the performance guard.
 
-@@cell(python, python3) [bench-cell-1]
+@@cell(python, default) [bench-cell-1]
 
-@@cell(python, python3, analysis) [bench-cell-2]
+@@cell(python, analysis) [bench-cell-2]
 
-@@cell(bash, bash) [bench-cell-3]
+@@cell(bash, default) [bench-cell-3]
 
-@@cell(python, sagemath-10.9) [bench-cell-4]
+@@cell(python, default) [bench-cell-4]
 
-@@cell(lean4, lean4) [bench-cell-5]
+@@cell(lean4, default) [bench-cell-5]
 
 Trailing prose so the final cell is not the last line of the document.

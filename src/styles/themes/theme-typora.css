@@ -790,7 +790,17 @@
 
 /* ─── Inline `@@scomment [text]` — an opaque side card anchored to the
    command position. The wide layout is deliberately out-of-flow so it does
-   not perturb CodeMirror's height map. ─── */
+   not perturb CodeMirror's height map. Cards sit to the right of the text
+   column without changing it; `SideCommentLayout` sets each card's left edge
+   and the shift that clears the card above. While a note has side comments
+   the content may overflow sideways, so the page scrolls right to reach a
+   card instead of clipping it. ─── */
+@media (min-width: 901px) {
+  .cm-editor.has-side-comments .cm-scroller .cm-content.cm-content {
+    overflow-x: visible;
+  }
+}
+
 .cm-editor .inline-side-comment-widget {
   --side-comment-c: var(--c-comment, #f2a272);
   --side-comment-bg: #a94700;
@@ -830,7 +840,7 @@
 .cm-editor .inline-side-comment-card {
   position: absolute;
   left: var(--side-comment-card-left);
-  top: -1.1em;
+  top: calc(-1.1em + var(--side-comment-shift, 0px));
   z-index: var(--side-comment-z, 14);
   width: min(22rem, 36vw);
   max-height: min(30rem, 70vh);

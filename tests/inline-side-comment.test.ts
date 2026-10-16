@@ -68,4 +68,21 @@ describe("inline @@scomment widget", () => {
       cleanup();
     }
   });
+
+  test("keeps the side-comment class across editor updates", () => {
+    const md = "Claim @@scomment [note] after\n\nMore text.";
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      const view = editor.view;
+      expect(view.dom.classList.contains("has-side-comments")).toBe(true);
+      // CM6 rewrites the editor's class attribute on updates such as focus and edits.
+      view.dispatch({ changes: { from: md.length, insert: " Typed." } });
+      view.focus();
+      expect(view.dom.classList.contains("has-side-comments")).toBe(true);
+      view.dispatch({ changes: { from: 0, to: view.state.doc.line(1).to, insert: "Claim after" } });
+      expect(view.dom.classList.contains("has-side-comments")).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
 });

@@ -607,13 +607,27 @@ export function latexMacrosPreamble(macros) {
 
 export function latexSideCommentPreamble(enabled) {
   if (!enabled) return "";
+  // A side comment is an aside in the text flow, set off by a thin rule. It is
+  // not a todonotes margin note: those cannot break, so a long one near the
+  // foot of a page ran off it. A breakable tcolorbox splits across pages,
+  // follows list indentation, and keeps its colour from leaking past a break.
   return String.raw`% Noema side comments
 \makeatletter
 \@ifpackageloaded{todonotes}{}{\usepackage[textsize=footnotesize]{todonotes}}
+\@ifpackageloaded{tcolorbox}{}{\usepackage{tcolorbox}}
 \makeatother
+\tcbuselibrary{skins,breakable}
 \providecolor{AaronSideCommentBackground}{HTML}{A94700}
+\providecolor{AaronSideCommentText}{HTML}{5A4A3E}
 \providecommand{\sidecomment}[1]{%
-  \todo[fancyline,color=AaronSideCommentBackground,textcolor=white,linecolor=AaronSideCommentBackground,bordercolor=white]{#1}%
+  \begin{tcolorbox}[enhanced,breakable,frame hidden,interior hidden,
+    borderline west={0.6pt}{0pt}{AaronSideCommentBackground},
+    boxsep=0pt,left=0.8em,right=0pt,top=1pt,bottom=1pt,
+    before skip=0.5\baselineskip,after skip=0.5\baselineskip,
+    parbox=false,fontupper=\small\upshape,colupper=AaronSideCommentText]%
+  #1%
+  \end{tcolorbox}%
+  \ignorespaces
 }
 
 `;

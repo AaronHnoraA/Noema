@@ -579,7 +579,9 @@ describe("LaTeX export", () => {
     const enabled = latexSideCommentPreamble(true);
     expect(enabled).toContain("todonotes");
     expect(enabled).toContain("\\providecommand{\\sidecomment}");
-    expect(enabled).toContain("fancyline");
+    // An in-flow aside that splits across pages, not an unbreakable margin note.
+    expect(enabled).toContain("breakable");
+    expect(enabled).not.toContain("fancyline");
     expect(latexSideCommentPreamble(false)).toBe("");
 
     const plain = aaronnoteMarkdownToLatex("Plain body.");
