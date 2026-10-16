@@ -3615,29 +3615,45 @@ after
   });
 
   test("html attachments render through an isolated image widget iframe", () => {
+    // Without an IntersectionObserver the embed controller loads eagerly;
+    // its viewport-driven lifecycle is covered by tests/html-embed.test.ts.
+    const observer = globalThis.IntersectionObserver;
+    (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = undefined;
     const md = "![Panel](attachments/demo.html)\n\ntext";
     const { editor, cleanup } = mountCM6(md);
-    editor.setMarkdownSelection(md.length);
+    try {
+      editor.setMarkdownSelection(md.length);
 
-    const iframe = document.querySelector<HTMLIFrameElement>(".cm-visual-embed-html");
-    expect(iframe).toBeTruthy();
-    expect(iframeSrc(iframe!)).toContain("attachments/demo.html");
-    expect(iframe!.getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-popups allow-downloads");
-    expect(document.querySelector(".cm-image-widget img")).toBeNull();
-    cleanup();
+      const iframe = document.querySelector<HTMLIFrameElement>(".cm-visual-embed-html");
+      expect(iframe).toBeTruthy();
+      expect(iframeSrc(iframe!)).toContain("attachments/demo.html");
+      expect(iframe!.getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-popups allow-downloads");
+      expect(document.querySelector(".cm-image-widget img")).toBeNull();
+    } finally {
+      cleanup();
+      globalThis.IntersectionObserver = observer;
+    }
   });
 
   test("empty html links render through the image widget iframe", () => {
+    // Without an IntersectionObserver the embed controller loads eagerly;
+    // its viewport-driven lifecycle is covered by tests/html-embed.test.ts.
+    const observer = globalThis.IntersectionObserver;
+    (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = undefined;
     const md = "[](attachments/demo.html)\n\ntext";
     const { editor, cleanup } = mountCM6(md);
-    editor.setMarkdownSelection(md.length);
+    try {
+      editor.setMarkdownSelection(md.length);
 
-    const iframe = document.querySelector<HTMLIFrameElement>(".cm-visual-embed-html");
-    expect(iframe).toBeTruthy();
-    expect(iframeSrc(iframe!)).toContain("attachments/demo.html");
-    expect(iframe!.getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-popups allow-downloads");
-    expect(document.querySelector(".cm-image-widget img")).toBeNull();
-    cleanup();
+      const iframe = document.querySelector<HTMLIFrameElement>(".cm-visual-embed-html");
+      expect(iframe).toBeTruthy();
+      expect(iframeSrc(iframe!)).toContain("attachments/demo.html");
+      expect(iframe!.getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-popups allow-downloads");
+      expect(document.querySelector(".cm-image-widget img")).toBeNull();
+    } finally {
+      cleanup();
+      globalThis.IntersectionObserver = observer;
+    }
   });
 
   test("image widgets consume trailing layout attrs", () => {

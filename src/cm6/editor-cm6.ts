@@ -1184,6 +1184,15 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       return !isVisualMode(view);
     },
 
+    rerenderPreview(): void {
+      if (!isVisualMode(view)) return;
+      const anchor = view.state.selection.main.head;
+      viewportStabilizer!.preserve(() => {
+        view.dispatch(setVisualMode(false));
+        view.dispatch(setVisualMode(true));
+      }, undefined, anchor);
+    },
+
     focus(): void {
       view.focus();
     },

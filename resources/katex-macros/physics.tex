@@ -1,0 +1,124 @@
+% The `physics` package (CTAN, Sergio C. de la Barrera), as plain macros.
+% Names and output follow the package manual; see
+% https://ctan.org/pkg/physics.
+%
+% Every renderer here reads the same `\newcommand` subset (KaTeX in the page,
+% RaTeX in Emacs, the generated .sty in LaTeX export), so only commands with a
+% fixed argument count are ported. Left out on purpose:
+%   - delimiter-scanning forms: \qty( ), \mqty( ), \eval( |, \sin( ), \dd( )
+%     — use \pqty{} \bqty{} \Bqty{} \vqty{} and \pmqty{} \bmqty{} \vmqty{};
+%   - starred and optional-power forms (\dv[n], \abs*, \qq*);
+%   - redefinitions of built-ins: \div \Re \Im \sin \exp \log \det \Pr;
+%   - names other shared files already define with their own meaning:
+%     \abs \norm \bra \ket \braket \ketbra \expval \ip \tr \Tr \rank \vec.
+%   - computed matrices: \imat \xmat \zmat \pmat \dmat \admat.
+
+% 2.1 Automatic bracing
+\newcommand{\pqty}[1]{\left(#1\right)}
+\newcommand{\bqty}[1]{\left[#1\right]}
+\newcommand{\Bqty}[1]{\left\{#1\right\}}
+\newcommand{\vqty}[1]{\left|#1\right|}
+\newcommand{\absolutevalue}[1]{\left|#1\right|}
+\newcommand{\evaluated}[1]{\left.#1\right|}
+\newcommand{\eval}[1]{\left.#1\right|}
+\newcommand{\order}[1]{\mathcal{O}\left(#1\right)}
+\newcommand{\commutator}[2]{\left[#1,#2\right]}
+\newcommand{\comm}[2]{\left[#1,#2\right]}
+\newcommand{\anticommutator}[2]{\left\{#1,#2\right\}}
+\newcommand{\acomm}[2]{\left\{#1,#2\right\}}
+\newcommand{\poissonbracket}[2]{\left\{#1,#2\right\}}
+\newcommand{\pb}[2]{\left\{#1,#2\right\}}
+
+% 2.2 Vector notation
+\newcommand{\vectorbold}[1]{\mathbf{#1}}
+\newcommand{\vb}[1]{\mathbf{#1}}
+\newcommand{\vectorarrow}[1]{\overrightarrow{\mathbf{#1}}}
+\newcommand{\va}[1]{\overrightarrow{\mathbf{#1}}}
+\newcommand{\vectorunit}[1]{\hat{\mathbf{#1}}}
+\newcommand{\vu}[1]{\hat{\mathbf{#1}}}
+\newcommand{\dotproduct}{\cdot}
+\newcommand{\vdot}{\cdot}
+\newcommand{\crossproduct}{\times}
+\newcommand{\cross}{\times}
+\newcommand{\cp}{\times}
+\newcommand{\gradient}{\nabla}
+\newcommand{\grad}{\nabla}
+\newcommand{\divergence}{\nabla\cdot}
+\newcommand{\curl}{\nabla\times}
+\newcommand{\laplacian}{\nabla^2}
+
+% 2.3 Operators
+\newcommand{\trace}{\operatorname{tr}}
+\newcommand{\Trace}{\operatorname{Tr}}
+\newcommand{\erf}{\operatorname{erf}}
+\newcommand{\Res}{\operatorname{Res}}
+\newcommand{\principalvalue}{\mathcal{P}}
+\newcommand{\pv}{\mathcal{P}}
+\newcommand{\PV}{\mathrm{P.V.}}
+
+% 2.4 Quick quad text
+\newcommand{\qqtext}[1]{\quad\text{#1}\quad}
+\newcommand{\qq}[1]{\quad\text{#1}\quad}
+\newcommand{\qcomma}{,\quad}
+\newcommand{\qc}{,\quad}
+\newcommand{\qcc}{\quad\text{c.c.}\quad}
+\newcommand{\qif}{\quad\text{if}\quad}
+\newcommand{\qthen}{\quad\text{then}\quad}
+\newcommand{\qelse}{\quad\text{else}\quad}
+\newcommand{\qotherwise}{\quad\text{otherwise}\quad}
+\newcommand{\qunless}{\quad\text{unless}\quad}
+\newcommand{\qgiven}{\quad\text{given}\quad}
+\newcommand{\qusing}{\quad\text{using}\quad}
+\newcommand{\qassume}{\quad\text{assume}\quad}
+\newcommand{\qsince}{\quad\text{since}\quad}
+\newcommand{\qlet}{\quad\text{let}\quad}
+\newcommand{\qfor}{\quad\text{for}\quad}
+\newcommand{\qall}{\quad\text{all}\quad}
+\newcommand{\qeven}{\quad\text{even}\quad}
+\newcommand{\qodd}{\quad\text{odd}\quad}
+\newcommand{\qinteger}{\quad\text{integer}\quad}
+\newcommand{\qand}{\quad\text{and}\quad}
+\newcommand{\qor}{\quad\text{or}\quad}
+\newcommand{\qas}{\quad\text{as}\quad}
+\newcommand{\qin}{\quad\text{in}\quad}
+
+% 2.5 Derivatives (two-argument forms)
+\newcommand{\differential}[1]{\mathop{}\!\mathrm{d}#1}
+\newcommand{\dd}[1]{\mathop{}\!\mathrm{d}#1}
+\newcommand{\derivative}[2]{\frac{\mathrm{d}#1}{\mathrm{d}#2}}
+\newcommand{\dv}[2]{\frac{\mathrm{d}#1}{\mathrm{d}#2}}
+\newcommand{\partialderivative}[2]{\frac{\partial#1}{\partial#2}}
+\newcommand{\pderivative}[2]{\frac{\partial#1}{\partial#2}}
+\newcommand{\pdv}[2]{\frac{\partial#1}{\partial#2}}
+\newcommand{\variation}[1]{\mathop{}\!\delta#1}
+\newcommand{\var}[1]{\mathop{}\!\delta#1}
+\newcommand{\functionalderivative}[2]{\frac{\delta#1}{\delta#2}}
+\newcommand{\fdv}[2]{\frac{\delta#1}{\delta#2}}
+
+% 2.6 Dirac notation (beyond quantum.tex)
+\newcommand{\innerproduct}[2]{\left\langle#1\middle|#2\right\rangle}
+\newcommand{\outerproduct}[2]{\left|#1\right\rangle\!\left\langle#2\right|}
+\newcommand{\dyad}[2]{\left|#1\right\rangle\!\left\langle#2\right|}
+\newcommand{\op}[2]{\left|#1\right\rangle\!\left\langle#2\right|}
+\newcommand{\expectationvalue}[1]{\left\langle#1\right\rangle}
+\newcommand{\ev}[1]{\left\langle#1\right\rangle}
+\newcommand{\matrixelement}[3]{\left\langle#1\middle|#2\middle|#3\right\rangle}
+\newcommand{\matrixel}[3]{\left\langle#1\middle|#2\middle|#3\right\rangle}
+\newcommand{\mel}[3]{\left\langle#1\middle|#2\middle|#3\right\rangle}
+
+% 2.7 Matrix macros
+\newcommand{\matrixquantity}[1]{\begin{matrix}#1\end{matrix}}
+\newcommand{\mqty}[1]{\begin{matrix}#1\end{matrix}}
+\newcommand{\pmqty}[1]{\begin{pmatrix}#1\end{pmatrix}}
+\newcommand{\Pmqty}[1]{\left(\begin{matrix}#1\end{matrix}\right)}
+\newcommand{\bmqty}[1]{\begin{bmatrix}#1\end{bmatrix}}
+\newcommand{\vmqty}[1]{\begin{vmatrix}#1\end{vmatrix}}
+\newcommand{\smallmatrixquantity}[1]{\begin{smallmatrix}#1\end{smallmatrix}}
+\newcommand{\smqty}[1]{\begin{smallmatrix}#1\end{smallmatrix}}
+\newcommand{\spmqty}[1]{\left(\begin{smallmatrix}#1\end{smallmatrix}\right)}
+\newcommand{\sPmqty}[1]{\left(\begin{smallmatrix}#1\end{smallmatrix}\right)}
+\newcommand{\sbmqty}[1]{\left[\begin{smallmatrix}#1\end{smallmatrix}\right]}
+\newcommand{\svmqty}[1]{\left|\begin{smallmatrix}#1\end{smallmatrix}\right|}
+\newcommand{\matrixdeterminant}[1]{\begin{vmatrix}#1\end{vmatrix}}
+\newcommand{\mdet}[1]{\begin{vmatrix}#1\end{vmatrix}}
+\newcommand{\smdet}[1]{\left|\begin{smallmatrix}#1\end{smallmatrix}\right|}

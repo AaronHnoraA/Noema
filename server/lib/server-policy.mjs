@@ -12,6 +12,7 @@ const SERVER_READ_CHANNELS = new Set([
   "aaronnote:api:notes:index",
   "aaronnote:api:notes:graph",
   "aaronnote:api:config:katex-macros",
+  "aaronnote:api:config:note-katex-macros",
   "aaronnote:api:config:app",
   "aaronnote:api:jupyter-cell:read-script-cell",
 ]);

@@ -1847,7 +1847,6 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   white-space: nowrap;
 }
 
-.aaronnote-livetex-palette-custom,
 .aaronnote-livetex-matrix-builder {
   display: flex;
   gap: 8px;
@@ -1855,12 +1854,10 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   border-bottom: 1px solid var(--aaron-paper-line);
 }
 
-.aaronnote-livetex-palette-custom[hidden],
 .aaronnote-livetex-matrix-builder[hidden] {
   display: none;
 }
 
-.aaronnote-livetex-palette-custom input,
 .aaronnote-livetex-matrix-builder input,
 .aaronnote-livetex-matrix-builder select {
   box-sizing: border-box;
@@ -1873,16 +1870,6 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   font: 12px/1.2 var(--aaron-font-sans);
 }
 
-.aaronnote-livetex-palette-custom input[name="name"] {
-  flex: 0 1 220px;
-}
-
-.aaronnote-livetex-palette-custom input[name="latex"] {
-  flex: 1 1 auto;
-  font-family: var(--aaron-font-mono);
-}
-
-.aaronnote-livetex-palette-custom button,
 .aaronnote-livetex-matrix-builder button {
   flex: 0 0 auto;
   border: 1px solid color-mix(in srgb, var(--aaron-accent), transparent 55%);
@@ -2030,25 +2017,178 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   background: color-mix(in srgb, var(--aaron-accent), var(--aaron-paper) 91%);
 }
 
-.aaronnote-livetex-palette-pin {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 22px;
-  height: 22px;
-  border: 0;
-  border-radius: 4px;
-  padding: 0;
-  background: transparent;
+/* Macro tab: a typeset list, not tiles. Square, hairline, monospace source. */
+.aaronnote-livetex-palette-items.is-macros {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 0 10px;
+}
+
+.aaronnote-livetex-macro-scopes {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  border-bottom: 1px solid var(--aaron-paper-line);
+  background: var(--aaron-paper);
+}
+
+.aaronnote-livetex-macro-scopes button {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 7px 14px 6px;
+  border-bottom: 1px solid transparent;
+  margin-bottom: -1px;
   color: var(--aaron-muted);
-  font: 15px/1 var(--aaron-font-sans);
+  font: 12px/1.2 var(--aaron-font-sans);
   cursor: pointer;
 }
 
-.aaronnote-livetex-palette-pin:hover,
-.aaronnote-livetex-palette-pin:focus-visible {
-  background: color-mix(in srgb, var(--aaron-accent), transparent 88%);
-  color: var(--aaron-accent);
+.aaronnote-livetex-macro-scopes button small {
+  font: 10.5px/1 var(--aaron-font-mono);
+  opacity: 0.75;
+}
+
+.aaronnote-livetex-macro-scopes button[aria-selected="true"] {
+  border-bottom-color: var(--aaron-ink);
+  color: var(--aaron-ink);
+}
+
+.aaronnote-livetex-macro-scopes button:focus-visible {
+  outline: 1px solid var(--aaron-accent);
+  outline-offset: -1px;
+}
+
+.aaronnote-livetex-macro-form {
+  display: grid;
+  grid-template-columns: minmax(90px, 160px) minmax(0, 1fr) minmax(60px, auto) auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--aaron-paper-line);
+}
+
+.aaronnote-livetex-macro-form input {
+  box-sizing: border-box;
+  min-width: 0;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: 0;
+  padding: 5px 7px;
+  background: transparent;
+  color: var(--aaron-ink);
+  font: 12px/1.3 var(--aaron-font-mono);
+}
+
+.aaronnote-livetex-macro-form input:focus {
+  border-color: var(--aaron-ink);
+  outline: none;
+}
+
+.aaronnote-livetex-macro-form button,
+.aaronnote-livetex-macro-row > button {
+  all: unset;
+  box-sizing: border-box;
+  padding: 4px 9px;
+  border: 1px solid var(--aaron-paper-line);
+  color: var(--aaron-ink);
+  font: 11.5px/1.2 var(--aaron-font-sans);
+  text-align: center;
+  cursor: pointer;
+}
+
+.aaronnote-livetex-macro-form button:hover,
+.aaronnote-livetex-macro-form button:focus-visible,
+.aaronnote-livetex-macro-row > button:hover,
+.aaronnote-livetex-macro-row > button:focus-visible {
+  border-color: var(--aaron-ink);
+}
+
+.aaronnote-livetex-macro-draft {
+  overflow: hidden;
+  color: var(--aaron-ink);
+  white-space: nowrap;
+}
+
+.aaronnote-livetex-macro-error,
+.aaronnote-livetex-macro-message {
+  color: var(--aaron-red, #d1495b);
+  font: 11px/1.35 var(--aaron-font-mono);
+}
+
+.aaronnote-livetex-macro-message,
+.aaronnote-livetex-macro-note {
+  margin: 0;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--aaron-paper-line);
+}
+
+.aaronnote-livetex-macro-note {
+  color: var(--aaron-muted);
+  font: 11.5px/1.35 var(--aaron-font-mono);
+}
+
+.aaronnote-livetex-macro-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--aaron-paper-line), transparent 45%);
+}
+
+.aaronnote-livetex-macro-row > button {
+  align-self: center;
+  padding: 2px 7px;
+  border-color: transparent;
+  color: var(--aaron-muted);
+}
+
+.aaronnote-livetex-macro-insert {
+  all: unset;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(80px, 150px) minmax(60px, 120px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 4px;
+  color: var(--aaron-ink);
+  cursor: pointer;
+}
+
+.aaronnote-livetex-macro-row:hover,
+.aaronnote-livetex-macro-row.is-selected,
+.aaronnote-livetex-macro-row:focus-within {
+  background: color-mix(in srgb, var(--aaron-ink), transparent 94%);
+}
+
+.aaronnote-livetex-macro-insert code {
+  overflow: hidden;
+  font: 12px/1.3 var(--aaron-font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aaronnote-livetex-macro-glyph {
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.aaronnote-livetex-macro-body {
+  overflow: hidden;
+  color: var(--aaron-muted);
+  font: 11px/1.3 var(--aaron-font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aaronnote-livetex-macro-insert em {
+  color: var(--aaron-muted);
+  font: italic 10.5px/1 var(--aaron-font-sans);
 }
 
 .aaronnote-livetex-palette-empty {

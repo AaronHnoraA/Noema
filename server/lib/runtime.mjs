@@ -1,6 +1,6 @@
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, extname, isAbsolute, join, posix as posixPath, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -14,6 +14,8 @@ import { applyLatexTemplate, bibliographyReferencesToLatex, defaultLatexOutputPa
 import { aaronnoteMarkdownToLatexPandoc, extractAaronnoteMetadata } from "./latex-export-pandoc.mjs";
 import { agentAvailable, loadAgentRules, normalizeAgentTitle, polishBodyWithAgent } from "./latex-export-codex.mjs";
 import { loadKatexMacros } from "./katex-macros.mjs";
+import { loadMacroSourceFiles, loadUserKatexMacros, MACRO_SOURCE_BYTES_LIMIT, readLocalMacroSource } from "./user-katex-macros.mjs";
+import { noteMacroSpec, parseNoteLocalMacros } from "../../shared/note-macros.mjs";
 import { durationFromEnv } from "./jupyter-cell.mjs";
 import { moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
 import { scanPlanningDocument, planningSourceIsLive } from "../../shared/planning-document.mjs";
@@ -6757,7 +6759,7 @@ export async function exportLatex(body = {}) {
   const header = parseLatexTemplateHeader(template.text, template.file);
   const engine = String(body.engine || header.engine || "pdflatex").toLowerCase();
   if (!["pdflatex", "xelatex", "lualatex"].includes(engine)) throw new Error(`Unsupported LaTeX engine: ${engine}`);
-  const macroResult = await loadRuntimeKatexMacros(katexMacrosRoot);
+  const macroResult = await loadDocumentKatexMacros(sourceFile, documentContent);
   const declaredSharedFiles = await latexTemplateSharedFiles(template.file, header.sharedFiles);
   // `wrapfigure` is emitted inside the prepared body. Infer it here rather than
   // widening the stable Go/Node feature contract for one standard LaTeX
@@ -9308,6 +9310,65 @@ export async function loadRuntimeKatexMacros(dir = katexMacrosRoot) {
     }
   }
   return { ...loadKatexMacros(resolved), source: "node-katex-macros" };
+}
+
+/**
+ * Resolve one `macros-from` name against the note that declares it and read
+ * it through the backend that owns the note, so a remote note's project
+ * class is read on its own target. RESTRICT keeps local reads inside the
+ * note root (the public reader).
+ */
+async function readNoteMacroSource(noteFile, name, { restrict = false } = {}) {
+  const note = String(noteFile || "");
+  const raw = String(name || "").trim();
+  if (externalFileProvider?.owns?.(note)) {
+    const prefix = /^\/fs:[^:/]*:/.exec(note)?.[0] ?? "";
+    const local = note.slice(prefix.length);
+    if (raw.startsWith("~")) throw new Error("A remote note names its macro files by path");
+    const target = prefix + posixPath.normalize(raw.startsWith("/") ? raw : posixPath.join(posixPath.dirname(local), raw));
+    if (!externalFileProvider.owns(target)) throw new Error(`Not on the note's target: ${raw}`);
+    const opened = await externalFileProvider.read(target);
+    const text = String(opened?.content ?? "");
+    if (text.length > MACRO_SOURCE_BYTES_LIMIT) throw new Error("File is larger than 1 MB");
+    return text;
+  }
+  const base = note ? dirname(resolveUserPath(note)) : noteRoot;
+  const target = raw.startsWith("~") || isAbsolute(raw) ? resolveUserPath(raw) : resolve(base, raw);
+  if (restrict && !inside(target, noteRoot)) {
+    const err = new Error(`Outside the note root: ${raw}`);
+    err.statusCode = 403;
+    throw err;
+  }
+  return readLocalMacroSource(target);
+}
+
+/** The macro layers a note adds over the global set: its `macros-from` files, then its own block. */
+export async function loadNoteKatexMacros(body = {}, options = {}) {
+  const file = String(body.file || "");
+  const names = Array.isArray(body.paths)
+    ? body.paths.map(String)
+    : noteMacroSpec(String(body.content || ""))?.from ?? [];
+  const project = await loadMacroSourceFiles(names, (name) => readNoteMacroSource(file, name, options));
+  const local = typeof body.content === "string" ? parseNoteLocalMacros(body.content) : { macros: {}, errors: [] };
+  return {
+    type: "note-katex-macros",
+    file,
+    files: project.files,
+    project: project.macros,
+    local: local.macros,
+    errors: [...project.errors, ...local.errors],
+  };
+}
+
+/** Every layer a note renders with: shared, the user's, its project files, its own. */
+export async function loadDocumentKatexMacros(file, content) {
+  const shared = await loadRuntimeKatexMacros(katexMacrosRoot);
+  const user = await loadUserKatexMacros();
+  const note = await loadNoteKatexMacros({ file, content });
+  return {
+    macros: { ...shared.macros, ...user.macros, ...note.project, ...note.local },
+    errors: [...shared.errors, ...user.errors, ...note.errors],
+  };
 }
 
 export async function saveNote(body) {

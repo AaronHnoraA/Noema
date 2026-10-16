@@ -21,8 +21,13 @@ $\R^n,\quad \ket{\psi},\quad \NP \subseteq \AM,\quad \tens{A}\in \cV$
 | `groups.tex` | `\GL \SO \U \Sym \Aut \Iso \aut \Cent` |
 | `complexity.tex` | `\class \probsty` + `\NP \coNP \GI \TI \AM \SZK ...` 与决策问题 `\MSE \AMTC ...` |
 | `probability.tex` | `\E \Var` |
+| `physics.tex` | CTAN physics 宏包的定参部分:`\pqty \bqty \Bqty \vqty \eval \order \comm \acomm`、`\vb \va \vu \grad \curl \laplacian`、`\qq \qand \qif …`、`\dd \dv \pdv \fdv`、`\mel \dyad \ev`、`\pmqty \bmqty \smqty \mdet …` |
 
 新增宏:在任意 `.tex` 里加 `\newcommand`,或新建一个 `.tex` 文件即可(目录下所有 `.tex` 都会被加载)。
+
+这里是**共享**层。个人的全局宏放在 `~/.config/noema/katex-macros.tex`,在公式工具板的「宏」分类里管理;
+某篇笔记专用的宏写在它 meta 的 `#+begin macros` 块里,项目宏用 meta 的 `macros-from:` 导入。
+四层的覆盖顺序是 共享 → 项目 → 全局 → 本笔记。
 
 ## 书写格式(KaTeX 可解析子集)
 

@@ -648,6 +648,12 @@ export interface Editor {
   toggleSource(): void;
   /** Whether the editor is currently in raw-source mode. */
   isSourceMode(): boolean;
+  /**
+   * Rebuild the rendered preview in place, keeping the viewport. For a change
+   * that every widget depends on but no transaction carries, such as the
+   * math macro set. Does nothing in source mode.
+   */
+  rerenderPreview(): void;
   /** Focus the editor. */
   focus(): void;
   /** Tear down the editor and remove its DOM. */

@@ -1367,17 +1367,79 @@
   border-radius: 6px;
   background: var(--note-figure-paper, transparent);
 }
-/* An embedded HTML document has no intrinsic size, so it keeps an explicit box. */
+/* An embedded HTML document has no intrinsic size, so it keeps an explicit box.
+ * Its figure spans the text column: a shrink-to-fit figure would leave the
+ * frame's percentage width nothing to resolve against, collapsing it to its
+ * minimum. A page can ask for its own height (`noema:resize`). */
+.cm-editor .cm-image-widget.cm-visual-attachment-html:not(.aaronnote-image-wrap) {
+  width: 100%;
+}
 .cm-editor .cm-visual-embed,
 .aaronnote-visual-embed {
   display: block;
+  box-sizing: border-box;
   width: var(--aaronnote-image-width, min(100%, var(--note-image-max, 100%)));
   min-width: min(100%, 320px);
-  height: var(--aaronnote-image-height, min(52vh, 420px));
+  height: var(--aaronnote-image-height, min(70vh, 640px));
   max-width: var(--aaronnote-image-max-width, min(100%, var(--note-image-max, 100%)));
-  max-height: var(--aaronnote-image-max-height, min(68vh, 560px));
+  max-height: var(--aaronnote-image-max-height, 85vh);
   border: 1px solid color-mix(in srgb, var(--aaron-paper-line, #414b61), var(--aaron-muted, #a9bed3) 12%);
   border-radius: 3px;
+  background: var(--aaron-paper, #171b28);
+}
+/* Full screen for an HTML embed: the live frame is promoted in place (its
+ * page keeps its state); a hairline bar above it carries the exit. */
+.noema-embed-fullscreen-bar {
+  position: fixed;
+  z-index: 2147483000;
+  inset: 0 0 auto 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 30px;
+  padding: 0 4px 0 12px;
+  color: var(--aaron-muted, #a9bed3);
+  font: 11.5px/1 var(--aaron-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  letter-spacing: 0.03em;
+  background: var(--aaron-paper, #171b28);
+  border-bottom: 1px solid var(--aaron-paper-line, #414b61);
+}
+.noema-embed-fullscreen-bar strong {
+  overflow: hidden;
+  color: var(--aaron-ink, #e4ecff);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.noema-embed-fullscreen-bar span { flex: 1; }
+.noema-embed-fullscreen-bar button {
+  all: unset;
+  box-sizing: border-box;
+  width: 24px;
+  height: 22px;
+  color: var(--aaron-ink, #e4ecff);
+  text-align: center;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.noema-embed-fullscreen-bar button:hover,
+.noema-embed-fullscreen-bar button:focus-visible {
+  border-color: var(--aaron-paper-line, #414b61);
+}
+iframe.noema-embed-fullscreen {
+  position: fixed !important;
+  z-index: 2147482999 !important;
+  inset: 30px 0 0 0 !important;
+  width: 100vw !important;
+  height: calc(100vh - 30px) !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
   background: var(--aaron-paper, #171b28);
 }
 .cm-editor .cm-visual-file-card,

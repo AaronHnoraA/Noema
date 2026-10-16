@@ -61,7 +61,9 @@ import {
   todoRefCompletions,
   runtimeDebugSnapshot,
   loadRuntimeKatexMacros,
+  loadNoteKatexMacros,
 } from "./server/lib/index.mjs";
+import { loadUserKatexMacros, saveUserKatexMacros } from "./server/lib/user-katex-macros.mjs";
 import {
   bibliographyPathWatchRelevant,
   bibliographyVersion,
@@ -2778,8 +2780,21 @@ const apiRouter = new ApiRouter().register({
   }),
   "aaronnote:api:config:katex-macros": async () => {
     const payload = await katexMacrosPayload();
-    return hostMode === "server" ? { ...payload, dir: "" } : payload;
+    return hostMode === "server" ? { ...payload, dir: "", user: { ...payload.user, file: "" } } : payload;
   },
+  "aaronnote:api:config:update-user-katex-macros": async (body) => {
+    if (hostMode === "server") {
+      const err = new Error("Macros are read-only in the public reader");
+      err.statusCode = 403;
+      throw err;
+    }
+    await saveUserKatexMacros(body?.macros);
+    const payload = await katexMacrosPayload();
+    broadcast("command", { command: "katex-macros-changed" });
+    return payload;
+  },
+  "aaronnote:api:config:note-katex-macros": (body) =>
+    loadNoteKatexMacros(body || {}, { restrict: hostMode === "server" }),
   "aaronnote:api:config:app": () => currentAppConfigPayload(),
   "aaronnote:api:config:update-app": async (body) => {
     const payload = await updateNoemaAppConfig(body || {}, {
@@ -2800,10 +2815,20 @@ const apiRouter = new ApiRouter().register({
 }, "web-host");
 
 // Read + parse the global KaTeX macro folder on every request (few small files),
-// so editing macros only needs a browser refresh to take effect.
+// so editing macros only needs a browser refresh to take effect. `macros` is
+// the global set the page renders with: shared, then the user's layer over it.
 async function katexMacrosPayload() {
   const { dir, macros, errors, source } = await loadRuntimeKatexMacros(katexMacrosDir);
-  return { type: "katex-macros", dir, macros, errors, source };
+  const user = await loadUserKatexMacros();
+  return {
+    type: "katex-macros",
+    dir,
+    macros: { ...macros, ...user.macros },
+    shared: macros,
+    user: { file: user.file, macros: user.macros },
+    errors: [...errors, ...user.errors],
+    source,
+  };
 }
 
 async function readSystemClipboard(body) {
@@ -3469,6 +3494,8 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     },
     config: {
       katexMacros: function() { return call("aaronnote:api:config:katex-macros", []); },
+      updateUserKatexMacros: function(body) { return call("aaronnote:api:config:update-user-katex-macros", [body || {}]); },
+      noteKatexMacros: function(body) { return call("aaronnote:api:config:note-katex-macros", [body || {}]); },
       app: function() { return call("aaronnote:api:config:app", []); },
       updateApp: function(body) { return call("aaronnote:api:config:update-app", [body || {}]); }
     },

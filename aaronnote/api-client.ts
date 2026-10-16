@@ -797,6 +797,8 @@ type NativeApi = {
   };
   config?: {
     katexMacros?: () => Promise<unknown>;
+    updateUserKatexMacros?: (body: { macros: Record<string, string> }) => Promise<unknown>;
+    noteKatexMacros?: (body: { file: string; paths: string[] }) => Promise<unknown>;
     app?: () => Promise<unknown>;
     updateApp?: (body: NoemaAppConfigUpdate) => Promise<unknown>;
   };
@@ -1186,7 +1188,19 @@ export type KatexMacrosResult = {
   type?: string;
   dir?: string;
   source?: string;
+  /** The global set: shared macros with the user's layer over them. */
   macros?: Record<string, string>;
+  shared?: Record<string, string>;
+  user?: { file?: string; macros?: Record<string, string> };
+  errors?: { file: string; message: string }[];
+};
+
+export type NoteKatexMacrosResult = {
+  type?: string;
+  file?: string;
+  files?: string[];
+  project?: Record<string, string>;
+  local?: Record<string, string>;
   errors?: { file: string; message: string }[];
 };
 
@@ -1905,6 +1919,15 @@ export const api = {
       const call = nativeApi().config?.katexMacros;
       if (!call) return {};
       return (await call()) as KatexMacrosResult;
+    },
+    async updateUserKatexMacros(macros: Record<string, string>): Promise<KatexMacrosResult> {
+      const call = requireMethod(nativeApi().config?.updateUserKatexMacros, "Math macros");
+      return ensureOk(await call({ macros }) as KatexMacrosResult & { ok?: boolean }, "Saving math macros failed");
+    },
+    async noteKatexMacros(file: string, paths: string[]): Promise<NoteKatexMacrosResult> {
+      const call = nativeApi().config?.noteKatexMacros;
+      if (!call) return {};
+      return (await call({ file, paths })) as NoteKatexMacrosResult;
     },
     async app(): Promise<NoemaAppConfigMsg> {
       const call = requireMethod(nativeApi().config?.app, "Noema settings");

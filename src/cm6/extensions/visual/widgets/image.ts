@@ -36,6 +36,7 @@ import {
 import { applyFigureLayout, arrangeWithNextFigure, figureHeightHandle, figureLayoutTarget, figureMoveGrip } from "../../../figure-layout-menu.ts";
 import { imageRowGrip, imageRowAt, imageRowSplitHandle, imageRowHeightHandle, joinNextImage, sizeImageRowItem } from "../../../image-row-layout.ts";
 import { openImageViewer } from "../../../image-viewer.ts";
+import { mountHtmlEmbed, type HtmlEmbedHandle } from "../../../../html-embed.ts";
 import { markdownLinkDestination } from "../../../../markdown-link.ts";
 import {
   VISUAL_ATTACHMENT_IFRAME_ALLOW,
@@ -110,6 +111,9 @@ function setVisualFrameSource(
 // ---------------------------------------------------------------------------
 // Widget
 // ---------------------------------------------------------------------------
+
+/** The lifecycle handle of an HTML embed, keyed by its figure. */
+const htmlEmbeds = new WeakMap<HTMLElement, HtmlEmbedHandle>();
 
 class ImageWidget extends MeasuredWidget {
   src: string;
@@ -214,11 +218,23 @@ class ImageWidget extends MeasuredWidget {
           const iframe = document.createElement("iframe");
           iframe.className = `cm-image-render cm-visual-embed cm-visual-embed-${kind}`;
           iframe.title = visualAttachmentTitle(kind, this.alt);
-          iframe.setAttribute("loading", "lazy");
           iframe.setAttribute("allow", VISUAL_ATTACHMENT_IFRAME_ALLOW);
           iframe.setAttribute("referrerpolicy", "no-referrer-when-downgrade");
           iframe.setAttribute("sandbox", visualAttachmentSandbox(kind));
-          setVisualFrameSource(iframe, frame);
+          if (frame.mode === "src") {
+            // The controller loads the document near the viewport, unloads it
+            // when it stays away, and is released in destroy().
+            htmlEmbeds.set(wrap, mountHtmlEmbed(iframe, {
+              src: frame.src,
+              title: this.alt.trim() || this.src.split(/[?#]/, 1)[0]!.split("/").pop() || "HTML",
+              container: wrap,
+              explicitHeight: Boolean(this.layout.height),
+              onResize: () => { if (wrap.isConnected) view.requestMeasure(); },
+              setSource: (target, src) => setVisualFrameSource(target, { kind, mode: "src", src }),
+            }));
+          } else {
+            setVisualFrameSource(iframe, frame);
+          }
           iframe.addEventListener("load", () => { if (wrap.isConnected) view.requestMeasure(); });
           wrap.append(iframe);
         } else {
@@ -296,6 +312,8 @@ class ImageWidget extends MeasuredWidget {
       if (!joinNextImage(view, Number(wrap.dataset.cmSourceFrom))) arrangeWithNextFigure(view, wrap);
     }, this.joinable ? "Place with next image" : "Place with next figure");
     if (!this.inRow && !view.state.readOnly) toolbar.append(figureMoveGrip(view, wrap));
+    const embed = htmlEmbeds.get(wrap);
+    if (embed) toolbar.append(imageToolSeparator(), imageToolButton("⤢", "Full screen (Esc exits)", false, () => embed.toggleFullscreen(true)));
     wrap.append(toolbar);
     syncImageRow(wrap, view, this.from, this.layout, resizableImage);
     if (resizableImage) {
@@ -304,6 +322,12 @@ class ImageWidget extends MeasuredWidget {
     if (!this.inRow && !view.state.readOnly) wrap.append(figureHeightHandle(view, wrap, "image"));
 
     return this.registerMeasured(wrap, view);
+  }
+
+  destroy(dom: HTMLElement): void {
+    htmlEmbeds.get(dom)?.dispose();
+    htmlEmbeds.delete(dom);
+    super.destroy(dom);
   }
 
   ignoreEvent(event: Event): boolean {

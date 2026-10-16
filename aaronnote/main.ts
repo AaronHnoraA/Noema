@@ -51,7 +51,7 @@ import { INLINE_MATH_RE } from "../src/inline-math.ts";
 import { scanInlineCommands } from "../src/command-syntax.ts";
 import { decodeRevisionAttribute, decodeRevisionContext } from "../src/authoring-syntax.ts";
 import { DEFAULT_REVISION_KIND, revisionKindIdOf, revisionKinds } from "../src/revision-kinds.ts";
-import { formatMathRenderError } from "../src/math-render.ts";
+import { formatMathRenderError, renderMathHTML } from "../src/math-render.ts";
 import { mathPreviewFitScale } from "./math-preview-fit.ts";
 import { liveTexMatrixTemplate, liveTexPaletteBeforeInputKey, liveTexPaletteCategories, liveTexPaletteMatches, liveTexPaletteSourceTemplate, rebaseLiveTexPaletteRange, searchLiveTexPalette, type LiveTexPaletteItem } from "./live-tex-palette.ts";
 import { managedFormulaStyle, wrapManagedFormulaStyle, type ManagedFormulaStyle } from "./formula-style.ts";
@@ -59,6 +59,9 @@ import { revealWhileLayoutSettles } from "./settled-reveal.ts";
 import { sameNoteFile } from "./same-note-file.ts";
 import { resolveNoteReference } from "../shared/note-refs.mjs";
 import { getKatexMacros, setKatexMacros } from "../src/katex-macros.ts";
+import { htmlEmbedActivityParticipant } from "../src/html-embed.ts";
+import { createNoteMacroRuntime } from "./note-macros-runtime.ts";
+import { buildMacroPanel, LIVE_TEX_MACRO_CATEGORY, macroPaletteItems, validateMacroDraft, type MacroPanelState, type MacroScope } from "./live-tex-macro-panel.ts";
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
 import { formatCitationLabel } from "../src/render-html.ts";
 import { hrefProtocol, safeHref } from "../src/url-safety.ts";
@@ -1131,15 +1134,9 @@ liveTexStudio.innerHTML = `
       <div class="aaronnote-livetex-palette-head">
         <div class="aaronnote-livetex-palette-tabs" data-livetex-palette-tabs role="tablist" aria-label="公式工具分类"></div>
         <input type="search" class="aaronnote-livetex-palette-search" data-livetex-palette-search placeholder="搜索符号或 LaTeX 命令" aria-label="搜索公式工具" autocomplete="off" spellcheck="false" />
-        <button type="button" data-livetex-custom-toggle title="添加自己的公式模板">＋ 自定义</button>
         <button type="button" data-livetex-palette-close aria-label="关闭公式工具板">×</button>
       </div>
       <div class="aaronnote-livetex-palette-help">Tab 切分类 · 方向键选符号 · Enter 插入 · 分类末尾 Tab / ⌘F 搜索 · Esc 返回编辑</div>
-      <form class="aaronnote-livetex-palette-custom" data-livetex-custom-form hidden>
-        <input name="name" maxlength="36" placeholder="名称，例如 傅里叶变换" aria-label="自定义公式名称" required />
-        <input name="latex" maxlength="1200" placeholder="LaTeX，例如 \\frac{\\placeholder{}}{\\placeholder{}}" aria-label="自定义公式 LaTeX" required spellcheck="false" />
-        <button type="submit">保存磁贴</button>
-      </form>
       <form class="aaronnote-livetex-matrix-builder" data-livetex-matrix-builder hidden>
         <label>行 <input type="number" name="rows" min="1" max="10" value="2" aria-label="矩阵行数" /></label>
         <label>列 <input type="number" name="columns" min="1" max="10" value="2" aria-label="矩阵列数" /></label>
@@ -1179,45 +1176,14 @@ const liveTexPaletteTabs = liveTexPalette.querySelector<HTMLElement>("[data-live
 const liveTexPaletteItems = liveTexPalette.querySelector<HTMLElement>("[data-livetex-palette-items]")!;
 const liveTexPaletteSearch = liveTexPalette.querySelector<HTMLInputElement>("[data-livetex-palette-search]")!;
 const liveTexPaletteToggle = liveTexStudio.querySelector<HTMLButtonElement>("[data-livetex-keyboard]")!;
-const liveTexCustomForm = liveTexPalette.querySelector<HTMLFormElement>("[data-livetex-custom-form]")!;
 const liveTexMatrixBuilder = liveTexPalette.querySelector<HTMLFormElement>("[data-livetex-matrix-builder]")!;
 const liveTexStylebar = liveTexPalette.querySelector<HTMLElement>("[data-livetex-stylebar]")!;
 let liveTexEditor: VisualTexInlineEditor | null = null;
 let liveTexTarget: ContextMathTarget | null = null;
 let liveTexDraft = "";
 let liveTexZoom = 1;
-const liveTexPaletteStorageKey = "noema:livetex-palette:v1";
-type LiveTexSavedPalette = { favorites: string[]; custom: LiveTexPaletteItem[] };
-function readLiveTexSavedPalette(): LiveTexSavedPalette {
-  try {
-    const saved: unknown = JSON.parse(localStorage.getItem(liveTexPaletteStorageKey) || "null");
-    if (!saved || typeof saved !== "object") return { favorites: [], custom: [] };
-    const candidate = saved as Partial<LiveTexSavedPalette>;
-    const favorites = Array.isArray(candidate.favorites)
-      ? candidate.favorites.filter((value): value is string => typeof value === "string").slice(0, 80)
-      : [];
-    const custom = Array.isArray(candidate.custom)
-      ? candidate.custom.filter((value): value is LiveTexPaletteItem => (
-        !!value && typeof value.label === "string" && value.label.length <= 36
-        && typeof value.name === "string" && value.name.length <= 36
-        && typeof value.latex === "string" && value.latex.length <= 1200
-      )).slice(0, 40)
-      : [];
-    return { favorites, custom };
-  } catch {
-    return { favorites: [], custom: [] };
-  }
-}
-const liveTexSavedPalette = readLiveTexSavedPalette();
-const liveTexPaletteFavorites = new Set(liveTexSavedPalette.favorites);
-const liveTexPaletteCustom = liveTexSavedPalette.custom;
-function saveLiveTexPalette(): void {
-  try {
-    localStorage.setItem(liveTexPaletteStorageKey, JSON.stringify({
-      favorites: [...liveTexPaletteFavorites], custom: liveTexPaletteCustom,
-    }));
-  } catch { /* Palette works for this session when storage is unavailable. */ }
-}
+let liveTexMacroPanel: MacroPanelState = { scope: "local", editing: null, message: "" };
+let disposeLiveTexMacroPanel: () => void = () => {};
 let liveTexPaletteCategory = liveTexPaletteCategories[0]!.id;
 let liveTexPaletteResults: readonly LiveTexPaletteItem[] = [];
 let liveTexPaletteRenderFrame = 0;
@@ -1257,7 +1223,8 @@ for (const swatches of liveTexStylebar.querySelectorAll<HTMLElement>("[data-live
   }
 }
 
-for (const category of [{ id: "favorites", label: "常用" }, ...liveTexPaletteCategories]) {
+// Macros come last: symbols are the everyday tabs, macros are managed.
+for (const category of [...liveTexPaletteCategories, { id: LIVE_TEX_MACRO_CATEGORY, label: "宏" }]) {
   const tab = document.createElement("button");
   tab.type = "button";
   tab.dataset.livetexPaletteCategory = category.id;
@@ -1272,17 +1239,20 @@ function renderLiveTexPalette(): void {
   const query = liveTexPaletteSearch.value;
   liveTexMatrixBuilder.hidden = Boolean(query) || liveTexPaletteCategory !== "arrays";
   liveTexStylebar.hidden = Boolean(query) || liveTexPaletteCategory !== "style";
-  const customMatches = liveTexPaletteCustom.filter((entry) => liveTexPaletteMatches(entry, query));
-  liveTexPaletteResults = liveTexPaletteCategory === "favorites" && !query
+  disposeLiveTexMacroPanel();
+  disposeLiveTexMacroPanel = () => {};
+  const macroTab = liveTexPaletteCategory === LIVE_TEX_MACRO_CATEGORY && !query;
+  liveTexPaletteItems.classList.toggle("is-macros", macroTab);
+  if (macroTab) {
+    renderLiveTexMacroTab();
+    return;
+  }
+  liveTexPaletteResults = query
     ? [
-      ...liveTexPaletteCategories.flatMap(({ items }) => items)
-        .filter((entry, index, all) => liveTexPaletteFavorites.has(entry.latex)
-          && all.findIndex((candidate) => candidate.latex === entry.latex) === index),
-      ...liveTexPaletteCustom,
+      ...searchLiveTexPalette(query, liveTexPaletteCategory),
+      ...macroPaletteItems(noteMacros.layers()).filter((entry) => liveTexPaletteMatches(entry, query)),
     ]
-    : query
-      ? [...searchLiveTexPalette(query, liveTexPaletteCategory), ...customMatches]
-      : searchLiveTexPalette("", liveTexPaletteCategory);
+    : searchLiveTexPalette("", liveTexPaletteCategory);
   liveTexPaletteSelectedIndex = Math.min(liveTexPaletteSelectedIndex, Math.max(0, liveTexPaletteResults.length - 1));
   for (const tab of liveTexPaletteTabs.querySelectorAll<HTMLButtonElement>("button")) {
     const active = !query && tab.dataset.livetexPaletteCategory === liveTexPaletteCategory;
@@ -1306,25 +1276,59 @@ function renderLiveTexPalette(): void {
     const caption = document.createElement("small");
     caption.textContent = entry.name;
     button.append(glyph, caption);
-    const isCustom = liveTexPaletteCustom.includes(entry);
-    const pin = document.createElement("button");
-    pin.type = "button";
-    pin.className = "aaronnote-livetex-palette-pin";
-    pin.dataset.livetexPalettePin = String(index);
-    pin.textContent = isCustom ? "×" : liveTexPaletteFavorites.has(entry.latex) ? "★" : "☆";
-    pin.setAttribute("aria-label", isCustom ? `删除自定义磁贴 ${entry.name}`
-      : liveTexPaletteFavorites.has(entry.latex) ? `取消收藏 ${entry.name}` : `收藏 ${entry.name}`);
-    tile.append(button, pin);
+    tile.append(button);
     fragment.appendChild(tile);
   }
   if (!liveTexPaletteResults.length) {
     const empty = document.createElement("p");
     empty.className = "aaronnote-livetex-palette-empty";
-    empty.textContent = query ? "没有找到符号或命令" : "收藏常用工具，或添加自己的公式磁贴";
+    empty.textContent = "没有找到符号或命令";
     fragment.appendChild(empty);
   }
   liveTexPaletteItems.replaceChildren(fragment);
   liveTexPaletteItems.scrollTop = 0;
+}
+
+function syncLiveTexPaletteTabs(): void {
+  for (const tab of liveTexPaletteTabs.querySelectorAll<HTMLButtonElement>("button")) {
+    const active = tab.dataset.livetexPaletteCategory === liveTexPaletteCategory;
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+  }
+}
+
+function renderLiveTexMacroTab(): void {
+  syncLiveTexPaletteTabs();
+  const panel = buildMacroPanel(noteMacros.layers(), liveTexMacroPanel, {
+    readOnly: editor.view.state.readOnly,
+    renderPreview: (tex) => renderMathHTML(tex, { displayMode: false }).html,
+    draftMacros: () => getKatexMacros(),
+  });
+  disposeLiveTexMacroPanel = panel.dispose;
+  liveTexPaletteResults = panel.items;
+  liveTexPaletteSelectedIndex = Math.min(liveTexPaletteSelectedIndex, Math.max(0, panel.items.length - 1));
+  liveTexPaletteItems.replaceChildren(panel.fragment);
+  selectLiveTexPaletteItem(liveTexPaletteSelectedIndex);
+}
+
+/** Write one editable layer: the user's file, or this note's meta block. */
+async function saveLiveTexMacroLayer(scope: MacroScope, next: Record<string, string>): Promise<boolean> {
+  try {
+    if (scope === "user") {
+      await noteMacros.saveUser(next);
+    } else {
+      if (editor.view.state.readOnly) return false;
+      const edit = noteMacros.localBlockEdit(editor.getMarkdown(), next);
+      if (edit) editor.view.dispatch({ changes: edit, userEvent: "input.macros" });
+    }
+    liveTexMacroPanel = { ...liveTexMacroPanel, editing: null, message: "" };
+    return true;
+  } catch (error) {
+    liveTexMacroPanel = { ...liveTexMacroPanel, message: error instanceof Error ? error.message : String(error) };
+    return false;
+  } finally {
+    scheduleLiveTexPaletteRender();
+  }
 }
 
 function scheduleLiveTexPaletteRender(): void {
@@ -1362,6 +1366,8 @@ function setLiveTexPaletteOpen(open: boolean, restoreFocus = true): void {
   } else {
     if (liveTexPaletteRenderFrame) cancelAnimationFrame(liveTexPaletteRenderFrame);
     liveTexPaletteRenderFrame = 0;
+    disposeLiveTexMacroPanel();
+    disposeLiveTexMacroPanel = () => {};
     if (restoreFocus) {
       if (liveTexPaletteKeepOpen && !liveTexStudio.hidden && liveTexPaletteVisualField?.isConnected) {
         liveTexPaletteVisualField.focus();
@@ -1395,7 +1401,7 @@ function insertSelectedLiveTexPaletteItem(): void {
 }
 
 function cycleLiveTexPaletteCategory(direction: number): void {
-  const categories = ["favorites", ...liveTexPaletteCategories.map(({ id }) => id)];
+  const categories = [...liveTexPaletteCategories.map(({ id }) => id), LIVE_TEX_MACRO_CATEGORY];
   const current = categories.indexOf(liveTexPaletteCategory);
   const next = current + direction;
   if (next < 0 || next >= categories.length) {
@@ -2145,9 +2151,34 @@ const editor = createEditor(host, {
     void flushCursorPosition();
   },
 });
+// Shared → user → the note's `macros-from` files → its `#+begin macros`.
+const noteMacros = createNoteMacroRuntime({
+  loadGlobal: () => api.config.katexMacros(),
+  saveUser: (macros) => api.config.updateUserKatexMacros(macros),
+  loadNote: (file, paths) => api.config.noteKatexMacros(file, paths),
+  install: (macros) => {
+    setKatexMacros(macros);
+    // The resident MathLive preview copied the old dictionary when it mounted;
+    // the next preview frame mounts a fresh one. Pop editors read the set when
+    // they open.
+    liveTexPreview?.destroy();
+    liveTexPreview = null;
+  },
+  rerender: () => {
+    editor.rerenderPreview();
+    scheduleAssistUpdate({ mathPreview: true });
+  },
+  composing: () => editor.view.composing,
+});
+window.addEventListener("aaronnote:command", (event) => {
+  if ((event as CustomEvent<{ command?: string }>).detail?.command === "katex-macros-changed") {
+    void noteMacros.loadGlobal(true);
+  }
+});
 editor.onViewUpdate((update) => {
   if (update.docChanged) editorSaveChanges.record(update.changes);
   if (update.docChanged) markFindStale();
+  if (update.docChanged) noteMacros.noteEdited(update.changes, update.state.doc);
 });
 editor.onDocumentReset(() => {
   editorSaveChanges.reset();
@@ -5539,16 +5570,30 @@ liveTexPaletteItems.addEventListener("pointerdown", (event) => {
   if ((event.target as HTMLElement).closest("button")) event.preventDefault();
 });
 liveTexPaletteItems.addEventListener("click", (event) => {
-  const pin = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-livetex-palette-pin]");
-  if (pin) {
-    const entry = liveTexPaletteResults[Number(pin.dataset.livetexPalettePin)];
-    if (!entry) return;
-    const customIndex = liveTexPaletteCustom.indexOf(entry);
-    if (customIndex >= 0) liveTexPaletteCustom.splice(customIndex, 1);
-    else if (liveTexPaletteFavorites.has(entry.latex)) liveTexPaletteFavorites.delete(entry.latex);
-    else liveTexPaletteFavorites.add(entry.latex);
-    saveLiveTexPalette();
+  const target = event.target as HTMLElement;
+  const scope = target.closest<HTMLButtonElement>("[data-livetex-macro-scope]");
+  if (scope) {
+    liveTexMacroPanel = { scope: scope.dataset.livetexMacroScope as MacroScope, editing: null, message: "" };
+    liveTexPaletteSelectedIndex = 0;
     scheduleLiveTexPaletteRender();
+    return;
+  }
+  const action = target.closest<HTMLButtonElement>("[data-livetex-macro-action]");
+  if (action) {
+    const name = action.dataset.livetexMacroName ?? "";
+    const editable = liveTexMacroPanel.scope === "user" || liveTexMacroPanel.scope === "local";
+    if (action.dataset.livetexMacroAction === "edit") {
+      liveTexMacroPanel = { ...liveTexMacroPanel, editing: name, message: "" };
+      scheduleLiveTexPaletteRender();
+    } else if (action.dataset.livetexMacroAction === "cancel") {
+      liveTexMacroPanel = { ...liveTexMacroPanel, editing: null, message: "" };
+      scheduleLiveTexPaletteRender();
+    } else if (action.dataset.livetexMacroAction === "delete" && editable) {
+      const layers = noteMacros.layers();
+      const next = { ...(liveTexMacroPanel.scope === "user" ? layers.user : layers.local) };
+      delete next[name];
+      void saveLiveTexMacroLayer(liveTexMacroPanel.scope, next);
+    }
     return;
   }
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-livetex-palette-index]");
@@ -5558,24 +5603,28 @@ liveTexPaletteItems.addEventListener("click", (event) => {
 });
 liveTexPalette.querySelector<HTMLButtonElement>("[data-livetex-palette-close]")!
   .addEventListener("click", () => setLiveTexPaletteOpen(false));
-liveTexPalette.querySelector<HTMLButtonElement>("[data-livetex-custom-toggle]")!
-  .addEventListener("click", () => {
-    liveTexCustomForm.hidden = !liveTexCustomForm.hidden;
-    if (!liveTexCustomForm.hidden) (liveTexCustomForm.elements.namedItem("name") as HTMLInputElement).focus();
-  });
-liveTexCustomForm.addEventListener("submit", (event) => {
+liveTexPaletteItems.addEventListener("submit", (event) => {
+  const form = (event.target as HTMLElement).closest<HTMLFormElement>("[data-livetex-macro-form]");
+  if (!form) return;
   event.preventDefault();
-  const name = (liveTexCustomForm.elements.namedItem("name") as HTMLInputElement).value.trim();
-  const latex = (liveTexCustomForm.elements.namedItem("latex") as HTMLInputElement).value.trim();
-  if (!name || !latex || liveTexPaletteCustom.length >= 40) return;
-  liveTexPaletteCustom.push({ label: name, name, latex });
-  saveLiveTexPalette();
-  liveTexCustomForm.reset();
-  liveTexCustomForm.hidden = true;
-  liveTexPaletteSearch.value = "";
-  liveTexPaletteCategory = "favorites";
-  liveTexPaletteSelectedIndex = 0;
-  scheduleLiveTexPaletteRender();
+  const scope = liveTexMacroPanel.scope;
+  if (scope !== "user" && scope !== "local") return;
+  const name = (form.elements.namedItem("name") as HTMLInputElement).value.trim();
+  const body = (form.elements.namedItem("body") as HTMLInputElement).value.trim();
+  const problem = validateMacroDraft(name, body);
+  if (problem) {
+    liveTexMacroPanel = { ...liveTexMacroPanel, message: problem };
+    scheduleLiveTexPaletteRender();
+    return;
+  }
+  const layers = noteMacros.layers();
+  const next = { ...(scope === "user" ? layers.user : layers.local) };
+  if (liveTexMacroPanel.editing && liveTexMacroPanel.editing !== name) delete next[liveTexMacroPanel.editing];
+  next[name] = body;
+  void saveLiveTexMacroLayer(scope, next);
+});
+noteMacros.subscribe(() => {
+  if (!liveTexPalette.hidden && liveTexPaletteCategory === LIVE_TEX_MACRO_CATEGORY) scheduleLiveTexPaletteRender();
 });
 liveTexMatrixBuilder.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -6572,6 +6621,7 @@ function applyOpenedNote(
     ? rememberedCursorPosition(currentFile, rememberedPositions)
     : undefined;
   applyingContent = true;
+  noteMacros.adopt(currentFile, String(opened.content || ""));
   editor.setMarkdown(String(opened.content || ""), {
     history: "reset",
     preserveView: options.preserveView === true,
@@ -6704,6 +6754,7 @@ async function openFile(
     // load.  Gate only installation so I/O overlaps without a KaTeX/theme
     // first-paint flash.
     if (beforeApply) await beforeApply;
+    await noteMacros.prepare(String(opened.file || target || ""), String(opened.content ?? ""));
     applyOpenedNote(opened, target, positions);
   } catch (error) {
     applyingContent = false;
@@ -6735,6 +6786,8 @@ async function reloadCurrentFilePreservingCursor(options: {
   if (!options.silent) setStatus("Refreshing...");
   try {
     const opened = await api.notes.open(file);
+    // A refresh also re-reads the note's `macros-from` files from disk.
+    await noteMacros.prepare(file, String(opened.content ?? ""), true);
     // Every reload is asynchronous, including a manual refresh and a core
     // reconnect.  A newer edit, navigation, or file event invalidates this
     // snapshot before it can replace the page.
@@ -7288,6 +7341,7 @@ const rendererActivity = createRendererActivityGate([
   hiddenSurfaceOnly(setMeasuredWidgetObservationPaused),
   hiddenSurfaceOnly(setViewportDecorationRefreshPaused),
   imageAnimationActivityParticipant(editor.view.contentDOM),
+  htmlEmbedActivityParticipant(),
   focusQuiescence,
   assistScheduler,
   proseLifecycle,
@@ -14385,8 +14439,7 @@ void (async () => {
   })();
   const macrosReady = (async () => {
     try {
-      const result = await api.config.katexMacros();
-      if (result?.macros) setKatexMacros(result.macros);
+      await noteMacros.loadGlobal();
     } catch (_) {
       // Macros are optional.
     }

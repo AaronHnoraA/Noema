@@ -47,6 +47,8 @@ separate editor implementation.
 | `src/theme-surface.ts` | Reads the editor's live surface for renderers that paint outside CSS (Mermaid's palette, the draw.io export theme). Anything tempted to hard-code a near-white figure background asks here instead. |
 | `src/math-render.ts` | KaTeX render + HTML cache. Cache key includes the active macro-set version. |
 | `src/katex-macros.ts` | Global KaTeX macro state (`setKatexMacros`/`getKatexMacros`/`getKatexMacrosVersion`); re-exports the parser. |
+| `shared/note-macros.mjs` | A note's macro layers in its meta block (`macros-from`, `#+begin macros`), class-file filtering, and the block edit the palette writes. |
+| `src/html-embed.ts` | Lifecycle, full screen and `postMessage` bridge of HTML embeds. |
 | `shared/katex-macros.mjs` | Browser-safe `\newcommand`/`\DeclareMathOperator`/`\def` → KaTeX macros parser. |
 | `server/lib/katex-macros.mjs` | Node loader: reads `*.tex` from a folder and parses via the shared parser. |
 | `src/attrs-syntax.ts` | Shared `{key: value}` trailing-attribute block parser used by command-syntax and image-attrs. |
@@ -145,6 +147,33 @@ fetches them through `api.config.katexMacros()` (channel
 before the first note renders; `scripts/render-html.mjs` does the same for
 export/publish. `renderMathHTML` reads the active map on every call and folds the
 macro-set version into its cache key. See `etc/katex-macros/README.md`.
+
+Those shared files are the first of four layers, later ones winning: shared →
+project (a note's meta `macros-from: a.cls`, read relative to the note through
+the backend that owns it) → the user's global file
+`~/.config/noema/katex-macros.tex` (`server/lib/user-katex-macros.mjs`,
+managed in the formula palette's 宏 tab) → the note's own
+`#+begin macros` block inside `#+begin meta` (`shared/note-macros.mjs`).
+`aaronnote/note-macros-runtime.ts` installs a note's layers before the note is
+painted and re-renders only when editing the meta block changes the merged
+set; `setKatexMacros` stays the single install point, so KaTeX, the MathLive
+pop editor and preview, TOC signatures and LaTeX export
+(`loadDocumentKatexMacros`) all see the same set. Do not cache a macro map in
+a long-lived MathLive field: rebuild it on install, as `main.ts` does for the
+resident preview.
+
+## HTML embeds
+
+`![](page.html)` is a sandboxed iframe whose lifetime belongs to
+`src/html-embed.ts`: it loads near the viewport (one shared
+IntersectionObserver), unloads to `about:blank` after staying off screen or
+while the pane is hidden (`htmlEmbedActivityParticipant` on the renderer
+activity gate), and is released in the image widget's `destroy`. Full screen
+promotes the live frame in place and falls back to a body-level copy only if
+an ancestor breaks fixed positioning. The page talks to Noema only through
+`postMessage` (`noema:open-url`, `noema:resize`, `noema:fullscreen`), accepted
+from the frame's own window. Any new embedded-document surface goes through
+this controller rather than creating its own iframe lifecycle.
 
 ## Invariants
 

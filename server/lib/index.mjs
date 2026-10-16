@@ -100,6 +100,7 @@ export {
   configureSessionProvider,
   configureBibliographyProvider,
   loadRuntimeKatexMacros,
+  loadNoteKatexMacros,
   markNotesDirty,
   notesIndexVersionValue,
   noteSelfWrite,
