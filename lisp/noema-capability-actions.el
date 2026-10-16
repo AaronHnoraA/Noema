@@ -562,40 +562,81 @@ collide with a user-defined server.")
   (and (or (derived-mode-p 'agent-shell-mode) (derived-mode-p 'ghostel-mode))
        (current-buffer)))
 
-(defun noema-capability-lookup--reference (record project)
+(defun noema-capability-lookup--reference (record project &optional resolution)
   "Return the one-line reference drafted for RECORD, resolved against PROJECT.
 The text stays on one line so a terminal never submits it on insertion."
   (let* ((id (noema--value record "id"))
          (path (noema--value (noema--value record "source") "path"))
          (file (and (stringp path) (not (string-prefix-p "builtin:" path))
                     (expand-file-name path (or project default-directory)))))
-    (if (equal (noema--value record "type") "skill")
-        (if file
-            (format "Noema Skill %s — read and follow %S; resolve its relative resources from %S."
-                    id file (directory-file-name (file-name-directory file)))
-          (format "Noema Skill %s — %s" id (or (noema--value record "description") "")))
-      (format "Noema MCP %s — use its tools%s."
-              id (if file (format "; configured in %S" file) "")))))
+    (pcase (noema--value record "type")
+      ("skill"
+       (if file
+           (format "Noema Skill %s — read and follow %S; resolve its relative resources from %S."
+                   id file (directory-file-name (file-name-directory file)))
+         (format "Noema Skill %s — %s" id (or (noema--value record "description") ""))))
+      ("pack"
+       (let* ((skills (noema--sequence (noema--value resolution "skills")))
+              (members
+               (mapconcat
+                (lambda (member)
+                  (let* ((member-id (noema--value member "id"))
+                         (skill (seq-find (lambda (candidate)
+                                            (equal (noema--value candidate "id") member-id))
+                                          skills))
+                         (source (noema--value (noema--value skill "source") "path")))
+                    (if (and (stringp source) (not (string-prefix-p "builtin:" source)))
+                        (format "%s (%S)" member-id
+                                (expand-file-name source (or project default-directory)))
+                      member-id)))
+                (noema--sequence (noema--value record "members")) "; "))
+              (preamble (string-trim
+                         (replace-regexp-in-string
+                          "[[:space:]]+" " " (or (noema--value (noema--value record "effective")
+                                                               "preamble") "")))))
+         (format "Noema Skill pack %s — read and follow member Skills: %s%s."
+                 id (if (string-empty-p members) "none" members)
+                 (if (string-empty-p preamble) "" (format "; pack guidance: %s" preamble)))))
+      (_ (format "Noema MCP %s — use its tools%s."
+                 id (if file (format "; configured in %S" file) ""))))))
+
+(defun noema-capability-lookup--records (resolution type)
+  "Return RESOLUTION records for TYPE, treating a Skill lookup as Skills and packs."
+  (seq-filter
+   (lambda (record)
+     (let ((kind (noema--value record "type")))
+       (or (null type) (equal kind type)
+           (and (equal type "skill") (equal kind "pack")))))
+   (append (noema--sequence (noema--value resolution "skills"))
+           (noema--sequence (noema--value resolution "packs"))
+           (noema--sequence (noema--value resolution "mcps")))))
 
 (defun noema-capability-lookup--read (records type)
-  "Read one record from RECORDS, annotated with scope, state and description.
-TYPE is the manager's filter, or nil when both kinds are offered."
+  "Read one record from RECORDS, annotated with kind, scope, state and description.
+TYPE is the manager's filter, or nil when all kinds are offered."
   (unless records (user-error "No capabilities resolved for this directory"))
-  (let* ((table (mapcar (lambda (record)
-                          (cons (if type (noema--value record "id")
-                                  (format "%s:%s" (noema--value record "type")
-                                          (noema--value record "id")))
+  (let* ((mixed (or (null type) (equal type "skill")))
+         (table (mapcar (lambda (record)
+                          (cons (if mixed
+                                    (format "%s:%s" (noema--value record "type")
+                                            (noema--value record "id"))
+                                  (noema--value record "id"))
                                 record))
                         records))
          (annotate
           (lambda (key)
             (let ((record (cdr (assoc key table))))
-              (format "  %s · %s · %s"
+              (format "  %s · %s · %s · %s"
+                      (capitalize (or (noema--value record "type") ""))
                       (if (eq t (noema--value record "enabled")) "enabled" "available")
                       (or (noema--value (noema--value record "source") "scope") "")
                       (or (noema--value record "description") "")))))
          (key (completing-read
-               (format "Look up %s: " (or type "capability"))
+               (pcase type
+                 ("skill" "Look up Skill or pack: ")
+                 ("mcp" "Look up MCP: ")
+                 ("pack" "Look up pack: ")
+                 (_ "Look up capability: "))
                (lambda (string predicate action)
                  (if (eq action 'metadata)
                      `(metadata (annotation-function . ,annotate)
@@ -614,7 +655,7 @@ TYPE is the manager's filter, or nil when both kinds are offered."
 
 ;;;###autoload
 (defun noema-capability-lookup (&optional type buffer)
-  "Look up a Skill or MCP and draft its reference in agent input BUFFER.
+  "Look up a Skill, Skill pack or MCP and draft its reference in agent input BUFFER.
 TYPE filters the candidates.  This is a lookup: it resolves the same host
 capability model as the manager and writes nothing to any scope."
   (interactive)
@@ -632,14 +673,10 @@ capability model as the manager and writes nothing to any scope."
           ((not (buffer-live-p target))
            (message "Noema: the agent buffer closed before the lookup finished"))
           (t
-           (let* ((records (seq-filter
-                            (lambda (record)
-                              (or (null type) (equal (noema--value record "type") type)))
-                            (append (noema--sequence (noema--value resolution "skills"))
-                                    (noema--sequence (noema--value resolution "mcps")))))
+           (let* ((records (noema-capability-lookup--records resolution type))
                   (record (noema-capability-lookup--read records type)))
              (noema-capability-lookup--draft
-              target (noema-capability-lookup--reference record project))
+              target (noema-capability-lookup--reference record project resolution))
              (message "Noema: drafted %s; review before sending"
                       (noema--value record "id")))))))))))
 

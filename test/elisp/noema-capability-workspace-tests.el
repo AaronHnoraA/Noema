@@ -2,6 +2,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'noema-capability-ui)
+(require 'noema-capability-actions)
 
 (ert-deftest noema-capability-project-pages-do-not-enumerate-inherited-skills ()
   (with-temp-buffer
@@ -149,6 +150,43 @@
                (source . ((scope . "global")))
                (patches . [((scope . "project"))])
                (members . [((id . "qiskit") (state . "missing"))]))])))
+
+(ert-deftest noema-capability-agent-skill-lookup-includes-packs-and-keeps-mcps-separate ()
+  (let* ((resolution
+          (append noema-capability-test--pack-resolution
+                  '((mcps . [((id . "search") (type . "mcp"))]))))
+         (skill-kinds (mapcar (lambda (record) (noema--value record "type"))
+                              (noema-capability-lookup--records resolution "skill"))))
+    (should (equal skill-kinds '("skill" "skill" "pack" "pack")))
+    (should (equal (mapcar (lambda (record) (noema--value record "id"))
+                           (noema-capability-lookup--records resolution "mcp"))
+                   '("search")))
+    (let (prompt)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (message collection &rest _)
+                   (setq prompt message)
+                   (should (member "skill:proof-plan" (all-completions "" collection)))
+                   (should (member "pack:math-verification" (all-completions "" collection)))
+                   "pack:math-verification")))
+        (should (equal (noema--value
+                        (noema-capability-lookup--read
+                         (noema-capability-lookup--records resolution "skill") "skill") "id")
+                       "math-verification")))
+      (should (equal prompt "Look up Skill or pack: ")))))
+
+(ert-deftest noema-capability-agent-pack-reference-names-members-and-guidance ()
+  (let* ((resolution
+          '((skills . [((id . "proof") (type . "skill")
+                        (source . ((path . "/global/proof/SKILL.md"))))])
+            (packs . [((id . "review") (type . "pack")
+                       (members . [((id . "proof"))])
+                       (effective . ((preamble . "Check claims.\nKeep notation stable."))))])))
+         (pack (car (noema--sequence (noema--value resolution "packs"))))
+         (draft (noema-capability-lookup--reference pack "/project/" resolution)))
+    (should (string-match-p "Noema Skill pack review" draft))
+    (should (string-match-p (regexp-quote "/global/proof/SKILL.md") draft))
+    (should (string-match-p "Check claims. Keep notation stable." draft))
+    (should-not (string-match-p "\n" draft))))
 
 (ert-deftest noema-capability-packs-page-expands-member-links ()
   (with-temp-buffer

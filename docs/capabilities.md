@@ -355,12 +355,13 @@ same three commands are a read-only lookup instead, because the manager's
 scoped writes reach Noema Runs, not a running external client. `M-x
 noema-capability-lookup` is the explicit name. The lookup resolves the same
 host capability model (the opening buffer's project, otherwise global), offers
-the filtered candidates with state, scope and description, and drafts one line
-naming the selected capability's resolved source at the agent's input. It
-enables, patches, installs and submits nothing; review the draft and send it
-yourself. Skills draft their absolute `SKILL.md` and resource directory, so the
-external agent reads the same file Noema would freeze; MCPs draft the
-configuration file that owns the server.
+the filtered candidates with kind, state, scope and description, and drafts one
+line naming the selected capability's resolved source at the agent's input.
+The Skill lookup offers both flat Skills and Skill packs, labeled `skill:` and
+`pack:` so equal ids remain distinct. A pack draft names its member Skill files
+and preamble; Skills draft their absolute `SKILL.md` and resource directory,
+while MCPs draft the configuration file that owns the server. Lookup enables,
+patches, installs and submits nothing; review the draft and send it yourself.
 
 The unified manager also supports:
 
