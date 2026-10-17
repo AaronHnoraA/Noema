@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "@voidzero-dev/vite-plus-test";
 import { undoDepth } from "@codemirror/commands";
 import { createEditor, type Editor } from "../../src/editor-api.ts";
 import { cellTarget } from "../../src/cm6/commands/index.ts";
+import { runEditorTextInput } from "../../src/cm6/input-commands.ts";
 
 const markdown = "before\n\n| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n\nafter";
 const editors: Editor[] = [];
@@ -46,6 +47,23 @@ function type(editor: Editor, text: string) {
 // snippets are the main editor's (tests/vim-input-method.test.ts,
 // tests/host-input-focus.test.ts, tests/snippets.test.ts), not the table's.
 describe("table source edited through the main editor (keyboard entry)", () => {
+  it("clicking a rendered cell keeps a visible grid and edits through the document editor", () => {
+    const { editor, host } = mount();
+    const cell = host.querySelector<HTMLTableElement>(".cm-table-block table")!.rows[1]!.cells[0]!;
+    cell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    cell.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+    cell.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    expect(host.querySelector(".cm-table-cell-input")).toBeNull();
+    expect(host.querySelectorAll(".cm-table-source-row")).toHaveLength(3);
+    expect(host.querySelectorAll(".cm-table-source-cell").length).toBeGreaterThanOrEqual(6);
+    expect(editor.getMarkdownSelection().from).toBe(markdown.indexOf("one") + 3);
+    expect(runEditorTextInput(editor.view, "! ")).toBe(true);
+    expect(editor.getMarkdown()).toContain("| one!  | two |");
+    expect(host.querySelectorAll(".cm-table-source-row")).toHaveLength(3);
+    expect(editor.undo()).toBe(true);
+    expect(editor.getMarkdown()).toBe(markdown);
+  });
+
   it("Shift-Enter replaces the selection in a cell with a line break, staying in the cell", () => {
     const { editor, host } = mount();
     clickCell(host, 1, 0);

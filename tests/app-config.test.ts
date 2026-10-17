@@ -41,8 +41,9 @@ describe("Noema app config", () => {
     const payload = await ensureNoemaAppConfig({ configDir });
     expect(payload.configFile).toBe(join(configDir, "config.json"));
     expect(payload.config).toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       appearance: { theme: NOEMA_DEFAULT_THEME_ID },
+      editor: { headingNumbering: { enabled: false, format: "decimal-hierarchical" } },
       workspace: { root: "~/Documents/Noema", layout: "legacy" },
       wiki: {
         sync: { automatic: true, intervalMinutes: 1440 },
@@ -82,7 +83,7 @@ describe("Noema app config", () => {
 
     expect(updated.config.appearance.theme).toBe(nextTheme.id);
     expect(JSON.parse(await readFile(file, "utf8"))).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       appearance: { theme: nextTheme.id, density: "compact" },
       editor: { lineNumbers: true },
     });
@@ -129,7 +130,8 @@ describe("Noema app config", () => {
     const migrated = await ensureNoemaAppConfig({ configDir });
     const raw = JSON.parse(await readFile(file, "utf8"));
 
-    expect(migrated.config).not.toHaveProperty("editor");
+    expect(migrated.config.editor.headingNumbering).toEqual({ enabled: false, format: "decimal-hierarchical" });
+    expect(migrated.editorSettingsExplicit).toBe(false);
     expect(raw.editor).toEqual({ lineNumbers: true });
   });
 
@@ -219,5 +221,38 @@ describe("Noema app config", () => {
     const loaded = await getNoemaAppConfig({ configDir });
     expect(loaded.diagnostics.map((entry) => entry.code)).toContain("migrated-schema");
     expect(loaded.config.wiki.sync).toEqual({ automatic: true, intervalMinutes: 1440 });
+  });
+
+  test("registers Markdown heading preferences in the shared config and preserves unrelated editor data", async () => {
+    const configDir = await tempConfigDir();
+    const file = join(configDir, "config.json");
+    await writeFile(file, JSON.stringify({
+      schemaVersion: 4,
+      editor: { lineNumbers: true },
+    }), "utf8");
+    const migrated = await ensureNoemaAppConfig({ configDir });
+    expect(migrated.editorSettingsExplicit).toBe(false);
+
+    const updated = await updateNoemaAppConfig({
+      revision: migrated.revision,
+      editor: { headingNumbering: { enabled: true, format: "chinese-document" } },
+    }, { configDir });
+    expect(updated.editorSettingsExplicit).toBe(true);
+    expect(updated.config.editor.headingNumbering).toEqual({ enabled: true, format: "chinese-document" });
+    expect(JSON.parse(await readFile(file, "utf8")).editor).toEqual({
+      lineNumbers: true,
+      headingNumbering: { enabled: true, format: "chinese-document" },
+    });
+
+    await expect(updateNoemaAppConfig({
+      revision: updated.revision,
+      editor: { headingNumbering: { format: "unknown" as "chinese-document" } },
+    }, { configDir })).rejects.toMatchObject({ statusCode: 400 });
+    await expect(updateNoemaAppConfig({
+      revision: updated.revision,
+      editor: { headingNumbering: { unexpected: true } } as never,
+    }, { configDir })).rejects.toMatchObject({ statusCode: 400 });
+    expect((await getNoemaAppConfig({ configDir })).config.editor.headingNumbering.format)
+      .toBe("chinese-document");
   });
 });

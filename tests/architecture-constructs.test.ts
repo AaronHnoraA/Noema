@@ -76,22 +76,22 @@ describe("rendered constructs: static rules", () => {
   });
 
   test("embedded editing surfaces are marked and recognized through one module", () => {
-    // A surface that edits text outside CM6 (a table cell input, a MathLive
-    // field) calls `markEmbeddedSurface`; checks use the exported selectors.
+    // A surface that edits text outside CM6 (for example, MathLive) calls
+    // `markEmbeddedSurface`; checks use the exported selectors.
     const spelled = srcFiles.concat(sourceFiles("aaronnote"))
       .filter((path) => path !== "src/cm6/embedded-surface.ts")
       .filter((path) => /data-aaronnote-vim|aaronnoteVim/.test(read(path)));
     expect(spelled).toEqual([]);
   });
 
-  test("a rendered table's cell editor is an embedded surface", () => {
-    // A click edits a rendered cell in place (an input; MathLive for a
-    // formula), as a formula is edited in its own editor; the keyboard opens
-    // the table's source for the main editor. The in-place editor must be an
-    // embedded surface, so Vim, the host key guard and focus handling leave
-    // its keys and pointer alone (see src/cm6/embedded-surface.ts).
+  test("table cells and their formulas use the document editor", () => {
     const preview = read("src/cm6/live-preview.ts");
-    expect(preview).toMatch(/if \(editable\) markEmbeddedSurface\(table\);/);
+    expect(preview).toMatch(/function tableSourceGridDecos\(/);
+    expect(preview).toMatch(/focusDocumentTableCell\(view, current/);
+    expect(preview).toMatch(/focusDocumentTableFormula\(view, current/);
+    expect(preview).toMatch(/revealFormulaSource\(view, from/);
+    expect(preview).not.toMatch(/mountVisualTexInlineEditor\(/);
+    expect(preview).not.toMatch(/markEmbeddedSurface\(table\);/);
     expect(preview.includes('dataset.aaronnoteVim = "native"'), "spell the surface through markEmbeddedSurface").toBe(false);
   });
 

@@ -25,9 +25,9 @@ Noema 借鉴了 [Adjustable Media](https://github.com/Yi-luo-hua/obsidian-adjust
 #+end layout
 ```
 
-`grid` 按 Markdown 顶层块从左到右、从上到下排。两个栏时第 1、2 块在第一行，第 3、4 块在第二行；空行分开的段落是不同块。`cols` 可设为 `2`、`3`、`4`，`widths` 用连字符给出各栏权重。窄窗口自动叠为一栏。`mode=flow` 适合连续正文；它使用浏览器文字分栏，块的最终高度由浏览器决定。
+`grid` 按 Markdown 顶层块从左到右、从上到下排。两个栏时第 1、2 块在第一行，第 3、4 块在第二行；空行分开的段落是不同块。`cols` 可设为 `1`、`2`、`3`、`4`，`widths` 用连字符给出各栏权重；`align=left|center|right|justify` 控制组内文字对齐。窄窗口自动叠为一栏。`mode=flow` 适合连续正文；它使用浏览器文字分栏，块的最终高度由浏览器决定。
 
-悬停排版组会显示 **2 / 3 / 4、Flow、Grid、Auto、Balance、Source**。前几项改栏数或模式；**Auto** 估算正文适合的栏数，**Balance** 估算各栏宽度；**Source** 回到 Markdown 编辑。直接点网格中的文字或图片，会在对应块的 Markdown 处打开源码。拖动网格栏间的分隔线可调宽度，聚焦后用左右方向键也可调整；拖动块上的 **⠿** 可以换位置，或用 `Alt` 加方向键。所有操作写回同一份源文件，可撤销。
+悬停排版组会显示 **1 / 2 / 3 / 4、L / C / R / J、Flow、Grid、Auto、Balance、Source**。前几项改栏数、文字对齐或模式；**Auto** 估算正文适合的栏数，**Balance** 估算各栏宽度；**Source** 回到 Markdown 编辑。直接点网格中的文字或图片，会在对应块的 Markdown 处打开源码。拖动网格栏间的分隔线可调宽度，聚焦后用左右方向键也可调整；拖动块上的 **⠿** 可以换位置，或用 `Alt` 加方向键。所有操作写回同一份源文件，可撤销。
 
 ## 单个图表的布局
 
@@ -37,7 +37,7 @@ Noema 借鉴了 [Adjustable Media](https://github.com/Yi-luo-hua/obsidian-adjust
 ![照片](photo.png){align=right width=50% height=240px}
 ```
 
-`align=left|center|right` 设置对齐；`wrap=left|right` 让后续正文绕排；`width` 和 `height` 设置尺寸。图旁正文仍是普通 Markdown：
+`align=left|center|right` 设置对齐；`wrap=left|right` 让图片、表格和图表悬浮，后续正文绕排；`width` 和 `height` 设置尺寸。这些属性共用一套解析和渲染规则，无需为每种块分别配置。图旁正文仍是普通 Markdown：
 
 ```markdown
 ![人物](portrait.png){wrap=left width=40%}

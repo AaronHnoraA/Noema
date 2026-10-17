@@ -179,19 +179,17 @@ widget 内部显示的 Markdown（表格单元格、todo 标签、旁注卡片�
 `isInEmbeddedSurface`，不要手写属性选择器。
 
 **先问能否不要嵌入面。** 能编辑为文档文字的内容就编辑为文档文字：嵌入面意味着另一套
-光标、按键、补全、撤销与输入法处理。表格的键盘入口正是如此；点击入口为保留就地编辑的手感，使用嵌入式编辑面——见下节。
+光标、按键、补全、撤销与输入法处理。表格单元格及格内公式都由主 CM6 编辑。
 
-## 表格：点击就地编辑，键盘进入源码
+## 表格：可见网格与同一编辑面
 
-表格始终画成表格，带有全部结构工具：工具栏增删行列、对齐、排序、CSV、尺寸选择器、边缘添加、
-拖动排序行列、框选复制/剪切/删除、布局菜单。编辑有两条入口，体验各自完整：
+表格保留结构工具：工具栏增删行列、对齐、排序、CSV、尺寸选择器、边缘添加、
+拖动排序行列、框选复制/剪切/删除、布局菜单。普通单元格无论由鼠标、键盘、Vim 或工具栏进入，
+都由主 CM6 编辑同一份 Markdown；输入法、补全、片段、撤销和文字命令沿用正文的配置。
 
-- **点击单元格**：就地编辑，表格保持渲染。单元格变成输入框（实时预览 Markdown 与公式），点击格内
-  公式用 MathLive 编辑；补全与代码片段、输入法、Tab/Enter/方向键在格间移动、越过边缘回到正文、
-  Mod-Enter 加行、Shift-Enter `<br>`、Esc 放弃。离开单元格时一次写回 Markdown（一个撤销步）。
-  就地编辑器是嵌入式编辑面（`markEmbeddedSurface`），Vim、宿主按键与焦点逻辑不碰它的按键。
-- **键盘进入**（方向键、Vim `j`/`k` 把光标移进表格）：表格显示 Markdown 源码，由主编辑器编辑，
-  单元格按键模型由源码命令保持（`commands/index.ts`）：
+未编辑时，表格是带工具的预览 widget。进入普通单元格后，`tableSourceGridDecos` 在主编辑器的
+源码行上画网格，文字仍是 CM6 文档的一部分；`commands/index.ts` 提供格间移动。点击格内公式时
+走正文公式相同的源码展开与编辑路径。拖动或 Shift 点击仍可框选单元格。
 
 | 按键 | 行为 |
 |---|---|
@@ -203,8 +201,8 @@ widget 内部显示的 Markdown（表格单元格、todo 标签、旁注卡片�
 | Shift-Enter | 单元格内换行 `<br>` |
 | Mod-Enter | 在下方插入一行，光标进入其第一格 |
 
-渲染状态下：从一格拖到另一格是框选；Shift-点击 选中单元格，方向键在选中的格子间移动，Enter
-就地编辑该格。工具栏插入行列后，新单元格就地进入编辑。
+渲染状态下：从一格拖到另一格是框选；Shift-点击选中单元格，方向键在选中的格子间移动，Enter
+进入主编辑器中的对应单元格。工具栏插入行列后，光标进入新单元格。
 
 ## 上下移动：一个行模型
 
@@ -234,10 +232,10 @@ Vim 的 `j`/`k` 与编辑器的 ↑/↓（原生按键与 xwidget 宿主都经�
 
 | 测试 | 保证 |
 |---|---|
-| `tests/architecture-constructs.test.ts` | 视口家族共用一个生命周期；字面范围只有一个答案；光标从不被隐藏（插入模式方向键与 Vim 移动扫过全部家族）；在 object 旁删除先整体选中、再整体删除（扫过示例笔记中所有绘制的 object）；组件写文档只经 `dispatchConstructEdit`；静态规则（无允许列表）：只有一个行模型（不调用 `moveVertically`）、只有一个装饰修补器、渲染模块必须经由 constructs 层决定显示并向 registry 登记、组件内 Markdown 只经共享渲染器、不得手写选区比较、不得读 DOM 模式、Vim 不得扫描、嵌入面只在一处拼写、表格就地编辑器必须是嵌入式编辑面；运行时双向一致：示例笔记（覆盖全部家族）中 registry 报告的每个组件都被绘制，绘制在源码上的每个 widget 都被 registry 报告 |
+| `tests/architecture-constructs.test.ts` | 视口家族共用一个生命周期；字面范围只有一个答案；光标从不被隐藏；组件写文档只经 `dispatchConstructEdit`；静态规则：只有一个行模型、一个装饰修补器，表格文字及公式使用主编辑器；运行时 registry 与绘制双向一致 |
 | `tests/rendered-constructs.test.ts` | policy 语义、registry、pinning、代码/公式内不识别、Vim 逐行穿过表格 |
-| `tests/cm6/table-keyboard.test.ts`、`table-interaction.test.ts` | 表格以源码编辑时（键盘进入）的单元格按键模型、撤销步骤 |
-| `tests/cm6/table-cell-input.test.ts`、`table-cell-input-interaction.test.ts`、`table-cell-assist.test.ts` | 点击就地编辑：输入框、格内公式 MathLive、补全、格间移动、写回与撤销 |
+| `tests/cm6/table-keyboard.test.ts`、`table-interaction.test.ts` | 鼠标与键盘进入同一主编辑面、可见网格、单元格按键模型与撤销 |
+| `tests/cm6/table-cell-assist.test.ts` | 格内公式进入正文相同的源码编辑路径 |
 | `tests/vim-row-geometry.test.ts` | 折行处以组件开头时的屏幕行 |
 | `tests/rendered-constructs.test.ts`（vertical motion） | ↑/↓ 进入表格的首/末行 |
 
@@ -245,7 +243,6 @@ Vim 的 `j`/`k` 与编辑器的 ↑/↓（原生按键与 xwidget 宿主都经�
 
 ## 已知差距与路线
 
-- **表格的源码形态**是对齐后的 Markdown（Tab 会对齐列宽），而不是网格；需要所见即所得的
-  网格编辑时，下一步是在源码行上用行装饰与 CSS 绘制网格，键位模型不变。
+- 表格编辑中的网格由源码行装饰绘制；分隔行仍是可进入的 Markdown 源码，便于直接修改列对齐。
 - **行内 Markdown 标记**（`**`、`` ` ``、链接括号）使用统一 policy，但不进 registry：它们是
   structure，被打开时就是普通文本。

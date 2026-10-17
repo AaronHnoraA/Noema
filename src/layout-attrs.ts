@@ -22,11 +22,13 @@ export function applyLayoutAttrs(el: HTMLElement, kind: string, layout: LayoutAt
   el.dataset.aaronnoteLayoutAlign = layout.align;
   el.dataset.aaronnoteLayoutWrap = layout.wrap ? "true" : "false";
   if (layout.width) {
+    el.style.setProperty("--aaronnote-layout-width", layout.width);
     el.style.setProperty(`--aaronnote-${kind}-width`, layout.width);
     el.style.setProperty(`--aaronnote-${kind}-max-width`, "none");
     el.style.setProperty(`--aaronnote-${kind}-max-height`, "none");
   }
   if (layout.height) {
+    el.style.setProperty("--aaronnote-layout-height", layout.height);
     el.style.setProperty(`--aaronnote-${kind}-height`, layout.height);
     el.style.setProperty(`--aaronnote-${kind}-max-height`, "none");
   }

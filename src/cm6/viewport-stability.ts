@@ -15,6 +15,9 @@ type ViewportSnapshot = {
   scrollTop: number;
   scrollLeft: number;
   interaction: number;
+  /** Last measured document-space top of the anchor's line. */
+  lineTop?: number | null;
+  scrollHeight?: number;
 };
 
 type PrivateStateEffect = StateEffect<unknown> & {
@@ -67,11 +70,8 @@ export function preserveEditorViewport<T>(
   update: () => T,
   preferredAnchorPos?: number,
 ): T {
-  return viewportStabilizers.get(view)?.preserve(
-    update,
-    undefined,
-    preferredAnchorPos,
-  ) ?? update();
+  const stabilizer = viewportStabilizers.get(view);
+  return stabilizer ? stabilizer.preserve(update, undefined, preferredAnchorPos) : update();
 }
 
 function transactionMovesViewport(transaction: Transaction): boolean {
@@ -388,19 +388,22 @@ export class EditorViewportStabilizer {
     const movesViewport = transactions.some(transactionMovesViewport);
     if (movesViewport) {
       // An explicit scroll (a jump, revealing the caret the reader moved)
-      // owns the viewport; a focus hold must not undo it. CM6 performs it at
-      // its next measure, within the next two frames.
+      // owns the viewport; neither a focus hold nor the previous pointer
+      // anchor may undo it. CM6 performs it at its next measure.
       this.focusGuard = null;
+      this.pointerSnapshot = null;
+      this.leasedSnapshot = null;
+      this.preserveGraceUntil = 0;
+      this.generation += 1;
+      this.restoringGeneration = 0;
       this.scrollRequested = true;
       this.win.requestAnimationFrame(() => this.win.requestAnimationFrame(() => {
         this.scrollRequested = false;
       }));
     }
-    // The press is honoured even when its transaction also reveals the caret
-    // (a formula or table cell entered by clicking does): revealing something
-    // already on screen moves nothing, while the block the caret left still
-    // refolds. A press that really jumps elsewhere (a link, the outline)
-    // moves the viewport afterwards, and restore() yields to that.
+    // An ordinary click may refold the block the caret left; keep the pressed
+    // line fixed. A transaction with scrollIntoView has released that press
+    // above, so links and outline jumps can move the viewport.
     const pointer = forced || !transactions.some(transactionMayRelayout)
       ? null
       : this.activePointerSnapshot();
@@ -489,7 +492,7 @@ export class EditorViewportStabilizer {
    * the host's pointer fallback all arrive here (see `installFocusOwner`).
    */
   focusContent(focus: () => void): void {
-    if (this.scrollRequested || this.view.hasFocus || !this.scrollHost.isConnected) {
+    if (this.forcedDepth > 0 || this.scrollRequested || this.view.hasFocus || !this.scrollHost.isConnected) {
       focus();
       return;
     }
@@ -638,6 +641,14 @@ export class EditorViewportStabilizer {
         const block = this.view.lineBlockAtHeight(relativeHeight);
         anchorPos = Math.max(0, Math.min(block.from, this.view.state.doc.length));
       }
+      // A tall rendered block can start above the viewport while the reader
+      // clicks its visible lower half. Its source line is then an off-screen
+      // anchor; preserving that line would scroll to the top of the block.
+      // Keep the viewport's absolute position for this case instead.
+      if (preferredAnchorPos != null && anchorOffset != null && this.scrollHost.clientHeight > 0
+          && (anchorOffset < -1 || anchorOffset > this.scrollHost.clientHeight + 1)) {
+        anchorOffset = null;
+      }
       // At the upper boundary, scrollTop=0 is the authoritative anchor. A
       // source/preview layout may move the first source position vertically;
       // correcting that offset would push the host away from the document top
@@ -660,28 +671,41 @@ export class EditorViewportStabilizer {
   private mapSnapshot(snapshot: ViewportSnapshot, transactions: readonly Transaction[]): void {
     let position = snapshot.anchorPos;
     for (const transaction of transactions) position = transaction.changes.mapPos(position, 1);
+    if (position !== snapshot.anchorPos) snapshot.lineTop = null;
     snapshot.anchorPos = Math.max(0, Math.min(position, transactions.at(-1)?.state.doc.length ?? position));
   }
 
-  private restore(snapshot: ViewportSnapshot, generation: number): void {
+  private anchorLineTop(snapshot: ViewportSnapshot): number | null {
+    try {
+      return this.view.lineBlockAt(Math.min(snapshot.anchorPos, this.view.state.doc.length)).top
+        * this.view.scaleY;
+    } catch {
+      return null;
+    }
+  }
+
+  private restore(snapshot: ViewportSnapshot, generation: number, afterInitialRestore = false): void {
     if (generation !== this.generation
         || snapshot.interaction !== this.interaction
         || !this.view.dom.isConnected
         || !this.scrollHost.isConnected) return;
 
-    if (snapshot === this.pointerSnapshot
+    // A source/preview swap may move scrollTop before WebKit delivers its
+    // scroll event. Restore that initial relayout first. A later movement
+    // after our first correction can be a programmatic jump whose scroll
+    // event is still pending; leave it in control.
+    if (afterInitialRestore && snapshot === this.pointerSnapshot
         && Math.abs(this.scrollHost.scrollTop - snapshot.scrollTop) > 0.5
-        && !this.clampedByShrink(snapshot.scrollTop)) {
-      // Something else moved the viewport since this press was last looked
-      // at, and its `scroll` event has not been delivered yet. That movement
-      // is intended (see the scroll listener); do not write over it.
+        && !this.clampedByShrink(snapshot.scrollTop)
+        && snapshot.scrollHeight === this.scrollHost.scrollHeight
+        && snapshot.lineTop != null
+        && Math.abs((this.anchorLineTop(snapshot) ?? snapshot.lineTop) - snapshot.lineTop) <= 0.5) {
       this.pointerSnapshot = null;
       this.generation += 1;
       this.restoringGeneration = 0;
       if (this.stableSnapshot === snapshot) this.stableSnapshot = null;
       return;
     }
-
     this.writeScrollTop(snapshot.scrollTop);
     if (Math.abs(this.scrollHost.scrollLeft - snapshot.scrollLeft) > 0.5) {
       this.scrollHost.scrollLeft = snapshot.scrollLeft;
@@ -708,6 +732,8 @@ export class EditorViewportStabilizer {
     }
     snapshot.scrollTop = this.scrollHost.scrollTop;
     snapshot.scrollLeft = this.scrollHost.scrollLeft;
+    snapshot.lineTop = this.anchorLineTop(snapshot);
+    snapshot.scrollHeight = this.scrollHost.scrollHeight;
     this.stableSnapshot = snapshot;
   }
 
@@ -744,12 +770,12 @@ export class EditorViewportStabilizer {
     this.restore(snapshot, generation);
     this.view.requestMeasure({
       read: () => snapshot,
-      write: (measured) => this.restore(measured, generation),
+      write: (measured) => this.restore(measured, generation, true),
     });
     this.win.requestAnimationFrame(() => {
-      this.restore(snapshot, generation);
+      this.restore(snapshot, generation, true);
       this.win.requestAnimationFrame(() => {
-        this.restore(snapshot, generation);
+        this.restore(snapshot, generation, true);
         if (generation === this.generation) {
           this.stableSnapshot = snapshot;
           this.restoringGeneration = 0;

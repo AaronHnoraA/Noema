@@ -37,6 +37,7 @@ export function applyNoemaAppConfig(payload: NoemaAppConfigMsg): NoemaAppConfigM
       detail: { theme, config: payload.config },
     }));
   }
+  window.dispatchEvent(new CustomEvent("noema:config-changed", { detail: payload }));
   return payload;
 }
 

@@ -1814,8 +1814,10 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
   }
 
   if (command === "insert-layout") {
-    const mode = value === "flow" ? "flow" : "grid";
-    const open = `#+begin layout {cols=2 mode=${mode}}`;
+    const requested = /^(grid|flow)(?::([1-4]))?$/.exec(value || "grid");
+    const mode = requested?.[1] === "flow" ? "flow" : "grid";
+    const columns = requested?.[2] ?? "2";
+    const open = `#+begin layout {cols=${columns} mode=${mode}}`;
     const close = "#+end layout";
     const { from, to } = view.state.selection.main;
     if (from === to) {

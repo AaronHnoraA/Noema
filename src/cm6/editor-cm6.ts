@@ -193,7 +193,7 @@ function nativeCaretPositionFromPoint(x: number, y: number): NativeCaretPosition
 }
 
 function hasWrappedLayout(view: EditorView): boolean {
-  return Boolean(view.dom.querySelector(".aaronnote-image-wrap, .aaronnote-table-wrap, .aaronnote-diagram-wrap"));
+  return Boolean(view.dom.querySelector(".aaronnote-layout-wrap"));
 }
 
 function realRectContainsY(el: Element, y: number): boolean {

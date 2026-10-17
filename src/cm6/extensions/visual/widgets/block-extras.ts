@@ -52,7 +52,7 @@ import {
 import { applyImageLayout, imageLayoutFromAttrs, type ImageLayoutAttrs } from "../../../../image-attrs.ts";
 import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
 import { readLayoutAttrSuffix } from "../../../../layout-attrs.ts";
-import { layoutGroupFromTitle, layoutGroupTracks, type LayoutGroup } from "../../../../layout-group.ts";
+import { layoutGroupClasses, layoutGroupFromTitle, layoutGroupStyle, layoutGroupTracks, type LayoutGroup } from "../../../../layout-group.ts";
 import { balanceTextColumns, suggestTextColumns } from "../../../../text-layout-measure.ts";
 import { parseAttrArgs } from "../../../../attrs-syntax.ts";
 import { supportedDiagramLang } from "../../../../diagram-langs.ts";
@@ -3062,6 +3062,10 @@ function setLayoutGroup(view: EditorView, from: number, to: number, source: stri
   const next = { ...current, ...patch };
   attrs.cols = String(next.columns);
   attrs.mode = next.mode;
+  if (patch.align) {
+    if (next.align === "inherit") delete attrs.align;
+    else attrs.align = next.align;
+  }
   if (patch.columns && patch.columns !== current.columns && !patch.widths) delete attrs.widths;
   else if (patch.widths) attrs.widths = patch.widths.map((width) => String(Math.round(width * 1000) / 1000)).join("-");
   const head = suffix ? beforeAnchor.slice(0, suffix.index).trimEnd() : beforeAnchor.trimEnd();
@@ -3130,9 +3134,8 @@ class LayoutGroupWidget extends MeasuredWidget {
     const group = layoutGroupFromTitle(this.title);
     const source = view.state.doc.sliceString(this.from, this.to);
     const block = document.createElement("div");
-    block.className = `cm-layout-group-widget noema-layout-group noema-layout-${group.mode}`;
-    block.style.setProperty("--noema-layout-cols", String(group.columns));
-    block.style.setProperty("--noema-layout-tracks", layoutGroupTracks(group));
+    block.className = `cm-layout-group-widget ${layoutGroupClasses(group)}`;
+    block.style.cssText = layoutGroupStyle(group);
     block.dataset.cols = String(group.columns);
     block.dataset.cmOpenSource = "true";
     setSourceRange(block, this.from, this.to);
@@ -3206,8 +3209,11 @@ class LayoutGroupWidget extends MeasuredWidget {
       button.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); run(); });
       tools.append(button);
     };
-    for (const columns of [2, 3, 4] as const) {
+    for (const columns of [1, 2, 3, 4] as const) {
       action(String(columns), `${columns} columns`, () => setLayoutGroup(view, this.from, this.to, source, { columns }));
+    }
+    for (const [label, align] of [["L", "left"], ["C", "center"], ["R", "right"], ["J", "justify"]] as const) {
+      action(label, `Align ${align}`, () => setLayoutGroup(view, this.from, this.to, source, { align }));
     }
     action("Flow", "Flow text between columns", () => setLayoutGroup(view, this.from, this.to, source, { mode: "flow" }));
     action("Grid", "Arrange Markdown blocks in grid", () => setLayoutGroup(view, this.from, this.to, source, { mode: "grid" }));

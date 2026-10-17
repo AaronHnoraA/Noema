@@ -67,6 +67,7 @@ import { formatCitationLabel } from "../src/render-html.ts";
 import { hrefProtocol, safeHref } from "../src/url-safety.ts";
 import {
   api,
+  type NoemaAppConfigMsg,
   type TodoItem,
   type JupyterKernelSpec,
   type JupyterKernelTask,
@@ -87,6 +88,7 @@ import { emojiCompletionContext, emojiCompletions } from "../src/emoji-shortcode
 import { matchHotKey } from "../src/hotkey.ts";
 import { noemaPlatformLabels, primaryModifierDown } from "../src/platform-compat.ts";
 import type { HeadingNumberFormat } from "../src/heading-number.ts";
+import { NOEMA_EDITOR_SETTINGS, noemaEditorDefaults } from "../shared/editor-settings.mjs";
 import { createMenuController, type NoemaMenuItem } from "../src/menu-system.ts";
 import { figureLayoutMenuItems, figureLayoutTarget } from "../src/cm6/figure-layout-menu.ts";
 import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
@@ -171,7 +173,6 @@ import {
   mathLiveSnippetTemplate,
   matchingSnippetsAtTokenBoundary,
   matchingSnippetsForPrefix,
-  inputSnippetEditor,
   SnippetSession,
   SnippetUsageStore,
   snippetDetail,
@@ -180,7 +181,6 @@ import {
   snippetScore,
 } from "./snippets.ts";
 import { MathSnippetIndex } from "./math-snippet-index.ts";
-import { tableCellSnippetContext, type TableCellCompletionDetail } from "../src/cm6/table-cell-assist.ts";
 import { collectTagSuggestions, createTagPicker } from "./tag-picker.ts";
 import {
   metadataTagsFromMarkdown,
@@ -264,8 +264,10 @@ import {
   type SourceLineEnding,
 } from "./editor-save-changes.ts";
 import {
+  applyNoemaAppConfig,
   installNoemaThemeRuntime,
   loadNoemaAppConfig,
+  noemaAppConfigState,
 } from "./theme-runtime.ts";
 import { wikiLinkCompletionContext } from "./wiki-completion.ts";
 import { createReferencePicker, type ReferenceAnswer } from "./reference-picker.ts";
@@ -1607,31 +1609,25 @@ let lastUserEditorScrollAt = -Infinity;
 let snippetPopupChooseHandler: ((snippet: SnippetSummary) => boolean) | null = null;
 const snippetUsage = new SnippetUsageStore();
 
-const HEADING_NUMBER_FORMATS = new Set<HeadingNumberFormat>([
-  "decimal-hierarchical",
-  "upper-alpha-hierarchical",
-  "lower-alpha-hierarchical",
-  "upper-roman-hierarchical",
-  "lower-roman-hierarchical",
-  "upper-greek-hierarchical",
-  "lower-greek-hierarchical",
-  "decimal-parenthesized",
-  "chinese-document",
-]);
-
-function loadHeadingNumberingPreference(): { enabled: boolean; format: HeadingNumberFormat } {
+function legacyHeadingNumberingPreference(): { enabled: boolean; format: HeadingNumberFormat } | null {
   try {
+    const enabled = localStorage.getItem("noema.headingNumbering.enabled");
     const format = localStorage.getItem("noema.headingNumbering.format") as HeadingNumberFormat | null;
+    if (enabled === null && format === null) return null;
+    const validFormat = NOEMA_EDITOR_SETTINGS.some((setting) => setting.type === "enum"
+      && setting.id === "headingNumbering.format"
+      && setting.choices.some((choice) => choice.value === format));
     return {
-      enabled: localStorage.getItem("noema.headingNumbering.enabled") === "true",
-      format: format && HEADING_NUMBER_FORMATS.has(format) ? format : "decimal-hierarchical",
+      enabled: enabled === "true",
+      format: validFormat && format ? format : noemaEditorDefaults().headingNumbering.format,
     };
   } catch {
-    return { enabled: false, format: "decimal-hierarchical" };
+    return null;
   }
 }
 
-let headingNumberingPreference = loadHeadingNumberingPreference();
+let headingNumberingPreference = noemaAppConfigState()?.config.editor.headingNumbering
+  ?? noemaEditorDefaults().headingNumbering;
 
 function loadWikiCompletionIndex(force = false): Promise<WikiIndex> {
   if (!force && wikiIndexCache) return Promise.resolve(wikiIndexCache);
@@ -2720,7 +2716,6 @@ document.body.dataset.headingNumbers = headingNumberingPreference.enabled ? "tru
 
 function applyHeadingNumberingPreference(
   next: { enabled: boolean; format?: HeadingNumberFormat },
-  persist = true,
 ): void {
   headingNumberingPreference = {
     enabled: next.enabled,
@@ -2728,26 +2723,61 @@ function applyHeadingNumberingPreference(
   };
   editor.setHeadingNumbering(headingNumberingPreference);
   document.body.dataset.headingNumbers = headingNumberingPreference.enabled ? "true" : "false";
-  if (persist) {
-    try {
-      localStorage.setItem("noema.headingNumbering.enabled", String(headingNumberingPreference.enabled));
-      localStorage.setItem("noema.headingNumbering.format", headingNumberingPreference.format);
-    } catch {
-      // The live editor state remains authoritative when storage is unavailable.
+}
+
+let headingNumberingSaving = false;
+
+function toggleHeadingNumbering(): void {
+  if (headingNumberingSaving) return;
+  const previous = { ...headingNumberingPreference };
+  const config = noemaAppConfigState();
+  if (!config && !serverReaderMode) {
+    setStatus("Noema settings are still loading");
+    return;
+  }
+  applyHeadingNumberingPreference({ enabled: !previous.enabled });
+  setStatus(`Heading numbers ${headingNumberingPreference.enabled ? "shown" : "hidden"}`);
+  if (serverReaderMode) return;
+  headingNumberingSaving = true;
+  void api.config.updateApp({
+    revision: config!.revision,
+    editor: { headingNumbering: headingNumberingPreference },
+  }).then(applyNoemaAppConfig).catch((error) => {
+    applyHeadingNumberingPreference(previous);
+    setStatus(`Heading numbers were not saved: ${error instanceof Error ? error.message : String(error)}`);
+    void loadNoemaAppConfig().catch(() => {});
+  }).finally(() => {
+    headingNumberingSaving = false;
+  });
+}
+
+window.addEventListener("noema:config-changed", (event) => {
+  const payload = (event as CustomEvent<NoemaAppConfigMsg>).detail;
+  applyHeadingNumberingPreference(payload.config.editor.headingNumbering);
+});
+
+async function migrateLegacyHeadingNumbering(config: NoemaAppConfigMsg): Promise<void> {
+  if (serverReaderMode || config.editorSettingsExplicit) return;
+  const legacy = legacyHeadingNumberingPreference();
+  if (!legacy) return;
+  try {
+    const updated = await api.config.updateApp({
+      revision: config.revision,
+      editor: { headingNumbering: legacy },
+    });
+    applyNoemaAppConfig(updated);
+    localStorage.removeItem("noema.headingNumbering.enabled");
+    localStorage.removeItem("noema.headingNumbering.format");
+  } catch (error) {
+    const refreshed = await loadNoemaAppConfig().catch(() => null);
+    if (refreshed?.editorSettingsExplicit) {
+      localStorage.removeItem("noema.headingNumbering.enabled");
+      localStorage.removeItem("noema.headingNumbering.format");
+    } else {
+      setStatus(`Heading number preference was not migrated: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
-
-function toggleHeadingNumbering(): void {
-  applyHeadingNumberingPreference({ enabled: !headingNumberingPreference.enabled });
-  setStatus(`Heading numbers ${headingNumberingPreference.enabled ? "shown" : "hidden"}`);
-}
-
-window.addEventListener("storage", (event) => {
-  if (event.key?.startsWith("noema.headingNumbering.")) {
-    applyHeadingNumberingPreference(loadHeadingNumberingPreference(), false);
-  }
-});
 host.appendChild(bibliographyPanel);
 
 const linkPreview = createLinkPreviewController({
@@ -3355,92 +3385,6 @@ document.addEventListener("keydown", (event) => {
 }, { capture: true });
 const snippetSession = new SnippetSession(editor);
 const mathSnippetIndex = new MathSnippetIndex(editor);
-let tableSnippetInput: HTMLInputElement | null = null;
-let tableSnippetSession: SnippetSession | null = null;
-let tableSnippetApplying = false;
-let tableSnippetSuppressedPrefix = "";
-function tableSnippetSessionFor(input: HTMLInputElement): SnippetSession {
-  if (tableSnippetInput !== input || !tableSnippetSession) {
-    tableSnippetInput = input;
-    tableSnippetSession = new SnippetSession(inputSnippetEditor(input));
-    tableSnippetSuppressedPrefix = "";
-  }
-  return tableSnippetSession;
-}
-document.addEventListener("aaronnote:table-cell-completion-request", (event) => {
-  const input = (event as CustomEvent<TableCellCompletionDetail>).detail?.input;
-  if (!input || !host.contains(input) || document.activeElement !== input || tableSnippetApplying || currentReadOnly) return;
-  tableSnippetSessionFor(input);
-  const { prefix, mode } = tableCellSnippetContext(input.value, input.selectionStart ?? input.value.length);
-  if (!prefix || prefix === tableSnippetSuppressedPrefix || input.selectionStart !== input.selectionEnd) {
-    if (snippetPopupChooseHandler) hideSnippetPopup();
-    return;
-  }
-  const math = mode === "tex-mode";
-  const candidates = math ? mathSnippetCandidates() : snippets;
-  const options = {
-    kind: currentSnippetKind(), mode, limit: 10,
-    allowFuzzy: math && (prefix.startsWith("\\") || prefix.startsWith("@")),
-    context: math ? "math" as const : undefined,
-    usage: snippetUsage,
-    documentFrequency: mathSnippetIndex.frequencies(),
-  };
-  const match = math
-    ? matchingSnippetsAtTokenBoundary(candidates, prefix, options)
-    : { prefix, deleteBefore: prefix.length, matches: matchingSnippetsForPrefix(candidates, prefix, options) };
-  const visible = match.matches.filter((snippet) => {
-    if (snippet.context === "org-meta") return false;
-    if (snippet.context?.startsWith("math")) return math;
-    return true;
-  });
-  if (visible.length === 0) {
-    if (snippetPopupChooseHandler) hideSnippetPopup();
-    return;
-  }
-  const rect = input.getBoundingClientRect();
-  showSnippetPopup(match.prefix, visible, match.deleteBefore, { left: rect.left, top: rect.top, bottom: rect.bottom }, (snippet) => {
-    if (!input.isConnected || document.activeElement !== input) return false;
-    const caret = input.selectionStart ?? input.value.length;
-    const live = tableCellSnippetContext(input.value, caret);
-    if (input.selectionStart !== input.selectionEnd || live.mode !== mode
-      || !input.value.slice(0, caret).endsWith(match.prefix)) return false;
-    tableSnippetApplying = true;
-    try {
-      const inserted = tableSnippetSessionFor(input).insert(snippet, match.deleteBefore);
-      if (inserted) input.focus();
-      return inserted;
-    } finally { tableSnippetApplying = false; }
-  });
-});
-document.addEventListener("aaronnote:table-cell-completion-key", (event) => {
-  const detail = (event as CustomEvent<TableCellCompletionDetail & {
-    key?: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; isComposing?: boolean;
-  }>).detail;
-  const input = detail?.input;
-  if (!input || input !== tableSnippetInput || document.activeElement !== input) return;
-  if (!snippetPopup.hidden && snippetPopupChooseHandler) {
-    const action = snippetPopupKeyAction({
-      key: detail.key || "", shiftKey: detail.shiftKey, ctrlKey: detail.ctrlKey,
-      commandKey: detail.metaKey && !detail.ctrlKey, altKey: detail.altKey,
-      isComposing: detail.isComposing, acceptEnter: true,
-    });
-    if (action.type === "dismiss") tableSnippetSuppressedPrefix = snippetPopup.dataset.prefix ?? "";
-    const handled = applySnippetPopupKeyAction(action);
-    if (handled) { event.preventDefault(); event.stopPropagation(); return; }
-  }
-  if (detail.key !== "Tab" || detail.isComposing || detail.ctrlKey || detail.metaKey || detail.altKey) return;
-  const moved = detail.shiftKey ? tableSnippetSession?.previous() : tableSnippetSession?.next();
-  if (moved) { event.preventDefault(); event.stopPropagation(); }
-});
-document.addEventListener("aaronnote:table-cell-completion-close", (event) => {
-  const input = (event as CustomEvent<TableCellCompletionDetail>).detail?.input;
-  if (input !== tableSnippetInput) return;
-  tableSnippetSession?.clear();
-  tableSnippetSession = null;
-  tableSnippetInput = null;
-  tableSnippetSuppressedPrefix = "";
-  if (snippetPopupChooseHandler) hideSnippetPopup();
-});
 const MATH_EDITOR_LAYOUT_ALIASES: Record<string, string> = {
   alig: "ali",
   align: "ali",
@@ -12882,10 +12826,8 @@ function runSelectionCommand(command: string): void {
 
 function runAssistUpdate(flags: AssistUpdateFlags): void {
   const insertMode = vim.mode() === "insert";
-  const tableInputActive = tableSnippetInput != null && document.activeElement === tableSnippetInput;
-  const wantsSnippets = !tableInputActive && !visualMathEditorActive && insertMode && (flags.snippets || !snippetPopup.hidden);
+  const wantsSnippets = !visualMathEditorActive && insertMode && (flags.snippets || !snippetPopup.hidden);
   const wantsMathPreview = !passiveServerReader
-    && !tableInputActive
     && !visualMathEditorActive
     && (flags.mathPreview || !mathPreview.hidden);
   if (passiveServerReader || visualMathEditorActive) hideMathPreview();
@@ -12908,7 +12850,7 @@ function runAssistUpdate(flags: AssistUpdateFlags): void {
   // MathLive drives the shared snippet popup with its own cursor and prefix.
   // A scheduled CM6 assist pass must not replace or hide that popup using the
   // source cursor sitting behind the visual formula widget.
-  if (visualMathEditorActive || tableInputActive) return;
+  if (visualMathEditorActive) return;
   if (!insertMode) {
     hideSnippetPopup();
     if (ctx && wantsMathPreview) updateMathPreview(ctx, flags.mathPreview, activeMath);
@@ -14440,6 +14382,7 @@ void (async () => {
   const configReady = (async () => {
     try {
       const config = await loadNoemaAppConfig();
+      await migrateLegacyHeadingNumbering(config);
       if (config.diagnostics[0]) setStatus(config.diagnostics[0].message);
     } catch (error) {
       setStatus(`Settings failed: ${error instanceof Error ? error.message : String(error)}`);

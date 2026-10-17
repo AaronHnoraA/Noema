@@ -5,6 +5,7 @@ import {
   isViewportScrollKey,
   mapPositionAcrossText,
   minimalDocumentChange,
+  preserveEditorViewport,
 } from "../src/cm6/viewport-stability.ts";
 
 afterEach(() => {
@@ -13,6 +14,12 @@ afterEach(() => {
 });
 
 describe("CM6 viewport position mapping", () => {
+  test("preserve helper runs a void editor update exactly once", () => {
+    const update = vi.fn(() => {});
+    preserveEditorViewport({} as EditorView, update);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
   test("treats legacy xwidget Spacebar as the same scroll interaction as Space", () => {
     expect(isViewportScrollKey({ key: " ", code: "Space" })).toBe(true);
     expect(isViewportScrollKey({ key: "Spacebar", code: "Space" })).toBe(true);
@@ -421,16 +428,25 @@ describe("CM6 viewport position mapping", () => {
         env.fireFrames();
         env.fireFrames();
         expect(env.scrollHost.scrollTop).toBe(149);
-        // The same holds when the click also asks to reveal the caret.
-        env.press();
-        env.layout.pressedLineTop = 560;
-        env.stabilizer.afterUpdate([env.selectionTransaction(true)]);
-        expect(env.scrollHost.scrollTop).toBe(360);
         // A widget that reports its height after the button is released.
         document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
-        env.layout.pressedLineTop = 600;
+        env.layout.pressedLineTop = 389;
         env.stabilizer.afterUpdate([env.selectionTransaction()]);
-        expect(env.scrollHost.scrollTop).toBe(400);
+        expect(env.scrollHost.scrollTop).toBe(189);
+      } finally {
+        env.dispose();
+      }
+    });
+
+    test("an explicit navigation releases the pressed-line anchor", () => {
+      const env = setup();
+      try {
+        env.press();
+        env.layout.pressedLineTop = 349;
+        env.stabilizer.afterUpdate([env.selectionTransaction(true)]);
+        env.fireFrames();
+        env.fireFrames();
+        expect(env.scrollHost.scrollTop).toBe(300);
       } finally {
         env.dispose();
       }

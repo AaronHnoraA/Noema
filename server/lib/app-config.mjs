@@ -9,8 +9,13 @@ import {
   noemaAppTheme,
   validNoemaAppThemeId,
 } from "../../shared/app-themes.mjs";
+import {
+  mergeNoemaEditorSettings,
+  noemaEditorDefaults,
+  normalizeNoemaEditorSettings,
+} from "../../shared/editor-settings.mjs";
 
-export const NOEMA_APP_CONFIG_SCHEMA_VERSION = 4;
+export const NOEMA_APP_CONFIG_SCHEMA_VERSION = 5;
 
 // A sync pass talks to every remote, so the floor keeps a mistyped value from
 // turning the cadence into a polling loop.
@@ -20,6 +25,7 @@ export const MAX_SYNC_INTERVAL_MINUTES = 7 * 24 * 60;
 const DEFAULT_CONFIG = Object.freeze({
   schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
   appearance: Object.freeze({ theme: NOEMA_DEFAULT_THEME_ID }),
+  editor: Object.freeze({ headingNumbering: Object.freeze(noemaEditorDefaults().headingNumbering) }),
   workspace: Object.freeze({
     root: "~/Documents/Noema",
     layout: "legacy",
@@ -63,6 +69,7 @@ function cloneDefaults() {
   return {
     schemaVersion: DEFAULT_CONFIG.schemaVersion,
     appearance: { ...DEFAULT_CONFIG.appearance },
+    editor: noemaEditorDefaults(),
     workspace: { ...DEFAULT_CONFIG.workspace },
     wiki: {
       sync: { ...DEFAULT_CONFIG.wiki.sync },
@@ -131,6 +138,7 @@ function normalizeParsedConfig(raw) {
       message: `Unknown Noema theme: ${requestedTheme}; using ${noemaAppTheme("").name}`,
     });
   }
+  const editor = normalizeNoemaEditorSettings(source.editor, { diagnostics });
 
   const workspaceSource = plainObject(source.workspace) ? source.workspace : {};
   const root = String(workspaceSource.root || DEFAULT_CONFIG.workspace.root).trim() || DEFAULT_CONFIG.workspace.root;
@@ -177,6 +185,7 @@ function normalizeParsedConfig(raw) {
     config: {
       schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
       appearance: { theme },
+      editor,
       workspace: { root, layout },
       wiki: { sync: { automatic, intervalMinutes }, creation: { activeProfile, profiles } },
     },
@@ -234,6 +243,7 @@ function publicPayload(state) {
     configFile: state.file,
     config: state.config,
     defaults: cloneDefaults(),
+    editorSettingsExplicit: Boolean(plainObject(state.raw?.editor?.headingNumbering)),
     themes: NOEMA_APP_THEMES,
     activeTheme: theme,
     revision: state.revision,
@@ -285,6 +295,14 @@ export async function ensureNoemaAppConfig(options = {}) {
           ...(plainObject(state.raw.appearance) ? state.raw.appearance : {}),
           ...state.config.appearance,
         },
+        editor: plainObject(sanitizedRaw.editor) && Object.keys(sanitizedRaw.editor).length > 0
+          ? Object.fromEntries(Object.entries(sanitizedRaw.editor).map(([key, value]) => [
+              key,
+              plainObject(value) && plainObject(state.config.editor[key])
+                ? { ...value, ...state.config.editor[key] }
+                : value,
+            ]))
+          : undefined,
         workspace: {
           ...(plainObject(state.raw.workspace) ? state.raw.workspace : {}),
           ...state.config.workspace,
@@ -339,6 +357,10 @@ export async function updateNoemaAppConfig(patch = {}, options = {}) {
     }
 
     const rawAppearance = plainObject(state.raw.appearance) ? state.raw.appearance : {};
+    const hasEditorPatch = Object.prototype.hasOwnProperty.call(patch, "editor");
+    const editor = hasEditorPatch
+      ? mergeNoemaEditorSettings(state.config.editor, patch.editor)
+      : state.config.editor;
     const workspacePatch = plainObject(patch.workspace) ? patch.workspace : {};
     const requestedRoot = Object.prototype.hasOwnProperty.call(workspacePatch, "root")
       ? String(workspacePatch.root || "").trim()
@@ -396,6 +418,10 @@ export async function updateNoemaAppConfig(patch = {}, options = {}) {
         ...rawAppearance,
         theme: requestedTheme,
       },
+      editor: hasEditorPatch ? {
+        ...(plainObject(state.raw.editor) ? state.raw.editor : {}),
+        ...editor,
+      } : withoutRetiredLineBreaking(state.raw).editor,
       workspace: {
         ...rawWorkspace,
         root: requestedRoot,

@@ -430,6 +430,15 @@ maybeDescribe("CM6 runCommand — block insert", () => {
     expect(ed.getMarkdown()).toBe("Before\n#+begin layout {cols=2 mode=flow}\nLeft text\n\n![Graph](graph.png)\n#+end layout\nAfter");
     ed.destroy();
   });
+
+  it("insert-layout: accepts a column count from host commands", async () => {
+    const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
+    const host = document.createElement("div");
+    const ed = createEditorCM6(host, { initialContent: "" });
+    ed.runCommand("insert-layout", "grid:3");
+    expect(ed.getMarkdown()).toBe("#+begin layout {cols=3 mode=grid}\n\n#+end layout");
+    ed.destroy();
+  });
 });
 
 maybeDescribe("CM6 runCommand — table editing", () => {

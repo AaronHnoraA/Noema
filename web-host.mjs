@@ -178,6 +178,7 @@ import {
   noemaAppConfigDir,
   updateNoemaAppConfig,
 } from "./server/lib/app-config.mjs";
+import { noemaEditorDefaults } from "./shared/editor-settings.mjs";
 import {
   adoptWikiRepository,
   buildWikiIndex,
@@ -338,16 +339,19 @@ const serverAppConfig = serverConfig ? {
   config: {
     schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
     appearance: { theme: serverTheme.id },
+    editor: noemaEditorDefaults(),
     workspace: { root: "", layout: "wiki" },
     wiki: { creation: { activeProfile: "", profiles: [] } },
   },
   defaults: {
     schemaVersion: NOEMA_APP_CONFIG_SCHEMA_VERSION,
     appearance: { theme: serverTheme.id },
+    editor: noemaEditorDefaults(),
     workspace: { root: "", layout: "wiki" },
     wiki: { creation: { activeProfile: "", profiles: [] } },
   },
   themes: NOEMA_APP_THEMES,
+  editorSettingsExplicit: true,
   activeTheme: serverTheme,
   revision: `server-${serverTheme.id}`,
   diagnostics: [],

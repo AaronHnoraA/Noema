@@ -14,6 +14,28 @@ describe("native layout group", () => {
     expect(html).toContain("<table");
   });
 
+  test("one-column alignment has the same contract in reader and CM6", () => {
+    const aligned = "#+begin layout {cols=1 mode=grid align=right}\nRight aligned **text**.\n#+end layout\n\nEnd";
+    const rendered = document.createElement("div");
+    rendered.innerHTML = renderMarkdownHTML(aligned);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: aligned });
+    editor.setMarkdownSelection(aligned.length);
+    try {
+      const reader = rendered.querySelector<HTMLElement>(".noema-layout-group")!;
+      const preview = host.querySelector<HTMLElement>(".cm-layout-group-widget")!;
+      expect(reader.classList.contains("noema-layout-align-right")).toBe(true);
+      expect(preview.classList.contains("noema-layout-align-right")).toBe(true);
+      expect(reader.style.getPropertyValue("--noema-layout-cols")).toBe("1");
+      expect(preview.style.getPropertyValue("--noema-layout-cols")).toBe("1");
+      host.querySelector<HTMLButtonElement>('button[aria-label="Align justify"]')!.click();
+      expect(editor.getMarkdown()).toContain("{cols=1 mode=grid align=justify}");
+      editor.undo();
+      expect(editor.getMarkdown()).toBe(aligned);
+    } finally { editor.destroy(); host.remove(); }
+  });
+
   test("grid cells reorder through parser source spans in one undo step", () => {
     const host = document.createElement("div");
     document.body.append(host);

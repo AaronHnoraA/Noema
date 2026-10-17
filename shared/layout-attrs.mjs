@@ -195,6 +195,9 @@ export function layoutFromAttrs(attrs) {
 
 export function layoutClasses(kind, layout) {
   return [
+    "aaronnote-layout",
+    `aaronnote-layout-align-${layout.align}`,
+    layout.wrap ? "aaronnote-layout-wrap" : "",
     `aaronnote-${kind}`,
     `aaronnote-${kind}-align-${layout.align}`,
     layout.wrap ? `aaronnote-${kind}-wrap` : "",
@@ -204,11 +207,13 @@ export function layoutClasses(kind, layout) {
 export function layoutStyle(kind, layout) {
   const parts = [];
   if (layout.width) {
+    parts.push(`--aaronnote-layout-width: ${layout.width}`);
     parts.push(`--aaronnote-${kind}-width: ${layout.width}`);
     parts.push(`--aaronnote-${kind}-max-width: none`);
     parts.push(`--aaronnote-${kind}-max-height: none`);
   }
   if (layout.height) {
+    parts.push(`--aaronnote-layout-height: ${layout.height}`);
     parts.push(`--aaronnote-${kind}-height: ${layout.height}`);
     parts.push(`--aaronnote-${kind}-max-height: none`);
   }

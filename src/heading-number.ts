@@ -7,16 +7,7 @@
  * the result ephemeral: numbers are CM6 decorations and never enter Markdown.
  */
 
-export type HeadingNumberFormat =
-  | "decimal-hierarchical"
-  | "upper-alpha-hierarchical"
-  | "lower-alpha-hierarchical"
-  | "upper-roman-hierarchical"
-  | "lower-roman-hierarchical"
-  | "upper-greek-hierarchical"
-  | "lower-greek-hierarchical"
-  | "decimal-parenthesized"
-  | "chinese-document";
+export type HeadingNumberFormat = import("../shared/editor-settings.mjs").NoemaHeadingNumberFormat;
 
 export type HeadingNumberSource = {
   level: number;

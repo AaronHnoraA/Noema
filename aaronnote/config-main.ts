@@ -3,6 +3,7 @@ import { installB3ComponentSystem } from "../src/b3-component-system.ts";
 import "./config.css";
 
 import type { NoemaAppConfigMsg, NoemaAppTheme } from "./api-client.ts";
+import { NOEMA_EDITOR_SETTINGS } from "../shared/editor-settings.mjs";
 import { api } from "./api-client.ts";
 import {
   installNoemaThemeRuntime,
@@ -39,6 +40,7 @@ root.innerHTML = `
       <a href="#appearance" class="is-active">Appearance</a>
       <a href="#workspace">Workspace</a>
       <a href="#new-pages">New pages</a>
+      <a href="#editor">Markdown editor</a>
       <a href="#configuration-file">Configuration file</a>
     </nav>
     <main class="noema-config-main">
@@ -117,6 +119,16 @@ root.innerHTML = `
         </div>
         <div class="noema-config-themes" data-config-themes role="radiogroup" aria-label="Noema theme"></div>
       </section>
+      <section class="noema-config-section" id="editor">
+        <div class="noema-config-section-head">
+          <div>
+            <p class="noema-config-eyebrow">Markdown</p>
+            <h2>Editor</h2>
+          </div>
+        </div>
+        <div data-editor-settings></div>
+        <div class="noema-config-actions"><button type="button" data-config-save-editor>Save editor settings</button></div>
+      </section>
       <section class="noema-config-section" id="configuration-file">
         <div class="noema-config-section-head">
           <div>
@@ -151,6 +163,51 @@ const syncAutomaticEl = root.querySelector<HTMLInputElement>("[data-sync-automat
 const syncIntervalEl = root.querySelector<HTMLInputElement>("[data-sync-interval]")!;
 const syncCopyEl = root.querySelector<HTMLElement>("[data-sync-copy]")!;
 const saveSyncButton = root.querySelector<HTMLButtonElement>("[data-config-save-sync]")!;
+const editorSettingsEl = root.querySelector<HTMLElement>("[data-editor-settings]")!;
+const saveEditorButton = root.querySelector<HTMLButtonElement>("[data-config-save-editor]")!;
+const editorControls = new Map<string, HTMLInputElement | HTMLSelectElement>();
+
+function editorSettingValue(source: object, path: readonly string[]): unknown {
+  return path.reduce<unknown>((value, part) => value && typeof value === "object"
+    ? (value as Record<string, unknown>)[part] : undefined, source);
+}
+
+function editorSettingPatch(): NonNullable<Parameters<typeof api.config.updateApp>[0]["editor"]> {
+  const patch: Record<string, unknown> = {};
+  for (const setting of NOEMA_EDITOR_SETTINGS) {
+    const control = editorControls.get(setting.id)!;
+    let node = patch;
+    for (const part of setting.path.slice(0, -1)) {
+      node = node[part] ||= {} as Record<string, unknown>;
+    }
+    node[setting.path.at(-1)!] = control instanceof HTMLInputElement ? control.checked : control.value;
+  }
+  return patch as NonNullable<Parameters<typeof api.config.updateApp>[0]["editor"]>;
+}
+
+for (const setting of NOEMA_EDITOR_SETTINGS) {
+  const label = document.createElement("label");
+  label.className = setting.type === "boolean" ? "noema-config-toggle" : "noema-config-field";
+  const control = setting.type === "boolean"
+    ? document.createElement("input")
+    : document.createElement("select");
+  if (control instanceof HTMLInputElement) control.type = "checkbox";
+  else for (const choice of setting.choices) {
+    const option = document.createElement("option");
+    option.value = choice.value;
+    option.textContent = choice.label;
+    control.appendChild(option);
+  }
+  control.dataset.editorSetting = setting.id;
+  const title = document.createElement("span");
+  title.textContent = setting.title;
+  label.append(control, title);
+  const description = document.createElement("p");
+  description.className = "noema-config-copy";
+  description.textContent = setting.description;
+  editorSettingsEl.append(label, description);
+  editorControls.set(setting.id, control);
+}
 
 let payload: NoemaAppConfigMsg | null = noemaAppConfigState();
 let statusTimer = 0;
@@ -197,6 +254,12 @@ function render(): void {
   syncIntervalEl.value = String(payload.config.wiki.sync.intervalMinutes);
   syncIntervalEl.disabled = !payload.config.wiki.sync.automatic;
   syncCopyEl.dataset.state = payload.config.wiki.sync.automatic ? "on" : "off";
+  for (const setting of NOEMA_EDITOR_SETTINGS) {
+    const control = editorControls.get(setting.id)!;
+    const value = editorSettingValue(payload.config.editor, setting.path);
+    if (control instanceof HTMLInputElement) control.checked = Boolean(value);
+    else control.value = String(value);
+  }
 
   for (const theme of payload.themes) {
     const selected = theme.id === payload.config.appearance.theme;
@@ -317,6 +380,23 @@ saveSyncButton.addEventListener("click", () => {
     setStatus(error instanceof Error ? error.message : String(error), "error");
   }).finally(() => {
     saveSyncButton.disabled = false;
+  });
+});
+saveEditorButton.addEventListener("click", () => {
+  if (!payload) return;
+  saveEditorButton.disabled = true;
+  setStatus("Saving editor settings…");
+  void api.config.updateApp({
+    revision: payload.revision,
+    editor: editorSettingPatch(),
+  }).then((next) => {
+    payload = next;
+    setStatus("Saved · open Markdown panes update automatically");
+    render();
+  }).catch((error) => {
+    setStatus(error instanceof Error ? error.message : String(error), "error");
+  }).finally(() => {
+    saveEditorButton.disabled = false;
   });
 });
 window.addEventListener("keydown", (event) => {

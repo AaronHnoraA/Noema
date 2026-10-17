@@ -374,7 +374,7 @@ class MermaidWidget extends MeasuredWidget {
     const wrap = document.createElement("figure");
     wrap.className = "cm-mermaid-widget";
     if (this.layout.wrap) {
-      wrap.classList.add("aaronnote-diagram-wrap", `aaronnote-diagram-align-${this.layout.align}`);
+      wrap.classList.add("aaronnote-layout-wrap", `aaronnote-layout-align-${this.layout.align}`, "aaronnote-diagram-wrap", `aaronnote-diagram-align-${this.layout.align}`);
     }
     setSourceRange(wrap, this.from, this.to, this.sourceFrom, true);
 
@@ -433,7 +433,7 @@ class MermaidPreviewWidget extends MeasuredWidget {
     const wrap = document.createElement("figure");
     wrap.className = "cm-mermaid-widget cm-mermaid-widget-preview";
     if (this.layout.wrap) {
-      wrap.classList.add("aaronnote-diagram-wrap", `aaronnote-diagram-align-${this.layout.align}`);
+      wrap.classList.add("aaronnote-layout-wrap", `aaronnote-layout-align-${this.layout.align}`, "aaronnote-diagram-wrap", `aaronnote-diagram-align-${this.layout.align}`);
     }
 
     const div = document.createElement("div");

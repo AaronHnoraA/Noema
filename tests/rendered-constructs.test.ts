@@ -110,14 +110,14 @@ describe("construct registry", () => {
 });
 
 describe("a table is edited as text", () => {
-  test("an editable rendered table is an embedded surface, so selected cells keep focus and keys", async () => {
+  test("an editable rendered table is a selection surface for the main editor", async () => {
     const { isInEmbeddedSurface } = await import("../src/cm6/embedded-surface.ts");
     const host = document.createElement("div");
     document.body.append(host);
     const editor = createEditor(host, { kernel: "cm6", initialContent: "x\n\n| a | b |\n|---|---|\n| c | d |" });
     try {
       const cell = host.querySelector(".cm-table-block td")!;
-      expect(isInEmbeddedSurface(cell)).toBe(true);
+      expect(isInEmbeddedSurface(cell)).toBe(false);
     } finally {
       editor.destroy();
       host.remove();

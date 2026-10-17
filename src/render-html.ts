@@ -11,7 +11,7 @@ import { supportedDiagramLang } from "./diagram-langs.ts";
 import { hydrateDiagramForeignObjectMarkup, sanitizeDiagramSvg } from "./diagram-sanitize.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
 import { layoutClasses, layoutFromAttrs, layoutStyle, readLayoutAttrSuffix, readLayoutAttrsLine, type LayoutAttrs } from "./layout-attrs.ts";
-import { layoutGroupFromTitle, layoutGroupTracks } from "./layout-group.ts";
+import { layoutGroupClasses, layoutGroupFromTitle, layoutGroupStyle } from "./layout-group.ts";
 import { katexStylesheetHref, renderMathHTML } from "./math-render.ts";
 import { markdownLinkDestination } from "./markdown-link.ts";
 import { safeHref } from "./url-safety.ts";
@@ -1278,7 +1278,7 @@ function renderOrgEnv(
   if (kind.toLowerCase() === "layout") {
     const group = layoutGroupFromTitle(meta.title);
     const body = meta.body.trim() ? md.render(meta.body) : "";
-    return `<div class="noema-layout-group noema-layout-${group.mode}" style="--noema-layout-cols:${group.columns};--noema-layout-tracks:${layoutGroupTracks(group)}" data-cols="${group.columns}">${body}</div>`;
+    return `<div class="${layoutGroupClasses(group)}" style="${layoutGroupStyle(group)}" data-cols="${group.columns}">${body}</div>`;
   }
   const title = meta.title;
   const blockId = meta.blockId;

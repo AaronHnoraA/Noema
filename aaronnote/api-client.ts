@@ -95,8 +95,9 @@ export type NoemaAppTheme = {
   description: string;
 };
 export type NoemaAppConfig = {
-  schemaVersion: 3;
+  schemaVersion: 5;
   appearance: { theme: string };
+  editor: import("../shared/editor-settings.mjs").NoemaEditorSettings;
   workspace: { root: string; layout: "legacy" | "wiki" };
   wiki: {
     sync: {
@@ -122,6 +123,7 @@ export type NoemaAppConfigMsg = {
   configFile: string;
   config: NoemaAppConfig;
   defaults: NoemaAppConfig;
+  editorSettingsExplicit: boolean;
   themes: NoemaAppTheme[];
   activeTheme: NoemaAppTheme;
   revision: string;
@@ -130,6 +132,7 @@ export type NoemaAppConfigMsg = {
 };
 export type NoemaAppConfigUpdate = {
   appearance?: { theme?: string };
+  editor?: import("../shared/editor-settings.mjs").NoemaEditorSettingsPatch;
   workspace?: { root?: string; layout?: "legacy" | "wiki" };
   wiki?: {
     sync?: Partial<NoemaAppConfig["wiki"]["sync"]>;
