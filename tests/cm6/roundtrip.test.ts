@@ -1962,24 +1962,51 @@ After`;
     } finally { cleanup(); }
   });
 
-  test("edits a table cell as document text, then renders it again", () => {
+  test("edits table cells directly without a lower preview copy", async () => {
+    const md = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    const { editor, cleanup } = mountCM6(md);
+    // A caret in the table's source opens it as text (keyboard editing); a
+    // click on a rendered cell edits that cell in place.
+    editor.setMarkdownSelection(0);
+    const cell = document.querySelector<HTMLElement>("tbody td");
+    expect(cell).toBeTruthy();
+    const table = cell!.closest("table");
+    expect(document.querySelector(".cm-table-block-preview")).toBeNull();
+    cell!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    const input = cell!.querySelector<HTMLInputElement>(".cm-table-cell-input");
+    expect(input).toBeTruthy();
+    input!.value = "edited";
+    input!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    input!.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(editor.getMarkdown()).toContain("| edited | 2 |");
+    expect(editor.view.dom.querySelector(".cm-table-block table")).toBe(table);
+    expect(cell!.querySelector(".cm-table-row-drag-handle")).toBeTruthy();
+    cleanup();
+  });
+
+  test("opening a table cell keeps editor coordinates fresh", async () => {
     const md = "| A | B |\n| --- | --- |\n| 1 | 2 |\n\nTail";
     const { editor, cleanup } = mountCM6(md);
-    try {
-      expect(document.querySelector(".cm-table-block-preview")).toBeNull();
-      const cell = document.querySelector<HTMLElement>("tbody td")!;
-      cell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
-      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
-      const at = md.indexOf("1");
-      expect(editor.getMarkdownSelection().from).toBe(at + 1);
-      expect(document.querySelector(".cm-table-block")).toBeNull();
-      editor.view.dispatch({ changes: { from: at, to: at + 1, insert: "edited" }, userEvent: "input.type" });
-      editor.view.dispatch({ selection: { anchor: editor.getMarkdown().length } });
-      expect(editor.getMarkdown()).toContain("| edited | 2 |");
-      expect(document.querySelector(".cm-table-block tbody td")?.textContent).toContain("edited");
-    } finally {
-      cleanup();
-    }
+    editor.setMarkdownSelection(md.length);
+    const selectionBefore = editor.getMarkdownSelection();
+    let measureCount = 0;
+    const originalRequestMeasure = editor.view.requestMeasure.bind(editor.view);
+    editor.view.requestMeasure = ((...args: Parameters<typeof editor.view.requestMeasure>) => {
+      measureCount += 1;
+      return originalRequestMeasure(...args);
+    }) as typeof editor.view.requestMeasure;
+
+    const cell = document.querySelector<HTMLElement>("tbody td");
+    expect(cell).toBeTruthy();
+    cell!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(editor.getMarkdownSelection()).toEqual(selectionBefore);
+    expect(cell!.querySelector<HTMLInputElement>(".cm-table-cell-input")).toBeTruthy();
+    expect(measureCount).toBeGreaterThan(0);
+    cleanup();
   });
 
   test("a press that leaves its cell selects cells instead of editing", () => {
@@ -2072,21 +2099,23 @@ After`;
     }
   });
 
-  test("tab at the last table cell appends a new row", () => {
+  test("tab at the last table cell appends a new row", async () => {
     const md = "| A | B |\n| --- | --- |\n| 1 | 2 |";
     const { editor, cleanup } = mountCM6(md);
-    try {
-      const lastBodyCell = document.querySelector<HTMLElement>("tbody td:last-child")!;
-      lastBodyCell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
-      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
-      editor.view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
-      const lines = editor.getMarkdown().split("\n");
-      expect(lines).toHaveLength(4);
-      expect(lines[3]).toMatch(/^\| +\| +\|$/);
-      expect(editor.view.state.doc.lineAt(editor.view.state.selection.main.head).number).toBe(4);
-    } finally {
-      cleanup();
-    }
+    const lastBodyCell = document.querySelector<HTMLElement>("tbody td:last-child");
+    lastBodyCell!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    const input = lastBodyCell!.querySelector<HTMLInputElement>(".cm-table-cell-input");
+    expect(input).toBeTruthy();
+
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+    const activeInput = document.activeElement as HTMLInputElement | null;
+    expect(activeInput?.classList.contains("cm-table-cell-input")).toBe(true);
+    expect(activeInput?.value).toBe("");
+    expect(editor.getMarkdown()).toBe("| A | B |\n| --- | --- |\n| 1 | 2 |\n|  |  |");
+    cleanup();
   });
 
   test("table cell edits preserve deliberate outer spaces", () => {
@@ -2102,18 +2131,21 @@ After`;
     }
   });
 
-  test("table toolbar puts the caret in the inserted row's cell", () => {
+  test("table toolbar keeps focus on the inserted row cell", async () => {
     const md = "| A | B |\n| --- | --- |\n| 1 | 2 |";
-    const { editor, cleanup } = mountCM6(md);
-    try {
-      document.querySelector<HTMLButtonElement>(".cm-table-toolbar button[title='Insert row below']")!
-        .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-      const line = editor.view.state.doc.lineAt(editor.view.state.selection.main.head);
-      expect(line.number).toBe(3);
-      expect(line.text).toMatch(/^\| +\| +\|$/);
-    } finally {
-      cleanup();
-    }
+    const { cleanup } = mountCM6(md);
+    const firstBodyCell = document.querySelector<HTMLElement>("tbody td");
+    firstBodyCell!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    document.querySelector<HTMLButtonElement>(".cm-table-toolbar button[title='Insert row below']")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+    const activeInput = document.activeElement as HTMLInputElement | null;
+    expect(activeInput?.classList.contains("cm-table-cell-input")).toBe(true);
+    expect(activeInput?.value).toBe("");
+    cleanup();
   });
 
   test("typing ordinary text above a table preserves the table widget DOM", () => {

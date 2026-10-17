@@ -1,6 +1,8 @@
 /**
- * Keyboard movement in a table (MarkText TableCellContent). A table is edited
- * as its Markdown source with the main editor; the keys keep the cell model:
+ * Keyboard movement in a table (MarkText TableCellContent). A caret moved into
+ * a table by the keyboard edits its Markdown source with the main editor (a
+ * click edits a rendered cell in place: table-cell-input.test.ts); the keys
+ * keep the cell model:
  * arrows at a cell's text edge move between cells and, past the table, back
  * into the document; Backspace at a cell's start never deletes a pipe;
  * Mod-Enter adds a row below; Shift-Enter breaks a line inside the cell.
@@ -8,6 +10,7 @@
 
 import { afterEach, describe, expect, it } from "@voidzero-dev/vite-plus-test";
 import { createEditor, type Editor } from "../../src/editor-api.ts";
+import { cellTarget } from "../../src/cm6/commands/index.ts";
 
 const markdown = "before\n\n| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n\nafter";
 const editors: Editor[] = [];
@@ -20,15 +23,17 @@ const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
 /** CodeMirror's `Mod`: Command on macOS, Control elsewhere. */
 const MOD = /Mac/.test(navigator.platform) ? "metaKey" : "ctrlKey";
 
-/** Open DOC and click cell (ROW, COL) of its rendered table: the source opens with the caret there. */
+/** Open DOC with the caret at the end of cell (ROW, COL) of its table's source: the source opens. */
 function open(doc = markdown, row = 1, col = 0) {
   const host = document.createElement("div");
   document.body.append(host);
   const editor = createEditor(host, { kernel: "cm6", initialContent: doc });
   editors.push(editor);
-  const cell = host.querySelector<HTMLTableElement>("table")!.rows[row]!.cells[col] as HTMLTableCellElement;
-  cell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
-  document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+  const state = editor.view.state;
+  let first = 1;
+  while (!/^\s*\|/.test(state.doc.line(first).text)) first++;
+  const line = state.doc.line(first + (row === 0 ? 0 : row + 1));
+  editor.view.dispatch({ selection: { anchor: line.from + cellTarget(line.text, col).head } });
   return { editor, host };
 }
 
@@ -56,7 +61,7 @@ function caretCell(editor: Editor): { row: number; col: number; offset: number }
 }
 
 describe("table cells are edited in the source", () => {
-  it("clicking a cell opens the table's source with the caret in that cell", () => {
+  it("a caret in a cell opens the table's source", () => {
     const { editor, host } = open(markdown, 1, 1);
     expect(caretCell(editor)).toMatchObject({ row: 1, col: 1, offset: 3 });
     expect(host.querySelector(".cm-table-block")).toBeNull();

@@ -102,6 +102,7 @@ import {
   EditorViewportStabilizer,
   mapPositionAcrossText,
   minimalDocumentChange,
+  installFocusOwner,
   preserveEditorViewport,
 } from "./viewport-stability.ts";
 import {
@@ -531,6 +532,8 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     },
   });
   viewportStabilizer = new EditorViewportStabilizer(view, host);
+  // Focusing the editor never moves the viewport, whoever focuses it.
+  installFocusOwner(view);
   // WKWebView can resize its enclosing Emacs window without a useful window
   // resize event. Measure the actual editor box once its CSS width has changed.
   let hostWidth = 0;

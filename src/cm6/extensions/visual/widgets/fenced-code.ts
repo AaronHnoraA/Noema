@@ -18,7 +18,6 @@
 import {
   Decoration,
   EditorView,
-  ViewPlugin,
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
@@ -32,11 +31,11 @@ import { supportedDiagramLang } from "../../../../diagram-langs.ts";
 import { writeSystemClipboard } from "../../../../system-clipboard.ts";
 import { getBlockMathRanges, rangeAtPosition, rangeInsideAny, rangeOverlapsAny } from "../../../math-ranges.ts";
 import { applyLayoutAttrs, layoutFromAttrs, layoutIsDefault, readLayoutAttrsLine, type LayoutAttrs } from "../../../../layout-attrs.ts";
-import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { scheduleViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
-import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import {
-  constructSources,
+  dispatchConstructEdit,  constructSources,
+  constructViewPlugin,
   rebuildDecorations,
   rebuildForRevealChange,
   selectionOpensSource,
@@ -44,11 +43,7 @@ import {
   type ConstructSource,
   type RenderedConstruct,
 } from "../constructs/index.ts";
-import {
-  persistentVisualStateField,
-  rememberPersistentVisualPluginState,
-  restorePersistentVisualPluginState,
-} from "../visual-mode.ts";
+import { persistentVisualStateField } from "../visual-mode.ts";
 
 function setSourceRange(el: HTMLElement, from: number, to: number, anchor?: number, openSource = false): void {
   el.dataset.cmSourceFrom = String(from);
@@ -99,7 +94,7 @@ class LangBadgeWidget extends MeasuredWidget {
       const commit = (): void => {
         const next = input.value.trim().replace(/[^A-Za-z0-9_+.-]/g, "").slice(0, 48);
         if (next !== this.lang) {
-          view.dispatch({ changes: { from: this.from, to: this.to, insert: next } });
+          dispatchConstructEdit(view, { changes: { from: this.from, to: this.to, insert: next } });
           view.requestMeasure();
         } else {
           span.textContent = this.lang || "lang";
@@ -119,7 +114,7 @@ class LangBadgeWidget extends MeasuredWidget {
           input.blur();
         }
       });
-      input.focus();
+      input.focus({ preventScroll: true });
       input.select();
     };
     span.addEventListener("mousedown", (event) => {
@@ -868,74 +863,30 @@ function pushMark(
   decos.push(Decoration.mark({ class: cls }).range(from, to));
 }
 
-type FencedCodePluginSnapshot = {
-  decorations: DecorationSet;
-  activeLineKey: string;
-};
-
-const fencedCodePluginCacheKey = {};
-
-class FencedCodePlugin {
-  decorations: DecorationSet;
-  private readonly view: EditorView;
-  private readonly unsubscribeHighlightReady: () => void;
-  private activeLineKey: string;
-
-  constructor(view: EditorView) {
-    this.view = view;
-    const cached = restorePersistentVisualPluginState<FencedCodePluginSnapshot>(
-      view.state,
-      fencedCodePluginCacheKey,
-    );
-    this.activeLineKey = cached?.activeLineKey ?? activeFenceChromeLineKey(view);
-    this.decorations = cached?.decorations ?? buildFencedCodeDecos(view);
-    this.unsubscribeHighlightReady = onCodeHighlightReady(() => {
-      if (!this.view.dom.isConnected) return;
-      this.decorations = buildFencedCodeDecos(this.view);
-      this.view.dispatch({});
-    });
-  }
-
-  update(update: ViewUpdate): void {
-    if (update.docChanged && update.startState.field(mermaidBlocksField, false)?.length) {
-      // The persistent block field often maps its decorations without creating
-      // new widgets. Keep menu and source-click metadata current in that path.
-      for (const figure of update.view.dom.querySelectorAll<HTMLElement>(".cm-mermaid-widget[data-cm-source-from]")) {
-        setSourceRange(figure,
-          update.changes.mapPos(Number(figure.dataset.cmSourceFrom), 1),
-          update.changes.mapPos(Number(figure.dataset.cmSourceTo), -1),
-          update.changes.mapPos(Number(figure.dataset.cmSourceAnchor), -1), true);
-      }
-    }
-    if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
-    if (isCoalescedVisualTyping(update)) {
-      this.decorations = this.decorations.map(update.changes);
-      return;
-    }
-    const foldToggled = update.transactions.some((transaction) =>
-      transaction.effects.some((effect) => effect.is(toggleCodeFoldEffect)));
-    if (update.docChanged || update.viewportChanged || foldToggled || hasViewportDecorationRefresh(update)) {
-      this.activeLineKey = activeFenceChromeLineKey(update.view);
-      this.decorations = buildFencedCodeDecos(update.view);
-    } else if (update.selectionSet) {
-      const nextLineKey = activeFenceChromeLineKey(update.view);
-      if (nextLineKey === this.activeLineKey) return;
-      this.activeLineKey = nextLineKey;
-      this.decorations = buildFencedCodeDecos(update.view);
-    }
-  }
-
-  destroy(): void {
-    rememberPersistentVisualPluginState(this.view, fencedCodePluginCacheKey, {
-      decorations: this.decorations,
-      activeLineKey: this.activeLineKey,
-    } satisfies FencedCodePluginSnapshot);
-    this.unsubscribeHighlightReady();
+/**
+ * The persistent block field often maps its decorations without creating new
+ * widgets; keep diagram menus' and source clicks' metadata current through it.
+ */
+function mapDiagramSourceRanges(update: ViewUpdate): void {
+  if (!update.docChanged || !update.startState.field(mermaidBlocksField, false)?.length) return;
+  for (const figure of update.view.dom.querySelectorAll<HTMLElement>(".cm-mermaid-widget[data-cm-source-from]")) {
+    setSourceRange(figure,
+      update.changes.mapPos(Number(figure.dataset.cmSourceFrom), 1),
+      update.changes.mapPos(Number(figure.dataset.cmSourceTo), -1),
+      update.changes.mapPos(Number(figure.dataset.cmSourceAnchor), -1), true);
   }
 }
 
-const fencedCodeViewPlugin = ViewPlugin.fromClass(FencedCodePlugin, {
-  decorations: (v) => v.decorations,
+const fencedCodeViewPlugin = constructViewPlugin({
+  build: buildFencedCodeDecos,
+  revealKey: activeFenceChromeLineKey,
+  invalidates: (update) => update.transactions.some((transaction) =>
+    transaction.effects.some((effect) => effect.is(toggleCodeFoldEffect))),
+  beforeUpdate: mapDiagramSourceRanges,
+  // Code drawn before its highlighter loaded is drawn again once it has.
+  setup: (view) => onCodeHighlightReady(() => {
+    if (view.dom.isConnected) scheduleViewportDecorationRefresh(view);
+  }),
 });
 
 // ---------------------------------------------------------------------------

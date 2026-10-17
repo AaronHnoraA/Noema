@@ -1,5 +1,5 @@
 import type { EditorView } from "@codemirror/view";
-import { isolateHistory } from "@codemirror/commands";
+import { dispatchConstructEdit } from "./extensions/visual/constructs/index.ts";
 import type { Text } from "@codemirror/state";
 import { imageLayoutFromAttrs, imageLayoutToAttrMap, type ImageLayoutAttrs } from "../image-attrs.ts";
 import { LAYOUT_ATTR_KEYS, readLayoutAttrSuffix, readLayoutAttrsLine, readLayoutTrailingAttrs } from "../layout-attrs.ts";
@@ -126,7 +126,7 @@ export function applyFigureLayouts(view: EditorView, edits: readonly LayoutEdit[
   }
   changes.sort((a, b) => a.from - b.from);
   if (!changes.length || changes.some((change, index) => index > 0 && change.from < changes[index - 1]!.to)) return false;
-  view.dispatch({ changes, annotations: isolateHistory.of("full"), userEvent: "input.layout", scrollIntoView: false });
+  dispatchConstructEdit(view, { changes, scrollIntoView: false }, "layout");
   view.requestMeasure();
   return true;
 }
@@ -170,12 +170,10 @@ export function swapAdjacentFigures(view: EditorView, first: FigureLayoutTarget,
   const rightSource = doc.sliceString(right.from, right.to);
   const gap = doc.sliceString(left.to, right.from);
   if (leftSource === rightSource) return false;
-  view.dispatch({
+  dispatchConstructEdit(view, {
     changes: { from: left.from, to: right.to, insert: rightSource + gap + leftSource },
-    annotations: isolateHistory.of("full"),
-    userEvent: "move.layout",
     scrollIntoView: false,
-  });
+  }, "move");
   return true;
 }
 

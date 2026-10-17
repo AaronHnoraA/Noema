@@ -4,21 +4,17 @@
  * block identity badge).
  *
  * A family only describes what it matches and what it draws. This module owns
- * everything the families used to repeat: skipping code and math, the reveal
- * policy and Vim pinning, when to rebuild (typing bursts, pointer drags,
- * selection moves that change nothing), the cache that survives the plugin
- * being recreated, and the family's entry in the construct registry.
+ * skipping code and math, the reveal policy and Vim pinning, and the family's
+ * entry in the construct registry; when to rebuild is the shared lifecycle of
+ * `constructViewPlugin`.
  */
 
 import type { EditorState, Extension, Line, Range } from "@codemirror/state";
-import { Decoration, ViewPlugin, type DecorationSet, type EditorView, type ViewUpdate, type WidgetType } from "@codemirror/view";
+import { Decoration, type DecorationSet, type EditorView, type WidgetType } from "@codemirror/view";
 import { rangeInsideAny } from "../../../math-ranges.ts";
-import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
-import { isPointerSelecting, updateHasPointerSelectionEffect } from "../selection.ts";
-import { isCoalescedVisualTyping } from "../typing-burst.ts";
-import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 import { literalRangesOnLine } from "./literal-ranges.ts";
-import { renderedConstructsPinned, transactionChangesPinning } from "./mode.ts";
+import { renderedConstructsPinned } from "./mode.ts";
+import { constructViewPlugin } from "./view-plugin.ts";
 import { constructSources, type ConstructSource, type RenderedConstruct } from "./registry.ts";
 import { revealProbeOffsets, selectionOpensSource, type ConstructRole, type RevealPolicy } from "./reveal.ts";
 
@@ -124,55 +120,12 @@ export function inlineConstruct(spec: InlineConstructSpec): Extension {
     return Decoration.set(decorations, true);
   };
 
-  type Snapshot = { decorations: DecorationSet; revealKey: string };
-  const cacheKey = {};
-
-  class InlineConstructPlugin {
-    decorations: DecorationSet;
-    private revealKey: string;
-    private readonly view: EditorView;
-    private readonly teardown: () => void;
-
-    constructor(view: EditorView) {
-      this.view = view;
-      this.teardown = spec.setup?.(view) ?? (() => {});
-      const cached = restorePersistentVisualPluginState<Snapshot>(view.state, cacheKey);
-      this.decorations = cached?.decorations ?? build(view);
-      this.revealKey = cached?.revealKey ?? revealKey(view.state);
-    }
-
-    update(update: ViewUpdate): void {
-      const selectionOnly = update.selectionSet && !update.docChanged && !update.viewportChanged;
-      if (selectionOnly && update.view.compositionStarted) return;
-      if (isCoalescedVisualTyping(update)) {
-        this.decorations = this.decorations.map(update.changes);
-        return;
-      }
-      // A pointer drag settles once, when the button is released.
-      if (selectionOnly && isPointerSelecting(update.state)) return;
-      const settled = updateHasPointerSelectionEffect(update) && !isPointerSelecting(update.state);
-      const nextKey = update.selectionSet || update.docChanged || settled
-        || update.transactions.some(transactionChangesPinning)
-        ? revealKey(update.state)
-        : this.revealKey;
-      if (update.docChanged || update.viewportChanged || nextKey !== this.revealKey
-          || hasViewportDecorationRefresh(update)) {
-        this.decorations = build(update.view);
-      }
-      this.revealKey = nextKey;
-    }
-
-    destroy(): void {
-      rememberPersistentVisualPluginState<Snapshot>(this.view, cacheKey, {
-        decorations: this.decorations,
-        revealKey: this.revealKey,
-      });
-      this.teardown();
-    }
-  }
-
   return [
     constructSources.of(source),
-    ViewPlugin.fromClass(InlineConstructPlugin, { decorations: (plugin) => plugin.decorations }),
+    constructViewPlugin({
+      build: (view) => build(view),
+      revealKey: (view) => revealKey(view.state),
+      setup: spec.setup,
+    }),
   ];
 }

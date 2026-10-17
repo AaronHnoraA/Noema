@@ -38,7 +38,7 @@
  */
 
 import { syntaxTree } from "@codemirror/language";
-import { isolateHistory, redo, undo } from "@codemirror/commands";
+import { redo, undo } from "@codemirror/commands";
 import {
   Decoration,
   EditorView,
@@ -51,10 +51,12 @@ import { MeasuredWidget } from "./extensions/visual/widgets/measured-widget.ts";
 import { shortHash } from "./extensions/visual/widgets/measured-observer.ts";
 import { StateField, type ChangeSet, type EditorState, type Text } from "@codemirror/state";
 import type { Range } from "@codemirror/state";
-import { blockMathRangesOverlapping, getBlockMathRanges, mergeOverlappingRanges, rangeInsideAny, rangeOverlapsAny } from "./math-ranges.ts";
-import { scanInlineMathRanges } from "../inline-math.ts";
+import { getBlockMathRanges, mergeOverlappingRanges, rangeInsideAny, rangeOverlapsAny } from "./math-ranges.ts";
 import { sanitizeEmbeddedHtml } from "../sanitize-html.ts";
 import { renderInlineMarkdownHTML } from "../render-html.ts";
+import { getKatexMacros } from "../katex-macros.ts";
+import { tableCellMathRanges, type TableCellCompletionDetail } from "./table-cell-assist.ts";
+import { mountVisualTexInlineEditor, normalizeVisualTexLatex, type VisualTexInlineEditor } from "./extensions/visual/widgets/visualtex-inline.ts";
 import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "./figure-layout-menu.ts";
 import { scanEmojiShortcodes } from "../emoji-shortcodes.ts";
 import { writeSystemClipboard } from "../system-clipboard.ts";
@@ -89,11 +91,11 @@ import {
   isPointerSelecting,
   updateHasPointerSelectionEffect,
 } from "./extensions/visual/selection.ts";
-import { cellTarget as tableCellTarget } from "./commands/index.ts";
 import { markEmbeddedSurface } from "./embedded-surface.ts";
 import {
-  constructSources,
+  dispatchConstructEdit,  constructSources,
   drawnConstructSource,
+  mathRangesIn,
   rangeRevealsSource,
   rebuildDecorations,
   rebuildForRevealChange,
@@ -342,10 +344,9 @@ function collectLivePreviewTokens(
 ): LivePreviewToken[] {
   const tokens: LivePreviewToken[] = [];
   const doc = view.state.doc;
-  const blockMathRanges = blockMathRangesOverlapping(view.state, ranges);
-  const inlineMathRanges = ranges.flatMap(({ from, to }) =>
-    scanInlineMathRanges(doc.sliceString(from, to), from));
-  const excludedRanges = combineRanges(blockMathRanges, inlineMathRanges);
+  // Math is literal for every construct family (constructs/literal-ranges.ts);
+  // code ranges are collected by the walk below, which already visits them.
+  const excludedRanges = mathRangesIn(view.state, ranges);
   const codeRanges: Array<{ from: number; to: number }> = [];
 
   // Headings come from the syntax tree (never inside code), so they can run
@@ -957,9 +958,12 @@ class LivePreviewPlugin {
 
 const livePreviewPlugin = ViewPlugin.fromClass(LivePreviewPlugin, {
   decorations: (v) => v.decorations,
-  // Emoji and inline HTML drawn over their source.
+  // Emoji and inline HTML drawn over their source; an emoji is one glyph, an object.
   provide: (plugin) => constructSources.of(drawnConstructSource(
-    "inline-markup", "structure", (_state, view) => view?.plugin(plugin)?.decorations)),
+    "inline-markup",
+    (widget) => (widget instanceof EmojiWidget ? "object" : "structure"),
+    (_state, view) => view?.plugin(plugin)?.decorations,
+  )),
 });
 
 // ---------------------------------------------------------------------------
@@ -1315,7 +1319,7 @@ function buildMarkdownTableSource(data: MarkdownTableData): string {
 type TableFocusTarget = {
   row: number;
   col: number;
-  /** Edit the cell in the document source rather than focus it as a selected cell. */
+  /** Open the cell's in-place editor rather than focus it as a selected cell. */
   edit?: boolean;
   select?: boolean;
   /** Where the caret lands in an edited cell when nothing is selected. */
@@ -1328,6 +1332,31 @@ type TableStructureActions = {
   replace: (rows: string[][], aligns: MarkdownTableData["aligns"], focus: TableFocusTarget | null) => void;
   remove: () => void;
 };
+
+type TableExit = "before" | "after";
+
+/**
+ * Put the document caret beside the table that starts at TABLE_FROM: at the
+ * end of the line above, or the start of the line below. A table at either
+ * edge of the note gets an empty line to land on, as MarkText appends a
+ * paragraph when ArrowDown leaves its last block.
+ */
+function leaveTableAt(view: EditorView, tableFrom: number, where: TableExit): void {
+  const tables = markdownTablesFromState(view.state);
+  const table = tables.find((candidate) => candidate.from === tableFrom)
+    ?? tables[firstTableEndingAtOrAfter(tables, tableFrom)];
+  if (!table) return;
+  const doc = view.state.doc;
+  if (where === "before") {
+    if (table.from > 0) view.dispatch({ selection: { anchor: table.from - 1 }, scrollIntoView: true, userEvent: "select" });
+    else dispatchConstructEdit(view, { changes: { from: 0, insert: "\n" }, selection: { anchor: 0 }, scrollIntoView: true });
+  } else if (table.to < doc.length) {
+    view.dispatch({ selection: { anchor: table.to + 1 }, scrollIntoView: true, userEvent: "select" });
+  } else {
+    dispatchConstructEdit(view, { changes: { from: doc.length, insert: "\n" }, selection: { anchor: doc.length + 1 }, scrollIntoView: true });
+  }
+  view.focus();
+}
 
 type TableFocusResolver = TableFocusTarget | ((data: MarkdownTableData) => TableFocusTarget | null);
 
@@ -1381,6 +1410,7 @@ class TableWidget extends MeasuredWidget {
     const wrap = this.layout.wrap ? dom.firstElementChild as HTMLElement | null : dom;
     const table = wrap?.querySelector<HTMLTableElement>("table");
     if (!wrap || !table) return false;
+    if (this.source !== previous.source && table.querySelector(".cm-table-cell-input, .cm-table-math-editor")) return false;
     if (table.classList.contains("cm-markdown-table-editable") === view.state.readOnly) return false;
     const data = parseMarkdownTable(this.source);
     if (context.data.rows.length !== data.rows.length
@@ -1402,6 +1432,8 @@ class TableWidget extends MeasuredWidget {
         if (cell.dataset.source !== source) {
           const handles = Array.from(cell.children).filter((child) => child.classList.contains("cm-table-drag-handle"));
           cell.dataset.source = source;
+          cell.dataset.editSource = source;
+          cell.dataset.dirty = "false";
           cell.innerHTML = renderInlineMarkdownHTML(source);
           cell.prepend(...handles);
         }
@@ -1446,18 +1478,24 @@ class TableWidget extends MeasuredWidget {
 
     let activeRow = 0;
     let activeCol = 0;
+    let commitTimer: number | null = null;
+    const cancelPendingCommit = (): void => {
+      if (commitTimer != null) {
+        window.clearTimeout(commitTimer);
+        commitTimer = null;
+      }
+    };
     /** Write the cells' sources back as the table's Markdown. */
     const commit = (focusTarget?: TableFocusTarget | null): void => {
+      cancelPendingCommit();
       const rows = tableRowsFromDOM(table);
       if (rows.length === 0) return;
       const current = currentTable();
       if (!current) return;
       const nextSource = buildMarkdownTableSource({ rows, aligns: data.aligns.slice(0, rows[0]!.length) });
       if (nextSource !== current.source) {
-        view.dispatch({
+        dispatchConstructEdit(view, {
           changes: { from: current.from, to: current.sourceTo, insert: nextSource },
-          annotations: isolateHistory.of("full"),
-          userEvent: "input",
         });
         focusTableCellAfterRender(view, current.from, focusTarget);
       } else {
@@ -1465,10 +1503,20 @@ class TableWidget extends MeasuredWidget {
       }
       view.requestMeasure();
     };
+    /** Commit after focus has moved to the next cell, so one edit is one write. */
+    const scheduleCommit = (focusTarget?: TableFocusTarget | null): void => {
+      cancelPendingCommit();
+      commitTimer = window.setTimeout(() => {
+        commitTimer = null;
+        if (!wrap.isConnected) return;
+        commit(focusTarget);
+      }, 0);
+    };
     const apply = (
       mutate: (next: MarkdownTableData) => void,
       focusTarget?: TableFocusResolver,
     ): void => {
+      cancelPendingCommit();
       const current = currentTable();
       if (!current) return;
       const rows = tableRowsFromDOM(table);
@@ -1476,10 +1524,8 @@ class TableWidget extends MeasuredWidget {
       mutate(next);
       const nextSource = buildMarkdownTableSource(next);
       const target = typeof focusTarget === "function" ? focusTarget(next) : focusTarget;
-      if (nextSource !== current.source) view.dispatch({
+      if (nextSource !== current.source) dispatchConstructEdit(view, {
         changes: { from: current.from, to: current.sourceTo, insert: nextSource },
-        annotations: isolateHistory.of("full"),
-        userEvent: "input",
       });
       focusTableCellAfterRender(view, current.from, target);
       view.requestMeasure();
@@ -1548,7 +1594,7 @@ class TableWidget extends MeasuredWidget {
     const rendered = renderEditableTable(data, (row, col) => {
       activeRow = row;
       activeCol = col;
-    }, commit, () => view.requestMeasure(), view, () => currentTable()?.from ?? context.widget.from, editable, {
+    }, commit, scheduleCommit, () => view.requestMeasure(), view, () => currentTable()?.from ?? context.widget.from, editable, {
       aligns: () => [...data.aligns],
       replace: (rows, aligns, focus) => apply((next) => {
         next.rows = rows;
@@ -1559,12 +1605,11 @@ class TableWidget extends MeasuredWidget {
         if (!current) return;
         const doc = view.state.doc;
         const to = current.to < doc.length && doc.sliceString(current.to, current.to + 1) === "\n" ? current.to + 1 : current.to;
-        view.dispatch({
+        dispatchConstructEdit(view, {
           changes: { from: current.from, to },
           selection: { anchor: current.from },
           scrollIntoView: true,
-          userEvent: "delete",
-        });
+        }, "delete");
         view.focus();
       },
     });
@@ -1761,52 +1806,35 @@ function installTableDragHandles(
   });
 }
 
-/** Focus cell TARGET of the rendered TABLE, as a selected cell. */
+/** Focus cell TARGET of the rendered TABLE; with `edit`, open its in-place editor. */
 function focusTableCellInTable(table: HTMLTableElement, target?: TableFocusTarget | null): boolean {
   if (!target || table.rows.length === 0) return false;
   const row = table.rows[Math.max(0, Math.min(target.row, table.rows.length - 1))];
   if (!row || row.cells.length === 0) return false;
   const cell = row.cells[Math.max(0, Math.min(target.col, row.cells.length - 1))] as HTMLTableCellElement | undefined;
   if (!cell) return false;
-  cell.focus();
+  cell.focus({ preventScroll: true });
+  if (target.edit) {
+    cell.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    const input = cell.querySelector<HTMLInputElement>(".cm-table-cell-input");
+    if (input) {
+      input.focus({ preventScroll: true });
+      if (target.select) input.select();
+      else if (target.caret) {
+        const at = target.caret === "start" ? 0 : input.value.length;
+        input.setSelectionRange(at, at);
+      }
+    }
+  }
   return true;
 }
 
-/**
- * Put the caret in cell TARGET of the table starting at TABLE_FROM, in its
- * source: the table opens as text there. `select` selects the cell's text, as
- * Tab does; otherwise the caret goes to the cell text's start or end.
- */
-function editTableCellSource(view: EditorView, tableFrom: number, target: TableFocusTarget): boolean {
-  const table = tableAt(view.state, tableFrom);
-  if (!table) return false;
-  const lines = table.source.split("\n");
-  // Source line 1 is the delimiter row; table rows after the header follow it.
-  const lineIndex = target.row === 0 ? 0 : target.row + 1;
-  const rowText = lines[lineIndex];
-  if (rowText == null) return false;
-  let rowFrom = table.from;
-  for (let index = 0; index < lineIndex; index++) rowFrom += lines[index]!.length + 1;
-  const cell = tableCellTarget(rowText, Math.max(0, target.col));
-  const selection = target.select
-    ? { anchor: rowFrom + cell.anchor, head: rowFrom + cell.head }
-    : { anchor: rowFrom + (target.caret === "start" ? cell.anchor : cell.head) };
-  view.dispatch({ selection, scrollIntoView: true, userEvent: "select" });
-  view.focus();
-  return true;
-}
-
-/** After a write re-renders the table: edit TARGET's source, or focus it as a selected cell. */
 function focusTableCellAfterRender(
   view: EditorView,
   tableFrom: number,
   target?: TableFocusTarget | null,
 ): void {
   if (!target) return;
-  if (target.edit) {
-    editTableCellSource(view, tableFrom, target);
-    return;
-  }
   window.requestAnimationFrame(() => {
     const table = view.dom.querySelector<HTMLTableElement>(
       `.cm-table-block[data-cm-source-from="${tableFrom}"] table`,
@@ -1820,6 +1848,7 @@ function renderEditableTable(
   data: MarkdownTableData,
   setActiveCell: (row: number, col: number) => void,
   commit: (focusTarget?: TableFocusTarget | null) => void,
+  scheduleCommit: (focusTarget?: TableFocusTarget | null) => void,
   requestMeasure: () => void,
   view: EditorView,
   tableFrom: () => number,
@@ -1828,26 +1857,181 @@ function renderEditableTable(
 ): { table: HTMLTableElement; dispose: () => void } {
   const table = document.createElement("table");
   table.className = editable ? "cm-markdown-table-preview cm-markdown-table-editable" : "cm-markdown-table-preview";
-  // Selected cells take their own keys (copy, delete, arrows) and pointer
-  // presses: the host must not hand focus back to the document under them.
+  // Cells are edited in place (an input, MathLive for a formula) and selected
+  // cells take their own keys: an embedded surface, as a formula editor is.
   if (editable) markEmbeddedSurface(table);
   const colCount = data.rows[0]?.length ?? 1;
-  /** Draw a cell from its source again, keeping its drag handle. */
+  const editingHandles = new WeakMap<HTMLTableCellElement, Element[]>();
+  let pendingFocusTarget: TableFocusTarget | null = null;
+  let pendingExit: TableExit | null = null;
+  let pendingRowInsert = false;
+  let activeFormula: { editor: VisualTexInlineEditor; cell: HTMLTableCellElement; source: string; from: number; to: number; draft: string } | null = null;
+  const completion = (input: HTMLInputElement, type: "request" | "close" | "key", key?: KeyboardEvent): boolean => {
+    const event = new CustomEvent<TableCellCompletionDetail & { key?: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; isComposing?: boolean }>(
+      `aaronnote:table-cell-completion-${type}`,
+      { bubbles: true, cancelable: true, detail: { input, key: key?.key, shiftKey: key?.shiftKey, ctrlKey: key?.ctrlKey, metaKey: key?.metaKey, altKey: key?.altKey, isComposing: key?.isComposing } },
+    );
+    input.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  const cellInput = (cell: HTMLTableCellElement): HTMLInputElement | null =>
+    cell.querySelector<HTMLInputElement>(".cm-table-cell-input");
   const restorePreview = (cell: HTMLTableCellElement): void => {
     const source = cell.dataset.source ?? "";
-    const handles = Array.from(cell.children).filter((child) => child.classList.contains("cm-table-drag-handle"));
+    const handles = editingHandles.get(cell)
+      ?? Array.from(cell.children).filter((child) => child.classList.contains("cm-table-drag-handle"));
     cell.innerHTML = renderInlineMarkdownHTML(source);
     cell.prepend(...handles);
+    editingHandles.delete(cell);
+    cell.dataset.editing = "false";
+    cell.dataset.dirty = "false";
+    cell.dataset.editSource = source;
     requestMeasure();
   };
+  const closeFormula = (save: boolean): boolean => {
+    const active = activeFormula;
+    if (!active) return false;
+    activeFormula = null;
+    const draft = normalizeVisualTexLatex(active.draft);
+    active.editor.destroy();
+    if (!active.cell.isConnected) return false;
+    if (!save) active.cell.dataset.source = active.source;
+    const changed = save && draft !== active.source.slice(active.from + 2, active.to - 2);
+    if (changed) {
+      active.cell.dataset.source = active.source.slice(0, active.from + 2) + draft + active.source.slice(active.to - 2);
+      restorePreview(active.cell);
+      commit({ row: Number(active.cell.dataset.row), col: Number(active.cell.dataset.col) });
+    } else restorePreview(active.cell);
+    return changed;
+  };
+  const openFormula = (cell: HTMLTableCellElement, span: HTMLElement, pointer: MouseEvent): boolean => {
+    const source = cell.dataset.source ?? "";
+    const spans = Array.from(cell.querySelectorAll<HTMLElement>(".aaronnote-math-inline"));
+    const index = spans.indexOf(span);
+    const range = tableCellMathRanges(source)[index];
+    if (!range || range.tex !== span.dataset.tex) return false;
+    cell.dataset.editing = "math";
+    let draft = range.tex;
+    span.classList.add("cm-table-math-editor");
+    markEmbeddedSurface(span);
+    // Keep the table editor's formula lifecycle observable without reaching
+    // into MathLive's shadow DOM or coupling callers to its implementation.
+    span.addEventListener("aaronnote:table-math-draft", (event) => {
+      const latex = (event as CustomEvent<{ latex?: unknown }>).detail?.latex;
+      if (typeof latex === "string") {
+        draft = latex;
+        if (activeFormula?.cell === cell) activeFormula.draft = latex;
+      }
+    });
+    span.addEventListener("aaronnote:table-math-commit", () => closeFormula(true));
+    const unavailable = (): void => {
+      if (activeFormula?.cell !== cell || !cell.isConnected) return;
+      closeFormula(false);
+      cell.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      const input = cellInput(cell);
+      input?.focus({ preventScroll: true });
+      input?.setSelectionRange(range.from, range.to);
+    };
+    span.addEventListener("aaronnote:table-math-unavailable", unavailable);
+    const editor = mountVisualTexInlineEditor(span, {
+      latex: range.tex,
+      macros: getKatexMacros(),
+      entry: { kind: "point", x: pointer.clientX, y: pointer.clientY },
+      onInput: (latex) => {
+        draft = latex;
+        if (activeFormula?.cell === cell) {
+          activeFormula.draft = latex;
+          cell.dataset.source = source.slice(0, range.from + 2) + latex + source.slice(range.to - 2);
+          cell.dataset.dirty = "true";
+        }
+      },
+      onCommit: () => closeFormula(true),
+      onUnavailable: unavailable,
+    });
+    activeFormula = { editor, cell, source, from: range.from, to: range.to, draft };
+    requestMeasure();
+    return true;
+  };
+  const enterEditing = (cell: HTMLTableCellElement): HTMLInputElement => {
+    const existing = cellInput(cell);
+    if (existing) return existing;
+    const source = cell.dataset.source ?? cell.textContent ?? "";
+    cell.dataset.editSource = source;
+    cell.dataset.editing = "true";
+    cell.dataset.dirty = "false";
+    editingHandles.set(cell, Array.from(cell.children).filter((child) => child.classList.contains("cm-table-drag-handle")));
+    cell.textContent = "";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "cm-table-cell-input";
+    input.value = source;
+    input.spellcheck = true;
+    const live = document.createElement("div");
+    live.className = "cm-table-cell-live-preview";
+    live.setAttribute("aria-hidden", "true");
+    let frame = 0;
+    const renderDraft = (): void => {
+      frame = 0;
+      if (!input.isConnected) return;
+      if (!/[\\*_~`!\[<^#:]/.test(input.value) && !input.value.includes("@@")) {
+        if (!live.hidden) {
+          live.replaceChildren();
+          live.hidden = true;
+          requestMeasure();
+        }
+        return;
+      }
+      live.innerHTML = renderInlineMarkdownHTML(input.value);
+      live.hidden = live.children.length === 0;
+      requestMeasure();
+    };
+    input.addEventListener("input", () => {
+      if (!frame) frame = window.requestAnimationFrame(renderDraft);
+    });
+    cell.append(input, live);
+    renderDraft();
+    requestMeasure();
+    return input;
+  };
   /**
-   * Edit a cell where every other text is edited: in the document, with the
-   * main editor. The table opens as source with the caret in that cell, so
-   * Vim, completion, formulas and undo behave as they do in a paragraph.
+   * Arrow keys and Backspace at the edge of a cell's text move between cells
+   * and, past the table's edge, back into the document — MarkText's
+   * `TableCellContent.arrowHandler`/`backspaceHandler`. Inside the text the
+   * keys keep their native caret movement.
    */
-  const editCell = (row: number, col: number): void => {
-    clearRect();
-    editTableCellSource(view, tableFrom(), { row, col, edit: true, caret: "end" });
+  const moveFromCellByKey = (event: KeyboardEvent, input: HTMLInputElement, row: number, col: number): boolean => {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
+    const start = input.selectionStart ?? 0;
+    const end = input.selectionEnd ?? start;
+    const collapsed = start === end;
+    const atStart = collapsed && start === 0;
+    const atEnd = collapsed && end === input.value.length;
+    const lastRow = table.rows.length - 1;
+    let target: TableFocusTarget | null = null;
+    let exit: TableExit | null = null;
+    if (event.key === "ArrowUp") {
+      if (row > 0) target = { row: row - 1, col, edit: true, caret: "end" };
+      else exit = "before";
+    } else if (event.key === "ArrowDown") {
+      if (row < lastRow) target = { row: row + 1, col, edit: true, caret: "start" };
+      else exit = "after";
+    } else if ((event.key === "ArrowLeft" || event.key === "Backspace") && atStart) {
+      if (col > 0) target = { row, col: col - 1, edit: true, caret: "end" };
+      else if (row > 0) target = { row: row - 1, col: colCount - 1, edit: true, caret: "end" };
+      else if (event.key === "ArrowLeft") exit = "before";
+      else return false;
+    } else if (event.key === "ArrowRight" && atEnd) {
+      if (col < colCount - 1) target = { row, col: col + 1, edit: true, caret: "start" };
+      else if (row < lastRow) target = { row: row + 1, col: 0, edit: true, caret: "start" };
+      else exit = "after";
+    } else {
+      return false;
+    }
+    event.preventDefault();
+    pendingFocusTarget = target;
+    pendingExit = exit;
+    input.blur();
+    return true;
   };
   // ── Rectangular cell selection (MarkText TableRectSelection) ───────────
   let rectAnchor: TableCellPosition | null = null;
@@ -1881,6 +2065,22 @@ function renderEditableTable(
     paintRect();
   };
   const selectRect = (anchor: TableCellPosition, focus: TableCellPosition, focusCell = true): void => {
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement && table.contains(active)) active.blur();
+    // A click opens its cell's editor at once; a drag out of the cell closes
+    // it again, keeping whatever was typed.
+    let dirty = false;
+    for (const input of Array.from(table.querySelectorAll<HTMLInputElement>(".cm-table-cell-input"))) {
+      const cell = input.closest<HTMLTableCellElement>("td, th");
+      if (!cell) continue;
+      if (input.value !== (cell.dataset.editSource ?? "")) {
+        cell.dataset.source = input.value;
+        dirty = true;
+      }
+      completion(input, "close");
+      restorePreview(cell);
+    }
+    if (dirty) commit(null);
     rectAnchor = anchor;
     rectFocus = focus;
     paintRect();
@@ -1984,7 +2184,7 @@ function renderEditableTable(
   };
   const onDragMove = (event: MouseEvent): void => {
     if (!drag) return;
-    if (!(event.buttons & 1)) { endDrag(false); return; }
+    if (!(event.buttons & 1)) { endDrag(); return; }
     const pos = cellPositionAt(event.target);
     if (!pos) return;
     if (!drag.selecting) {
@@ -1999,22 +2199,19 @@ function renderEditableTable(
     paintRect();
     window.getSelection?.()?.removeAllRanges();
   };
-  /** End a press. CLICKED is a button release; a press that stayed in its cell then edits it. */
-  const endDrag = (clicked: boolean): void => {
+  const endDrag = (): void => {
     const finished = drag;
     drag = null;
     document.removeEventListener("mousemove", onDragMove, true);
-    document.removeEventListener("mouseup", onDragEnd, true);
+    document.removeEventListener("mouseup", endDrag, true);
     if (finished?.selecting && rectFocus) cellElement(rectFocus)?.focus({ preventScroll: true });
-    else if (finished && clicked) editCell(finished.origin.row, finished.origin.col);
   };
-  const onDragEnd = (): void => endDrag(true);
   const startDrag = (pos: TableCellPosition): void => {
-    endDrag(false);
+    endDrag();
     drag = { origin: pos, selecting: false };
     // Capture: the widget stops mouseup from bubbling past its wrapper.
     document.addEventListener("mousemove", onDragMove, true);
-    document.addEventListener("mouseup", onDragEnd, true);
+    document.addEventListener("mouseup", endDrag, true);
   };
   if (editable) {
     table.addEventListener("focusout", (event) => {
@@ -2028,20 +2225,182 @@ function renderEditableTable(
     cell.tabIndex = 0;
     cell.dataset.row = String(row);
     cell.dataset.col = String(col);
+    cell.dataset.editing = "false";
+    cell.dataset.dirty = "false";
+    cell.dataset.editSource = cell.dataset.source ?? "";
+    const bindInput = (input: HTMLInputElement): void => {
+      if (input.dataset.bound === "true") return;
+      input.dataset.bound = "true";
+      // Candidate confirmation belongs to the IME, not table navigation.
+      // WebKit can end composition before its confirming keydown (229).
+      let composing = false;
+      input.addEventListener("compositionstart", () => {
+        composing = true;
+        completion(input, "close");
+      });
+      input.addEventListener("compositionend", () => {
+        composing = false;
+        completion(input, "request");
+      });
+      input.addEventListener("input", (event) => {
+        cell.dataset.dirty = "true";
+        if (!composing && !(event as InputEvent).isComposing) completion(input, "request");
+      });
+      input.addEventListener("mousedown", (event) => {
+        event.stopPropagation();
+        if (event.button === 0 && !event.shiftKey) startDrag({ row, col });
+      });
+      input.addEventListener("mouseup", (event) => event.stopPropagation());
+      input.addEventListener("click", (event) => {
+        event.stopPropagation();
+        completion(input, "request");
+      });
+      input.addEventListener("keyup", (event) => {
+        if (composing || event.isComposing || event.keyCode === 229) return;
+        if (!["ArrowUp", "ArrowDown", "Tab", "Enter", "Escape"].includes(event.key)) completion(input, "request");
+      });
+      input.addEventListener("blur", (event) => {
+        completion(input, "close");
+        const focusTarget = pendingFocusTarget;
+        pendingFocusTarget = null;
+        const exit = pendingExit;
+        pendingExit = null;
+        const exitFrom = exit ? tableFrom() : 0;
+        let appendedRow = pendingRowInsert;
+        pendingRowInsert = false;
+        if (focusTarget && focusTarget.row >= table.rows.length) {
+          appendEmptyTableRow(table, colCount);
+          appendedRow = true;
+        }
+        const nextSource = input.value;
+        const changed = nextSource !== (cell.dataset.editSource ?? "");
+        if (changed) cell.dataset.source = nextSource;
+        // Finish the local edit before dispatch so the table can update this
+        // cell in place instead of rebuilding all rows around a live input.
+        restorePreview(cell);
+        if (changed || appendedRow) {
+          const nextTarget = event.relatedTarget;
+          const movingInsideTable = nextTarget instanceof Node && table.contains(nextTarget);
+          if (movingInsideTable) scheduleCommit(focusTarget);
+          else commit(focusTarget);
+        } else {
+          cell.dataset.dirty = "false";
+        }
+        if (!changed && focusTarget) {
+          window.setTimeout(() => focusTableCellInTable(table, focusTarget), 0);
+        }
+        if (exit) leaveTableAt(view, exitFrom, exit);
+      });
+      input.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (composing || event.isComposing || event.keyCode === 229) return;
+        if (completion(input, "key", event)) {
+          event.preventDefault();
+          return;
+        }
+        if (moveFromCellByKey(event, input, row, col)) return;
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+          // MarkText's Mod-Enter: a new row below this one, caret in its first cell.
+          event.preventDefault();
+          insertEmptyTableRow(table, row + 1, colCount);
+          pendingRowInsert = true;
+          pendingFocusTarget = { row: row + 1, col: 0, edit: true };
+          input.blur();
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          if (event.shiftKey) {
+            // Match MarkText's cell line break while retaining native input
+            // undo when the browser supports insertText on an input element.
+            const start = input.selectionStart ?? 0;
+            if (!input.ownerDocument.execCommand?.("insertText", false, "<br>")) {
+              input.setRangeText("<br>", start, input.selectionEnd ?? start, "end");
+              input.setSelectionRange(start + 4, start + 4);
+              input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "<br>" }));
+            }
+            return;
+          }
+          pendingFocusTarget = { row: row + 1, col, edit: true, select: true };
+          input.blur();
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          pendingFocusTarget = null;
+          cell.dataset.dirty = "false";
+          completion(input, "close");
+          restorePreview(cell);
+          cell.focus({ preventScroll: true });
+        }
+        if (event.key === "Tab") {
+          event.preventDefault();
+          const nextCol = event.shiftKey ? col - 1 : col + 1;
+          const nextRow = nextCol < 0 ? row - 1 : nextCol >= colCount ? row + 1 : row;
+          const normalizedCol = nextCol < 0 ? colCount - 1 : nextCol >= colCount ? 0 : nextCol;
+          pendingFocusTarget = { row: nextRow, col: normalizedCol, edit: true, select: true };
+          input.blur();
+        }
+      });
+    };
+    const openEditor = (targetCell: HTMLTableCellElement): HTMLInputElement => {
+      const input = enterEditing(targetCell);
+      bindInput(input);
+      return input;
+    };
     cell.addEventListener("mousedown", (event) => {
       event.stopPropagation();
-      if (event.button !== 0) return;
-      // The caret is placed when the button is released inside the cell; a
-      // drag out of it selects a rectangle of cells instead.
-      event.preventDefault();
-      if (event.shiftKey) {
+      if (event.button === 0 && event.shiftKey && !activeFormula) {
+        event.preventDefault();
         selectRect(rectAnchor ?? lastCell ?? { row, col }, { row, col });
         return;
       }
       clearRect();
       lastCell = { row, col };
+      if (event.button === 0) startDrag({ row, col });
       setActiveCell(row, col);
-      startDrag({ row, col });
+      if (activeFormula) {
+        const activeCell = activeFormula.cell;
+        const activeHost = activeCell.querySelector<HTMLElement>(".cm-table-math-editor");
+        if (activeCell === cell && event.target instanceof Node && activeHost?.contains(event.target)) return;
+        const formula = event.target instanceof Element
+          ? event.target.closest<HTMLElement>(".aaronnote-math-inline") : null;
+        const formulaIndex = formula && cell.contains(formula)
+          ? Array.from(cell.querySelectorAll(".aaronnote-math-inline")).indexOf(formula) : -1;
+        const { clientX, clientY } = event;
+        const changed = closeFormula(true);
+        if (changed || activeCell === cell) {
+          event.preventDefault();
+          window.requestAnimationFrame(() => {
+            const updated = view.dom.querySelector<HTMLTableElement>(
+              `.cm-table-block[data-cm-source-from="${tableFrom()}"] table`,
+            );
+            const nextCell = updated?.rows[row]?.cells[col] as HTMLTableCellElement | undefined;
+            const nextTarget = formulaIndex >= 0
+              ? nextCell?.querySelectorAll<HTMLElement>(".aaronnote-math-inline")[formulaIndex] : nextCell;
+            nextTarget?.dispatchEvent(new MouseEvent("mousedown", {
+              bubbles: true, cancelable: true, clientX, clientY,
+            }));
+          });
+          return;
+        }
+      }
+      if (event.target instanceof HTMLInputElement) return;
+      const formula = event.target instanceof Element
+        ? event.target.closest<HTMLElement>(".aaronnote-math-inline") : null;
+      if (formula && cell.contains(formula) && openFormula(cell, formula, event)) {
+        event.preventDefault();
+        return;
+      }
+      event.preventDefault();
+      const input = openEditor(cell);
+      window.setTimeout(() => {
+        // A drag that left this cell turned the click into a cell selection.
+        if (!input.isConnected || rectAnchor) return;
+        input.focus({ preventScroll: true });
+        const end = input.value.length;
+        input.setSelectionRange(end, end);
+        completion(input, "request");
+      }, 0);
     });
     cell.addEventListener("focus", () => {
       if (rectAnchor && rectFocus && !rectContains(tableCellRect(rectAnchor, rectFocus), row, col)) clearRect();
@@ -2055,8 +2414,9 @@ function renderEditableTable(
     cell.addEventListener("keydown", (event) => {
       event.stopPropagation();
       if (event.isComposing || event.keyCode === 229) return;
-      if (handleRectKey(event)) return;
-      if (event.shiftKey && event.key.startsWith("Arrow") && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      if (event.target === cell && handleRectKey(event)) return;
+      if (event.target === cell && event.shiftKey && event.key.startsWith("Arrow")
+          && !event.metaKey && !event.ctrlKey && !event.altKey) {
         // Shift+Arrow from a selected cell starts a rectangle.
         event.preventDefault();
         const step = event.key === "ArrowUp" ? [-1, 0] : event.key === "ArrowDown" ? [1, 0]
@@ -2079,8 +2439,8 @@ function renderEditableTable(
       const step = event.metaKey || event.ctrlKey || event.altKey || event.shiftKey ? null
         : event.key === "ArrowUp" ? [-1, 0] : event.key === "ArrowDown" ? [1, 0]
           : event.key === "ArrowLeft" ? [0, -1] : event.key === "ArrowRight" ? [0, 1] : null;
-      if (step) {
-        // A selected cell moves like a spreadsheet cursor.
+      if (step && event.target === cell) {
+        // A selected (not edited) cell moves like a spreadsheet cursor.
         event.preventDefault();
         focusTableCellInTable(table, {
           row: Math.max(0, Math.min(table.rows.length - 1, row + step[0]!)),
@@ -2090,7 +2450,9 @@ function renderEditableTable(
       }
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        editCell(row, col);
+        const input = openEditor(cell);
+        input.focus({ preventScroll: true });
+        input.select();
       }
     });
   };
@@ -2122,12 +2484,44 @@ function renderEditableTable(
     }
   });
 
-  return { table, dispose: () => endDrag(false) };
+  return { table, dispose: () => {
+    endDrag();
+    const active = activeFormula;
+    activeFormula = null;
+    active?.editor.destroy();
+    const input = table.querySelector<HTMLInputElement>(".cm-table-cell-input");
+    if (input) completion(input, "close");
+  } };
 }
 
 function tableRowsFromDOM(table: HTMLTableElement): string[][] {
   return Array.from(table.rows).map((row) =>
-    Array.from(row.cells).map((cell) => cell.dataset.source ?? cell.textContent ?? ""));
+    Array.from(row.cells).map((cell) => (
+      cell.dataset.dirty === "true"
+        ? cell.querySelector<HTMLInputElement>(".cm-table-cell-input")?.value
+          ?? cell.dataset.source
+          ?? cell.textContent
+          ?? ""
+        : cell.dataset.source ?? cell.textContent ?? ""
+    )));
+}
+
+/** An empty body row at ROW_INDEX (a table row index; the header is row 0). */
+function insertEmptyTableRow(table: HTMLTableElement, rowIndex: number, colCount: number): void {
+  const tbody = table.tBodies[0] ?? table.createTBody();
+  const bodyRows = tbody.querySelectorAll(":scope > tr").length;
+  const bodyIndex = Math.max(0, Math.min(rowIndex - 1, bodyRows));
+  const tr = tbody.insertRow(bodyIndex);
+  for (let col = 0; col < colCount; col++) tr.insertCell().dataset.source = "";
+}
+
+function appendEmptyTableRow(table: HTMLTableElement, colCount: number): void {
+  const tbody = table.tBodies[0] ?? table.createTBody();
+  const tr = tbody.insertRow();
+  for (let col = 0; col < colCount; col++) {
+    const td = tr.insertCell();
+    td.dataset.source = "";
+  }
 }
 
 const markdownTablesField = StateField.define<readonly MarkdownTable[]>({

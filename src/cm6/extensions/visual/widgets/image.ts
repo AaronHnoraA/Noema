@@ -16,7 +16,6 @@
 import {
   Decoration,
   EditorView,
-  ViewPlugin,
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
@@ -27,6 +26,7 @@ import { parser as markdownParser } from "@lezer/markdown";
 import { rangeInsideAny } from "../../../math-ranges.ts";
 import {
   constructSources,
+  constructViewPlugin,
   literalRangesOnLine,
   renderedConstructsPinned,
   selectionOpensSource,
@@ -57,9 +57,6 @@ import {
   visualAttachmentTitle,
   mediaPlayerKind,
 } from "../../../../visual-attachments.ts";
-import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
-import { isCoalescedVisualTyping } from "../typing-burst.ts";
-import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 
 declare global {
   interface Window {
@@ -680,69 +677,30 @@ function activeImageSourceKey(view: EditorView): string {
 // ViewPlugin export
 // ---------------------------------------------------------------------------
 
-type ImagePluginSnapshot = { decorations: DecorationSet; activeSourceKey: string };
-const imagePluginCacheKey = {};
-
-class ImagePlugin {
-  decorations: DecorationSet;
-  private readonly view: EditorView;
-  private activeSourceKey: string;
-
-  constructor(view: EditorView) {
-    this.view = view;
-    const cached = restorePersistentVisualPluginState<ImagePluginSnapshot>(
-      view.state,
-      imagePluginCacheKey,
-    );
-    this.activeSourceKey = cached?.activeSourceKey ?? activeImageSourceKey(view);
-    this.decorations = cached?.decorations ?? buildImageDecorations(view);
+/**
+ * The decoration positions map during a typing burst; their DOM metadata must
+ * follow too, since source clicks, attachment links and layout menus use it
+ * before the delayed rebuild. This only touches mounted figures and reads no
+ * layout. Editing a figure itself requires a fresh render instead.
+ */
+function mapFigureSourceRanges(update: ViewUpdate): boolean {
+  const figures = [...update.view.dom.querySelectorAll<HTMLElement>(".cm-image-widget[data-cm-source-base-to]:not(.cm-tikz-env-widget)")];
+  if (figures.some((figure) => update.changes.touchesRange(
+    Number(figure.dataset.cmSourceFrom), Number(figure.dataset.cmSourceTo),
+  ))) return false;
+  for (const figure of figures) {
+    const from = update.changes.mapPos(Number(figure.dataset.cmSourceFrom), 1);
+    const to = update.changes.mapPos(Number(figure.dataset.cmSourceTo), -1);
+    const baseTo = update.changes.mapPos(Number(figure.dataset.cmSourceBaseTo), -1);
+    setSourceRange(figure, from, to);
+    figure.dataset.cmSourceBaseTo = String(baseTo);
   }
-
-  update(update: ViewUpdate): void {
-    if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
-    if (isCoalescedVisualTyping(update) && this.mapSourceRanges(update)) {
-      this.decorations = this.decorations.map(update.changes);
-      return;
-    }
-    if (update.docChanged || update.viewportChanged || hasViewportDecorationRefresh(update)) {
-      this.activeSourceKey = activeImageSourceKey(update.view);
-      this.decorations = buildImageDecorations(update.view);
-    } else if (update.selectionSet) {
-      const nextSourceKey = activeImageSourceKey(update.view);
-      if (nextSourceKey === this.activeSourceKey) return;
-      this.activeSourceKey = nextSourceKey;
-      this.decorations = buildImageDecorations(update.view);
-    }
-  }
-
-  private mapSourceRanges(update: ViewUpdate): boolean {
-    // The decoration positions map during a typing burst; their DOM metadata
-    // must follow too, since source clicks, attachment links and layout menus
-    // use it before the delayed rebuild. This only touches mounted figures and
-    // reads no layout. Editing a figure itself requires a fresh render instead.
-    const figures = [...update.view.dom.querySelectorAll<HTMLElement>(".cm-image-widget[data-cm-source-base-to]:not(.cm-tikz-env-widget)")];
-    if (figures.some((figure) => update.changes.touchesRange(
-      Number(figure.dataset.cmSourceFrom), Number(figure.dataset.cmSourceTo),
-    ))) return false;
-    for (const figure of figures) {
-      const from = update.changes.mapPos(Number(figure.dataset.cmSourceFrom), 1);
-      const to = update.changes.mapPos(Number(figure.dataset.cmSourceTo), -1);
-      const baseTo = update.changes.mapPos(Number(figure.dataset.cmSourceBaseTo), -1);
-      setSourceRange(figure, from, to);
-      figure.dataset.cmSourceBaseTo = String(baseTo);
-    }
-    return true;
-  }
-
-  destroy(): void {
-    rememberPersistentVisualPluginState(this.view, imagePluginCacheKey, {
-      decorations: this.decorations,
-      activeSourceKey: this.activeSourceKey,
-    } satisfies ImagePluginSnapshot);
-  }
+  return true;
 }
 
-export const imageExtension = ViewPlugin.fromClass(ImagePlugin, {
-  decorations: (v) => v.decorations,
+export const imageExtension = constructViewPlugin({
+  build: buildImageDecorations,
+  revealKey: activeImageSourceKey,
+  mapDuringTyping: mapFigureSourceRanges,
   provide: () => constructSources.of(imageConstructSource),
 });

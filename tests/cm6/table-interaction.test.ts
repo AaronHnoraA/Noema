@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "@voidzero-dev/vite-plus-test";
 import { undoDepth } from "@codemirror/commands";
 import { createEditor, type Editor } from "../../src/editor-api.ts";
+import { cellTarget } from "../../src/cm6/commands/index.ts";
 
 const markdown = "before\n\n| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n\nafter";
 const editors: Editor[] = [];
@@ -19,11 +20,14 @@ function mount() {
   return { editor, host };
 }
 
-/** Click a rendered cell: the table's source opens with the caret in it. */
-function clickCell(host: HTMLElement, row: number, col: number) {
-  const cell = host.querySelector<HTMLTableElement>(".cm-table-block table")!.rows[row]!.cells[col] as HTMLTableCellElement;
-  cell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
-  document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+/** Put the caret at the end of cell (ROW, COL) in the table's source: it opens as text. */
+function clickCell(host: HTMLElement, row: number, col: number, editor = editors[editors.length - 1]!) {
+  void host;
+  const state = editor.view.state;
+  let first = 1;
+  while (!/^\s*\|/.test(state.doc.line(first).text)) first++;
+  const line = state.doc.line(first + (row === 0 ? 0 : row + 1));
+  editor.view.dispatch({ selection: { anchor: line.from + cellTarget(line.text, col).head } });
 }
 
 function key(target: HTMLElement, init: KeyboardEventInit) {
@@ -41,7 +45,7 @@ function type(editor: Editor, text: string) {
 // A table cell is document text: input-method composition, completion and
 // snippets are the main editor's (tests/vim-input-method.test.ts,
 // tests/host-input-focus.test.ts, tests/snippets.test.ts), not the table's.
-describe("table cells edited through the main editor", () => {
+describe("table source edited through the main editor (keyboard entry)", () => {
   it("Shift-Enter replaces the selection in a cell with a line break, staying in the cell", () => {
     const { editor, host } = mount();
     clickCell(host, 1, 0);

@@ -34,6 +34,7 @@
     "dev": "vp dev",
     "start:vite": "vp dev --config vite.aaronnote.config.ts --host 127.0.0.1",
     "start:server": "AARONNOTE_HOST_MODE=server node web-host.mjs",
+    "check:scroll": "node scripts/check-scroll-invariance.mjs",
     "build:aaronnote": "tsc && vp build --config vite.aaronnote.config.ts && node scripts/write-renderer-build.mjs",
     "build": "tsc && vp build",
     "build:lib": "tsc && vp build --config vite.lib.config.ts",

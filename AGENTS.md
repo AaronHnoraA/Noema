@@ -338,16 +338,15 @@ reveal rule, Vim behaviour and registry entry from
 rejects code that compares the selection by hand, reads the Vim mode from the
 DOM, or teaches Vim about widgets any other way.
 
-## Editor constructs
+## Editor viewport
 
-Before adding or changing anything the visual editor renders over Markdown
-(a widget, a decoration that replaces source, a Vim motion over rendered
-content), read `docs/architecture/rendered-constructs.md` and the
-"Rendered constructs" section of `CLAUDE.md`. Every construct takes its
-reveal rule, Vim behaviour and registry entry from
-`src/cm6/extensions/visual/constructs/`; `tests/architecture-constructs.test.ts`
-rejects code that compares the selection by hand, reads the Vim mode from the
-DOM, or teaches Vim about widgets any other way.
+Nothing but `src/cm6/viewport-stability.ts` moves the editor's viewport. Read
+`docs/architecture/scroll-ownership.md` before touching focus, scrolling or a
+widget's click handling: focus an element inside the editor with
+`{ preventScroll: true }`, reveal through a transaction's `scrollIntoView`, and
+never write `scrollTop`. `tests/architecture-scroll.test.ts` enforces it;
+`npm run check:scroll` checks the behaviour in a real WebKit for every
+construct family (see the doc for the full-app mode).
 
 ## Required checks
 

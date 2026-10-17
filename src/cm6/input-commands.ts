@@ -56,6 +56,7 @@ import {
   moveInsertLineWithDisplayMathEntry,
   orgEnvExitTarget,
 } from "./extensions/visual/index.ts";
+import { objectAtEdge } from "./extensions/visual/constructs/index.ts";
 
 export type EditorDeleteDirection = "backward" | "forward";
 export type EditorMovementKey =
@@ -298,53 +299,21 @@ function deleteForwardJoinBlock(view: EditorView): boolean {
 }
 
 /**
- * The source range of the image (with any trailing `{...}` layout attributes)
- * that ends at POS, or that starts at POS when looking forward.
+ * Backspace after a rendered object (Delete before one) selects it first; the
+ * next press deletes it whole. One character at a time turned the object into
+ * broken source — `![](a.png`, `\\(x^2`, `smile:` — often while it was still
+ * drawn, so nothing on screen showed what was lost. MarkText selects an image
+ * the same way; here every object does, through the construct registry.
  */
-function imageSourceAt(view: EditorView, pos: number, direction: EditorDeleteDirection): { from: number; to: number } | null {
-  const state = view.state;
-  const line = state.doc.lineAt(pos);
-  const tree = ensureSyntaxTree(state, line.to, 25) ?? syntaxTree(state);
-  const imageAt = (at: number, side: -1 | 1) => {
-    for (let node: ReturnType<typeof tree.resolveInner> | null = tree.resolveInner(at, side); node; node = node.parent) {
-      if (node.name === "Image") return node;
-    }
-    return null;
-  };
-  const withAttrs = (from: number, to: number): { from: number; to: number } => {
-    const rest = state.doc.sliceString(to, line.to);
-    const attrs = /^\{[^{}\n]*\}/u.exec(rest);
-    return { from, to: attrs ? to + attrs[0].length : to };
-  };
-  if (direction === "forward") {
-    const image = imageAt(pos, 1);
-    return image && image.from === pos ? withAttrs(image.from, image.to) : null;
-  }
-  let image = imageAt(pos, -1);
-  if (image && image.to === pos) return withAttrs(image.from, image.to);
-  if (state.doc.sliceString(pos - 1, pos) !== "}") return null;
-  const open = state.doc.sliceString(line.from, pos).lastIndexOf("{");
-  if (open < 0) return null;
-  image = imageAt(line.from + open, -1);
-  if (!image || image.to !== line.from + open) return null;
-  const range = withAttrs(image.from, image.to);
-  return range.to === pos ? range : null;
-}
-
-/**
- * Backspace after an image (Delete before one) selects it first; the next
- * press deletes it whole. One character at a time turned the picture into
- * broken source (`![](a.png`). MarkText selects the image the same way.
- */
-function selectImageBeforeDelete(view: EditorView, direction: EditorDeleteDirection): boolean {
+function selectObjectBeforeDelete(view: EditorView, direction: EditorDeleteDirection): boolean {
   const range = view.state.selection.main;
   if (!range.empty || view.state.selection.ranges.length > 1) return false;
-  const image = imageSourceAt(view, range.head, direction);
-  if (!image) return false;
+  const object = objectAtEdge(view, range.head, direction === "backward" ? "before" : "after");
+  if (!object) return false;
   view.dispatch({
     selection: direction === "backward"
-      ? EditorSelection.range(image.to, image.from)
-      : EditorSelection.range(image.from, image.to),
+      ? EditorSelection.range(object.to, object.from)
+      : EditorSelection.range(object.from, object.to),
     scrollIntoView: true,
     userEvent: "select",
   });
@@ -398,7 +367,7 @@ export function runEditorDelete(
   if (direction === "backward") {
     return tableBackspaceAtCellStart(view)
       || deleteTexSourceAutoPair(view)
-      || selectImageBeforeDelete(view, direction)
+      || selectObjectBeforeDelete(view, direction)
       || deleteBracketPair(view)
       || deleteTaskBoxBackward(view)
       || deleteHeadingMarkerBackward(view)
@@ -408,7 +377,7 @@ export function runEditorDelete(
   }
 
   return deleteTexSourceAutoPairForward(view)
-    || selectImageBeforeDelete(view, direction)
+    || selectObjectBeforeDelete(view, direction)
     || deleteForwardJoinBlock(view)
     || deleteGraphemes(view, direction);
 }

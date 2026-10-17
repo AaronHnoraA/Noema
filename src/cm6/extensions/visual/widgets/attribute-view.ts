@@ -126,7 +126,7 @@ function beginCellEdit(cell: HTMLElement, row: AttributeViewRow, key: string, re
   if (editor instanceof HTMLSelectElement) editor.addEventListener("change", commit);
   else editor.addEventListener("blur", commit);
   queueMicrotask(() => {
-    editor.focus();
+    editor.focus({ preventScroll: true });
     if (editor instanceof HTMLInputElement) editor.select();
   });
 }

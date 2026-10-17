@@ -136,10 +136,25 @@ command, HTML block — goes through one layer,
   `rebuildDecorations`, `replaceDecorations`).
 - Vertical motion has one row model, `src/cm6/screen-rows.ts`, for Vim and the
   editor caret alike; arrow keys go through `runEditorMovement`.
+- A construct's own controls write to the document only through
+  `dispatchConstructEdit(view, spec, kind?)` — one undo step each, labelled
+  `construct`.
 - Markdown inside a widget renders through `src/render-html.ts`
   (`renderMarkdownHTML`, `renderInlineMarkdownHTML`).
 - `tests/architecture-constructs.test.ts` enforces these rules, with no
   allowlist. Fix the code when it fails; change the rule in the doc first.
+
+## Editor viewport
+
+The viewport has one owner, `src/cm6/viewport-stability.ts`; see
+`docs/architecture/scroll-ownership.md`. Every focus of the editor content goes
+through it (`installFocusOwner`), elements inside the editor are focused with
+`{ preventScroll: true }`, reveals go through a transaction's `scrollIntoView`,
+and only the owner writes `scrollTop`. `tests/architecture-scroll.test.ts`
+enforces this; `npm run check:scroll` verifies, in WebKit and for every
+construct family, that clicking, leaving and clicking mid-scroll never move the
+view unless the click navigates. Run it after changing focus, scrolling, a
+widget's click handling or a widget's height.
 
 ## Widget Rules
 

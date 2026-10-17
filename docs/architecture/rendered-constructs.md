@@ -24,11 +24,11 @@
 | 概念 | 含义 | 所在 |
 |---|---|---|
 | **construct** | 被 widget 替换绘制的一段源码 | — |
-| **object** 角色 | 读者看到的"东西"：公式、图片、引用、图表。Vim 把它当一个字符跨过；Normal/Visual 下保持渲染 | `reveal.ts` |
+| **object** 角色 | 读者看到的"东西"：公式、图片、引用、图表、emoji。Vim 把它当一个字符跨过；Normal/Visual 下保持渲染；删除时整体删除 | `reveal.ts` |
 | **structure** 角色 | 读者编辑的文字与语法：表格、块标题/分隔、HR、TOC、`@@` 命令、行内标记。任何模式下光标进入都显示源码 | `reveal.ts` |
 | **reveal policy** | 选区何时打开源码，见下表 | `reveal.ts` |
 | **pinning** | Vim 在 Normal/Visual 时让 object 保持渲染。是编辑器状态，不是 DOM 属性 | `mode.ts` |
-| **literal ranges** | 代码与公式内部不识别任何组件（`[^1]` 写在公式里就是文字） | `literal-ranges.ts` |
+| **literal ranges** | 代码与公式（含跨行的行内公式）内部不识别任何组件（`[^1]`、`[[链接]]`、`@@命令` 写在公式里就是文字）。所有家族用同一个答案：`literalRangesIn` / `mathRangesIn` / `literalRangesOnLine`；只有公式自身（`math.ts`）与只放块级组件的 `block-extras` 直接用底层扫描 | `literal-ranges.ts` |
 | **registry** | 唯一的"哪里画着什么"。所有在源码上绘制 widget 的组件都在此登记；从状态计算的来源屏幕外也正确，视口插件经 `drawnConstructSource` 直接读其绘制结果 | `registry.ts` |
 | **embedded surface** | 组件内部用自己的编辑器编辑文字的元素（公式 MathLive、图表灯箱） | `src/cm6/embedded-surface.ts` |
 | **visual row** | 读者看到的折行行；仍被绘制的块整体算一行。Vim 的 `j`/`k` 与编辑器的 ↑/↓ 共用 | `src/cm6/screen-rows.ts` |
@@ -112,6 +112,45 @@ export const myExtension = inlineConstruct({
 **不要**：比较 `sel.empty && sel.from ...`；读 `dataset.vimMode`；给装饰加私有标记让
 Vim 识别；在 Vim 里扫描 Markdown 找组件。守卫测试会拒绝这些写法。
 
+## 左右与词移动：光标从不被隐藏
+
+插入模式的 ←/→ 与 Vim 的 `h`/`l`/`w`/`b`/`e` 规则不同，但都由本层决定：插入模式下光标碰到组件
+时按其 reveal policy 打开（脚注、引用贴边即打开；公式到达边界后进入编辑）；Vim 的 Normal/Visual
+模式下 object 保持渲染，作为一个字符跨过。两者共享一条不变量：**光标从不停在仍被绘制的组件内部**
+——要么组件为它打开，要么光标落在组件边缘。守卫按屏幕上实际绘制的 widget 判断（而不是按
+registry 的看法），用覆盖全部家族的示例笔记扫过 ←/→/↑/↓ 与 `l h w b e j k`。
+
+## 删除：object 整体删除
+
+object 是一个东西，不会被删掉半个。插入模式下，在 object 之后按 Backspace（之前按 Delete）先选中
+整个 object，再按一次才删除——图片、公式（行内与块）、图表、emoji、脚注、块引用、块锚点、任务框
+一律如此；Vim 的 `x`/`X` 本来就把 object 当一个字符整体删除。从前只有图片这样做，其他 object
+被逐字删掉源码，往往还在绘制状态下就坏成了文字（`\(x^2`、`smile:`）。判断来自 registry 的
+`objectAtEdge(view, pos, side)`：无论 object 正在绘制还是因光标贴边而打开，都算。structure
+（表格、`@@` 命令、块标题、行内标记）是文字，照常逐字删除。emoji 由行内标记家族绘制，但它是一个
+字形，因此登记为 object（`drawnConstructSource` 的 role 可以按 widget 决定）。
+
+## 从组件写文档：一个入口
+
+组件自己的控件写回文档——勾选任务框、改代码块语言、接受/保留 AI 建议、布局菜单、表格工具与
+就地编辑写回、离开文末表格时补的空行——一律经 `dispatchConstructEdit(view, spec, kind?)`
+（`constructs/edit.ts`）：每个动作是独立的一步撤销，标记为 `construct[.kind]`。从前这些写入有的
+不加标记（两次快速勾选被 CodeMirror 历史合成一步，撤销一次看不出变化；紧接着打字的勾选和打字
+合成一步），有的标成 `input`（被当成连续打字，重绘被推迟）。公式编辑会话（`math.ts`）自行管理
+历史分组，是唯一的具名例外。
+
+## 何时重建：一个生命周期
+
+由 ViewPlugin 绘制的家族（行内组件工厂、图片、`@@` 命令、wiki 标题、代码块）都用
+`constructs/view-plugin.ts` 的 `constructViewPlugin`：输入法组字时的选区移动不重建；打字合并时
+只映射（家族可映射自己的状态，或拒绝）；鼠标拖选在松开时结算一次；文档、视口、刷新变化时重建；
+选区变化只在"打开了哪些组件"（`revealKey`）改变或 Vim 固定状态切换时重建；插件重建之间经持久
+缓存保留。家族只提供 `build`，以及可选的 `revealKey`、`extra`（自有状态）、`mapDuringTyping`、
+`invalidates`、`beforeUpdate`、`setup`、`provide`。
+
+三个模块保留自己的生命周期，各有理由：`live-preview`（视口增量扫描与逐行 CJK 缓存）、`math`
+（公式编辑会话）、以及只做测量的 `block-extras` 轨道与 `optimal-linebreak`。
+
 ## 增量重绘：一个修补器
 
 块级家族在整篇文档上保存装饰，每个事务只重绘变化的部分，全部经由
@@ -140,17 +179,19 @@ widget 内部显示的 Markdown（表格单元格、todo 标签、旁注卡片�
 `isInEmbeddedSurface`，不要手写属性选择器。
 
 **先问能否不要嵌入面。** 能编辑为文档文字的内容就编辑为文档文字：嵌入面意味着另一套
-光标、按键、补全、撤销与输入法处理。表格正是这样改造的——见下节。
+光标、按键、补全、撤销与输入法处理。表格的键盘入口正是如此；点击入口为保留就地编辑的手感，使用嵌入式编辑面——见下节。
 
-## 表格：渲染的结构，编辑的文字
+## 表格：点击就地编辑，键盘进入源码
 
-表格是 structure：光标不在里面时画成表格，带有全部结构工具（工具栏增删行列、对齐、排序、
-CSV、尺寸选择器、边缘添加、拖动排序行列、框选复制/剪切/删除、布局菜单）；光标进入时
-（方向键、Vim `j`/`k`、点击单元格）显示 Markdown 源码，用主编辑器编辑。于是 Vim、公式、
-补全与代码片段、输入法、撤销在单元格里与段落中完全一样。
+表格始终画成表格，带有全部结构工具：工具栏增删行列、对齐、排序、CSV、尺寸选择器、边缘添加、
+拖动排序行列、框选复制/剪切/删除、布局菜单。编辑有两条入口，体验各自完整：
 
-单元格的编辑模型由源码命令保持（`commands/index.ts`，经 `input-commands.ts` 与
-`editor-cm6.ts` 的按键绑定）：
+- **点击单元格**：就地编辑，表格保持渲染。单元格变成输入框（实时预览 Markdown 与公式），点击格内
+  公式用 MathLive 编辑；补全与代码片段、输入法、Tab/Enter/方向键在格间移动、越过边缘回到正文、
+  Mod-Enter 加行、Shift-Enter `<br>`、Esc 放弃。离开单元格时一次写回 Markdown（一个撤销步）。
+  就地编辑器是嵌入式编辑面（`markEmbeddedSurface`），Vim、宿主按键与焦点逻辑不碰它的按键。
+- **键盘进入**（方向键、Vim `j`/`k` 把光标移进表格）：表格显示 Markdown 源码，由主编辑器编辑，
+  单元格按键模型由源码命令保持（`commands/index.ts`）：
 
 | 按键 | 行为 |
 |---|---|
@@ -162,9 +203,8 @@ CSV、尺寸选择器、边缘添加、拖动排序行列、框选复制/剪切/
 | Shift-Enter | 单元格内换行 `<br>` |
 | Mod-Enter | 在下方插入一行，光标进入其第一格 |
 
-渲染状态下：点击单元格（按下并在格内松开）把光标放进该格源码；从一格拖到另一格是框选；
-Shift-点击 选中单元格，方向键在选中的格子间移动，Enter 进入该格源码。工具栏插入行列后，
-光标进入新单元格的源码。
+渲染状态下：从一格拖到另一格是框选；Shift-点击 选中单元格，方向键在选中的格子间移动，Enter
+就地编辑该格。工具栏插入行列后，新单元格就地进入编辑。
 
 ## 上下移动：一个行模型
 
@@ -194,9 +234,10 @@ Vim 的 `j`/`k` 与编辑器的 ↑/↓（原生按键与 xwidget 宿主都经�
 
 | 测试 | 保证 |
 |---|---|
-| `tests/architecture-constructs.test.ts` | 静态规则（无允许列表）：只有一个行模型（不调用 `moveVertically`）、只有一个装饰修补器、渲染模块必须经由 constructs 层决定显示并向 registry 登记、组件内 Markdown 只经共享渲染器、不得手写选区比较、不得读 DOM 模式、Vim 不得扫描、嵌入面只在一处拼写、表格不得有自己的单元格编辑器；运行时双向一致：示例笔记（覆盖全部家族）中 registry 报告的每个组件都被绘制，绘制在源码上的每个 widget 都被 registry 报告 |
+| `tests/architecture-constructs.test.ts` | 视口家族共用一个生命周期；字面范围只有一个答案；光标从不被隐藏（插入模式方向键与 Vim 移动扫过全部家族）；在 object 旁删除先整体选中、再整体删除（扫过示例笔记中所有绘制的 object）；组件写文档只经 `dispatchConstructEdit`；静态规则（无允许列表）：只有一个行模型（不调用 `moveVertically`）、只有一个装饰修补器、渲染模块必须经由 constructs 层决定显示并向 registry 登记、组件内 Markdown 只经共享渲染器、不得手写选区比较、不得读 DOM 模式、Vim 不得扫描、嵌入面只在一处拼写、表格就地编辑器必须是嵌入式编辑面；运行时双向一致：示例笔记（覆盖全部家族）中 registry 报告的每个组件都被绘制，绘制在源码上的每个 widget 都被 registry 报告 |
 | `tests/rendered-constructs.test.ts` | policy 语义、registry、pinning、代码/公式内不识别、Vim 逐行穿过表格 |
-| `tests/cm6/table-keyboard.test.ts`、`table-interaction.test.ts` | 表格以源码编辑时的单元格按键模型、撤销步骤 |
+| `tests/cm6/table-keyboard.test.ts`、`table-interaction.test.ts` | 表格以源码编辑时（键盘进入）的单元格按键模型、撤销步骤 |
+| `tests/cm6/table-cell-input.test.ts`、`table-cell-input-interaction.test.ts`、`table-cell-assist.test.ts` | 点击就地编辑：输入框、格内公式 MathLive、补全、格间移动、写回与撤销 |
 | `tests/vim-row-geometry.test.ts` | 折行处以组件开头时的屏幕行 |
 | `tests/rendered-constructs.test.ts`（vertical motion） | ↑/↓ 进入表格的首/末行 |
 

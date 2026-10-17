@@ -79,7 +79,7 @@ import { hasViewportDecorationRefresh, refreshViewportDecorations } from "../../
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import { persistentVisualStateField } from "../visual-mode.ts";
 import {
-  constructSources,
+  dispatchConstructEdit,  constructSources,
   drawnConstructSource,
   rebuildDecorations,
   rebuildForRevealChange,
@@ -933,7 +933,7 @@ function replaceCeilCommandLine(view: EditorView, from: number, insert: string):
   const prefix = line.text.slice(0, range.from - line.from);
   const next = `${prefix}${insert}`;
   if (line.text === next) return;
-  view.dispatch({ changes: { from: line.from, to: line.to, insert: next } });
+  dispatchConstructEdit(view, { changes: { from: line.from, to: line.to, insert: next } });
 }
 
 function scheduleCeilCommandLineUpdate(view: EditorView, from: number, insert: string): void {
@@ -1200,7 +1200,7 @@ function scheduleTikzIdAssignment(view: EditorView, from: number, id: string): v
     const current = completeTikzTitle(info.title);
     if (!current.changed) return;
     const title = current.attrsRaw ? `${id} ${current.attrsRaw}` : id;
-    view.dispatch({
+    dispatchConstructEdit(view, {
       // Keep the line's own indentation and spelling of the opener; only the
       // title is being completed.
       changes: {
@@ -2635,7 +2635,7 @@ class CeilCommandWidget extends MeasuredWidget {
 
       stdinRow = row;
       outputWrap.append(row);
-      field.focus();
+      field.focus({ preventScroll: true });
     };
     const stopLive = leanRuntime ? () => {} : registerCeilLiveHandler(meta.id, (detail) => {
       if (detail.kernel !== meta.kernel || detail.session !== meta.session) return;
@@ -3068,11 +3068,10 @@ function setLayoutGroup(view: EditorView, from: number, to: number, source: stri
   const attrSource = Object.entries(attrs).map(([key, value]) => `${key}=${/\s/.test(value) ? JSON.stringify(value) : value}`).join(" ");
   const replacement = `${head} {${attrSource}}${anchor ? ` ${anchor[0].trim()}` : ""}`;
   if (replacement === line.text) return false;
-  view.dispatch({
+  dispatchConstructEdit(view, {
     changes: { from: line.from, to: line.to, insert: replacement },
-    userEvent: "input.layout",
     scrollIntoView: false,
-  });
+  }, "layout");
   return true;
 }
 
@@ -3087,15 +3086,14 @@ function swapLayoutCells(
   const [left, right] = first < second ? [spans[first]!, spans[second]!] : [spans[second]!, spans[first]!];
   if (left.to > right.from || doc.sliceString(left.to, right.from).trim()) return false;
   const gap = doc.sliceString(left.to, right.from);
-  view.dispatch({
+  dispatchConstructEdit(view, {
     changes: {
       from: left.from,
       to: right.to,
       insert: doc.sliceString(right.from, right.to) + gap + doc.sliceString(left.from, left.to),
     },
-    userEvent: "move.layout",
     scrollIntoView: false,
-  });
+  }, "move");
   return true;
 }
 
@@ -3653,7 +3651,7 @@ function dispatchMetaPatch(
   to: number,
   insert: string,
 ): void {
-  view.dispatch({
+  dispatchConstructEdit(view, {
     changes: { from: bodyFrom + from, to: bodyFrom + to, insert },
     scrollIntoView: false,
   });

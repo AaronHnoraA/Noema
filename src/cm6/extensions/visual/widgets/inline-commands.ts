@@ -21,10 +21,14 @@ import { revisionKindOf } from "../../../../revision-kinds.ts";
 import { findInlineCommandClose, isEscapedCommandStart, parseCommandArgs, scanInlineCommands, type InlineCommand } from "../../../../command-syntax.ts";
 import { renderInlineMarkdownHTML } from "../../../../render-html.ts";
 import { StateField, type Range, type Text, type Transaction } from "@codemirror/state";
-import { constructSources, drawnConstructSource, selectionOpensSource } from "../constructs/index.ts";
-import { blockMathRangesOverlapping, mergeOverlappingRanges, positionInsideAnyRange } from "../../../math-ranges.ts";
-import { scanCodeRanges } from "../../../code-ranges.ts";
-import { scanInlineMathRanges } from "../../../../inline-math.ts";
+import {
+  dispatchConstructEdit,  constructSources,
+  constructViewPlugin,
+  drawnConstructSource,
+  literalRangesIn,
+  selectionOpensSource,
+} from "../constructs/index.ts";
+import { positionInsideAnyRange } from "../../../math-ranges.ts";
 import {
   DATE_KEYS,
   DATE_KEY_LABELS,
@@ -33,9 +37,6 @@ import {
   relativeDateClass,
   relativeDateLabel,
 } from "../../../../date-syntax.ts";
-import { hasViewportDecorationRefresh } from "../../../viewport-refresh.ts";
-import { isCoalescedVisualTyping } from "../typing-burst.ts";
-import { rememberPersistentVisualPluginState, restorePersistentVisualPluginState } from "../visual-mode.ts";
 import { latexMark } from "../../../../../shared/latex-marks.mjs";
 
 declare global {
@@ -757,7 +758,7 @@ class RevisionWidget extends MeasuredWidget {
     actions.append(
       action("Accept", "Replace original text with the suggestion", () => {
         if (!advice) return;
-        view.dispatch({
+        dispatchConstructEdit(view, {
           changes: { from: this.cmd.fullFrom, to: this.cmd.fullTo, insert: advice },
           selection: { anchor: this.cmd.fullFrom + advice.length },
           scrollIntoView: true,
@@ -765,7 +766,7 @@ class RevisionWidget extends MeasuredWidget {
         view.focus();
       }),
       action("Keep", "Keep the original text", () => {
-        view.dispatch({
+        dispatchConstructEdit(view, {
           changes: { from: this.cmd.fullFrom, to: this.cmd.fullTo, insert: original },
           selection: { anchor: this.cmd.fullFrom + original.length },
           scrollIntoView: true,
@@ -967,11 +968,7 @@ class SideCommentWidget extends MeasuredWidget {
 // ---------------------------------------------------------------------------
 
 function excludedCommandRanges(view: EditorView): Array<{ from: number; to: number }> {
-  const math = blockMathRangesOverlapping(view.state, view.visibleRanges).map(({ from, to }) => ({ from, to }));
-  const inlineMath = view.visibleRanges.flatMap(({ from, to }) =>
-    scanInlineMathRanges(view.state.doc.sliceString(from, to), from));
-  const code = scanCodeRanges(view.state, view.visibleRanges);
-  return mergeOverlappingRanges([...math, ...inlineMath, ...code]);
+  return literalRangesIn(view.state, view.visibleRanges);
 }
 
 function pushHiddenPlanningBodyLines(
@@ -1120,104 +1117,57 @@ function activeInlineCommandKey(view: EditorView): string {
   const scanFrom = view.state.doc.line(scanFromLine).from;
   const scanTo = view.state.doc.line(scanToLine).to;
   const localText = view.state.doc.sliceString(scanFrom, scanTo);
-  const localInlineMathRanges = scanInlineMathRanges(localText, scanFrom);
+  // The same literal ranges the decoration builder skips.
+  const literal = literalRangesIn(view.state, [{ from: scanFrom, to: scanTo }]);
   for (const cmd of visibleInlineCommands(localText)) {
     const from = scanFrom + cmd.fullFrom;
     const to = scanFrom + (cmd.blockTo ?? cmd.fullTo);
-    if (positionInsideAnyRange(from, localInlineMathRanges)) continue;
+    if (positionInsideAnyRange(from, literal)) continue;
     if (selectionOpensSource(view.state, from, to, "caret-edge", "structure")) keys.push(`${from}:${to}`);
   }
   if (keys.length > 0) return keys.join("|");
 
   for (let lineNum = firstLine; lineNum <= lastLine; lineNum++) {
     const line = view.state.doc.line(lineNum);
-    const inlineMathRanges = scanInlineMathRanges(line.text, line.from);
+    const lineLiteral = literalRangesIn(view.state, [{ from: line.from, to: line.to }]);
     for (const cmd of visibleInlineCommands(line.text)) {
       const from = line.from + cmd.fullFrom;
       const to = line.from + cmd.fullTo;
-      if (positionInsideAnyRange(from, inlineMathRanges)) continue;
-      if (sel.from <= to && sel.to >= from) keys.push(`${from}:${to}`);
+      if (positionInsideAnyRange(from, lineLiteral)) continue;
+      if (selectionOpensSource(view.state, from, to, "caret-edge", "structure")) keys.push(`${from}:${to}`);
     }
   }
   return keys.join("|");
 }
 
-type TodoPluginSnapshot = {
-  decorations: DecorationSet;
-  excludedRanges: Array<{ from: number; to: number }>;
-  activeCommandKey: string;
-};
-const todoPluginCacheKey = {};
-
-class TodoPlugin {
-  decorations: DecorationSet;
-  excludedRanges: Array<{ from: number; to: number }>;
-  private readonly view: EditorView;
-  private activeCommandKey: string;
-
-  constructor(view: EditorView) {
-    this.view = view;
-    const cached = restorePersistentVisualPluginState<TodoPluginSnapshot>(
-      view.state,
-      todoPluginCacheKey,
-    );
-    this.excludedRanges = cached?.excludedRanges ?? excludedCommandRanges(view);
-    this.activeCommandKey = cached?.activeCommandKey ?? activeInlineCommandKey(view);
-    this.decorations = cached?.decorations ?? buildInlineCommandDecos(view, this.excludedRanges);
-  }
-
-  update(update: ViewUpdate): void {
-    if (update.view.compositionStarted && update.selectionSet && !update.docChanged && !update.viewportChanged) return;
-    if (update.docChanged && window.AaronnoteBibliography?.mapChanges) {
-      const changes: Array<{
-        from: number;
-        to: number;
-        insertedLength: number;
-        insertedText: string;
-        deletedText: string;
-      }> = [];
-      update.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
-        changes.push({
-          from,
-          to,
-          insertedLength: inserted.length,
-          insertedText: inserted.toString(),
-          deletedText: update.startState.doc.sliceString(from, to),
-        });
-      });
-      window.AaronnoteBibliography.mapChanges(changes);
-    }
-    if (isCoalescedVisualTyping(update)) {
-      this.excludedRanges = this.excludedRanges.map((range) => ({
-        from: update.changes.mapPos(range.from, -1),
-        to: update.changes.mapPos(range.to, 1),
-      }));
-      this.decorations = this.decorations.map(update.changes);
-      return;
-    }
-    if (update.docChanged || update.viewportChanged || hasViewportDecorationRefresh(update)) {
-      this.excludedRanges = excludedCommandRanges(update.view);
-      this.activeCommandKey = activeInlineCommandKey(update.view);
-      this.decorations = buildInlineCommandDecos(update.view, this.excludedRanges);
-    } else if (update.selectionSet) {
-      const nextCommandKey = activeInlineCommandKey(update.view);
-      if (nextCommandKey === this.activeCommandKey) return;
-      this.activeCommandKey = nextCommandKey;
-      this.decorations = buildInlineCommandDecos(update.view, this.excludedRanges);
-    }
-  }
-
-  destroy(): void {
-    rememberPersistentVisualPluginState(this.view, todoPluginCacheKey, {
-      decorations: this.decorations,
-      excludedRanges: this.excludedRanges,
-      activeCommandKey: this.activeCommandKey,
-    } satisfies TodoPluginSnapshot);
-  }
+/** Keep the bibliography's citation positions in step with every edit. */
+function mapBibliographyPositions(update: ViewUpdate): void {
+  if (!update.docChanged || !window.AaronnoteBibliography?.mapChanges) return;
+  const changes: Array<{ from: number; to: number; insertedLength: number; insertedText: string; deletedText: string }> = [];
+  update.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+    changes.push({
+      from,
+      to,
+      insertedLength: inserted.length,
+      insertedText: inserted.toString(),
+      deletedText: update.startState.doc.sliceString(from, to),
+    });
+  });
+  window.AaronnoteBibliography.mapChanges(changes);
 }
 
-export const inlineCommandsExtension = ViewPlugin.fromClass(TodoPlugin, {
-  decorations: (v) => v.decorations,
+export const inlineCommandsExtension = constructViewPlugin<Array<{ from: number; to: number }>>({
+  build: buildInlineCommandDecos,
+  revealKey: (view) => activeInlineCommandKey(view),
+  // The literal ranges commands skip, kept with the decorations.
+  extra: {
+    create: excludedCommandRanges,
+    map: (ranges, update) => ranges.map((range) => ({
+      from: update.changes.mapPos(range.from, -1),
+      to: update.changes.mapPos(range.to, 1),
+    })),
+  },
+  beforeUpdate: mapBibliographyPositions,
   provide: (plugin) => constructSources.of(drawnConstructSource(
     "inline-command", "structure", (_state, view) => view?.plugin(plugin)?.decorations)),
 });

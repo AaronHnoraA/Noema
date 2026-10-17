@@ -84,11 +84,48 @@ describe("rendered constructs: static rules", () => {
     expect(spelled).toEqual([]);
   });
 
-  test("table cells are edited as document text, not by an editor of their own", () => {
-    // A cell editor of its own is a second caret, key map, completion and
-    // undo; tables open their source for the main editor instead.
+  test("a rendered table's cell editor is an embedded surface", () => {
+    // A click edits a rendered cell in place (an input; MathLive for a
+    // formula), as a formula is edited in its own editor; the keyboard opens
+    // the table's source for the main editor. The in-place editor must be an
+    // embedded surface, so Vim, the host key guard and focus handling leave
+    // its keys and pointer alone (see src/cm6/embedded-surface.ts).
     const preview = read("src/cm6/live-preview.ts");
-    expect(/createElement\(["']input["']\)|mountVisualTexInlineEditor/.test(preview)).toBe(false);
+    expect(preview).toMatch(/if \(editable\) markEmbeddedSurface\(table\);/);
+    expect(preview.includes('dataset.aaronnoteVim = "native"'), "spell the surface through markEmbeddedSurface").toBe(false);
+  });
+
+  test("a construct writes to the document through dispatchConstructEdit", () => {
+    // A checkbox, a language field, Accept, a layout menu, a table tool: one
+    // action, one undo step, labelled `construct` — never merged with typing
+    // or with the previous action, never mistaken for a typing burst. Owner:
+    // the formula editing session groups its own history (math.ts).
+    const owners = new Set(["src/cm6/extensions/visual/widgets/math.ts"]);
+    const offenders: string[] = [];
+    const constructModules = new Set([
+      ...renderingModules,
+      ...srcFiles.filter((path) => path.startsWith("src/cm6/extensions/visual/widgets/")),
+      "src/cm6/figure-layout-menu.ts",
+    ]);
+    for (const path of constructModules) {
+      if (owners.has(path)) continue;
+      const text = read(path);
+      const call = /(\w+(?:\.\w+)*)\.dispatch\(\s*(?:\w+\.state\.update\()?\{/g;
+      let match: RegExpExecArray | null;
+      while ((match = call.exec(text))) {
+        const open = text.indexOf("{", match.index + match[0].length - 1);
+        let depth = 0;
+        let close = open;
+        for (; close < text.length; close++) {
+          if (text[close] === "{") depth++;
+          else if (text[close] === "}" && --depth === 0) break;
+        }
+        if (/\bchanges\s*[:,}]/.test(text.slice(open, close))) {
+          offenders.push(`${path}:${text.slice(0, match.index).split("\n").length}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   test("Markdown inside a widget is rendered by the one shared renderer", () => {
@@ -120,6 +157,41 @@ describe("rendered constructs: static rules", () => {
     expect(offenders).toEqual([]);
   });
 
+  test("what counts as literal (code, math) has one answer", () => {
+    // Rendering modules ask constructs/literal-ranges.ts (literalRangesIn,
+    // mathRangesIn, literalRangesOnLine) instead of scanning formulas and code
+    // themselves, so a `[[link]]` or `@@command` inside any formula — including
+    // one spanning lines — is literal for every family. math.ts owns formulas;
+    // block-extras places only block constructs and caches block literals.
+    const owners = new Set([
+      "src/cm6/extensions/visual/widgets/math.ts",
+      "src/cm6/extensions/visual/widgets/block-extras.ts",
+    ]);
+    const offenders = renderingModules
+      .filter((path) => !path.startsWith(CONSTRUCTS_DIR) && !owners.has(path))
+      .filter((path) => /scanInlineMathRanges\(|blockMathRangesOverlapping\(|scanCodeRanges\(/.test(read(path)));
+    expect(offenders).toEqual([]);
+  });
+
+  test("viewport families share one update lifecycle", () => {
+    // When to rebuild — composition, typing bursts, pointer drags, refreshes,
+    // reveal keys, the persistent cache — is constructs/view-plugin.ts.
+    // The modules that define those primitives, and three owners whose
+    // lifecycle does more than the shared one, are the only other users.
+    const owners: Record<string, string> = {
+      "src/cm6/extensions/visual/typing-burst.ts": "defines typing bursts",
+      "src/cm6/extensions/visual/visual-mode.ts": "defines the persistent cache",
+      "src/cm6/live-preview.ts": "incremental viewport scan with a per-line CJK cache",
+      "src/cm6/extensions/visual/widgets/math.ts": "the formula editing session",
+      "src/cm6/extensions/visual/widgets/block-extras.ts": "org-env rail measurement, not a decoration family",
+      "src/cm6/extensions/visual/optimal-linebreak.ts": "paragraph layout measurement, not a decoration family",
+    };
+    const users = srcFiles
+      .filter((path) => path !== `${CONSTRUCTS_DIR}view-plugin.ts` && !(path in owners))
+      .filter((path) => /isCoalescedVisualTyping\(|restorePersistentVisualPluginState|rememberPersistentVisualPluginState/.test(read(path)));
+    expect(users).toEqual([]);
+  });
+
   test("Vim learns what is drawn from the construct registry, not by scanning", () => {
     for (const path of ["aaronnote/vim-lite.ts", "src/cm6/screen-rows.ts"]) {
       const text = read(path);
@@ -145,43 +217,46 @@ function drawnReplacements(view: EditorView): Map<string, string> {
   return drawn;
 }
 
+/** A note exercising every construct family. */
+const SAMPLE_NOTE = [
+  "A footnote[^1] and a block ref ((019a0000-0000-7000-8000-000000000000)) here {#019a0000-0000-7000-8000-0000000000aa}",
+  "",
+  "Inline math \\(x^2 + y\\) and an image ![alt](pic.png) in text.",
+  "",
+  "- [ ] a task",
+  "- [x] a done task",
+  "",
+  "\\[",
+  "E = mc^2",
+  "\\]",
+  "",
+  "| a | b |",
+  "|---|---|",
+  "| \\(z\\) | 2 |",
+  "",
+  "[^1]: The note.",
+  "",
+  "@@lean4 [lemma-tag]",
+  "",
+  "#+begin theorem Main",
+  "Statement with :smile: and a todo @@todo [check this].",
+  "#+end theorem",
+  "",
+  "[toc]",
+  "",
+  "---",
+  "",
+  "<div class=\"note\">raw html</div>",
+  "",
+  "```mermaid",
+  "graph TD; A-->B",
+  "```",
+  "",
+  "Tail line.",
+].join("\n");
+
 describe("rendered constructs: what is drawn and what the registry reports agree", () => {
-  const md = [
-    "A footnote[^1] and a block ref ((019a0000-0000-7000-8000-000000000000)) here {#019a0000-0000-7000-8000-0000000000aa}",
-    "",
-    "Inline math \\(x^2 + y\\) and an image ![alt](pic.png) in text.",
-    "",
-    "- [ ] a task",
-    "- [x] a done task",
-    "",
-    "\\[",
-    "E = mc^2",
-    "\\]",
-    "",
-    "| a | b |",
-    "|---|---|",
-    "| \\(z\\) | 2 |",
-    "",
-    "[^1]: The note.",
-    "",
-    "@@lean4 [lemma-tag]",
-    "",
-    "#+begin theorem Main",
-    "Statement with :smile: and a todo @@todo [check this].",
-    "#+end theorem",
-    "",
-    "[toc]",
-    "",
-    "---",
-    "",
-    "<div class=\"note\">raw html</div>",
-    "",
-    "```mermaid",
-    "graph TD; A-->B",
-    "```",
-    "",
-    "Tail line.",
-  ].join("\n");
+  const md = SAMPLE_NOTE;
 
   test("every construct the registry reports is drawn over exactly its range", () => {
     const host = document.createElement("div");
@@ -215,6 +290,125 @@ describe("rendered constructs: what is drawn and what the registry reports agree
         .filter(([key]) => { const [from, to] = key.split(":").map(Number); return !coveredBy(from!, to!); })
         .map(([key, widget]) => `${widget} ${key} ${JSON.stringify(md.slice(...key.split(":").map(Number) as [number, number]))}`);
       expect(unreported, "a widget is drawn over source the registry does not report").toEqual([]);
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+});
+
+describe("the caret is never hidden", () => {
+  // Whatever moves the caret — arrows in Insert mode, Vim motions in Normal
+  // mode — it never rests strictly inside a construct that is still drawn:
+  // either the construct opens for it, or the caret lands on its edge.
+  // Judged by what is on screen — the widgets drawn over source — not by the
+  // registry's opinion, so drift between the two cannot hide a caret.
+  const hiddenAt = (view: EditorView): string | null => {
+    const head = view.state.selection.main.head;
+    for (const [key, widget] of drawnReplacements(view)) {
+      const [from, to] = key.split(":").map(Number) as [number, number];
+      if (head > from && head < to) return `${widget} ${key} at ${head}`;
+    }
+    return null;
+  };
+
+  test("arrow keys in Insert mode", async () => {
+    const { runEditorMovement } = await import("../src/cm6/input-commands.ts");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: SAMPLE_NOTE });
+    const view = editor.view as unknown as EditorView;
+    const hidden = new Set<string>();
+    const stuck: number[] = [];
+    try {
+      const sweep = (key: "ArrowRight" | "ArrowLeft" | "ArrowDown" | "ArrowUp", until: (head: number) => boolean) => {
+        for (let step = 0; step < SAMPLE_NOTE.length + 10 && !until(view.state.selection.main.head); step++) {
+          const before = view.state.selection.main.head;
+          runEditorMovement(view, key);
+          const at = hiddenAt(view);
+          if (at) hidden.add(`${key} ${at}`);
+          if (view.state.selection.main.head === before && (key === "ArrowRight" || key === "ArrowLeft")) stuck.push(before);
+          if (view.state.selection.main.head === before) break;
+        }
+      };
+      view.dispatch({ selection: { anchor: 0 } });
+      sweep("ArrowRight", (head) => head >= view.state.doc.length);
+      sweep("ArrowLeft", (head) => head === 0);
+      sweep("ArrowDown", (head) => head >= view.state.doc.length);
+      sweep("ArrowUp", (head) => head === 0);
+      expect([...hidden]).toEqual([]);
+      expect(stuck.filter((head) => head > 0 && head < view.state.doc.length)).toEqual([]);
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+
+  test("Vim motions in Normal mode", async () => {
+    const { createVimLite } = await import("../aaronnote/vim-lite.ts");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: SAMPLE_NOTE });
+    const vim = createVimLite(editor, host);
+    const view = editor.view as unknown as EditorView;
+    const hidden = new Set<string>();
+    try {
+      vim.setMode("normal");
+      editor.setSelection(0, 0);
+      vim.syncSelectionFromEditor();
+      for (const [key, times] of [["l", 400], ["h", 400], ["w", 120], ["b", 120], ["e", 120], ["j", 40], ["k", 40]] as const) {
+        for (let step = 0; step < times; step++) {
+          vim.handleKey({ key });
+          const at = hiddenAt(view);
+          if (at) hidden.add(`${key} ${at}`);
+        }
+      }
+      expect([...hidden]).toEqual([]);
+    } finally {
+      vim.destroy();
+      editor.destroy();
+      host.remove();
+    }
+  });
+});
+
+describe("deleting beside an object takes it whole", () => {
+  // Backspace after an object (Delete before one) selects the whole object;
+  // the next press removes it. Deleting one character of its source broke the
+  // object into text, often while it was still drawn. Judged for every widget
+  // drawn over source: either the press selects exactly the object, or the
+  // widget is structure, edited as text.
+  test("Backspace and Delete in Insert mode", async () => {
+    const { runEditorDelete } = await import("../src/cm6/input-commands.ts");
+    const { objectAtEdge } = await import("../src/cm6/extensions/visual/constructs/index.ts");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: SAMPLE_NOTE });
+    const view = editor.view as unknown as EditorView;
+    const broken: string[] = [];
+    try {
+      view.dispatch({ selection: { anchor: SAMPLE_NOTE.length } });
+      const objects = [...drawnReplacements(view).entries()].filter(([key]) => {
+        const [from, to] = key.split(":").map(Number) as [number, number];
+        return objectAtEdge(view, to, "before")?.from === from;
+      });
+      expect(objects.length, "the sample note draws objects").toBeGreaterThan(8);
+      for (const [key, widget] of objects) {
+        const [from, to] = key.split(":").map(Number) as [number, number];
+        for (const [at, direction] of [[to, "backward"], [from, "forward"]] as const) {
+          view.dispatch({ selection: { anchor: at } });
+          runEditorDelete(view, direction);
+          const { from: selFrom, to: selTo } = view.state.selection.main;
+          if (view.state.doc.toString() !== SAMPLE_NOTE || selFrom !== from || selTo !== to) {
+            broken.push(`${widget} ${key} ${direction}`);
+          }
+          runEditorDelete(view, direction);
+          const removed = SAMPLE_NOTE.slice(0, from) + SAMPLE_NOTE.slice(to);
+          if (view.state.doc.toString() !== removed) broken.push(`${widget} ${key} ${direction}: second press`);
+          view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: SAMPLE_NOTE } });
+        }
+      }
+      expect(broken).toEqual([]);
     } finally {
       editor.destroy();
       host.remove();

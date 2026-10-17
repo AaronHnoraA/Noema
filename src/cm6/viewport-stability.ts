@@ -31,6 +31,8 @@ const scrollIntoViewEffectType = (
 // After the button is released a click's relayout can still be settling
 // (measured widgets report their height a frame or two later).
 const POINTER_ANCHOR_SETTLE_MS = 250;
+// WebKit reveals the restored caret within a frame or two of focus().
+const FOCUS_GUARD_MS = 300;
 
 const viewportStabilizers = new WeakMap<EditorView, EditorViewportStabilizer>();
 
@@ -39,6 +41,25 @@ export function isViewportScrollKey(
 ): boolean {
   return ["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "]
     .includes(normalizedEditorKey(event));
+}
+
+/**
+ * Route every native focus of VIEW's content through its stabilizer, so no
+ * caller — CM6's own `view.focus()`, a widget, the host — can reveal an old
+ * off-screen caret by focusing. Installed once per view; callers keep using
+ * `view.focus()` / `contentDOM.focus()` as usual.
+ */
+export function installFocusOwner(view: EditorView): void {
+  const content = view.contentDOM as HTMLElement & { __noemaFocusOwner?: true };
+  if (content.__noemaFocusOwner) return;
+  content.__noemaFocusOwner = true;
+  const nativeFocus = HTMLElement.prototype.focus;
+  content.focus = function focus(options?: FocusOptions): void {
+    const stabilizer = viewportStabilizers.get(view);
+    const run = () => nativeFocus.call(content, { ...options, preventScroll: true });
+    if (stabilizer) stabilizer.focusContent(run);
+    else run();
+  };
 }
 
 export function preserveEditorViewport<T>(
@@ -202,6 +223,19 @@ export class EditorViewportStabilizer {
    */
   private pointerSnapshot: ViewportSnapshot | null = null;
   private pointerAnchorUntil = 0;
+  /**
+   * Where the viewport was when the editor took focus. In WebKit, focusing
+   * the content — even with `preventScroll` — restores the DOM caret where
+   * the editor last left it and scrolls to it. A reader who scrolled away and
+   * then clicked a widget (which does not move the caret), or came back from
+   * another window, was thrown back to that old caret. Every focus of the
+   * editor goes through `focusContent`, which holds the viewport here until
+   * the reveal has passed; a transaction that asks to scroll, or the reader
+   * scrolling, ends the hold.
+   */
+  private focusGuard: { scrollTop: number; scrollLeft: number; interaction: number; until: number } | null = null;
+  /** A transaction asked CM6 to scroll; it lands at the next measure. */
+  private scrollRequested = false;
   private readonly previousOverflowAnchor: string;
 
   constructor(view: EditorView, scrollHost: HTMLElement) {
@@ -221,6 +255,7 @@ export class EditorViewportStabilizer {
       this.preserveGraceUntil = 0;
       this.leasedSnapshot = null;
       this.pointerSnapshot = null;
+      this.focusGuard = null;
       this.interaction += 1;
       this.generation += 1;
       this.stableSnapshot = null;
@@ -247,8 +282,13 @@ export class EditorViewportStabilizer {
     scrollHost.ownerDocument.addEventListener("pointerup", releasePointerAnchor, listenerOptions);
     scrollHost.ownerDocument.addEventListener("pointercancel", releasePointerAnchor, listenerOptions);
     scrollHost.addEventListener("wheel", beginScrollInteraction, listenerOptions);
+    // A drag that auto-scrolls at the edge is the reader moving the view.
+    scrollHost.addEventListener("pointermove", (event) => {
+      if (event.buttons & 1) this.focusGuard = null;
+    }, listenerOptions);
     scrollHost.addEventListener("touchmove", beginScrollInteraction, listenerOptions);
     scrollHost.addEventListener("scroll", () => {
+      if (this.holdFocusGuard()) return;
       const expected = this.expectedProgrammaticScrollTop;
       if (expected != null) {
         // A write made by restore() emits `scroll` asynchronously. It is an
@@ -346,6 +386,16 @@ export class EditorViewportStabilizer {
   afterUpdate(transactions: readonly Transaction[]): void {
     const forced = this.forcedSnapshot;
     const movesViewport = transactions.some(transactionMovesViewport);
+    if (movesViewport) {
+      // An explicit scroll (a jump, revealing the caret the reader moved)
+      // owns the viewport; a focus hold must not undo it. CM6 performs it at
+      // its next measure, within the next two frames.
+      this.focusGuard = null;
+      this.scrollRequested = true;
+      this.win.requestAnimationFrame(() => this.win.requestAnimationFrame(() => {
+        this.scrollRequested = false;
+      }));
+    }
     // The press is honoured even when its transaction also reveals the caret
     // (a formula or table cell entered by clicking does): revealing something
     // already on screen moves nothing, while the block the caret left still
@@ -431,6 +481,43 @@ export class EditorViewportStabilizer {
         }
       }
     }
+  }
+
+  /**
+   * Give the editor content native focus without moving the viewport. The
+   * one way the editor is focused: `view.focus()`, `contentDOM.focus()` and
+   * the host's pointer fallback all arrive here (see `installFocusOwner`).
+   */
+  focusContent(focus: () => void): void {
+    if (this.scrollRequested || this.view.hasFocus || !this.scrollHost.isConnected) {
+      focus();
+      return;
+    }
+    this.focusGuard = {
+      scrollTop: this.scrollHost.scrollTop,
+      scrollLeft: this.scrollHost.scrollLeft,
+      interaction: this.interaction,
+      until: this.win.performance.now() + FOCUS_GUARD_MS,
+    };
+    focus();
+    this.holdFocusGuard();
+    this.win.requestAnimationFrame(() => {
+      this.holdFocusGuard();
+      this.win.requestAnimationFrame(() => this.holdFocusGuard());
+    });
+  }
+
+  /** Put the viewport back where focus found it; false once the hold is over. */
+  private holdFocusGuard(): boolean {
+    const guard = this.focusGuard;
+    if (!guard) return false;
+    if (guard.interaction !== this.interaction || this.win.performance.now() > guard.until) {
+      this.focusGuard = null;
+      return false;
+    }
+    if (Math.abs(this.scrollHost.scrollTop - guard.scrollTop) > 0.5) this.writeScrollTop(guard.scrollTop);
+    if (Math.abs(this.scrollHost.scrollLeft - guard.scrollLeft) > 0.5) this.scrollHost.scrollLeft = guard.scrollLeft;
+    return true;
   }
 
   resetBaseline(): void {

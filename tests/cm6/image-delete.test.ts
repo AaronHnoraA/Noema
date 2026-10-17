@@ -1,4 +1,4 @@
-/** Deleting next to an image selects it first, then removes it whole (MarkText). */
+/** Deleting next to an image selects it first, then removes it whole (MarkText); every rendered object does the same (tests/architecture-constructs.test.ts). */
 
 import { afterEach, describe, expect, it } from "@voidzero-dev/vite-plus-test";
 import { createEditorCM6 } from "../../src/cm6/editor-cm6.ts";

@@ -17,7 +17,7 @@ import { EditorView } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
 import { syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import type { EditorState, Line } from "@codemirror/state";
-import { inlineConstruct } from "../constructs/index.ts";
+import { dispatchConstructEdit, inlineConstruct } from "../constructs/index.ts";
 
 // ---------------------------------------------------------------------------
 // Widget
@@ -64,7 +64,7 @@ class TaskCheckboxWidget extends MeasuredWidget {
       // Replace exactly the marker range ([ ] or [x]) without adding extra space.
       const raw = view.state.doc.sliceString(this.from, this.to);
       const next = /\[x\]/i.test(raw) ? "[ ]" : "[x]";
-      view.dispatch({ changes: { from: this.from, to: this.to, insert: next } });
+      dispatchConstructEdit(view, { changes: { from: this.from, to: this.to, insert: next } });
     });
     return frame;
   }

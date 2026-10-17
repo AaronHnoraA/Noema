@@ -93,3 +93,8 @@ export function revealProbeOffsets(state: EditorState): readonly number[] {
   const { from, to } = state.selection.main;
   return from === to ? [from] : [from, to];
 }
+
+/** The ends of every selection range: for constructs that open for any range, not just the main one. */
+export function selectionProbeOffsets(selection: EditorSelection): readonly number[] {
+  return selection.ranges.flatMap(({ from, to }) => (from === to ? [from] : [from, to]));
+}

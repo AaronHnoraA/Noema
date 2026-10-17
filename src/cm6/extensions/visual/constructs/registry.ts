@@ -57,11 +57,12 @@ export const constructSources = Facet.define<ConstructSource>();
  * decorations put over source at POS. The drawing already reflects the reveal
  * rule, so such constructs are never "revealed"; the registry and the screen
  * agree by construction. DECORATIONS returns the family's current set, or
- * null when it has none (the visual mode is off).
+ * null when it has none (the visual mode is off). ROLE may depend on the
+ * widget, for a family drawing both objects and structure.
  */
 export function drawnConstructSource(
   kind: string,
-  role: ConstructRole,
+  role: ConstructRole | ((widget: unknown) => ConstructRole),
   decorations: (state: EditorState, view?: EditorView) => DecorationSet | null | undefined,
 ): ConstructSource {
   return {
@@ -69,8 +70,10 @@ export function drawnConstructSource(
     at(state, pos, view) {
       const found: RenderedConstruct[] = [];
       decorations(state, view)?.between(pos, pos + 1, (from, to, value) => {
-        if (from <= pos && pos < to && (value.spec as { widget?: unknown }).widget) {
-          found.push({ from, to, block: Boolean(value.spec.block), kind, reveal: "never", role });
+        const widget = (value.spec as { widget?: unknown }).widget;
+        if (from <= pos && pos < to && widget) {
+          const roleOf = typeof role === "function" ? role(widget) : role;
+          found.push({ from, to, block: Boolean(value.spec.block), kind, reveal: "never", role: roleOf });
         }
       });
       return found;
@@ -102,6 +105,28 @@ export function renderedConstructAt(view: EditorView, pos: number): RenderedCons
     for (const construct of source.at(state, safe, view)) {
       if (found && construct.to - construct.from <= found.to - found.from) continue;
       if ((source.revealed ?? defaultRevealed)(view, construct)) continue;
+      found = construct;
+    }
+  }
+  return found;
+}
+
+/**
+ * The object whose source ends at POS (SIDE `before`) or starts there (SIDE
+ * `after`), drawn or opened — the caret on its edge may be what opens it. Of
+ * nested objects the widest wins. Structure is never returned: it is edited
+ * as text.
+ */
+export function objectAtEdge(view: EditorView, pos: number, side: "before" | "after"): RenderedConstruct | null {
+  const state = view.state;
+  const probe = side === "before" ? pos - 1 : pos;
+  if (probe < 0 || probe >= state.doc.length) return null;
+  let found: RenderedConstruct | null = null;
+  for (const source of state.facet(constructSources)) {
+    for (const construct of source.at(state, probe, view)) {
+      if ((construct.role ?? "object") !== "object") continue;
+      if ((side === "before" ? construct.to : construct.from) !== pos) continue;
+      if (found && construct.to - construct.from <= found.to - found.from) continue;
       found = construct;
     }
   }

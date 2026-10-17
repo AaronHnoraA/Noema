@@ -182,3 +182,33 @@ describe("vertical motion over a drawn block", () => {
     }
   });
 });
+
+describe("literal source", () => {
+  test("a command or footnote inside a formula spanning lines stays literal while the formula is edited", () => {
+    const md = "Before \\(\nx + [^note] + @@todo [inside]\n\\) after\n\n[^note]: n.";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: md });
+    const view = editor.view as unknown as EditorView;
+    try {
+      // The caret inside the formula shows its TeX source; nothing in it is a construct.
+      view.dispatch({ selection: { anchor: md.indexOf("x + ") } });
+      const formulaFrom = md.indexOf("\\(");
+      const formulaTo = md.indexOf("\\)") + 2;
+      const decorated: string[] = [];
+      for (const source of view.state.facet((view.constructor as typeof EditorView).decorations)) {
+        const set = typeof source === "function" ? source(view) : source;
+        set.between(formulaFrom, formulaTo, (from, to, value) => {
+          const widget = (value.spec as { widget?: { constructor: { name: string } } }).widget;
+          if (widget && from >= formulaFrom && to <= formulaTo && !/Math|Formula|VisualTex/i.test(widget.constructor.name)) {
+            decorated.push(`${widget.constructor.name} ${from}-${to}`);
+          }
+        });
+      }
+      expect(decorated).toEqual([]);
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+});

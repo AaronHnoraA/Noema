@@ -3,16 +3,18 @@ import type { Range } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
-  ViewPlugin,
   WidgetType,
   type DecorationSet,
-  type ViewUpdate,
 } from "@codemirror/view";
-import { blockMathRangesOverlapping, mergeOverlappingRanges, rangeOverlapsAny } from "./math-ranges.ts";
-import { scanCodeRanges } from "./code-ranges.ts";
-import { scanInlineMathRanges } from "../inline-math.ts";
-import { hasViewportDecorationRefresh } from "./viewport-refresh.ts";
-import { anySelectionRevealsSource, constructSources, drawnConstructSource } from "./extensions/visual/constructs/index.ts";
+import { rangeOverlapsAny } from "./math-ranges.ts";
+import {
+  anySelectionRevealsSource,
+  constructSources,
+  constructViewPlugin,
+  drawnConstructSource,
+  literalRangesIn,
+  selectionProbeOffsets,
+} from "./extensions/visual/constructs/index.ts";
 import { isStableWikiHref, scanWikiLinks, splitWikiFragmentTarget } from "../../shared/wiki-link.mjs";
 
 const BARE_ROAM_RE = /\broam:\/\/[^\s<>)\]]+/gi;
@@ -123,24 +125,16 @@ function knownRefMatches(known: Set<string>, ref: string): boolean {
   return known.has(target);
 }
 
-type LinkStatusBuild = { decorations: DecorationSet; titled: boolean };
-
-function buildBrokenLinkDecorations(view: EditorView): LinkStatusBuild {
+function buildBrokenLinkDecorations(view: EditorView): DecorationSet {
   const knownRefs = view.state.field(knownRoamRefsField, false);
   const known = knownRefs && knownRefs.size > 0 ? knownRefs : null;
   const titles = view.state.field(wikiPageTitlesField, false) ?? null;
-  if (!known && !titles) return { decorations: Decoration.none, titled: false };
+  if (!known && !titles) return Decoration.none;
   const selection = view.state.selection;
-  let titled = false;
   const decos: Range<Decoration>[] = [];
   const mark = Decoration.mark({ class: "cm-roam-link-broken" });
   const visibleRanges = view.visibleRanges;
-  const excludedRanges = mergeOverlappingRanges([
-    ...blockMathRangesOverlapping(view.state, visibleRanges).map(({ from, to }) => ({ from, to })),
-    ...visibleRanges.flatMap(({ from, to }) =>
-      scanInlineMathRanges(view.state.doc.sliceString(from, to), from)),
-    ...scanCodeRanges(view.state, visibleRanges),
-  ]);
+  const excludedRanges = literalRangesIn(view.state, visibleRanges);
 
   for (const { from: visibleFrom, to: visibleTo } of visibleRanges) {
     const text = view.state.doc.sliceString(visibleFrom, visibleTo);
@@ -154,7 +148,6 @@ function buildBrokenLinkDecorations(view: EditorView): LinkStatusBuild {
         if (title == null) {
           decos.push(mark.range(from, to));
         } else if (!wiki.explicitLabel) {
-          titled = true;
           // The raw ID is editable while a caret touches the link or a range
           // ends inside it; a range that only crosses it keeps the title.
           if (anySelectionRevealsSource(selection, wiki.from, wiki.to, "edge")) continue;
@@ -181,39 +174,36 @@ function buildBrokenLinkDecorations(view: EditorView): LinkStatusBuild {
     }
   }
 
-  return { decorations: Decoration.set(decos, true), titled };
+  return Decoration.set(decos, true);
 }
 
-class RoamLinkStatusPlugin {
-  decorations: DecorationSet;
-  // Whether the visible text holds a link shown under its page title; only
-  // then does moving the selection change what is drawn.
-  private titled: boolean;
-
-  constructor(view: EditorView) {
-    const built = buildBrokenLinkDecorations(view);
-    this.decorations = built.decorations;
-    this.titled = built.titled;
-  }
-
-  update(update: ViewUpdate): void {
-    if (
-      update.docChanged
-      || update.viewportChanged
-      || hasViewportDecorationRefresh(update)
-      || update.startState.field(knownRoamRefsField, false) !== update.state.field(knownRoamRefsField, false)
-      || update.startState.field(wikiPageTitlesField, false) !== update.state.field(wikiPageTitlesField, false)
-      || (this.titled && update.selectionSet)
-    ) {
-      const built = buildBrokenLinkDecorations(update.view);
-      this.decorations = built.decorations;
-      this.titled = built.titled;
+/**
+ * The titled wiki links the selection opens to their raw ID. Only these
+ * change what a selection move draws; the lines of the selection's ends are
+ * the only ones that can hold one.
+ */
+function openedWikiTitleKey(view: EditorView): string {
+  const titles = view.state.field(wikiPageTitlesField, false);
+  if (!titles || titles.size === 0) return "";
+  const selection = view.state.selection;
+  const opened: string[] = [];
+  for (const offset of selectionProbeOffsets(selection)) {
+    const line = view.state.doc.lineAt(offset);
+    for (const wiki of scanWikiLinks(line.text, line.from)) {
+      if (wiki.explicitLabel || !stableWikiTargetId(wiki.target)) continue;
+      if (anySelectionRevealsSource(selection, wiki.from, wiki.to, "edge")) opened.push(`${wiki.from}:${wiki.to}`);
     }
   }
+  return opened.join(",");
 }
 
-const roamLinkStatusPlugin = ViewPlugin.fromClass(RoamLinkStatusPlugin, {
-  decorations: (plugin) => plugin.decorations,
+const roamLinkStatusPlugin = constructViewPlugin({
+  build: buildBrokenLinkDecorations,
+  revealKey: openedWikiTitleKey,
+  // Link status and page titles arrive asynchronously in their own fields.
+  invalidates: (update) =>
+    update.startState.field(knownRoamRefsField, false) !== update.state.field(knownRoamRefsField, false)
+    || update.startState.field(wikiPageTitlesField, false) !== update.state.field(wikiPageTitlesField, false),
   // Wiki links drawn as their page title.
   provide: (plugin) => constructSources.of(drawnConstructSource(
     "wiki-title", "structure", (_state, view) => view?.plugin(plugin)?.decorations)),

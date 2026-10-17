@@ -306,7 +306,7 @@ function focusMetaProperties(view: EditorView): boolean {
   const existing = view.dom.querySelector<HTMLDetailsElement>(".aaronnote-meta-properties");
   if (!existing) return false;
   existing.open = true;
-  existing.querySelector<HTMLElement>("input, textarea, summary")?.focus();
+  existing.querySelector<HTMLElement>("input, textarea, summary")?.focus({ preventScroll: true });
   return true;
 }
 
