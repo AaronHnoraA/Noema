@@ -81,6 +81,9 @@ import { persistentVisualStateField } from "../visual-mode.ts";
 import {
   constructSources,
   drawnConstructSource,
+  rebuildDecorations,
+  rebuildForRevealChange,
+  replaceDecorations,
   selectionOpensSource,
   transactionChangesPinning,
   type ConstructRole,
@@ -4430,11 +4433,9 @@ function patchOrgEnvBodyLineDecosNearChanges(
   const centerTo = state.doc.lineAt(Math.min(toB, state.doc.length)).number;
   const startLine = Math.max(1, centerFrom - 1);
   const endLine = Math.min(state.doc.lines, centerTo + 1);
-  const affectedFrom = state.doc.line(startLine).from;
-  const affectedTo = state.doc.line(endLine).to;
-  return mapped
-    .update({ filterFrom: affectedFrom, filterTo: affectedTo, filter: () => false })
-    .update({ add: buildOrgEnvBodyLineDecoRanges(state, startLine, endLine), sort: true });
+  const affected = { from: state.doc.line(startLine).from, to: state.doc.line(endLine).to };
+  return rebuildDecorations(mapped, [affected], (from, to) =>
+    buildOrgEnvBodyLineDecoRanges(state, state.doc.lineAt(from).number, state.doc.lineAt(to).number));
 }
 
 function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
@@ -4757,52 +4758,8 @@ function activeBlockExtraKey(state: EditorState): string {
   return parts.join("|");
 }
 
-function blockExtraPatchRangesFromKey(key: string): Array<{ from: number; to: number }> {
-  if (!key) return [];
-  return key.split("|")
-    .map((part) => {
-      const pieces = part.split(":");
-      const from = Number(pieces[pieces.length - 2]);
-      const to = Number(pieces[pieces.length - 1]);
-      return Number.isFinite(from) && Number.isFinite(to) && from <= to ? { from, to } : null;
-    })
-    .filter((range): range is { from: number; to: number } => Boolean(range));
-}
 
-function mergeBlockExtraPatchRanges(ranges: Array<{ from: number; to: number }>): Array<{ from: number; to: number }> {
-  const sorted = ranges.sort((a, b) => a.from - b.from || a.to - b.to);
-  const merged: Array<{ from: number; to: number }> = [];
-  for (const range of sorted) {
-    const previous = merged[merged.length - 1];
-    if (previous && range.from <= previous.to) {
-      previous.to = Math.max(previous.to, range.to);
-    } else {
-      merged.push({ ...range });
-    }
-  }
-  return merged;
-}
 
-function patchBlockExtraDecosForSelectionChange(
-  state: EditorState,
-  current: DecorationSet,
-  oldKey: string,
-  newKey: string,
-): DecorationSet {
-  const ranges = mergeBlockExtraPatchRanges([
-    ...blockExtraPatchRangesFromKey(oldKey),
-    ...blockExtraPatchRangesFromKey(newKey),
-  ]);
-  if (ranges.length === 0) return current;
-
-  let next = current;
-  const add: CMRange<Decoration>[] = [];
-  for (const range of ranges) {
-    next = next.update({ filterFrom: range.from, filterTo: range.to, filter: () => false });
-    add.push(...buildBlockExtraDecoRanges(state, range.from, range.to));
-  }
-  return next.update({ add, sort: true });
-}
 
 function canMapBlockExtraDecos(state: EditorState, changes: ChangeSet): boolean {
   const ranges = state.field(blockExtraRangesField, false) ?? scanBlockExtraRanges(state.doc, blockExtraExcludedRanges(state));
@@ -4889,13 +4846,10 @@ function patchBlockExtraDecosForOrgEnvTitleChange(
     || (block.kind === "av" && !opensSource(state, block.from, block.to))
     || (block.kind === "embed" && !opensSource(state, block.from, block.to))
     || ((block.kind === "comment" || block.kind === "fold" || block.kind === "layout") && !opensSource(state, block.from, block.to));
-  let next = fullBlockWidgetActive
-    ? mapped.update({ filterFrom: block.from, filterTo: block.to, filter: () => false })
-    : mapped
-        .update({ filterFrom: block.openFrom, filterTo: block.openTo, filter: () => false })
-        .update({ filterFrom: block.closeFrom, filterTo: block.closeTo, filter: () => false });
-  next = next.update({ add: decos, sort: true });
-  return next;
+  const ranges = fullBlockWidgetActive
+    ? [{ from: block.from, to: block.to }]
+    : [{ from: block.openFrom, to: block.openTo }, { from: block.closeFrom, to: block.closeTo }];
+  return replaceDecorations(mapped, ranges, decos);
 }
 
 function patchTocWidgetDecos(
@@ -4904,12 +4858,7 @@ function patchTocWidgetDecos(
 ): DecorationSet {
   const ranges = state.field(blockExtraRangesField, false)?.toc ?? [];
   if (ranges.length === 0) return current;
-  let next = current;
-  for (const range of ranges) {
-    next = next.update({ filterFrom: range.from, filterTo: range.to, filter: () => false });
-  }
-  const add = buildTocWidgetDecoRanges(state, ranges);
-  return next.update({ add, sort: true });
+  return replaceDecorations(current, ranges, buildTocWidgetDecoRanges(state, ranges));
 }
 
 function scanFrontMatter(doc: Text): { from: number; to: number; body: string } | null {
@@ -4952,9 +4901,7 @@ const blockExtrasDecorations = StateField.define<DecorationSet>({
     if (transactionChangesPinning(tr)) {
       const oldKey = activeBlockExtraKey(tr.startState);
       const newKey = activeBlockExtraKey(tr.state);
-      return oldKey === newKey
-        ? value
-        : patchBlockExtraDecosForSelectionChange(tr.state, value, oldKey, newKey);
+      return rebuildForRevealChange(value, oldKey, newKey, (from, to) => buildBlockExtraDecoRanges(tr.state, from, to));
     }
     if (tr.docChanged) {
       if (canMapBlockExtraDecos(tr.startState, tr.changes)) {
@@ -4980,7 +4927,7 @@ const blockExtrasDecorations = StateField.define<DecorationSet>({
     if (tr.selection != null) {
       const oldKey = activeBlockExtraKey(tr.startState);
       const newKey = activeBlockExtraKey(tr.state);
-      if (oldKey !== newKey) return patchBlockExtraDecosForSelectionChange(tr.state, value, oldKey, newKey);
+      return rebuildForRevealChange(value, oldKey, newKey, (from, to) => buildBlockExtraDecoRanges(tr.state, from, to));
     }
     return value;
   },

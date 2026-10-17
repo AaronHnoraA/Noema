@@ -33,7 +33,7 @@ separate editor implementation.
 | `src/cjk-emphasis.ts` | CJK-friendly emphasis flanking shared by the Lezer editor grammar and the markdown-it renderer; strictly additive over CommonMark. |
 | `src/cm6/extensions/visual/constructs/` | The rendered-construct layer: reveal policies and roles, Vim pinning as state, literal (code/math) ranges, the construct registry, and the `inlineConstruct` factory. See `docs/architecture/rendered-constructs.md`. |
 | `src/cm6/embedded-surface.ts` | Marks and recognizes elements inside the editor that take their own keys and focus (MathLive, the diagram lightbox, a rendered table's cell selection), for Vim, focus, scrolling and Emacs key forwarding. |
-| `aaronnote/vim-rows.ts` | Vim's screen rows (soft-wrapped lines) measured from the DOM, including rows that open with a widget or a hidden marker. |
+| `src/cm6/screen-rows.ts` | Visual rows — soft-wrapped lines, a drawn block as one row — measured from the DOM; the one row model behind Vim's `j`/`k` and the editor's ArrowUp/ArrowDown (`moveByVisualRow`). |
 | `src/cm6/extensions/visual/widgets/*.ts` | Math, code fence, image, task, TOC, org-env, and related widgets. `block-extras.ts` hosts the `@@cell` Jupyter widget; it renders cell output through the shared JupyterLab stack (lazy-loaded). |
 | `src/jupyter-rendermime.ts` | Shared JupyterLab render stack for cell output — the same `@jupyterlab/rendermime` + `@jupyterlab/outputarea` pipeline VS Code Jupyter uses. Adds a KaTeX LaTeX typesetter, an HTML renderer that sandboxes script-bearing HTML in an auto-sizing iframe (and routes math-only HTML to KaTeX), and a widget-view renderer bridging to the live kernel manager. Loaded lazily (large). |
 | `src/jupyter-widget-runtime.ts` | ipywidgets frontend: a `KernelWidgetManager` subclass over the live kernel (via `server/lib/jupyter-kernel-ws.mjs`). Mounts kernel-state-first (`restoreWidgets`), replays captured comm messages only as a fallback, and seeds Output widgets with server-captured outputs. Shares the render stack above. Lazy chunk. |
@@ -62,7 +62,7 @@ separate editor implementation.
 | `shared/planning-values.mjs` | Value-grammar layer for the planning DSL: dates, repeaters, lead-time, dep-refs, durations, canonical-key aliasing, status normalization. Shared by the server and `src/planning-values.ts` (browser facade) so both validate identically. |
 | `src/styles/*.css` | CM6 editor chrome and swappable Markdown themes. |
 | `aaronnote/main.ts` | CM6 editor composition shell hosted by Emacs; server mode reuses it read-only. |
-| `aaronnote/vim-lite.ts`, `aaronnote/vim-rows.ts` | The modal layer. Native Vim is the reference: `tests/vim-native-parity.test.ts` replays results recorded from Neovim (`scripts/record-vim-parity.mjs`), and `docs/vim.md` lists the deliberate differences. Lines are screen rows; a row takes in the hidden Markdown syntax drawn on it. Outside Insert, keys an input method has taken are dropped (`inputMethodKey`). `scripts/check-vim-rows.mjs` checks rows, the painted selection, search and undo under WebKit. |
+| `aaronnote/vim-lite.ts`, `src/cm6/screen-rows.ts` | The modal layer. Native Vim is the reference: `tests/vim-native-parity.test.ts` replays results recorded from Neovim (`scripts/record-vim-parity.mjs`), and `docs/vim.md` lists the deliberate differences. Lines are screen rows; a row takes in the hidden Markdown syntax drawn on it. Outside Insert, keys an input method has taken are dropped (`inputMethodKey`). `scripts/check-vim-rows.mjs` checks rows, the painted selection, search and undo under WebKit. |
 | `src/cm6/selection-column-clip.ts` | Clips `drawSelection`'s layer to the text column. The browser's own `::selection` stays hidden on editor lines; do not style it back in, or every selection is painted twice. |
 | `aaronnote/agenda-view.ts` | Agenda implementation shared by the Emacs-hosted editor panel and `/agenda` surface. It is not an independent product; all edits round-trip through `patchTodo`/`clockIn`/`clockOut`. See `docs/agenda.md`. |
 | `aaronnote/latex-export-scope.ts` | Pure whole-note/selection/heading-subtree range model used by the LaTeX scope picker. |
@@ -131,6 +131,11 @@ command, HTML block — goes through one layer,
   `constructSources.of(...)` so Vim and the caret know what is drawn.
 - The Vim mode reaches widgets only as state (`renderedConstructsPinned`);
   an element that edits text with its own editor calls `markEmbeddedSurface`.
+- A block family redraws only what a transaction changed through
+  `constructs/decoration-patch.ts` (`rebuildForRevealChange`,
+  `rebuildDecorations`, `replaceDecorations`).
+- Vertical motion has one row model, `src/cm6/screen-rows.ts`, for Vim and the
+  editor caret alike; arrow keys go through `runEditorMovement`.
 - Markdown inside a widget renders through `src/render-html.ts`
   (`renderMarkdownHTML`, `renderInlineMarkdownHTML`).
 - `tests/architecture-constructs.test.ts` enforces these rules, with no

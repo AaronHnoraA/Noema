@@ -36,7 +36,7 @@ import { wikiLinkAt } from "../../shared/wiki-link.mjs";
 import { vscodeCloseBrackets } from "./close-brackets-vscode.ts";
 import { cjkTyping } from "./cjk-typing.ts";
 import { texSourceInput } from "./tex-source-input.ts";
-import { openLineAfterTrailingBlock, runEditorDelete, runEditorEnter, runEditorSoftBreak, runEditorTab } from "./input-commands.ts";
+import { runEditorDelete, runEditorEnter, runEditorMovement, runEditorSoftBreak, runEditorTab } from "./input-commands.ts";
 import { isWordChar } from "./text-boundaries.ts";
 import {
   pasteTargetExtension,
@@ -50,8 +50,6 @@ import {
   getBlockContextCM6,
   createQuickInsertRegistry,
   tableInsertRowBelow,
-  tableMoveHorizontal,
-  tableMoveVertical,
 } from "./commands/index.ts";
 import {
   pasteDataTransfer,
@@ -1366,10 +1364,12 @@ function buildExtensions(
       { key: "Enter", run: runEditorEnter },
       { key: "Shift-Enter", run: runEditorSoftBreak },
       { key: "Mod-Enter", run: (view) => tableInsertRowBelow(view) || exitCurrentOrgEnv(view) || exitFencedCode(view) },
-      { key: "ArrowDown", run: (view) => tableMoveVertical(view, 1) || openLineAfterTrailingBlock(view) },
-      { key: "ArrowUp", run: (view) => tableMoveVertical(view, -1) },
-      { key: "ArrowRight", run: (view) => tableMoveHorizontal(view, 1) },
-      { key: "ArrowLeft", run: (view) => tableMoveHorizontal(view, -1) },
+      // One movement function for native keys and the xwidget host alike.
+      ...(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"] as const).map((key) => ({
+        key,
+        run: (view: EditorView) => runEditorMovement(view, key) !== false,
+        shift: (view: EditorView) => runEditorMovement(view, key, true) !== false,
+      })),
       { key: "Tab", run: (view) => runEditorTab(view) },
       { key: "Shift-Tab", run: (view) => runEditorTab(view, true) },
       { key: "Mod-d", run: selectNextMarkdownOccurrence },

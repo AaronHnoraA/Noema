@@ -95,6 +95,8 @@ import {
   constructSources,
   drawnConstructSource,
   rangeRevealsSource,
+  rebuildDecorations,
+  rebuildForRevealChange,
   selectionOpensSource,
   type ConstructSource,
 } from "./extensions/visual/constructs/index.ts";
@@ -2209,50 +2211,6 @@ const tableConstructSource: ConstructSource = {
   },
 };
 
-function tableRangesFromKey(key: string): Array<{ from: number; to: number }> {
-  if (!key) return [];
-  return key.split("|")
-    .map((part) => {
-      const [from, to] = part.split(":").map((value) => Number(value));
-      return Number.isFinite(from) && Number.isFinite(to) && from <= to ? { from, to } : null;
-    })
-    .filter((range): range is { from: number; to: number } => Boolean(range));
-}
-
-function mergeTablePatchRanges(ranges: Array<{ from: number; to: number }>): Array<{ from: number; to: number }> {
-  const sorted = ranges.sort((a, b) => a.from - b.from || a.to - b.to);
-  const merged: Array<{ from: number; to: number }> = [];
-  for (const range of sorted) {
-    const previous = merged[merged.length - 1];
-    if (previous && range.from <= previous.to) {
-      previous.to = Math.max(previous.to, range.to);
-    } else {
-      merged.push({ ...range });
-    }
-  }
-  return merged;
-}
-
-function patchTableDecosForSelectionChange(
-  state: EditorState,
-  current: DecorationSet,
-  oldKey: string,
-  newKey: string,
-): DecorationSet {
-  const ranges = mergeTablePatchRanges([
-    ...tableRangesFromKey(oldKey),
-    ...tableRangesFromKey(newKey),
-  ]);
-  if (ranges.length === 0) return current;
-
-  let next = current;
-  const add: Range<Decoration>[] = [];
-  for (const range of ranges) {
-    next = next.update({ filterFrom: range.from, filterTo: range.to, filter: () => false });
-    add.push(...buildTableDecoRanges(state, range.from, range.to));
-  }
-  return next.update({ add, sort: true });
-}
 
 const tableDecoField = StateField.define<DecorationSet>({
   create: (state) => buildTableDecos(state),
@@ -2267,7 +2225,7 @@ const tableDecoField = StateField.define<DecorationSet>({
     if (tr.selection != null) {
       const oldKey = activeTableAttrsKey(tr.startState);
       const newKey = activeTableAttrsKey(tr.state);
-      if (oldKey !== newKey) return patchTableDecosForSelectionChange(tr.state, value, oldKey, newKey);
+      return rebuildForRevealChange(value, oldKey, newKey, (from, to) => buildTableDecoRanges(tr.state, from, to));
     }
     return value;
   },
@@ -2290,9 +2248,7 @@ function patchTableDecosNearChanges(
   const { startLine, endLine } = affectedTableLineWindow(oldState, state, changes);
   const affectedFrom = state.doc.line(startLine).from;
   const affectedTo = state.doc.line(endLine).to;
-  return mapped
-    .update({ filterFrom: affectedFrom, filterTo: affectedTo, filter: () => false })
-    .update({ add: buildTableDecoRanges(state, affectedFrom, affectedTo), sort: true });
+  return rebuildDecorations(mapped, [{ from: affectedFrom, to: affectedTo }], (from, to) => buildTableDecoRanges(state, from, to));
 }
 
 function buildLineDecoRanges(
@@ -2425,16 +2381,10 @@ const lineDecoField = StateField.define<DecorationSet>({
   update(value, tr) {
     const refreshRanges = viewportDecorationRefreshRanges(tr);
     if (refreshRanges) {
-      let next = value;
-      for (const range of refreshRanges) {
-        const startLine = tr.state.doc.lineAt(range.from).number;
-        const endLine = tr.state.doc.lineAt(range.to).number;
-        const from = tr.state.doc.line(startLine).from;
-        const to = tr.state.doc.line(endLine).to;
-        next = next.update({ filterFrom: from, filterTo: to, filter: () => false });
-        next = next.update({ add: buildLineDecoRanges(tr.state, startLine, endLine), sort: true });
-      }
-      return next;
+      const doc = tr.state.doc;
+      const lines = refreshRanges.map((range) => ({ from: doc.lineAt(range.from).from, to: doc.lineAt(range.to).to }));
+      return rebuildDecorations(value, lines, (from, to) =>
+        buildLineDecoRanges(tr.state, doc.lineAt(from).number, doc.lineAt(to).number));
     }
     // A one-character edit can turn an empty source line into prose (or the
     // reverse). Mapping its old line decoration would leave the new text with
@@ -2540,11 +2490,9 @@ function patchLineDecosNearChanges(
   if (!Number.isFinite(fromB)) return mapped;
   const startLine = state.doc.lineAt(Math.max(0, Math.min(fromB, state.doc.length))).number;
   const endLine = state.doc.lineAt(Math.max(0, Math.min(toB, state.doc.length))).number;
-  const affectedFrom = state.doc.line(startLine).from;
-  const affectedTo = state.doc.line(endLine).to;
-  return mapped
-    .update({ filterFrom: affectedFrom, filterTo: affectedTo, filter: () => false })
-    .update({ add: buildLineDecoRanges(state, startLine, endLine), sort: true });
+  const affected = { from: state.doc.line(startLine).from, to: state.doc.line(endLine).to };
+  return rebuildDecorations(mapped, [affected], (from, to) =>
+    buildLineDecoRanges(state, state.doc.lineAt(from).number, state.doc.lineAt(to).number));
 }
 
 // ---------------------------------------------------------------------------
@@ -2648,11 +2596,11 @@ function patchHtmlBlockDecosNearChanges(
   if (!Number.isFinite(fromB)) return mapped;
   const startLine = state.doc.lineAt(Math.max(0, Math.min(fromB, state.doc.length))).number;
   const endLine = state.doc.lineAt(Math.max(0, Math.min(toB, state.doc.length))).number;
-  const affectedFrom = state.doc.line(Math.max(1, startLine)).from;
-  const affectedTo = state.doc.line(Math.min(state.doc.lines, endLine)).to;
-  return mapped
-    .update({ filterFrom: affectedFrom, filterTo: affectedTo, filter: () => false })
-    .update({ add: collectHtmlBlockDecoRanges(state, affectedFrom, affectedTo), sort: true });
+  const affected = {
+    from: state.doc.line(Math.max(1, startLine)).from,
+    to: state.doc.line(Math.min(state.doc.lines, endLine)).to,
+  };
+  return rebuildDecorations(mapped, [affected], (from, to) => collectHtmlBlockDecoRanges(state, from, to));
 }
 
 function activeHtmlBlockKey(state: EditorState): string {
@@ -2684,13 +2632,7 @@ const htmlBlockDecoField = StateField.define<DecorationSet>({
   update(value, tr) {
     const refreshRanges = viewportDecorationRefreshRanges(tr);
     if (refreshRanges) {
-      let next = value;
-      for (const range of refreshRanges) {
-        next = next
-          .update({ filterFrom: range.from, filterTo: range.to, filter: () => false })
-          .update({ add: collectHtmlBlockDecoRanges(tr.state, range.from, range.to), sort: true });
-      }
-      return next;
+      return rebuildDecorations(value, refreshRanges, (from, to) => collectHtmlBlockDecoRanges(tr.state, from, to));
     }
     if (isCoalescedVisualTypingTransaction(tr)) return value.map(tr.changes);
     if (tr.docChanged) {
@@ -2699,7 +2641,7 @@ const htmlBlockDecoField = StateField.define<DecorationSet>({
     if (tr.selection != null) {
       const oldKey = activeHtmlBlockKey(tr.startState);
       const newKey = activeHtmlBlockKey(tr.state);
-      if (oldKey !== newKey) return buildHtmlBlockDecos(tr.state);
+      return rebuildForRevealChange(value, oldKey, newKey, (from, to) => collectHtmlBlockDecoRanges(tr.state, from, to));
     }
     return value;
   },

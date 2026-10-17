@@ -49,6 +49,8 @@ import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import {
   anySelectionRevealsSource,
   constructSources,
+  mergeSpans,
+  rebuildDecorations,
   renderedConstructsPinned,
   selectionRevealsSource,
   type ConstructSource,
@@ -75,6 +77,7 @@ import {
   type VisualTexInlineMoveDirection,
 } from "./visualtex-inline.ts";
 import { markEmbeddedSurface } from "../../../embedded-surface.ts";
+import { moveByVisualRow } from "../../../screen-rows.ts";
 
 function setSourceRange(el: HTMLElement, from: number, to: number, openSource = false): void {
   el.dataset.cmSourceFrom = String(from);
@@ -808,27 +811,20 @@ function rangeFromKey(key: string): { from: number; to: number } | null {
   return Number.isFinite(from) && Number.isFinite(to) && from <= to ? { from, to } : null;
 }
 
+/** The whole-line windows of the formulas named by KEYS (each `from:to`). */
+function blockMathWindowsForKeys(state: EditorState, keys: readonly string[]): Array<{ from: number; to: number }> {
+  return [...new Set(keys)]
+    .map((key) => key ? rangeFromKey(key) : null)
+    .filter((range): range is { from: number; to: number } => Boolean(range))
+    .map((range) => blockMathWindow(state, range.from, range.to));
+}
+
 function blockMathWindow(state: EditorState, from: number, to: number): { from: number; to: number } {
   const start = state.doc.lineAt(Math.max(0, Math.min(from, state.doc.length))).from;
   const end = state.doc.lineAt(Math.max(0, Math.min(to, state.doc.length))).to;
   return { from: start, to: end };
 }
 
-function mergeWindows(windows: Array<{ from: number; to: number }>): Array<{ from: number; to: number }> {
-  const sorted = windows
-    .filter((range) => range.from <= range.to)
-    .sort((a, b) => a.from - b.from || a.to - b.to);
-  const merged: Array<{ from: number; to: number }> = [];
-  for (const range of sorted) {
-    const prev = merged[merged.length - 1];
-    if (prev && range.from <= prev.to) {
-      prev.to = Math.max(prev.to, range.to);
-    } else {
-      merged.push({ ...range });
-    }
-  }
-  return merged;
-}
 
 function patchBlockMathDecosForSelectionChange(
   state: EditorState,
@@ -837,20 +833,8 @@ function patchBlockMathDecosForSelectionChange(
   active: BlockMathEditSession | null = null,
   suppressedKey = "",
 ): DecorationSet {
-  const windows = mergeWindows(keys
-    .filter((key, index) => key && keys.indexOf(key) === index)
-    .map(rangeFromKey)
-    .filter((range): range is { from: number; to: number } => Boolean(range))
-    .map((range) => blockMathWindow(state, range.from, range.to)));
-  if (windows.length === 0) return current;
-
-  let next = current;
-  const add: Range<Decoration>[] = [];
-  for (const range of windows) {
-    next = next.update({ filterFrom: range.from, filterTo: range.to, filter: () => false });
-    add.push(...buildBlockMathDecoRanges(state, range.from, range.to, active, suppressedKey));
-  }
-  return next.update({ add, sort: true });
+  return rebuildDecorations(current, blockMathWindowsForKeys(state, keys), (from, to) =>
+    buildBlockMathDecoRanges(state, from, to, active, suppressedKey));
 }
 
 function patchBlockMathAtomicRangesForKeys(
@@ -860,26 +844,8 @@ function patchBlockMathAtomicRangesForKeys(
   active: BlockMathEditSession | null = null,
   suppressedKey = "",
 ): DecorationSet {
-  const windows = mergeWindows(keys
-    .filter((key, index) => key && keys.indexOf(key) === index)
-    .map(rangeFromKey)
-    .filter((range): range is { from: number; to: number } => Boolean(range))
-    .map((range) => blockMathWindow(state, range.from, range.to)));
-  if (windows.length === 0) return current;
-
-  let next = current;
-  const add: Range<Decoration>[] = [];
-  for (const range of windows) {
-    next = next.update({ filterFrom: range.from, filterTo: range.to, filter: () => false });
-    add.push(...buildBlockMathAtomicRangeItems(
-      state,
-      range.from,
-      range.to,
-      active,
-      suppressedKey,
-    ));
-  }
-  return next.update({ add, sort: true });
+  return rebuildDecorations(current, blockMathWindowsForKeys(state, keys), (from, to) =>
+    buildBlockMathAtomicRangeItems(state, from, to, active, suppressedKey));
 }
 
 function mapBlockMathKey(key: string, changes: ChangeSet): string {
@@ -1348,24 +1314,8 @@ function patchBlockMathDecosNearChanges(
       windows.push(blockMathWindow(state, from, to));
     }
   });
-  if (windows.length === 0) return mapped;
-
-  let next = mapped;
-  for (const window of mergeWindows(windows)) {
-    next = next
-      .update({ filterFrom: window.from, filterTo: window.to, filter: () => false })
-      .update({
-        add: buildBlockMathDecoRanges(
-          state,
-          window.from,
-          window.to,
-          active,
-          suppressedKey,
-        ),
-        sort: true,
-      });
-  }
-  return next;
+  return rebuildDecorations(mapped, windows, (from, to) =>
+    buildBlockMathDecoRanges(state, from, to, active, suppressedKey));
 }
 
 function dispatchMathEditState(view: EditorView, active: boolean, kind: "inline" | "display"): void {
@@ -2107,7 +2057,9 @@ function patchMultilineInlineField(
   state: EditorState,
   keys: readonly string[],
 ): MultilineInlineFieldValue {
-  const windows = mergeWindows(keys.map(rangeFromKey)
+  // Two sets patched together, keeping decorations that only touch a window's
+  // edge — unlike `rebuildDecorations`, which drops those too.
+  const windows = mergeSpans(keys.map(rangeFromKey)
     .filter((range): range is { from: number; to: number } => Boolean(range)));
   let decorations = value.decorations;
   let atomicRanges = value.atomicRanges;
@@ -2287,7 +2239,7 @@ function multilineInlineCrossedByVerticalMove(
 
 export type InsertDisplayLineMoveResult = false | "cursor" | "formula";
 
-/** CM6-native vertical motion, treating only display math as an editable row. */
+/** Vertical caret motion over visual rows, entering a display formula it crosses. */
 export function moveInsertLineWithDisplayMathEntry(
   view: EditorView,
   forward: boolean,
@@ -2295,7 +2247,8 @@ export function moveInsertLineWithDisplayMathEntry(
   const selection = view.state.selection;
   if (view.state.readOnly || selection.ranges.length !== 1 || !selection.main.empty) return false;
   const start = selection.main.head;
-  let moved = view.moveVertically(selection.main, forward);
+  // The same visual rows as Vim's j/k (src/cm6/screen-rows.ts).
+  let moved = moveByVisualRow(view, selection.main, forward);
   if (moved.head === start) moved = view.moveToLineBoundary(selection.main, forward);
 
   const display = displayMathCrossedByVerticalMove(view, start, moved.head, forward);

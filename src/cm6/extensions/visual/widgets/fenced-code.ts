@@ -37,6 +37,8 @@ import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "../
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
 import {
   constructSources,
+  rebuildDecorations,
+  rebuildForRevealChange,
   selectionOpensSource,
   transactionChangesPinning,
   type ConstructSource,
@@ -686,46 +688,8 @@ function activeMermaidBlockKey(state: EditorState): string {
   return block && diagramOpened(state, block) ? `${block.from}:${block.to}` : "";
 }
 
-function mermaidRangeFromKey(key: string): { from: number; to: number } | null {
-  const [from, to] = key.split(":").map((part) => Number(part));
-  return Number.isFinite(from) && Number.isFinite(to) && from <= to ? { from, to } : null;
-}
 
-function mergeMermaidWindows(windows: Array<{ from: number; to: number }>): Array<{ from: number; to: number }> {
-  const sorted = windows
-    .filter((range) => range.from <= range.to)
-    .sort((a, b) => a.from - b.from || a.to - b.to);
-  const merged: Array<{ from: number; to: number }> = [];
-  for (const range of sorted) {
-    const prev = merged[merged.length - 1];
-    if (prev && range.from <= prev.to) {
-      prev.to = Math.max(prev.to, range.to);
-    } else {
-      merged.push({ ...range });
-    }
-  }
-  return merged;
-}
 
-function patchMermaidDecosForSelectionChange(
-  state: EditorState,
-  current: DecorationSet,
-  oldKey: string,
-  newKey: string,
-): DecorationSet {
-  const windows = mergeMermaidWindows([oldKey, newKey]
-    .map(mermaidRangeFromKey)
-    .filter((range): range is { from: number; to: number } => Boolean(range)));
-  if (windows.length === 0) return current;
-
-  let next = current;
-  const add: Range<Decoration>[] = [];
-  for (const range of windows) {
-    next = next.update({ filterFrom: range.from, filterTo: range.to, filter: () => false });
-    add.push(...buildMermaidDecoRanges(state, range.from, range.to));
-  }
-  return next.update({ add, sort: true });
-}
 
 const mermaidField = StateField.define<DecorationSet>({
   create: (state) => buildMermaidDecos(state),
@@ -742,7 +706,7 @@ const mermaidField = StateField.define<DecorationSet>({
     if (tr.selection != null || transactionChangesPinning(tr)) {
       const oldKey = activeMermaidBlockKey(tr.startState);
       const newKey = activeMermaidBlockKey(tr.state);
-      if (oldKey !== newKey) return patchMermaidDecosForSelectionChange(tr.state, value, oldKey, newKey);
+      return rebuildForRevealChange(value, oldKey, newKey, (from, to) => buildMermaidDecoRanges(tr.state, from, to));
     }
     return value;
   },
@@ -771,9 +735,7 @@ function patchMermaidDecosNearChanges(
     from = Math.min(from, block.from);
     to = Math.max(to, block.to);
   }
-  return mapped
-    .update({ filterFrom: from, filterTo: to, filter: () => false })
-    .update({ add: buildMermaidDecoRanges(state, from, to), sort: true });
+  return rebuildDecorations(mapped, [{ from, to }], (start, end) => buildMermaidDecoRanges(state, start, end));
 }
 
 // ---------------------------------------------------------------------------

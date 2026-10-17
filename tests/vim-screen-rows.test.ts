@@ -3,7 +3,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import { createEditor } from "../src/editor-api.ts";
 import { createVimLite } from "../aaronnote/vim-lite.ts";
-import { fixedWidthRowLayout, setVimRowLayoutForTesting } from "../aaronnote/vim-rows.ts";
+import { fixedWidthRowLayout, setVimRowLayoutForTesting } from "../src/cm6/screen-rows.ts";
 
 function mount(text: string, at: number, width = 4) {
   const restore = setVimRowLayoutForTesting(fixedWidthRowLayout(width));

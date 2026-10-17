@@ -15,7 +15,7 @@
 import { describe, expect, it } from "@voidzero-dev/vite-plus-test";
 
 import { isWordChar } from "../../src/cm6/text-boundaries.ts";
-import { fixedWidthRowLayout, setVimRowLayoutForTesting } from "../../aaronnote/vim-rows.ts";
+import { fixedWidthRowLayout, setVimRowLayoutForTesting } from "../../src/cm6/screen-rows.ts";
 
 describe("isWordChar is the single word definition", () => {
   it("treats a hyphen as a separator, like Vim and CodeMirror's categorizer", () => {

@@ -3,7 +3,7 @@
  *
  * Semantics follow Evil with `evil-respect-visual-line-mode`, which is how the
  * Emacs side of this configuration runs: Vim lines are the rows the reader
- * sees (`vim-rows.ts`), not raw Markdown source lines.  `j`/`k`, `0`/`^`/`$`,
+ * sees (`src/cm6/screen-rows.ts`), not raw Markdown source lines.  `j`/`k`, `0`/`^`/`$`,
  * `dd`/`yy`/`cc`, `V`, `D`/`C`/`Y`, `A`/`I`, `H`/`M`/`L` and `f`/`t` all act on
  * screen rows, and columns are pixel columns.  The `g` forms (`gj`, `gk`,
  * `g0`, `g^`, `g$`) and the line-number motions (`gg`, `G`, `+`, `-`, `_`)
@@ -75,10 +75,14 @@ import {
   releaseEditorPasteTarget,
 } from "../src/cm6/paste-target.ts";
 import {
+  drawnBlockAt,
+  nextVisualRow,
+  prevVisualRow,
   screenColumnAt,
   screenPosAtColumn,
   screenRowAt,
-} from "./vim-rows.ts";
+  visualRowAt,
+} from "../src/cm6/screen-rows.ts";
 import {
   bracketObject,
   paragraphObject,
@@ -832,23 +836,16 @@ function vimRowAt(
     return { from, to, lineStart: from === lineFrom, lineEnd: to === lineTo, scope, logical };
   }
 
-  const line = text.lineAt(safe);
-  const object = renderedObjectAtPosition(editor, assoc < 0 && safe > line.from ? safe - 1 : safe);
-  if (object?.block) {
-    return { from: object.from, to: object.to, lineStart: true, lineEnd: true, scope: null, logical };
-  }
-  const row = logical ? { from: line.from, to: line.to } : screenRowAt(editor.view, safe, assoc);
-  return {
-    from: row.from,
-    to: row.to,
-    lineStart: row.from === text.lineAt(row.from).from,
-    lineEnd: row.to === text.lineAt(row.to).to,
-    scope: null,
-    logical,
-  };
+  // Outside a revealed formula a Vim line is the shared visual row, the same
+  // row the editor's ArrowUp/ArrowDown step over.
+  return { ...visualRowAt(editor.view, safe, assoc, logical), scope: null };
 }
 
 function nextVimRow(editor: Editor, row: VimRow): VimRow | null {
+  if (!row.scope) {
+    const next = nextVisualRow(editor.view, row);
+    return next && { ...next, scope: null };
+  }
   const text = doc(editor);
   const ceiling = row.scope ? row.scope.to : text.length;
   if (row.to >= ceiling) return null;
@@ -865,7 +862,11 @@ function nextVimRow(editor: Editor, row: VimRow): VimRow | null {
 }
 
 function prevVimRow(editor: Editor, row: VimRow): VimRow | null {
-  const floor = row.scope ? row.scope.from : 0;
+  if (!row.scope) {
+    const previous = prevVisualRow(editor.view, row);
+    return previous && { ...previous, scope: null };
+  }
+  const floor = row.scope.from;
   if (row.from <= floor) return null;
   const end = row.lineStart ? row.from - 1 : row.from;
   let previous = vimRowAt(editor, end, -1, { scope: row.scope, logical: row.logical });
@@ -1810,6 +1811,10 @@ export function createVimLite(
   function positionAtGoal(row: VimRow, goal: VerticalGoal): number {
     const text = doc(editor);
     if (row.from >= row.to) return row.from;
+    // A block drawn as one row (a formula, a metadata cover) is landed on at
+    // its start, never inside its hidden source.
+    const block = row.scope ? null : drawnBlockAt(editor.view, row.from);
+    if (block && block.from === row.from && block.to === row.to) return row.from;
     const last = lastCharOfRow(text, row);
     let pos: number;
     if (goal.kind === "eol") pos = last;

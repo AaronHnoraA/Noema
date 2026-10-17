@@ -5,6 +5,7 @@ import type { EditorView } from "@codemirror/view";
 
 import { createEditor } from "../src/editor-api.ts";
 import { createVimLite } from "../aaronnote/vim-lite.ts";
+import { runEditorMovement } from "../src/cm6/input-commands.ts";
 import {
   rangeRevealsSource,
   renderedConstructAt,
@@ -149,6 +150,33 @@ describe("a table is edited as text", () => {
       expect(host.querySelector(".cm-table-block table")).toBeTruthy();
     } finally {
       vim.destroy();
+      editor.destroy();
+      host.remove();
+    }
+  });
+});
+
+describe("vertical motion over a drawn block", () => {
+  const md = "Above\n\n| a | b |\n|---|---|\n| c | d |\n\nBelow";
+
+  test("ArrowDown enters a table at its first row and ArrowUp at its last", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: md });
+    const view = editor.view as unknown as EditorView;
+    const line = () => view.state.doc.lineAt(view.state.selection.main.head).text;
+    try {
+      view.dispatch({ selection: { anchor: md.indexOf("\n\n") + 1 } });
+      expect(host.querySelector(".cm-table-block table")).toBeTruthy();
+      runEditorMovement(view, "ArrowDown");
+      expect(line()).toBe("| a | b |");
+      expect(host.querySelector(".cm-table-block")).toBeNull();
+
+      view.dispatch({ selection: { anchor: md.indexOf("Below") } });
+      runEditorMovement(view, "ArrowUp");
+      runEditorMovement(view, "ArrowUp");
+      expect(line()).toBe("| c | d |");
+    } finally {
       editor.destroy();
       host.remove();
     }

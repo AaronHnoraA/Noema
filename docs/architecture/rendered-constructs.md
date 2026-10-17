@@ -31,7 +31,7 @@
 | **literal ranges** | 代码与公式内部不识别任何组件（`[^1]` 写在公式里就是文字） | `literal-ranges.ts` |
 | **registry** | 唯一的"哪里画着什么"。所有在源码上绘制 widget 的组件都在此登记；从状态计算的来源屏幕外也正确，视口插件经 `drawnConstructSource` 直接读其绘制结果 | `registry.ts` |
 | **embedded surface** | 组件内部用自己的编辑器编辑文字的元素（公式 MathLive、图表灯箱） | `src/cm6/embedded-surface.ts` |
-| **screen row** | Vim 的行 = 读者看到的折行行，不是源码行 | `aaronnote/vim-rows.ts` |
+| **visual row** | 读者看到的折行行；仍被绘制的块整体算一行。Vim 的 `j`/`k` 与编辑器的 ↑/↓ 共用 | `src/cm6/screen-rows.ts` |
 
 ### Reveal policy
 
@@ -112,6 +112,18 @@ export const myExtension = inlineConstruct({
 **不要**：比较 `sel.empty && sel.from ...`；读 `dataset.vimMode`；给装饰加私有标记让
 Vim 识别；在 Vim 里扫描 Markdown 找组件。守卫测试会拒绝这些写法。
 
+## 增量重绘：一个修补器
+
+块级家族在整篇文档上保存装饰，每个事务只重绘变化的部分，全部经由
+`constructs/decoration-patch.ts`：
+
+- `openedKey` / `spansFromKey`：选区打开了哪些组件；键不变即无事可做。
+- `rebuildForRevealChange(current, oldKey, newKey, build)`：只重绘打开或关闭的组件。
+- `rebuildDecorations(current, ranges, build)`：编辑、视口刷新涉及的范围。
+- `replaceDecorations(current, ranges, add)`：用别处建好的装饰替换范围。
+
+家族只提供"如何构建一个范围"。
+
 ## 组件内部的 Markdown
 
 widget 内部显示的 Markdown（表格单元格、todo 标签、旁注卡片、org 环境正文、嵌入查询）一律经由
@@ -154,9 +166,23 @@ CSV、尺寸选择器、边缘添加、拖动排序行列、框选复制/剪切/
 Shift-点击 选中单元格，方向键在选中的格子间移动，Enter 进入该格源码。工具栏插入行列后，
 光标进入新单元格的源码。
 
+## 上下移动：一个行模型
+
+Vim 的 `j`/`k` 与编辑器的 ↑/↓（原生按键与 xwidget 宿主都经由 `runEditorMovement`）走同一套
+视觉行（`src/cm6/screen-rows.ts`：`visualRowAt`、`nextVisualRow`、`prevVisualRow`、
+`moveByVisualRow`）：
+
+- 一行是读者看到的折行行；**仍被绘制的块**（公式、图表、元数据封面、未打开的表格）整体算一行。
+- ↑/↓ 越过 object 块时落在其后（越过显示公式即进入公式）；进入 structure 块（表格）时落在近端，
+  它随即打开为文字。Vim 落在块行上时落在块的开头，从不落进隐藏源码。
+- 行内 object 不能容纳光标：落点在其开头；若它恰好开启一行，落在其后（CodeMirror 把它之前的
+  位置画在上一行末尾）。
+- 无布局时（脱离文档的编辑器、测试）行退化为源码行，目标列用字符列。
+- CodeMirror 的 `moveVertically` 不再使用。
+
 ## Vim 与屏幕行
 
-- Vim 的行是屏幕折行行（`aaronnote/vim-rows.ts`）。判断一个字符画在哪一行时，用它
+- Vim 的行是屏幕折行行（`src/cm6/screen-rows.ts`）。判断一个字符画在哪一行时，用它
   自身的结束边缘 `coordsAtPos(next, -1)`：CodeMirror 把行首 widget 前的光标位置
   报告在上一行末尾。行首是公式或隐藏标记（`**`）时，这个位置归属它真正显示的行。
 - Vim 通过 `renderedConstructAt(view, pos)` 知道哪里画着什么，只把 **object** 当作一个字符
@@ -168,10 +194,11 @@ Shift-点击 选中单元格，方向键在选中的格子间移动，Enter 进�
 
 | 测试 | 保证 |
 |---|---|
-| `tests/architecture-constructs.test.ts` | 静态规则（无允许列表）：渲染模块必须经由 constructs 层决定显示并向 registry 登记、组件内 Markdown 只经共享渲染器、不得手写选区比较、不得读 DOM 模式、Vim 不得扫描、嵌入面只在一处拼写、表格不得有自己的单元格编辑器；运行时双向一致：示例笔记（覆盖全部家族）中 registry 报告的每个组件都被绘制，绘制在源码上的每个 widget 都被 registry 报告 |
+| `tests/architecture-constructs.test.ts` | 静态规则（无允许列表）：只有一个行模型（不调用 `moveVertically`）、只有一个装饰修补器、渲染模块必须经由 constructs 层决定显示并向 registry 登记、组件内 Markdown 只经共享渲染器、不得手写选区比较、不得读 DOM 模式、Vim 不得扫描、嵌入面只在一处拼写、表格不得有自己的单元格编辑器；运行时双向一致：示例笔记（覆盖全部家族）中 registry 报告的每个组件都被绘制，绘制在源码上的每个 widget 都被 registry 报告 |
 | `tests/rendered-constructs.test.ts` | policy 语义、registry、pinning、代码/公式内不识别、Vim 逐行穿过表格 |
 | `tests/cm6/table-keyboard.test.ts`、`table-interaction.test.ts` | 表格以源码编辑时的单元格按键模型、撤销步骤 |
 | `tests/vim-row-geometry.test.ts` | 折行处以组件开头时的屏幕行 |
+| `tests/rendered-constructs.test.ts`（vertical motion） | ↑/↓ 进入表格的首/末行 |
 
 守卫没有允许列表。失败时修代码；规则本身需要改变时，先改本文，再改守卫。
 

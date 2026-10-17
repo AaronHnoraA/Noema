@@ -1,7 +1,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { EditorSelection, EditorState, type SelectionRange } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { domRowLayout } from "../aaronnote/vim-rows.ts";
+import { domRowLayout } from "../src/cm6/screen-rows.ts";
 
 /**
  * A fake view for one source line drawn as two rows.  Row 1 covers [0, WRAP)

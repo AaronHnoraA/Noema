@@ -1,5 +1,6 @@
 /**
- * Screen-row geometry for Vim-lite.
+ * Screen-row geometry: the rows the reader sees, shared by every vertical
+ * motion — Vim's `j`/`k` and the editor's ArrowUp/ArrowDown alike.
  *
  * Noema's Vim layer works on what the reader sees, not on raw Markdown source
  * lines: a long paragraph soft-wrapped into five rows is five Vim lines, the
@@ -22,9 +23,10 @@
  * `VimRowLayout` interface so tests can substitute a fixed-width wrap model.
  */
 
-import { EditorSelection, type Text } from "@codemirror/state";
+import { EditorSelection, type SelectionRange, type Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { nextGraphemePosition, previousGraphemePosition } from "../src/cm6/text-boundaries.ts";
+import { nextGraphemePosition, previousGraphemePosition } from "./text-boundaries.ts";
+import { renderedConstructAt } from "./extensions/visual/constructs/registry.ts";
 
 export type VimRowSpan = { from: number; to: number };
 
@@ -265,4 +267,114 @@ export function fixedWidthRowLayout(width: number): VimRowLayout {
     },
     posAtX: (_view, span, x) => clamp(span.from + Math.round(x), span.from, span.to),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Visual rows: screen rows, with a block object counted as one row
+// ---------------------------------------------------------------------------
+
+/** A row as vertical motion sees it: a screen row, or a whole block object. */
+export type VisualRow = VimRowSpan & {
+  /** The row starts its source line (or is a block object). */
+  lineStart: boolean;
+  /** The row ends its source line (or is a block object). */
+  lineEnd: boolean;
+  /** Logical (source-line) rows instead of screen rows. */
+  logical: boolean;
+};
+
+/**
+ * The block drawn at POS, if any: a display formula, a diagram, a folded code
+ * block, a metadata cover, a table — one row to every vertical motion, as the
+ * reader sees it. Structure that opens where the caret lands (a table) is no
+ * longer drawn once the caret is there, and is then moved through as text.
+ */
+export function drawnBlockAt(view: EditorView, pos: number): (VimRowSpan & { structure: boolean }) | null {
+  const construct = renderedConstructAt(view, pos);
+  return construct?.block
+    ? { from: construct.from, to: construct.to, structure: construct.role === "structure" }
+    : null;
+}
+
+/** The visual row holding POS; ASSOC picks the earlier (-1) or later (1) row at a wrap. */
+export function visualRowAt(view: EditorView, pos: number, assoc: -1 | 1 = 1, logical = false): VisualRow {
+  const doc = view.state.doc;
+  const safe = clamp(pos, 0, doc.length);
+  const line = doc.lineAt(safe);
+  const object = drawnBlockAt(view, assoc < 0 && safe > line.from ? safe - 1 : safe);
+  if (object) return { from: object.from, to: object.to, lineStart: true, lineEnd: true, logical };
+  const row = logical ? logicalRow(doc, safe) : screenRowAt(view, safe, assoc);
+  return {
+    from: row.from,
+    to: row.to,
+    lineStart: row.from === doc.lineAt(row.from).from,
+    lineEnd: row.to === doc.lineAt(row.to).to,
+    logical,
+  };
+}
+
+/** The visual row after ROW, or null at the end of the document. */
+export function nextVisualRow(view: EditorView, row: VisualRow): VisualRow | null {
+  const doc = view.state.doc;
+  if (row.to >= doc.length) return null;
+  const start = row.lineEnd ? row.to + 1 : row.to;
+  if (start > doc.length) return null;
+  let next = visualRowAt(view, start, 1, row.logical);
+  if (next.from <= row.from) {
+    // A measuring failure must not trap a motion on one row.
+    if (row.logical) return null;
+    next = visualRowAt(view, start, 1, true);
+    if (next.from <= row.from) return null;
+  }
+  return next;
+}
+
+/** The visual row before ROW, or null at the start of the document. */
+export function prevVisualRow(view: EditorView, row: VisualRow): VisualRow | null {
+  if (row.from <= 0) return null;
+  const end = row.lineStart ? row.from - 1 : row.from;
+  let previous = visualRowAt(view, end, -1, row.logical);
+  if (previous.from >= row.from) {
+    if (row.logical) return null;
+    previous = visualRowAt(view, end, -1, true);
+    if (previous.from >= row.from) return null;
+  }
+  return previous;
+}
+
+/**
+ * ArrowUp/ArrowDown for the editor's caret, over the same rows as Vim's
+ * `j`/`k`: the adjacent visual row at the goal column (CodeMirror's pixel
+ * `goalColumn`, kept across repeated presses). A block object is crossed whole,
+ * landing just past it, which callers use to enter a display formula; a block
+ * of structure (a table) is entered at its near edge, where it opens. A caret
+ * cannot rest inside an inline object's hidden source, so it lands at the
+ * object's start. Returns RANGE unchanged at the edge of the document.
+ */
+export function moveByVisualRow(view: EditorView, range: SelectionRange, forward: boolean): SelectionRange {
+  const row = visualRowAt(view, range.head, range.assoc < 0 ? -1 : 1);
+  const target = forward ? nextVisualRow(view, row) : prevVisualRow(view, row);
+  if (!target) return range;
+  // A pixel goal with layout; without it (a detached editor) the character column.
+  const measured = activeLayout.available(view);
+  const goal = range.goalColumn ?? (measured ? screenColumnAt(view, range.head) ?? 0 : range.head - row.from);
+  const object = drawnBlockAt(view, target.from);
+  if (object && object.from === target.from && object.to === target.to) {
+    // An object is crossed whole, landing just past it; structure (a table)
+    // is entered at its near edge and opens there as text.
+    const at = object.structure === forward ? target.from : target.to;
+    return EditorSelection.cursor(at, forward ? -1 : 1, undefined, measured ? goal : undefined);
+  }
+  let pos = target.from >= target.to ? target.from
+    : measured ? screenPosAtColumn(view, target, goal) : Math.min(target.from + goal, target.to);
+  const inline = renderedConstructAt(view, pos);
+  if (inline && !inline.block && (inline.role ?? "object") === "object" && pos >= inline.from && pos < inline.to) {
+    // CodeMirror draws the slot before an object that opens a wrapped row at
+    // the end of the row above, so a caret there would look as if it had not
+    // moved; it goes after the object instead, on the row it is drawn on.
+    pos = inline.from <= target.from ? inline.to : pos > inline.from ? inline.from : pos;
+  }
+  // The end of a row that wraps is also the start of the next; keep the caret on this one.
+  const assoc = pos === target.to && !target.lineEnd ? -1 : 1;
+  return EditorSelection.cursor(pos, assoc, undefined, measured ? goal : undefined);
 }

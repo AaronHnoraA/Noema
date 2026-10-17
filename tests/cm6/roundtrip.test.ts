@@ -25,7 +25,7 @@ import {
 import { setKnownRoamRefs } from "../../src/cm6/roam-link-status.ts";
 import { MATH_RENDER_ERROR_MAX_LENGTH, renderMathHTML } from "../../src/math-render.ts";
 import { createVimLite } from "../../aaronnote/vim-lite.ts";
-import { fixedWidthRowLayout, setVimRowLayoutForTesting } from "../../aaronnote/vim-rows.ts";
+import { fixedWidthRowLayout, setVimRowLayoutForTesting } from "../../src/cm6/screen-rows.ts";
 import { SnippetSession } from "../../aaronnote/snippets.ts";
 import { indentMarkdownBlock } from "../../src/cm6/commands/index.ts";
 import { runEditorEnter, runEditorMovement } from "../../src/cm6/input-commands.ts";
@@ -4195,7 +4195,9 @@ maybeDescribe("cm6 kernel: selection", () => {
     editor.setMarkdownSelection(3);
     expect(runEditorMovement(editor.view, "ArrowDown")).toBe("formula");
     expect(editor.getMarkdownSelection().from).toBe(md.indexOf("\\(") + 2);
-    editor.setMarkdownSelection(md.indexOf("xyz") + 3);
+    // Without layout, rows are source lines and the goal is the character
+    // column: column 1 of "xyz" lands inside the formula's closing `\)`.
+    editor.setMarkdownSelection(md.indexOf("xyz") + 1);
     expect(runEditorMovement(editor.view, "ArrowUp")).toBe("formula");
     expect(editor.getMarkdownSelection().from).toBe(md.indexOf("\\)"));
     cleanup();

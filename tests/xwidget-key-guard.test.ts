@@ -850,17 +850,14 @@ describe("xwidget key guard", () => {
     const editor = createEditor(host, { initialContent: markdown });
     const vim = createVimLite(editor, host);
     const before = markdown.indexOf("Before");
-    const after = markdown.indexOf("After");
-    const move = vi.spyOn(editor.view, "moveVertically")
-      .mockReturnValue(EditorSelection.cursor(after));
     vim.setMode("insert");
     try {
+      // The display formula is one visual row: ArrowDown crosses it whole and enters it.
       editor.setMarkdownSelection(before);
       const down = new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true });
       Object.defineProperty(down, "target", { value: document.body });
       expect(handleXwidgetSpecialKeydown(down, { editor, editorHost: host, vim })).toBe(true);
       expect(down.defaultPrevented).toBe(true);
-      expect(move).toHaveBeenCalledTimes(1);
       const contentStart = markdown.indexOf("x + y");
       expect(editor.getMarkdownSelection()).toEqual({ from: contentStart, to: contentStart });
       expect(editor.isSourceMode()).toBe(false);
@@ -868,7 +865,6 @@ describe("xwidget key guard", () => {
       expect(document.querySelector(".cm-math-block")).toBeNull();
       expect(editor.view.contentDOM.textContent).toContain("x + y");
     } finally {
-      move.mockRestore();
       editor.destroy();
       host.remove();
     }
@@ -910,19 +906,16 @@ describe("xwidget key guard", () => {
     const editor = createEditor(host, { initialContent: markdown });
     const vim = createVimLite(editor, host);
     const before = markdown.indexOf("Before");
-    const after = markdown.indexOf("After");
-    const move = vi.spyOn(editor.view, "moveVertically")
-      .mockReturnValue(EditorSelection.cursor(after));
+    const text = markdown.indexOf("text");
     vim.setMode("insert");
     editor.setMarkdownSelection(before);
     try {
       const down = new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true });
       Object.defineProperty(down, "target", { value: document.body });
       expect(handleXwidgetSpecialKeydown(down, { editor, editorHost: host, vim })).toBe(true);
-      expect(editor.getMarkdownSelection()).toEqual({ from: after, to: after });
+      expect(editor.getMarkdownSelection()).toEqual({ from: text, to: text });
       expect(document.querySelector(".cm-math-block-editor, .cm-inline-math-editor")).toBeNull();
     } finally {
-      move.mockRestore();
       editor.destroy();
       host.remove();
     }
@@ -933,26 +926,23 @@ describe("xwidget key guard", () => {
     const markdown = "Before\ntext \\(\nx+y\n\\) here\nAfter";
     const editor = createEditor(host, { initialContent: markdown });
     const vim = createVimLite(editor, host);
-    const before = markdown.indexOf("Before");
     const after = markdown.indexOf("After");
-    const move = vi.spyOn(editor.view, "moveVertically")
-      .mockReturnValueOnce(EditorSelection.cursor(after))
-      .mockReturnValueOnce(EditorSelection.cursor(before));
     vim.setMode("insert");
     try {
-      editor.setMarkdownSelection(before);
+      // Column 6 of "Before" lands inside the formula's opening `\(` below.
+      editor.setMarkdownSelection(markdown.indexOf("Before") + 6);
       const down = new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true });
       Object.defineProperty(down, "target", { value: document.body });
       expect(handleXwidgetSpecialKeydown(down, { editor, editorHost: host, vim })).toBe(true);
       expect(editor.getMarkdownSelection().from).toBe(markdown.indexOf("\\(") + 2);
 
-      editor.setMarkdownSelection(after);
+      // Column 1 of "After" lands inside its closing `\)` above.
+      editor.setMarkdownSelection(after + 1);
       const up = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true });
       Object.defineProperty(up, "target", { value: document.body });
       expect(handleXwidgetSpecialKeydown(up, { editor, editorHost: host, vim })).toBe(true);
       expect(editor.getMarkdownSelection().from).toBe(markdown.indexOf("\\)"));
     } finally {
-      move.mockRestore();
       editor.destroy();
       host.remove();
     }

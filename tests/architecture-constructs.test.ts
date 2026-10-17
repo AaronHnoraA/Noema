@@ -101,8 +101,27 @@ describe("rendered constructs: static rules", () => {
     expect(offenders).toEqual([]);
   });
 
+  test("vertical motion has one row model, shared by Vim and the editor caret", () => {
+    // ArrowUp/ArrowDown and Vim's j/k step over the same visual rows
+    // (src/cm6/screen-rows.ts); CodeMirror's own moveVertically is not used.
+    const callers = srcFiles.concat(sourceFiles("aaronnote"))
+      .filter((path) => path !== "src/cm6/screen-rows.ts")
+      .filter((path) => /\.moveVertically\(/.test(read(path)));
+    expect(callers).toEqual([]);
+  });
+
+  test("construct families redraw what a transaction changed through one patcher", () => {
+    // Opened-construct keys, merging ranges and drop-and-rebuild live in
+    // constructs/decoration-patch.ts (rebuildForRevealChange, rebuildDecorations,
+    // replaceDecorations); a family supplies only how to build a range.
+    const offenders = srcFiles
+      .filter((path) => path !== `${CONSTRUCTS_DIR}decoration-patch.ts`)
+      .filter((path) => /filter:\s*\(\)\s*=>\s*false/.test(read(path)));
+    expect(offenders).toEqual([]);
+  });
+
   test("Vim learns what is drawn from the construct registry, not by scanning", () => {
-    for (const path of ["aaronnote/vim-lite.ts", "aaronnote/vim-rows.ts"]) {
+    for (const path of ["aaronnote/vim-lite.ts", "src/cm6/screen-rows.ts"]) {
       const text = read(path);
       expect(text.includes("EditorView.decorations"), `${path} reads decorations`).toBe(false);
       expect(/scanInlineMathRanges|getBlockMathRanges|@lezer\/markdown/.test(text), `${path} rescans Markdown`).toBe(false);
