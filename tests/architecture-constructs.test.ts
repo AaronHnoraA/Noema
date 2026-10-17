@@ -89,7 +89,9 @@ describe("rendered constructs: static rules", () => {
     expect(preview).toMatch(/function tableSourceGridDecos\(/);
     expect(preview).toMatch(/focusDocumentTableCell\(view, current/);
     expect(preview).toMatch(/focusDocumentTableFormula\(view, current/);
-    expect(preview).toMatch(/revealFormulaSource\(view, from/);
+    expect(preview).toMatch(/openRenderedFormulaSource\(view,/);
+    const click = read("src/cm6/rendered-formula-click.ts");
+    expect(click).toMatch(/revealFormulaSource\(view, formula\.from/);
     expect(preview).not.toMatch(/mountVisualTexInlineEditor\(/);
     expect(preview).not.toMatch(/markEmbeddedSurface\(table\);/);
     expect(preview.includes('dataset.aaronnoteVim = "native"'), "spell the surface through markEmbeddedSurface").toBe(false);

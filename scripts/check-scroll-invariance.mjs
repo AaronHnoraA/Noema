@@ -34,7 +34,10 @@ const constructs = [
   "A task list:\n\n- [ ] open item\n- [x] done item",
   "---",
 ];
-const markdown = [prose(40), ...constructs.flatMap((c) => [c, prose(6)]), prose(40), "[^1]: The note."].join("\n\n");
+const wrapTables = ["left", "right"].map((side) =>
+  `| wrap ${side} | formula |\n|---|---|\n| label | \\(z+1\\) |\n{align=${side} wrap=true width=40%}`);
+const markdown = [prose(40), ...constructs.flatMap((c) => [c, prose(6)]),
+  ...wrapTables.flatMap((c) => [c, prose(6)]), prose(40), "[^1]: The note."].join("\n\n");
 
 const server = await createServer({
   configFile: repo + "vite.aaronnote.config.ts", root: repo + "aaronnote",
@@ -242,6 +245,105 @@ try {
           record(`${family} leave by clicking text (${caret})`,
             after.top != null && Math.abs(after.top - text.top) <= TOLERANCE && Math.abs(after.head - text.pos) <= 1,
             { textTop: text.top, after });
+        }
+      }
+
+      // A table's inline formula opens a real CM6 cell. Its source line is
+      // lower than the table widget's source position; anchoring that line
+      // moved the whole page on entry. Leaving for prose below the table also
+      // exposed a one-line mismatch in CM6's cached height map.
+      if (!process.env.ONLY || process.env.ONLY.split(",").includes("table")) {
+        const tableFrom = markdown.indexOf("| name |");
+        await scrollTo(tableFrom, "unfocused start");
+        await page.evaluate(() => {
+          const table = document.querySelector(".cm-markdown-table-preview");
+          host.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+          host.scrollTop += table.getBoundingClientRect().top - host.getBoundingClientRect().top - 100;
+        });
+        await page.waitForTimeout(400);
+        const formulaPoint = await page.locator(
+          ".cm-markdown-table-preview tbody tr:first-child td:nth-child(2) .aaronnote-math-inline",
+        ).boundingBox();
+        assert.ok(formulaPoint, "table formula is rendered");
+        const beforeFormula = await page.evaluate(() => host.scrollTop);
+        await page.mouse.click(formulaPoint.x + formulaPoint.width / 2,
+          formulaPoint.y + formulaPoint.height / 2);
+        const formulaPath = await sample(500);
+        const formulaOpen = await page.locator(".cm-table-source-active-cell .cm-math-inline-source").count();
+        record("table formula opens in its cell without scrolling",
+          formulaOpen > 0 && formulaPath.every((top) => Math.abs(top - beforeFormula) <= TOLERANCE),
+          { before: beforeFormula, path: [...new Set(formulaPath.map(Math.round))], formulaOpen });
+
+        await scrollTo(tableFrom, "start");
+        await page.evaluate(() => {
+          const table = document.querySelector(".cm-markdown-table-preview");
+          host.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+          host.scrollTop += table.getBoundingClientRect().bottom - host.getBoundingClientRect().top - 560;
+        });
+        await page.waitForTimeout(400);
+        const cellPoint = await page.locator(
+          ".cm-markdown-table-preview tbody tr:last-child td:nth-child(2)",
+        ).boundingBox();
+        assert.ok(cellPoint, "last table row is rendered");
+        const beforeCell = await page.evaluate(() => host.scrollTop);
+        await page.mouse.click(cellPoint.x + cellPoint.width / 2,
+          cellPoint.y + cellPoint.height / 2);
+        const cellPath = await sample(500);
+        const cellOpen = await page.locator(".cm-table-source-active-cell").count();
+        record("table cell opens without scrolling",
+          cellOpen > 0 && cellPath.every((top) => Math.abs(top - beforeCell) <= TOLERANCE),
+          { before: beforeCell, path: [...new Set(cellPath.map(Math.round))], cellOpen });
+        const afterTable = markdown.indexOf("Paragraph 0.", tableFrom) + 10;
+        const prosePoint = await page.evaluate((pos) => {
+          const rect = editor.view.coordsAtPos(pos);
+          return rect ? { x: rect.left + 1, y: (rect.top + rect.bottom) / 2,
+            top: rect.top, scrollTop: host.scrollTop } : null;
+        }, afterTable);
+        assert.ok(prosePoint && prosePoint.y < 800, "prose after table is visible");
+        await page.mouse.click(prosePoint.x, prosePoint.y);
+        const leavePath = await sample(500);
+        const proseAfter = await page.evaluate((pos) => editor.view.coordsAtPos(pos)?.top, afterTable);
+        record("table leaves for prose below without scrolling",
+          leavePath.every((top) => Math.abs(top - prosePoint.scrollTop) <= TOLERANCE)
+            && proseAfter != null && Math.abs(proseAfter - prosePoint.top) <= TOLERANCE,
+          { before: prosePoint, path: [...new Set(leavePath.map(Math.round))], proseAfter });
+
+        for (const side of ["left", "right"]) {
+          const wrapFrom = markdown.indexOf(`| wrap ${side} |`);
+          await scrollTo(wrapFrom, "start");
+          await page.evaluate((side) => {
+            const wrap = document.querySelector(`.cm-table-block.aaronnote-table-wrap.aaronnote-table-align-${side}`);
+            host.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+            host.scrollTop += wrap.getBoundingClientRect().top - host.getBoundingClientRect().top - 200;
+          }, side);
+          await page.waitForTimeout(400);
+          const wrapFormula = await page.locator(
+            `.cm-table-block.aaronnote-table-wrap.aaronnote-table-align-${side} .cm-markdown-table-preview .aaronnote-math-inline`,
+          ).boundingBox();
+          assert.ok(wrapFormula, `${side} wrapped table formula is visible`);
+          const wrapBefore = await page.evaluate(() => host.scrollTop);
+          await page.mouse.click(wrapFormula.x + wrapFormula.width / 2,
+            wrapFormula.y + wrapFormula.height / 2);
+          const wrapPath = await sample(500);
+          const wrapOpen = await page.locator(".cm-table-source-active-cell .cm-math-inline-source").count();
+          record(`${side} wrapped table formula opens without scrolling`,
+            wrapOpen > 0 && wrapPath.every((top) => Math.abs(top - wrapBefore) <= TOLERANCE),
+            { before: wrapBefore, path: [...new Set(wrapPath.map(Math.round))], wrapOpen });
+          const wrapProsePos = markdown.indexOf("Paragraph 0.", wrapFrom) + 10;
+          const wrapProse = await page.evaluate((pos) => {
+            const rect = editor.view.coordsAtPos(pos);
+            return rect ? { x: rect.left + 1, y: (rect.top + rect.bottom) / 2,
+              top: rect.top, scrollTop: host.scrollTop } : null;
+          }, wrapProsePos);
+          assert.ok(wrapProse && wrapProse.y > 0 && wrapProse.y < 800,
+            `${side} wrapped table has visible adjacent prose`);
+          await page.mouse.click(wrapProse.x, wrapProse.y);
+          const wrapLeavePath = await sample(500);
+          const wrapProseAfter = await page.evaluate((pos) => editor.view.coordsAtPos(pos)?.top, wrapProsePos);
+          record(`${side} wrapped table leaves without scrolling`,
+            wrapLeavePath.every((top) => Math.abs(top - wrapProse.scrollTop) <= TOLERANCE)
+              && wrapProseAfter != null && Math.abs(wrapProseAfter - wrapProse.top) <= TOLERANCE,
+            { before: wrapProse, path: [...new Set(wrapLeavePath.map(Math.round))], wrapProseAfter });
         }
       }
 

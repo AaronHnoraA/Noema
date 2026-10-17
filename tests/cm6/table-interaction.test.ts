@@ -47,6 +47,65 @@ function type(editor: Editor, text: string) {
 // snippets are the main editor's (tests/vim-input-method.test.ts,
 // tests/host-input-focus.test.ts, tests/snippets.test.ts), not the table's.
 describe("table source edited through the main editor (keyboard entry)", () => {
+  it("keeps the toolbar and layout attributes while a cell is active", () => {
+    const source = "| A | B |\n| --- | --- |\n| one | two |\n{wrap=right width=40%}\n\nAfter";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: source });
+    editors.push(editor);
+    const cell = host.querySelector<HTMLTableCellElement>("tbody td")!;
+    cell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    cell.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    expect(host.querySelector(".cm-table-source-toolbar .cm-table-toolbar")).toBeTruthy();
+    const row = host.querySelector<HTMLElement>(".cm-table-source-row")!;
+    expect(row.classList.contains("aaronnote-table-wrap")).toBe(true);
+    expect(row.classList.contains("aaronnote-table-align-right")).toBe(true);
+    expect(row.style.getPropertyValue("--aaronnote-table-width")).toBe("40%");
+    expect(host.querySelector(".cm-table-source-attrs-hidden")?.textContent).toBe("");
+    expect(host.querySelector('.cm-table-source-toolbar button[title="Insert row below"]')).toBeTruthy();
+    expect(editor.getMarkdown()).toBe(source);
+  });
+
+  it("keeps other cells rendered while the current cell uses the main editor", async () => {
+    const source = "| A | B | C |\n| --- | --- | --- |\n| **one** | \\(x+1\\) | three |";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: source });
+    editors.push(editor);
+    const first = host.querySelector<HTMLTableCellElement>("tbody td")!;
+    first.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    first.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    expect(host.querySelectorAll(".cm-table-source-active-cell")).toHaveLength(1);
+    expect(host.querySelectorAll(".cm-table-source-rendered-cell")).toHaveLength(5);
+    const formula = host.querySelector<HTMLElement>(".cm-table-source-rendered-cell .aaronnote-math-inline")!;
+    expect(formula).toBeTruthy();
+    formula.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(editor.getMarkdownSelection().from).toBe(source.indexOf("x+1"));
+    const body = host.querySelectorAll(".cm-table-source-row")[1]!;
+    expect(body.querySelector('.cm-table-source-rendered-cell[data-col="0"] strong')?.textContent).toBe("one");
+    expect(body.querySelector('.cm-table-source-rendered-cell[data-col="1"]')).toBeNull();
+    expect(body.querySelectorAll(".cm-table-source-active-cell")).toHaveLength(1);
+    expect(editor.getMarkdown()).toBe(source);
+  });
+
+  it("opens an empty rendered cell in place and types into the document", async () => {
+    const source = "| A | B | C |\n| --- | --- | --- |\n| one |  | three |";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: source });
+    editors.push(editor);
+    const first = host.querySelector<HTMLTableCellElement>("tbody td")!;
+    first.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    first.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    host.querySelector<HTMLElement>('.cm-table-source-rendered-cell[data-row="1"][data-col="1"]')!
+      .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(runEditorTextInput(editor.view, "two")).toBe(true);
+    expect(editor.getMarkdown()).toContain("| one | two | three |");
+    expect(host.querySelectorAll(".cm-table-source-row")).toHaveLength(2);
+  });
+
   it("clicking a rendered cell keeps a visible grid and edits through the document editor", () => {
     const { editor, host } = mount();
     const cell = host.querySelector<HTMLTableElement>(".cm-table-block table")!.rows[1]!.cells[0]!;

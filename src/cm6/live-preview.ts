@@ -49,18 +49,19 @@ import {
 } from "@codemirror/view";
 import { MeasuredWidget } from "./extensions/visual/widgets/measured-widget.ts";
 import { shortHash } from "./extensions/visual/widgets/measured-observer.ts";
-import { StateField, type ChangeSet, type EditorState, type Text } from "@codemirror/state";
+import { Prec, StateField, type ChangeSet, type EditorState, type Text } from "@codemirror/state";
 import type { Range } from "@codemirror/state";
 import { getBlockMathRanges, mergeOverlappingRanges, rangeInsideAny, rangeOverlapsAny } from "./math-ranges.ts";
 import { sanitizeEmbeddedHtml } from "../sanitize-html.ts";
 import { renderInlineMarkdownHTML } from "../render-html.ts";
 import { tableCellMathRanges } from "./table-cell-assist.ts";
-import { revealFormulaSource } from "./extensions/visual/widgets/math.ts";
+import { openRenderedFormulaSource, renderedFormulaClickRatio } from "./rendered-formula-click.ts";
 import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "./figure-layout-menu.ts";
 import { scanEmojiShortcodes } from "../emoji-shortcodes.ts";
 import { writeSystemClipboard } from "../system-clipboard.ts";
 import { sortTableBodyRows, tableRowsToCSV } from "./table-model.ts";
 import { cellTarget } from "./commands/index.ts";
+import { tableSourceRowParts } from "./table-source-cells.ts";
 import {
   clearRectCells,
   rectCellSources,
@@ -74,7 +75,9 @@ import {
 } from "./table-rect-selection.ts";
 import {
   applyLayoutAttrs,
+  layoutClasses,
   layoutFromAttrs,
+  layoutStyle,
   readLayoutAttrsLine,
   type LayoutAttrs,
 } from "../layout-attrs.ts";
@@ -1335,6 +1338,74 @@ type TableStructureActions = {
 
 type TableFocusResolver = TableFocusTarget | ((data: MarkdownTableData) => TableFocusTarget | null);
 
+/** The same table controls in the preview and in the live document grid. */
+function createTableToolbar(
+  apply: (mutate: (next: MarkdownTableData) => void, focus?: TableFocusResolver) => void,
+  active: () => { row: number; col: number },
+  readRows: () => string[][],
+): HTMLElement {
+  const toolbar = document.createElement("div");
+  toolbar.className = "cm-table-toolbar";
+  toolbar.addEventListener("mousedown", stopEvent);
+  toolbar.append(
+    tableToolButton("+ Row", "Insert row below", () => {
+      let insertAt = Math.max(1, active().row + 1);
+      apply((next) => {
+        const width = next.rows[0]?.length ?? 1;
+        insertAt = Math.min(insertAt, next.rows.length);
+        next.rows.splice(insertAt, 0, Array(width).fill(""));
+      }, () => ({ row: insertAt, col: active().col, edit: true, select: true }));
+    }),
+    tableToolButton("- Row", "Delete current body row", () => apply((next) => {
+      if (next.rows.length <= 2) return;
+      const row = Math.max(1, active().row);
+      next.rows.splice(row, 1);
+    }, (next) => ({ row: Math.max(1, Math.min(active().row, next.rows.length - 1)), col: active().col }))),
+    tableToolButton("+ Col", "Insert column right", () => {
+      let col = Math.max(0, active().col + 1);
+      apply((next) => {
+        col = Math.min(col, next.rows[0]?.length ?? 1);
+        next.rows.forEach((row) => row.splice(col, 0, ""));
+        next.aligns.splice(col, 0, "");
+      }, () => ({ row: active().row, col, edit: true, select: true }));
+    }),
+    tableToolButton("- Col", "Delete current column", () => apply((next) => {
+      if ((next.rows[0]?.length ?? 0) <= 1) return;
+      const col = Math.max(0, Math.min(active().col, (next.rows[0]?.length ?? 1) - 1));
+      next.rows.forEach((row) => row.splice(col, 1));
+      next.aligns.splice(col, 1);
+    }, (next) => ({ row: active().row, col: Math.max(0, Math.min(active().col, (next.rows[0]?.length ?? 1) - 1)) }))),
+    tableToolButton("L", "Align column left", () => apply((next) => { next.aligns[active().col] = "left"; }, { row: active().row, col: active().col })),
+    tableToolButton("C", "Align column center", () => apply((next) => { next.aligns[active().col] = "center"; }, { row: active().row, col: active().col })),
+    tableToolButton("R", "Align column right", () => apply((next) => { next.aligns[active().col] = "right"; }, { row: active().row, col: active().col })),
+    tableToolButton("↑", "Sort body rows ascending by active column", () => apply((next) => {
+      if (next.rows.length > 100) return;
+      next.rows = sortTableBodyRows(next.rows, active().col, 1, (row) => row);
+    }, { row: Math.max(1, active().row), col: active().col })),
+    tableToolButton("↓", "Sort body rows descending by active column", () => apply((next) => {
+      if (next.rows.length > 100) return;
+      next.rows = sortTableBodyRows(next.rows, active().col, -1, (row) => row);
+    }, { row: Math.max(1, active().row), col: active().col })),
+    tableToolButton("CSV", "Copy table as CSV", () => {
+      const rows = readRows();
+      if (rows.length <= 100) void writeSystemClipboard(tableRowsToCSV(rows));
+    }),
+    tableSizePickerButton((rows, columns) => apply((next) => {
+      const targetRows = Math.max(2, Math.min(8, rows));
+      const targetColumns = Math.max(1, Math.min(8, columns));
+      while (next.rows.length < targetRows) next.rows.push(Array(next.rows[0]?.length ?? 1).fill(""));
+      next.rows.length = targetRows;
+      next.rows.forEach((row) => {
+        while (row.length < targetColumns) row.push("");
+        row.length = targetColumns;
+      });
+      while (next.aligns.length < targetColumns) next.aligns.push("");
+      next.aligns.length = targetColumns;
+    }, { row: 1, col: 0, edit: true, select: true })),
+  );
+  return toolbar;
+}
+
 class TableWidget extends MeasuredWidget {
   source: string;
   from: number;
@@ -1432,6 +1503,7 @@ class TableWidget extends MeasuredWidget {
     wrap.dataset.cmSourceBaseTo = String(this.sourceTo);
     wrap.dataset.cmOpenSource = "false";
     applyLayoutAttrs(wrap, "table", this.layout);
+    if (this.layout.height) wrap.classList.add("cm-table-explicit-height");
     const currentTable = (): MarkdownTable | null => {
       // Decorations can map through an edit before the table without replacing
       // the widget. Resolve the live position when an action writes source.
@@ -1485,74 +1557,16 @@ class TableWidget extends MeasuredWidget {
       view.requestMeasure();
     };
 
-    const toolbar = document.createElement("div");
-    toolbar.className = "cm-table-toolbar";
-    toolbar.addEventListener("mousedown", stopEvent);
-    toolbar.append(
-      tableToolButton("+ Row", "Insert row below", () => {
-        let insertAt = Math.max(1, activeRow + 1);
-        apply((next) => {
-          const width = next.rows[0]?.length ?? 1;
-          insertAt = Math.min(insertAt, next.rows.length);
-          next.rows.splice(insertAt, 0, Array(width).fill(""));
-        }, () => ({ row: insertAt, col: activeCol, edit: true, select: true }));
-      }),
-      tableToolButton("- Row", "Delete current body row", () => apply((next) => {
-        if (next.rows.length <= 2) return;
-        const row = Math.max(1, activeRow);
-        next.rows.splice(row, 1);
-      }, (next) => ({ row: Math.max(1, Math.min(activeRow, next.rows.length - 1)), col: activeCol }))),
-      tableToolButton("+ Col", "Insert column right", () => {
-        let col = Math.max(0, activeCol + 1);
-        apply((next) => {
-          col = Math.min(col, next.rows[0]?.length ?? 1);
-          next.rows.forEach((row) => row.splice(col, 0, ""));
-          next.aligns.splice(col, 0, "");
-        }, () => ({ row: activeRow, col, edit: true, select: true }));
-      }),
-      tableToolButton("- Col", "Delete current column", () => apply((next) => {
-        if ((next.rows[0]?.length ?? 0) <= 1) return;
-        const col = Math.max(0, Math.min(activeCol, (next.rows[0]?.length ?? 1) - 1));
-        next.rows.forEach((row) => row.splice(col, 1));
-        next.aligns.splice(col, 1);
-      }, (next) => ({ row: activeRow, col: Math.max(0, Math.min(activeCol, (next.rows[0]?.length ?? 1) - 1)) }))),
-      tableToolButton("L", "Align column left", () => apply((next) => { next.aligns[activeCol] = "left"; }, { row: activeRow, col: activeCol })),
-      tableToolButton("C", "Align column center", () => apply((next) => { next.aligns[activeCol] = "center"; }, { row: activeRow, col: activeCol })),
-      tableToolButton("R", "Align column right", () => apply((next) => { next.aligns[activeCol] = "right"; }, { row: activeRow, col: activeCol })),
-      tableToolButton("↑", "Sort body rows ascending by active column", () => apply((next) => {
-        if (next.rows.length > 100) return;
-        next.rows = sortTableBodyRows(next.rows, activeCol, 1, (row) => row);
-      }, { row: Math.max(1, activeRow), col: activeCol })),
-      tableToolButton("↓", "Sort body rows descending by active column", () => apply((next) => {
-        if (next.rows.length > 100) return;
-        next.rows = sortTableBodyRows(next.rows, activeCol, -1, (row) => row);
-      }, { row: Math.max(1, activeRow), col: activeCol })),
-      tableToolButton("CSV", "Copy table as CSV", () => {
-        const rows = tableRowsFromDOM(table);
-        if (rows.length <= 100) void writeSystemClipboard(tableRowsToCSV(rows));
-      }),
-      tableSizePickerButton((rows, columns) => apply((next) => {
-        const targetRows = Math.max(2, Math.min(8, rows));
-        const targetColumns = Math.max(1, Math.min(8, columns));
-        while (next.rows.length < targetRows) next.rows.push(Array(next.rows[0]?.length ?? 1).fill(""));
-        next.rows.length = targetRows;
-        next.rows.forEach((row) => {
-          while (row.length < targetColumns) row.push("");
-          row.length = targetColumns;
-        });
-        while (next.aligns.length < targetColumns) next.aligns.push("");
-        next.aligns.length = targetColumns;
-      }, { row: 1, col: 0, edit: true, select: true })),
-    );
+    const toolbar = createTableToolbar(apply, () => ({ row: activeRow, col: activeCol }), () => tableRowsFromDOM(table));
 
     const rendered = renderEditableTable(data, (row, col) => {
       activeRow = row;
       activeCol = col;
     }, commit, view, () => currentTable()?.from ?? context.widget.from,
-    (row, col, select = false, formulaIndex = -1) => {
+    (row, col, select = false, formulaIndex = -1, formulaClickRatio = 0) => {
       const current = currentTable();
       if (!current) return;
-      if (formulaIndex >= 0 && focusDocumentTableFormula(view, current, row, col, formulaIndex)) return;
+      if (formulaIndex >= 0 && focusDocumentTableFormula(view, current, row, col, formulaIndex, formulaClickRatio)) return;
       focusDocumentTableCell(view, current, { row, col, edit: true, select });
     }, editable, {
       aligns: () => [...data.aligns],
@@ -1574,6 +1588,8 @@ class TableWidget extends MeasuredWidget {
       },
     });
     const table = rendered.table;
+    table.style.setProperty("--noema-table-row-count", String(data.rows.length));
+    if (this.layout.height) table.classList.add("cm-table-explicit-height");
     this.disposeCellEditor = rendered.dispose;
     if (editable) {
       table.addEventListener("keydown", (event) => {
@@ -1814,6 +1830,7 @@ function focusDocumentTableFormula(
   row: number,
   col: number,
   formulaIndex: number,
+  clickRatio = 0,
 ): boolean {
   const firstLine = view.state.doc.lineAt(table.from).number;
   const lineNumber = firstLine + (row === 0 ? 0 : row + 1);
@@ -1824,11 +1841,13 @@ function focusDocumentTableFormula(
   const formula = tableCellMathRanges(line.text.slice(cell.anchor, cell.head))[formulaIndex];
   if (!formula) return false;
   const from = line.from + cell.anchor + formula.from;
-  return preserveEditorViewport(view, () => {
-    if (!revealFormulaSource(view, from, line.from + cell.anchor + formula.to)) return false;
-    view.focus();
-    return true;
-  }, table.from);
+  return openRenderedFormulaSource(view, {
+    display: false,
+    from,
+    to: line.from + cell.anchor + formula.to,
+    contentFrom: from + 2,
+    contentTo: line.from + cell.anchor + formula.to - 2,
+  }, clickRatio, table.from);
 }
 
 function focusTableCellAfterRender(
@@ -1854,7 +1873,7 @@ function renderEditableTable(
   commit: (focusTarget?: TableFocusTarget | null) => void,
   view: EditorView,
   tableFrom: () => number,
-  openSource: (row: number, col: number, select?: boolean, formulaIndex?: number) => void,
+  openSource: (row: number, col: number, select?: boolean, formulaIndex?: number, formulaClickRatio?: number) => void,
   editable = true,
   structure: TableStructureActions | null = null,
 ): { table: HTMLTableElement; dispose: () => void } {
@@ -2069,7 +2088,7 @@ function renderEditableTable(
         ? event.target.closest<HTMLElement>(".aaronnote-math-inline") : null;
       const formulaIndex = formula && cell.contains(formula)
         ? Array.from(cell.querySelectorAll(".aaronnote-math-inline")).indexOf(formula) : -1;
-      openSource(row, col, false, formulaIndex);
+      openSource(row, col, false, formulaIndex, formula ? renderedFormulaClickRatio(formula, event) : 0);
     });
     cell.addEventListener("keydown", (event) => {
       event.stopPropagation();
@@ -2160,6 +2179,140 @@ const markdownTablesField = StateField.define<readonly MarkdownTable[]>({
   },
 });
 
+/** Render an inactive cell while its neighbour remains editable in the main CM6 view. */
+class TableSourceCellWidget extends WidgetType {
+  readonly source: string;
+  readonly row: number;
+  readonly col: number;
+  readonly align: string;
+  readonly last: boolean;
+
+  constructor(
+    source: string,
+    row: number,
+    col: number,
+    align: string,
+    last: boolean,
+  ) {
+    super();
+    this.source = source;
+    this.row = row;
+    this.col = col;
+    this.align = align;
+    this.last = last;
+  }
+
+  eq(other: TableSourceCellWidget): boolean {
+    return this.source === other.source && this.row === other.row
+      && this.col === other.col && this.align === other.align && this.last === other.last;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const cell = document.createElement("span");
+    cell.className = "cm-table-source-cell cm-table-source-rendered-cell";
+    if (this.last) cell.classList.add("cm-table-source-last-cell");
+    cell.setAttribute("role", "cell");
+    cell.dataset.row = String(this.row);
+    cell.dataset.col = String(this.col);
+    if (this.align) cell.style.textAlign = this.align;
+    cell.innerHTML = renderInlineMarkdownHTML(this.source) || "&nbsp;";
+    cell.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const formula = event.target instanceof Element
+        ? event.target.closest<HTMLElement>(".aaronnote-math-inline") : null;
+      const formulaIndex = formula && cell.contains(formula)
+        ? Array.from(cell.querySelectorAll(".aaronnote-math-inline")).indexOf(formula) : -1;
+      const formulaClickRatio = formula ? renderedFormulaClickRatio(formula, event) : 0;
+      // A widget press can arrive while CM6 is reconciling decorations.
+      // Enter the neighbouring cell after that DOM update has finished.
+      window.setTimeout(() => {
+        if (!cell.isConnected || !view.dom.isConnected) return;
+        const table = tableAt(view.state, view.posAtDOM(cell));
+        if (!table) return;
+        if (formulaIndex >= 0 && focusDocumentTableFormula(view, table, this.row, this.col, formulaIndex, formulaClickRatio)) return;
+        focusDocumentTableCell(view, table, { row: this.row, col: this.col, edit: true });
+      }, 0);
+    });
+    return cell;
+  }
+
+  ignoreEvent(): boolean { return true; }
+}
+
+/** Keep the table's structural controls present while a cell uses CM6 text. */
+class TableSourceToolbarWidget extends WidgetType {
+  readonly from: number;
+  readonly layout: LayoutAttrs;
+
+  constructor(from: number, layout: LayoutAttrs) {
+    super();
+    this.from = from;
+    this.layout = layout;
+  }
+
+  eq(other: TableSourceToolbarWidget): boolean {
+    return this.from === other.from && this.layout.align === other.layout.align
+      && this.layout.wrap === other.layout.wrap && this.layout.width === other.layout.width
+      && this.layout.height === other.layout.height;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "cm-table-source-toolbar cm-table-editable-block";
+    applyLayoutAttrs(wrap, "table", this.layout);
+    const currentTable = (): MarkdownTable | null => {
+      if (!wrap.isConnected) return null;
+      return tableAt(view.state, view.posAtDOM(wrap));
+    };
+    const refreshSourceRange = (): void => {
+      const table = currentTable() ?? tableAt(view.state, this.from);
+      if (!table) return;
+      wrap.dataset.cmSourceFrom = String(table.from);
+      wrap.dataset.cmSourceTo = String(table.to);
+      wrap.dataset.cmSourceBaseTo = String(table.sourceTo);
+    };
+    refreshSourceRange();
+    wrap.addEventListener("click", refreshSourceRange, true);
+    wrap.addEventListener("pointerdown", refreshSourceRange, true);
+    const active = (): { row: number; col: number } => {
+      const table = currentTable();
+      if (!table) return { row: 1, col: 0 };
+      const firstLine = view.state.doc.lineAt(table.from).number;
+      const line = view.state.doc.lineAt(view.state.selection.main.head);
+      return {
+        row: Math.max(0, line.number === firstLine ? 0 : line.number - firstLine - 1),
+        col: Math.max(0, tableSourceActiveColumn(view.state, line)),
+      };
+    };
+    const apply = (
+      mutate: (next: MarkdownTableData) => void,
+      focus?: TableFocusResolver,
+    ): void => {
+      const table = currentTable();
+      if (!table) return;
+      const next = parseMarkdownTable(table.source);
+      mutate(next);
+      const source = buildMarkdownTableSource(next);
+      const requested = typeof focus === "function" ? focus(next) : focus;
+      const target = { ...(requested ?? active()), edit: true };
+      if (source !== table.source) dispatchConstructEdit(view, {
+        changes: { from: table.from, to: table.sourceTo, insert: source },
+      });
+      focusTableCellAfterRender(view, table.from, target);
+      view.requestMeasure();
+    };
+    wrap.append(createTableToolbar(apply, active, () => {
+      const table = currentTable();
+      return table ? parseMarkdownTable(table.source).rows : [];
+    }), figureLayoutToolbar(view, wrap, this.layout), figureResizeHandle(view, wrap, "table"), figureHeightHandle(view, wrap, "table"));
+    return wrap;
+  }
+
+  ignoreEvent(): boolean { return true; }
+}
+
 function buildTableDecoRanges(
   state: EditorState,
   from = 0,
@@ -2172,6 +2325,11 @@ function buildTableDecoRanges(
        index < tables.length && tables[index]!.from <= to; index++) {
     const table = tables[index]!;
     if (tableOpened(state, table)) {
+      if (!state.readOnly) decos.push(Decoration.widget({
+        widget: new TableSourceToolbarWidget(table.from, table.layout),
+        block: true,
+        side: -1,
+      }).range(table.from));
       decos.push(...tableSourceGridDecos(state, table));
       continue;
     }
@@ -2186,47 +2344,72 @@ function buildTableDecoRanges(
   return decos;
 }
 
-/** Keep source text in the main editor while drawing its rows as a table. */
+function tableSourceActiveColumn(state: EditorState, line: ReturnType<Text["line"]>): number {
+  if (state.doc.lineAt(state.selection.main.head).number !== line.number) return -1;
+  const offset = state.selection.main.head - line.from;
+  return Math.max(0, tableSourceRowParts(line.text).cells.findIndex(({ from, to }) => offset >= from && offset <= to));
+}
+
+/** Keep the active cell as CM6 text and render every other cell in place. */
 function tableSourceGridDecos(state: EditorState, table: MarkdownTable): Range<Decoration>[] {
   const ranges: Range<Decoration>[] = [];
   const doc = state.doc;
   const first = doc.lineAt(table.from).number;
   const last = doc.lineAt(table.sourceTo).number;
-  const aligns = parseMarkdownTable(table.source).aligns;
+  const data = parseMarkdownTable(table.source);
+  const aligns = data.aligns;
   const columns = aligns.length;
+  const layoutClass = layoutClasses("table", table.layout);
+  const layoutCss = layoutStyle("table", table.layout);
+  const caretLine = doc.lineAt(state.selection.main.head).number;
   for (let number = first; number <= last; number++) {
     const line = doc.line(number);
     const separator = number === first + 1;
     ranges.push(Decoration.line({
       attributes: {
-        class: separator ? "cm-table-source-rule" : `cm-table-source-row${number === first ? " cm-table-source-header" : ""}`,
-        style: `--noema-table-cols:${columns}`,
+        class: separator
+          ? `cm-table-source-rule${caretLine === number ? " cm-table-source-rule-active" : ""}`
+          : `cm-table-source-row ${layoutClass}${table.layout.height ? " cm-table-source-explicit-height" : ""}${number === first ? " cm-table-source-header" : ""}${number === last ? " cm-table-source-last-row" : ""}${number > first + 1 && (number - first - 1) % 2 === 0 ? " cm-table-source-alt-row" : ""}`,
+        style: `--noema-table-cols:${columns};--noema-table-row-count:${data.rows.length};${layoutCss}`,
       },
     }).range(line.from));
     if (separator) continue;
-    const pipes: number[] = [];
-    for (let index = 0; index < line.text.length; index++) {
-      if (line.text[index] === "\\") { index++; continue; }
-      if (line.text[index] === "|") pipes.push(index);
-    }
-    const leading = pipes[0] === 0;
-    const trailing = pipes[pipes.length - 1] === line.text.length - 1;
-    const boundaries = [leading ? 1 : 0, ...pipes.slice(leading ? 1 : 0, trailing ? -1 : undefined).map((offset) => offset + 1), line.text.length - (trailing ? 1 : 0)];
+    const { pipes, cells } = tableSourceRowParts(line.text);
+    const activeCol = number === caretLine ? tableSourceActiveColumn(state, line) : -1;
+    const row = number === first ? 0 : number - first - 1;
     for (const offset of pipes) {
       ranges.push(Decoration.mark({ class: "cm-table-source-pipe" }).range(line.from + offset, line.from + offset + 1));
     }
-    for (let col = 0; col < boundaries.length - 1; col++) {
-      const from = boundaries[col]!;
-      const next = boundaries[col + 1]!;
-      const to = col < boundaries.length - 2 ? next - 1 : next;
-      if (to <= from) continue;
-      ranges.push(Decoration.mark({
-        attributes: {
-          class: "cm-table-source-cell",
-          style: aligns[col] ? `text-align:${aligns[col]}` : "",
-        },
-      }).range(line.from + from, line.from + to));
+    for (let col = 0; col < cells.length; col++) {
+      const { from, to } = cells[col]!;
+      const sourceFrom = line.from + from;
+      const sourceTo = line.from + to;
+      if (col !== activeCol) {
+        const widget = new TableSourceCellWidget(data.rows[row]?.[col] ?? "", row, col, aligns[col] ?? "", col === cells.length - 1);
+        ranges.push(to > from
+          ? Decoration.replace({ widget }).range(sourceFrom, sourceTo)
+          : Decoration.widget({ widget }).range(sourceFrom));
+      } else if (to > from) {
+        ranges.push(Decoration.mark({
+          attributes: {
+            class: `cm-table-source-cell cm-table-source-active-cell${col === cells.length - 1 ? " cm-table-source-last-cell" : ""}`,
+            style: aligns[col] ? `text-align:${aligns[col]}` : "",
+          },
+        }).range(sourceFrom, sourceTo));
+      } else {
+        ranges.push(Decoration.widget({
+          widget: new TableSourceCellWidget("", row, col, aligns[col] ?? "", col === cells.length - 1),
+        }).range(sourceFrom));
+      }
     }
+  }
+  if (table.to > table.sourceTo) {
+    const attrs = doc.lineAt(table.to);
+    const active = caretLine === attrs.number;
+    ranges.push(Decoration.line({ attributes: {
+      class: active ? "cm-table-source-attrs-active" : "cm-table-source-attrs-hidden",
+    } }).range(attrs.from));
+    if (!active && attrs.to > attrs.from) ranges.push(Decoration.replace({}).range(attrs.from, attrs.to));
   }
   return ranges;
 }
@@ -2256,7 +2439,10 @@ function tableAt(state: EditorState, pos: number): MarkdownTable | null {
 
 function activeTableAttrsKey(state: EditorState): string {
   const table = tableAt(state, state.selection.main.from);
-  return table && tableOpened(state, table) ? `${table.from}:${table.to}` : "";
+  if (!table || !tableOpened(state, table)) return "";
+  const line = state.doc.lineAt(state.selection.main.head);
+  const col = tableSourceActiveColumn(state, line);
+  return `${line.number}.${col}:${table.from}:${table.to}`;
 }
 
 /** Tables as rendered constructs: one block of structure while rendered. */
@@ -2722,7 +2908,9 @@ export const livePreviewExtension = [
   livePreviewPlugin,
   persistentVisualStateField(markdownTablesField, collectMarkdownTables),
   persistentVisualStateField(lineDecoField, buildLineDecos),
-  persistentVisualStateField(tableDecoField, buildTableDecos),
+  // Keep the editable cell's mark outside syntax marks, so nested emphasis
+  // and formula styling cannot split one visual cell into several flex items.
+  Prec.lowest(persistentVisualStateField(tableDecoField, buildTableDecos)),
   constructSources.of(tableConstructSource),
   persistentVisualStateField(htmlBlockDecoField, buildHtmlBlockDecos),
   constructSources.of(drawnConstructSource("html-block", "structure", (state) => state.field(htmlBlockDecoField, false))),

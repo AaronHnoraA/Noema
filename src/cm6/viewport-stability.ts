@@ -568,7 +568,7 @@ export class EditorViewportStabilizer {
     }
     // One layout read per press. Layout is clean here: the press arrives
     // before CodeMirror has applied anything for it.
-    const snapshot = this.capture(position ?? undefined);
+    const snapshot = this.capture(position ?? undefined, true);
     if (!snapshot) return;
     this.pointerSnapshot = snapshot;
     this.pointerAnchorUntil = Infinity;
@@ -593,7 +593,7 @@ export class EditorViewportStabilizer {
     return null;
   }
 
-  private capture(preferredAnchorPos?: number): ViewportSnapshot | null {
+  private capture(preferredAnchorPos?: number, precisePreferredAnchor = false): ViewportSnapshot | null {
     if (!this.view.dom.isConnected || !this.scrollHost.isConnected) return null;
     const scrollTop = this.scrollHost.scrollTop;
     const scrollLeft = this.scrollHost.scrollLeft;
@@ -614,7 +614,11 @@ export class EditorViewportStabilizer {
           preciseAnchor = true;
           anchorCaptured = true;
         };
-        if (anchorPos >= this.view.viewport.from && anchorPos <= this.view.viewport.to) {
+        // A press on ordinary text needs the DOM caret's position. CM6's
+        // height map can lag a table's source/preview swap by one collapsed
+        // line, even while the text itself has not moved at all.
+        if (precisePreferredAnchor) captureCoordinates();
+        if (!anchorCaptured && anchorPos >= this.view.viewport.from && anchorPos <= this.view.viewport.to) {
           try {
             const block = this.view.lineBlockAt(anchorPos);
             anchorOffset = this.view.documentTop + block.top * this.view.scaleY - hostTop;

@@ -82,6 +82,7 @@ import {
 } from "./formula-scroll.ts";
 import { getBlockMathRanges, positionInsideAnyRange } from "./math-ranges.ts";
 import { scanInlineMathRanges } from "../inline-math.ts";
+import { openRenderedFormulaSource, renderedFormulaClickRatio } from "./rendered-formula-click.ts";
 import { tocIndexFromState } from "./toc-index.ts";
 import {
   headingNumberingExtension,
@@ -103,7 +104,6 @@ import {
   mapPositionAcrossText,
   minimalDocumentChange,
   installFocusOwner,
-  preserveEditorViewport,
 } from "./viewport-stability.ts";
 import {
   finishInlineMathEditing,
@@ -111,7 +111,6 @@ import {
   isVisualMode,
   orgEnvExitTarget,
   formulaRangeAtWidgetPosition,
-  revealFormulaSource,
   setVisualMode,
 } from "./extensions/visual/index.ts";
 
@@ -163,13 +162,6 @@ function widgetSourcePosition(view: EditorView, source: HTMLElement): number | n
     // The element may already be detached from the current view tree.
     return null;
   }
-}
-
-function formulaSourceOffsetForClick(source: HTMLElement, event: MouseEvent, sourceLength: number): number {
-  const rect = source.getBoundingClientRect();
-  if (rect.width <= 0 || sourceLength <= 0) return 0;
-  const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-  return Math.round(sourceLength * ratio);
 }
 
 function eventTargetElement(target: EventTarget | Node | null): Element | null {
@@ -623,13 +615,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       // cursor. Automatic stabilization would not run here — the mousedown
       // that opened the formula counts as a scroll interaction — so this asks
       // for the anchoring explicitly, the way editing commands do.
-      preserveEditorViewport(view, () => revealFormulaSource(
-        view,
-        formula.from,
-        formula.to,
-        formulaSourceOffsetForClick(source, event, formula.contentTo - formula.contentFrom),
-      ), formula.from);
-      if (!formula.display) view.contentDOM.focus({ preventScroll: true });
+      openRenderedFormulaSource(view, formula, renderedFormulaClickRatio(source, event));
     } else if (mathBlock || inlineMath) {
       return;
     } else {

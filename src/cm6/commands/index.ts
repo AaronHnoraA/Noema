@@ -14,6 +14,7 @@ import type { ChangeSet, EditorState, Line, Text, TransactionSpec } from "@codem
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
 import { parseTableModel, formatTableLines, splitTableCells, sortTableBodyRows, tableRowsToCSV, tableTooLarge, type TableAlign } from "../table-model.ts";
+import { tablePipeOffsets } from "../table-source-cells.ts";
 import { writeSystemClipboard } from "../../system-clipboard.ts";
 import type {
   EditorBlockContext,
@@ -1105,15 +1106,6 @@ function findTableInfo(view: EditorView): TableInfo | null {
 
 function splitCells(row: string): string[] {
   return splitTableCells(row).map((cell) => cell || " ");
-}
-
-function tablePipeOffsets(row: string): number[] {
-  const offsets: number[] = [];
-  for (let i = 0; i < row.length; i++) {
-    if (row[i] === "\\" && i + 1 < row.length) { i++; continue; }
-    if (row[i] === "|") offsets.push(i);
-  }
-  return offsets;
 }
 
 function buildRow(cells: string[]): string {

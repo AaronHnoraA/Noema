@@ -1,7 +1,7 @@
 /**
  * Keyboard movement in a table (MarkText TableCellContent). A caret moved into
- * a table by the keyboard edits its Markdown source with the main editor (a
- * click edits a rendered cell in place: table-cell-input.test.ts); the keys
+ * a table by the keyboard edits its Markdown source with the main editor;
+ * a click keeps the surrounding cells rendered. The keys
  * keep the cell model:
  * arrows at a cell's text edge move between cells and, past the table, back
  * into the document; Backspace at a cell's start never deletes a pipe;

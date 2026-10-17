@@ -4731,51 +4731,143 @@ body.has-diagram-fullscreen {
 .cm-editor .cm-line.cm-table-source-row {
   display: flex;
   align-items: stretch;
-  min-height: 2.1em;
-  white-space: pre-wrap;
+  white-space: normal;
+  box-sizing: border-box;
+  width: var(--aaronnote-table-width, 100%);
+  max-width: var(--aaronnote-table-max-width, 100%);
   padding: 0;
+  border-left: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+}
+.cm-editor .cm-line.cm-table-source-explicit-height {
+  min-height: calc(var(--aaronnote-table-height) / var(--noema-table-row-count));
+}
+.cm-editor .cm-line.cm-table-source-explicit-height.cm-table-source-last-row {
+  min-height: calc(var(--aaronnote-table-height) / var(--noema-table-row-count) + 1px);
+}
+.cm-editor .cm-table-source-toolbar {
+  box-sizing: border-box;
+  width: var(--aaronnote-table-width, 100%);
+  max-width: var(--aaronnote-table-max-width, 100%);
+  padding-top: 4px;
+}
+.cm-editor :is(.cm-table-source-toolbar, .cm-line.cm-table-source-row).aaronnote-table-align-left {
+  margin-left: 0;
+  margin-right: auto;
+}
+.cm-editor :is(.cm-table-source-toolbar, .cm-line.cm-table-source-row).aaronnote-table-align-center {
+  margin-left: auto;
+  margin-right: auto;
+}
+.cm-editor :is(.cm-table-source-toolbar, .cm-line.cm-table-source-row).aaronnote-table-align-right {
+  margin-left: auto;
+  margin-right: 0;
+}
+.cm-editor :is(.cm-table-source-toolbar, .cm-line.cm-table-source-row).aaronnote-table-wrap.aaronnote-table-align-left {
+  position: relative;
+  z-index: 2;
+  float: left;
+  clear: left;
+  width: var(--aaronnote-table-width, min(56%, 520px));
+  margin: 0 1rem 0 0;
+}
+.cm-editor :is(.cm-table-source-toolbar, .cm-line.cm-table-source-row).aaronnote-table-wrap.aaronnote-table-align-right {
+  position: relative;
+  z-index: 2;
+  float: right;
+  clear: right;
+  width: var(--aaronnote-table-width, min(56%, 520px));
+  margin: 0 0 0 1rem;
+}
+.cm-editor .cm-line.cm-table-source-last-row {
+  margin-bottom: 16px;
+}
+.cm-editor .cm-table-source-last-row .cm-table-source-cell {
+  padding-bottom: 5px;
+}
+.cm-editor .cm-line.cm-table-source-alt-row {
+  background: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), transparent 55%);
 }
 .cm-editor .cm-table-source-cell {
   display: inline-block;
   box-sizing: border-box;
   flex: 1 1 0;
   min-width: 0;
-  padding: 0.35em 0.55em;
+  padding: 4px 8px;
   border: 1px solid var(--aaron-paper-line, #414b61);
+  border-top: 0;
+  border-right: 0;
+  line-height: 1.42;
   overflow-wrap: anywhere;
 }
 .cm-editor .cm-table-source-header .cm-table-source-cell {
+  border-top: 1px solid var(--aaron-paper-line, #414b61);
+  border-bottom: 0;
+  box-shadow: inset 0 -1px 0 var(--aaron-paper-line, #414b61);
+  text-align: center;
+}
+.cm-editor .cm-table-source-last-cell {
+  border-right: 1px solid var(--aaron-paper-line, #414b61);
+}
+.cm-editor .cm-table-source-rendered-cell {
+  white-space: normal;
+  cursor: text;
+}
+.cm-editor .cm-table-source-active-cell {
+  background: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), transparent 45%);
+}
+.cm-editor .cm-table-source-header .cm-table-source-cell {
   font-weight: 600;
-  background: var(--aaron-paper-soft, #1e2536);
+  background: var(--aaron-panel, #232b3d);
 }
 .cm-editor .cm-table-source-pipe {
   display: inline-block;
-  flex: 0 0 1px;
-  width: 1px;
+  flex: 0 0 0;
+  width: 0;
   overflow: hidden;
   color: transparent;
 }
-/* CM6 splits marks around inline widgets, and an empty cell has no text to
- * mark. Neither can supply one flex item per column, so show those rows as
- * bordered source lines with their content in document order. */
-.cm-editor .cm-line.cm-table-source-row:is(:has(.cm-widgetBuffer), :has(.cm-table-source-pipe + .cm-table-source-pipe)) {
+/* CM6 can split the active cell's mark around another inline widget. In that
+ * case preserve source order rather than letting the fragments become columns. */
+.cm-editor .cm-line.cm-table-source-row:has(> [contenteditable="false"]:not(.cm-table-source-rendered-cell)) {
   display: block;
   padding: 0.35em 0.55em;
   border: 1px solid var(--aaron-paper-line, #414b61);
 }
-.cm-editor .cm-table-source-row:is(:has(.cm-widgetBuffer), :has(.cm-table-source-pipe + .cm-table-source-pipe)) .cm-table-source-cell {
+.cm-editor .cm-table-source-row:has(> [contenteditable="false"]:not(.cm-table-source-rendered-cell)) .cm-table-source-cell {
   display: inline;
   padding: 0;
   border: 0;
 }
-.cm-editor .cm-table-source-row:is(:has(.cm-widgetBuffer), :has(.cm-table-source-pipe + .cm-table-source-pipe)) .cm-table-source-pipe {
+.cm-editor .cm-table-source-row:has(> [contenteditable="false"]:not(.cm-table-source-rendered-cell)) .cm-table-source-pipe {
   display: inline;
   width: auto;
   color: var(--aaron-muted, #a9bed3);
 }
-.cm-editor .cm-line.cm-table-source-rule {
-  font-size: 0.7em;
+.cm-editor .cm-line.cm-table-source-rule:not(.cm-table-source-rule-active) {
+  height: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  font-size: 0;
+  line-height: 0;
+  pointer-events: none;
+}
+.cm-editor .cm-line.cm-table-source-rule-active {
+  padding: 0.15em 0.55em;
+  font-size: 0.72em;
   color: var(--aaron-muted, #a9bed3);
+}
+.cm-editor .cm-line.cm-table-source-attrs-hidden {
+  height: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  font-size: 0;
+  line-height: 0;
+  pointer-events: none;
 }
 .cm-editor .cm-table-editable-block { position: relative; }
 /* Tables default to full editor width with a fixed layout so columns
@@ -4851,6 +4943,9 @@ body.has-diagram-fullscreen {
   padding: 4px 0 16px;
   overflow-x: auto;
 }
+.cm-editor .cm-table-block.cm-table-explicit-height {
+  height: auto;
+}
 .cm-editor .cm-table-block.aaronnote-table-align-left,
 .cm-editor .cm-table-block-preview.aaronnote-table-align-left {
   margin-left: 0;
@@ -4869,17 +4964,38 @@ body.has-diagram-fullscreen {
 .cm-editor .cm-table-block.aaronnote-table-wrap.aaronnote-table-align-left,
 .cm-editor .cm-table-block-preview.aaronnote-table-wrap.aaronnote-table-align-left {
   float: left;
+  z-index: 2;
   width: var(--aaronnote-table-width, min(56%, 520px));
   margin: 0 1rem 0 0;
 }
 .cm-editor .cm-table-block.aaronnote-table-wrap.aaronnote-table-align-right,
 .cm-editor .cm-table-block-preview.aaronnote-table-wrap.aaronnote-table-align-right {
   float: right;
+  z-index: 2;
   width: var(--aaronnote-table-width, min(56%, 520px));
   margin: 0 0 0 1rem;
 }
 .cm-editor .cm-markdown-table-preview {
+  width: 100%;
+  max-width: 100%;
   margin-bottom: 0;
+}
+.cm-editor .cm-markdown-table-preview th,
+.cm-editor .cm-markdown-table-preview td {
+  padding: 4px 8px;
+  border: 1px solid var(--aaron-paper-line, #414b61);
+  vertical-align: top;
+  line-height: 1.42;
+}
+.cm-editor .cm-markdown-table-preview th {
+  font-weight: 600;
+  background: var(--aaron-panel, #232b3d);
+}
+.cm-editor .cm-markdown-table-preview tr:nth-child(2n) {
+  background: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), transparent 55%);
+}
+.cm-editor .cm-markdown-table-preview.cm-table-explicit-height tr {
+  height: calc(var(--aaronnote-table-height) / var(--noema-table-row-count));
 }
 .cm-editor .cm-table-toolbar {
   display: inline-flex;

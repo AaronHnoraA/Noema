@@ -48,6 +48,32 @@ describe("Markdown table formula editing", () => {
     } finally { cleanup(); }
   });
 
+  test("prose and table formulas place the caret at the same clicked offset", () => {
+    const source = "Before \\(abcd\\) after\n\n| A | B |\n| --- | --- |\n| \\(abcd\\) | 2 |";
+    const { host, editor, cleanup } = mount(source);
+    try {
+      const pointAtThreeQuarters = (element: HTMLElement) => {
+        element.getBoundingClientRect = () => ({ left: 0, width: 100 }) as DOMRect;
+        element.dispatchEvent(new MouseEvent("mousedown", {
+          bubbles: true, cancelable: true, button: 0, clientX: 75,
+        }));
+      };
+      pointAtThreeQuarters(host.querySelector<HTMLElement>(".cm-math-inline")!);
+      expect(editor.getMarkdownSelection().from).toBe(source.indexOf("abcd") + 3);
+
+      const tableFormula = host.querySelector<HTMLElement>("tbody td .aaronnote-math-inline")!;
+      tableFormula.getBoundingClientRect = () => ({ left: 0, width: 100 }) as DOMRect;
+      tableFormula.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true, cancelable: true, button: 0, clientX: 75,
+      }));
+      tableFormula.dispatchEvent(new MouseEvent("click", {
+        bubbles: true, cancelable: true, button: 0, clientX: 75,
+      }));
+      expect(editor.getMarkdownSelection().from).toBe(source.lastIndexOf("abcd") + 3);
+      expect(host.querySelectorAll(".cm-table-source-active-cell")).toHaveLength(1);
+    } finally { cleanup(); }
+  });
+
   test("read-only tables keep rendered cells without edit controls", () => {
     const { host, cleanup } = mount("| A | B |\n| --- | --- |\n| **one** | \\(x\\) |", true);
     try {
