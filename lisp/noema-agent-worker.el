@@ -809,6 +809,13 @@ file."
                            ,@(when (and reason (not (string-empty-p reason)))
                                `((failure_reason . ,reason)))))))))
     (setf (noema-agent-worker-segments worker) nil)
+    (when (equal status "completed")
+      (noema-agent-worker--best-effort
+       #'noema-hy-memory-remember-run
+       (noema-agent-worker-root worker)
+       (noema-agent-worker--string (noema-agent-worker-spec worker) "prompt" "")
+       (noema-agent-worker--result-text worker)
+       (noema-agent-worker-run-id worker)))
     (noema-agent-worker--best-effort #'noema-agent-worker--cleanup-subscriptions worker)
 	(dolist (permission-id (noema-agent-worker-pending-permissions worker))
 	  (remhash permission-id noema-agent-worker--permissions)

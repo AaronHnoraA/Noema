@@ -5,6 +5,8 @@ NOEMA_ROOT ?= $(HOME)/Documents/Noema
 NODE_VERSION := $(shell tr -d '\r\n' < .nvmrc)
 NPM_VERSION := 11.17.0
 NVM_SH ?= $(HOME)/.nvm/nvm.sh
+MEMORY_PYTHON ?= python3.11
+MEMORY_VENV ?= $(HOME)/.local/share/noema/hy-memory-venv
 KERNEL_DIR := kernel
 KERNEL_BIN_NAME := noema-kernel
 KERNEL_GOOS ?= $(shell go env GOOS 2>/dev/null)
@@ -19,7 +21,8 @@ KERNEL_BIN_LINK ?= $(HOME)/.local/bin/$(KERNEL_BIN_NAME)
 	disk-audit help \
 	init-data install jupyter-bootstrap kernel-build kernel-install \
 	nvm-install prune-legacy-garbage server-build \
-	server-config-init server-deploy server-start setup test agenda-apple-build agenda-apple-test
+	server-config-init server-deploy server-start setup test agenda-apple-build agenda-apple-test \
+	memory-setup memory-test
 
 all: build
 
@@ -46,6 +49,21 @@ init-data:
 	mkdir -p "$(NOEMA_ROOT)"
 
 setup: bootstrap init-data
+
+# Optional private memory runtime.  Luna is called through Noema Pi; only the
+# Hy Memory SDK runs in this Python environment.  Embeddings use a configured
+# remote provider, so this target installs no local model or Ollama service.
+memory-setup:
+	@command -v $(MEMORY_PYTHON) >/dev/null || (echo "Python 3.11 is required" && exit 1)
+	$(MEMORY_PYTHON) -m venv "$(MEMORY_VENV)"
+	"$(MEMORY_VENV)/bin/python" -m pip install --disable-pip-version-check 'hy-memory==2.0.4'
+
+memory-test:
+	"$(MEMORY_VENV)/bin/python" -m unittest discover -s tests -p 'test_hy_memory_bridge.py'
+	node --test tests/hy-memory-fail-open.contract.mjs
+	node --check scripts/noema-pi-memory-gateway.mjs
+	node --check server/lib/hy-memory-bridge.mjs
+	emacs -Q --batch -L lisp -L test/elisp -l test/elisp/noema-hy-memory-tests.el -f ert-run-tests-batch-and-exit
 
 build: check-env check-go prune-legacy-garbage build-web kernel-build
 
@@ -129,6 +147,8 @@ help:
 	@echo "Noema build targets"
 	@echo "  make | make build  Build the Emacs-hosted CM6 renderer and headless Go engine"
 	@echo "  make setup         Install dependencies and create $(NOEMA_ROOT)"
+	@echo "  make memory-setup  Install the optional Hy Memory SDK (no local models)"
+	@echo "  make memory-test   Check the private memory bridge contracts"
 	@echo "  make bootstrap     Reproducibly install dependencies with npm ci"
 	@echo "  make nvm-install   Install/use pinned Node and npm through nvm"
 	@echo "  make init-data     Create the Noema notes directory"

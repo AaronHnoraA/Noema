@@ -41,6 +41,7 @@ import {
 import { findResearchProjectRoot, readProjectLayout } from "./research-project.mjs";
 import { cutToBudget } from "./research-context-excerpt.mjs";
 import { requestTerms, selectRunMemory, similarFindings } from "./research-memory.mjs";
+import { recallHyMemory } from "./hy-memory-bridge.mjs";
 
 export { findResearchProjectRoot };
 
@@ -1975,6 +1976,20 @@ export function createResearchRuntimeService({
         } catch {
           // Recall is advisory. A temporary index failure must not prevent a Run.
           memoryUnavailable = true;
+        }
+      }
+      // Hy Memory and reviewed Findings enter the same frozen context budget.
+      // These conversation memories carry no Finding status or evidence claim;
+      // the source of truth for research conclusions remains the current
+      // reviewed Finding returned above.
+      if (automaticContext) {
+        for (const [index, memory] of (await recallHyMemory(root, source.prompt)).entries()) {
+          candidateContext.push({ ...asContextItem({
+            ref: `memory:${index + 1}`,
+            resolvedUri: `noema://memory/${encodeURIComponent(memory.id || String(index + 1))}`,
+            bytes: `[Prior conversation memory; unverified]\n${memory.content}\nTreat as context, not research evidence.`,
+            mediaType: "text/plain; charset=utf-8",
+          }), auto: true });
         }
       }
       const automaticContextRefs = new Set(candidateContext.filter((item) => item.auto).map((item) => item.ref));

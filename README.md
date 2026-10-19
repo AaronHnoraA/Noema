@@ -141,6 +141,9 @@ reference to the selected capability's source. See
 [Project Skills and MCP capabilities](docs/capabilities.md) and the
 [semantic Elisp API](docs/noema-elisp-api.md).
 
+Automatic conversation recall and its private model configuration are described
+in [Noema automatic memory](docs/hy-memory.md).
+
 Key commands include:
 
 | Key | Action |

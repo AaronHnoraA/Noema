@@ -1886,5 +1886,6 @@ so it can be listed, switched to and given buffer context by name."
 
 (noema-agent-acp--retire-transcript-workspace)
 
+(require 'noema-hy-memory)
 (provide 'noema-agent-acp)
 ;;; noema-agent-acp.el ends here

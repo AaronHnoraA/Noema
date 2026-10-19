@@ -13,4 +13,7 @@ import { join } from "node:path";
 const scope = mkdtempSync(join(tmpdir(), "noema-test-global-"));
 process.env.NOEMA_GLOBAL_CAPABILITIES = join(scope, "capabilities.json");
 process.env.NOEMA_GLOBAL_SKILLS = join(scope, "skills");
+// Tests must also never call the developer's live memory service. Tests that
+// exercise memory can explicitly point this variable at their own fixture.
+process.env.NOEMA_HY_MEMORY_CONFIG = join(scope, "hy-memory.env");
 process.on("exit", () => rmSync(scope, { recursive: true, force: true }));
