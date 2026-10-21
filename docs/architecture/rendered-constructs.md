@@ -37,9 +37,9 @@
 
 | policy | 光标（空选区） | 范围选区 | 用于 |
 |---|---|---|---|
-| `edge` | 在内部或贴着两端 | 一端落在内部 | 脚注、块引用、块 ID、任务框 |
+| `edge` | 在内部或贴着两端 | 一端落在内部 | 脚注、块引用、块 ID、任务框、表格 |
 | `interior` | 严格在内部 | 一端落在内部 | 公式、行内标记 |
-| `caret-edge` | 在内部或贴着两端 | 从不 | 图片、`@@` 命令、块结构、HTML 块、表格 |
+| `caret-edge` | 在内部或贴着两端 | 从不 | 图片、`@@` 命令、块结构、HTML 块 |
 | `caret-interior` | 严格在内部 | 从不 | 图表、front matter |
 | `never` | 从不（由自己的开关打开） | 从不 | 代码折叠 |
 
@@ -56,7 +56,7 @@
 | 图片 / html 嵌入 | `widgets/image.ts` | object | `caret-edge` | 自有插件 + `constructSources` |
 | 公式 | `widgets/math.ts` | object | `interior`，由公式编辑会话打开 | 自有字段 + `constructSources`（`revealed` 覆盖） |
 | 代码折叠、图表 | `widgets/fenced-code.ts` | object | `never` / `caret-interior` | 自有字段 + `constructSources` |
-| 表格 | `live-preview.ts` | structure（块） | `caret-edge`（文档开头的 0 偏移不算） | 自有字段 + `constructSources` |
+| 表格 | `live-preview.ts` | structure（块） | `edge`（文档开头的 0 偏移不算） | 自有字段 + `constructSources` |
 | HTML 块、行内标记、emoji | `live-preview.ts` | structure | `caret-edge` / `interior` | `selectionOpensSource` / `rangeRevealsSource` |
 | org 环境、TOC、HR、语义标题、front matter | `widgets/block-extras.ts` | structure（TikZ 为 object） | `caret-edge`（front matter `caret-interior`） | `selectionOpensSource` |
 | `@@` 行内命令 | `widgets/inline-commands.ts` | structure | `caret-edge` | `selectionOpensSource` |
@@ -189,6 +189,15 @@ widget 内部显示的 Markdown（表格单元格、todo 标签、旁注卡片�
 
 未编辑时，表格是带工具的预览 widget。进入单元格后，`tableSourceGridDecos` 保持整张表的列宽、
 单元格边框和布局属性：当前格显示主 CM6 文本，其余格直接渲染 Markdown，点击即可切换当前格。
+格内打字与正文共用 visual typing burst：打字和输入法组字期间只映射网格装饰，不重建当前
+`contenteditable` 的 DOM；当前单元格的 CM6 mark 包含两端插入，防止边界输入在 flex 网格里
+变成独立窄列。当前格的 mark 还包住其右侧隐藏的 `|`：分隔符必须留在同一个 DOM span 内，
+否则 WebKit 会把格尾光标、补全和输入法候选窗定位到列边界，组字内容也会进入分隔符的 flex 子元素。
+视口刷新遇到组字会等到 `compositionend`，再按已提交的文档重绘。
+格内文字选区仍打开同一个可编辑网格；跨过整张表的选区仍保留预览。xwidget 的特殊键适配层
+在 CM6 组字期间及 Safari 的组字结束瞬间跳过确认候选字的 Enter，不替表格另建输入链路。
+正文与表格共用的补全弹窗在组字开始时关闭；组字与候选字确认期间不重新打开，也不接管确认键。
+视口重绘的延迟由共享的 `viewport-refresh.ts` 实现，表格没有独立的输入法或编辑历史。
 结构工具栏和 figure 布局工具栏在两种状态共用，左右对齐、宽高与文字环绕由同一条布局属性决定；
 布局属性行平时收起，光标进入时显示源码。分隔行也只在光标进入时显示源码以便调整列对齐。
 `commands/index.ts` 提供格间移动；

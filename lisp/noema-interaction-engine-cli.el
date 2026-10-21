@@ -140,23 +140,26 @@ answer-block regex matching; this makes session-mode parsing reliable."
 ;; ── Session routing ───────────────────────────────────────────────────────────
 
 (defvar noema-interaction-engine-cli--session-timeout 180
-  "Seconds to wait for an answer block from a managed Ghostel session.")
+  "Seconds to wait for an answer block from a managed Portal session.")
 
 (defvar noema-interaction-engine-cli--session-idle-cycles 3
   "Consecutive polls with no buffer growth to declare output stable.")
 
 (defun noema-interaction-engine-cli--session-request (tool-id prompt root fsm callback)
-  "Pipe PROMPT into the live TOOL-ID Ghostel session and poll for answer block.
+  "Pipe PROMPT into the live TOOL-ID Portal session and poll for answer block.
 Calls FSM/CALLBACK when the answer block appears or the timeout expires.
 
 Detection strategy (in order):
 1. Polling for a `.done` file created by the agent in `var/noema/`.
-2. `#+end answer` block in the Ghostel buffer (primary, with ANSI stripping).
+2. `#+end answer` block in the Portal buffer (primary, with ANSI stripping).
 3. Output stability: buffer unchanged for `noema-interaction-engine-cli--session-idle-cycles`
    polls, meaning the agent has likely finished.
 4. Hard timeout (`noema-interaction-engine-cli--session-timeout`)."
   (let* ((session-buf (noema-interaction-cli-buffer tool-id root))
-         (start-pos (with-current-buffer session-buf (point-max)))
+         (start-pos (with-current-buffer session-buf
+                      (if (derived-mode-p 'portal-terminal-mode)
+                          (length (portal--terminal-text portal-view--target))
+                        (point-max))))
          (timeout noema-interaction-engine-cli--session-timeout)
          (poll-interval 2.0)
          (prev-size 0)
@@ -199,13 +202,17 @@ Detection strategy (in order):
                            (setq result raw-text))))
                      (ignore-errors (delete-file done-file))
                      (ignore-errors (delete-file output-file)))
-                 ;; 2. Fallback to scraping the Ghostel buffer
+                 ;; 2. Fallback to scraping the Portal buffer
                  (when (buffer-live-p session-buf)
                    (with-current-buffer session-buf
-                     (let* ((end (point-max))
-                            (size (- end start-pos))
+                     (let* ((all (if (derived-mode-p 'portal-terminal-mode)
+                                     (portal--terminal-text portal-view--target)
+                                   (buffer-substring-no-properties
+                                    (point-min) (point-max))))
+                            (end (length all))
+                            (size (max 0 (- end start-pos)))
                             (text (when (> size 0)
-                                    (buffer-substring-no-properties start-pos end))))
+                                    (substring all (min start-pos end) end))))
                        (when text
                          (setq raw-text text)
                          (let ((clean (noema-interaction--strip-ansi text))
@@ -244,7 +251,7 @@ Detection strategy (in order):
 
 (cl-defmethod gptel--get-response ((backend noema-interaction-cli) fsm)
   "Drive the request in FSM through BACKEND.
-When a Ghostel session is live for this backend's tool-id, pipe the
+When a Portal session is live for this backend's tool-id, pipe the
 prompt into it and poll the buffer for an answer block (session mode).
 Otherwise fall back to a headless one-shot exec."
   (let* ((info (gptel-fsm-info fsm))
@@ -255,7 +262,7 @@ Otherwise fall back to a headless one-shot exec."
          (root (noema-interaction-cli--root info)))
     (plist-put info :callback callback)
     (if (noema-interaction-cli-session-live-p tool-id root)
-        ;; SESSION mode: reuse the running Ghostel, extract answer from buffer.
+        ;; SESSION mode: reuse the running Portal, extract answer from buffer.
         (condition-case err
             (noema-interaction-engine-cli--session-request tool-id prompt root fsm callback)
           (error

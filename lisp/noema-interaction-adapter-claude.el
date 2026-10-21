@@ -1,4 +1,4 @@
-;;; noema-interaction-adapter-claude.el --- Claude CLI through Ghostel -*- lexical-binding: t; -*-
+;;; noema-interaction-adapter-claude.el --- Claude CLI through Portal -*- lexical-binding: t; -*-
 
 ;;; Code:
 
@@ -20,7 +20,7 @@
   :group 'noema-interaction-claude)
 
 (define-minor-mode noema-interaction-claude-mode
-  "Mark a Noema Claude Ghostel buffer."
+  "Mark a Noema Claude Portal buffer."
   :init-value nil
   :lighter " AI-Claude")
 
@@ -43,7 +43,7 @@
   (noema-interaction-cli-available-p 'claude))
 
 (defun noema-interaction-load-claude ()
-  "Validate the Claude CLI and Ghostel backend."
+  "Validate the Claude CLI and Portal backend."
   (unless (noema-interaction-claude-available-p)
     (user-error "Claude executable not found: %s" noema-interaction-claude-executable))
   (noema-interaction-cli--ensure-terminal-backend 'claude))

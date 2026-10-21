@@ -726,6 +726,7 @@ type NativeApi = {
     templates?: () => Promise<unknown>;
     chooseOutputPath?: (body?: Record<string, unknown>) => Promise<unknown>;
     intervene?: (body?: Record<string, unknown>) => Promise<unknown>;
+    openAgent?: (body?: Record<string, unknown>) => Promise<unknown>;
     export?: (body?: LatexExportRequest) => Promise<unknown>;
   };
   tasks?: {
@@ -1184,6 +1185,7 @@ export type CoreTask = {
   cancellable?: boolean;
   retryable?: boolean;
   closeable?: boolean;
+  agentSessionAvailable?: boolean;
 };
 export type CoreTasksResult = { type?: string; ok?: boolean; tasks?: CoreTask[]; task?: CoreTask | null; message?: string };
 
@@ -1209,6 +1211,10 @@ export type NoteKatexMacrosResult = {
 
 declare global {
   interface Window {
+    portalBridge?: {
+      postMessage(message: Record<string, unknown>): void;
+      receive?: (message: { type?: string; payload?: unknown }) => void | Promise<void>;
+    };
     aaronnoteApi?: NativeApi;
     aaronnoteOpenTaskManager?: () => void;
     __noemaAppConfig?: NoemaAppConfigMsg;
@@ -1571,6 +1577,10 @@ export const api = {
     async intervene(id: string): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().latex?.intervene, "LaTeX export intervention");
       return ensureOk(await call({ id }) as Record<string, unknown>, "LaTeX export intervention failed");
+    },
+    async openAgent(id: string): Promise<Record<string, unknown>> {
+      const call = requireMethod(nativeApi().latex?.openAgent, "Open LaTeX export agent session");
+      return ensureOk(await call({ id }) as Record<string, unknown>, "Open LaTeX export agent session failed");
     },
     async export(body: LatexExportRequest): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().latex?.export, "LaTeX export");

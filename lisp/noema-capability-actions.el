@@ -27,7 +27,8 @@
 (declare-function noema-capability-ui--after-mutation "noema-capability-ui" (buffer result error-object))
 (declare-function noema-research--entry-at-point "noema-research-mode" (&optional entries))
 (declare-function noema-research--require-cell "noema-research-mode" ())
-(declare-function ghostel-paste-string "ghostel" (string))
+(declare-function portal--terminal-paste "portal-terminal" (target text &optional enter))
+(defvar portal-view--target)
 
 (defun noema-capability-ui--open-right (path &optional directory manager)
   "Open PATH to the right of MANAGER without replacing the manager window.
@@ -559,7 +560,7 @@ collide with a user-defined server.")
 
 (defun noema-capability-lookup--agent-buffer ()
   "Return the current buffer when it is an agent input surface, or nil."
-  (and (or (derived-mode-p 'agent-shell-mode) (derived-mode-p 'ghostel-mode))
+  (and (or (derived-mode-p 'agent-shell-mode) (derived-mode-p 'portal-terminal-mode))
        (current-buffer)))
 
 (defun noema-capability-lookup--reference (record project &optional resolution)
@@ -651,7 +652,9 @@ TYPE is the manager's filter, or nil when all kinds are offered."
       (progn (require 'noema-agent-acp)
              (noema-agent-acp-draft buffer text))
     (with-current-buffer buffer
-      (if (derived-mode-p 'ghostel-mode) (ghostel-paste-string text) (insert text)))))
+      (if (derived-mode-p 'portal-terminal-mode)
+          (portal--terminal-paste portal-view--target text)
+        (insert text)))))
 
 ;;;###autoload
 (defun noema-capability-lookup (&optional type buffer)

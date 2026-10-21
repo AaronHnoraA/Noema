@@ -82,7 +82,7 @@ import {
   type LayoutAttrs,
 } from "../layout-attrs.ts";
 import { tocIndexFromState } from "./toc-index.ts";
-import { hasViewportDecorationRefresh, refreshViewportDecorations, viewportDecorationRefreshRanges } from "./viewport-refresh.ts";
+import { hasViewportDecorationRefresh, viewportDecorationRefreshRanges } from "./viewport-refresh.ts";
 import { changesMightAffectFencedCodeRanges, getFencedCodeRanges } from "./code-ranges.ts";
 import { orgEnvContextForRange } from "./extensions/visual/widgets/block-extras.ts";
 import { markdownLinkDestination } from "../markdown-link.ts";
@@ -2384,18 +2384,27 @@ function tableSourceGridDecos(state: EditorState, table: MarkdownTable): Range<D
       const { from, to } = cells[col]!;
       const sourceFrom = line.from + from;
       const sourceTo = line.from + to;
+      // The closing pipe must be inside the editable cell's DOM span. If it
+      // remains a separate flex child, WebKit places a boundary caret (and
+      // the native IME candidate window) at the far edge of the column;
+      // composition text can then land inside the hidden pipe span.
+      const closingPipeTo = pipes.includes(to) ? sourceTo + 1 : sourceTo;
       if (col !== activeCol) {
         const widget = new TableSourceCellWidget(data.rows[row]?.[col] ?? "", row, col, aligns[col] ?? "", col === cells.length - 1);
         ranges.push(to > from
           ? Decoration.replace({ widget }).range(sourceFrom, sourceTo)
           : Decoration.widget({ widget }).range(sourceFrom));
-      } else if (to > from) {
+      } else if (closingPipeTo > sourceFrom) {
         ranges.push(Decoration.mark({
+          // During the shared typing burst the grid is mapped instead of
+          // rebuilt. Include edits at either cell edge in the active mark so
+          // WebKit/CM6 keep one editable DOM child inside the flex row.
+          inclusive: true,
           attributes: {
             class: `cm-table-source-cell cm-table-source-active-cell${col === cells.length - 1 ? " cm-table-source-last-cell" : ""}`,
             style: aligns[col] ? `text-align:${aligns[col]}` : "",
           },
-        }).range(sourceFrom, sourceTo));
+        }).range(sourceFrom, closingPipeTo));
       } else {
         ranges.push(Decoration.widget({
           widget: new TableSourceCellWidget("", row, col, aligns[col] ?? "", col === cells.length - 1),
@@ -2422,13 +2431,17 @@ function buildTableDecos(state: EditorState): DecorationSet {
  * A table is structure, like an org-env block: a caret in it — moved there by
  * the arrow keys or Vim, or placed by a click on a cell — opens its source,
  * which is then edited with the main editor (Tab and Enter move between
- * cells; see `commands/index.ts`). A range keeps it rendered.
+ * cells; see `commands/index.ts`). A range inside a cell opens the editable
+ * grid; a range crossing the whole table leaves it rendered.
  */
 function tableOpened(state: EditorState, table: MarkdownTable): boolean {
   // A note opens with the caret at offset 0; a table starting there stays
   // rendered until the caret actually moves into it (front matter does the same).
   const from = table.from === 0 ? 1 : table.from;
-  return selectionOpensSource(state, from, table.to, "caret-edge", "structure");
+  // A text selection inside a cell must keep the same editable grid visible.
+  // The shared `edge` policy still leaves a range spanning the whole table
+  // rendered, since neither endpoint lies inside the table.
+  return selectionOpensSource(state, from, table.to, "edge", "structure");
 }
 
 function tableAt(state: EditorState, pos: number): MarkdownTable | null {
@@ -2456,7 +2469,7 @@ const tableConstructSource: ConstructSource = {
       to: table.to,
       block: true,
       kind: "table",
-      reveal: "caret-edge",
+      reveal: "edge",
       role: "structure",
       revealRegion: { from: table.from === 0 ? 1 : table.from, to: table.to },
     }];
@@ -2467,7 +2480,28 @@ const tableConstructSource: ConstructSource = {
 const tableDecoField = StateField.define<DecorationSet>({
   create: (state) => buildTableDecos(state),
   update(value, tr) {
-    if (tr.effects.some((e) => e.is(refreshViewportDecorations))) return value;
+    const refreshRanges = viewportDecorationRefreshRanges(tr);
+    if (refreshRanges) {
+      const tables = markdownTablesFromState(tr.state);
+      const affected = tables.filter((table) =>
+        refreshRanges.some(({ from, to }) => table.from <= to && table.to >= from));
+      let stale = false;
+      for (const { from, to } of refreshRanges) {
+        value.between(from, to, (oldFrom, oldTo) => {
+          if (!affected.some((table) => table.from <= oldFrom && oldTo <= table.to)) stale = true;
+        });
+      }
+      // The candidate may have removed the table delimiter or changed its
+      // extent. Remove decorations left outside the current table spans.
+      if (stale) return buildTableDecos(tr.state);
+      return rebuildDecorations(value, affected.map(({ from, to }) => ({ from, to })),
+        (from, to) => buildTableDecoRanges(tr.state, from, to));
+    }
+    // Cell text belongs to the same CM6 contenteditable as prose. Mapping its
+    // decorations during a typing burst keeps the IME's DOM target intact even
+    // when an uncommitted candidate briefly looks like table syntax. The
+    // shared typing-burst refresh redraws the grid after input settles.
+    if (isCoalescedVisualTypingTransaction(tr)) return value.map(tr.changes);
     if (tr.docChanged) {
       const tables = markdownTablesFromState(tr.startState);
       return canMapMarkdownTables(tr.startState.doc, tables, tr.changes)

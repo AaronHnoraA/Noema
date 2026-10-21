@@ -1327,38 +1327,12 @@ Tool activity arrives in bursts; one claim after the burst is enough."
       (with-current-buffer buffer
         (add-hook 'kill-buffer-hook hook nil t)))))
 
-(defun noema-agent-worker--context-text (item)
-  "Return the text of frozen context ITEM as a multibyte string.
-`base64-decode-string' yields raw UTF-8 bytes; a unibyte string holding
-non-ASCII bytes (a Chinese title, say) is not a JSON value, so the ACP
-request would fail to serialize."
-  (decode-coding-string
-   (base64-decode-string (noema-agent-worker--string item "contentBase64"))
-   'utf-8))
-
 (defun noema-agent-worker--content-blocks (worker)
-  "Return exact prompt blocks for WORKER, embedding frozen context if able."
-  (let* ((prompt (noema-agent-worker--string (noema-agent-worker-spec worker) "prompt" ""))
-         (embedded (noema-agent-acp-state-value
-                    (noema-agent-worker-buffer worker)
-                    '(:prompt-capabilities :embedded-context)))
-         (items (noema-agent-worker-context-items worker)))
-    (if (noema-agent-worker--true-p embedded)
-        (append
-         (list `((type . "text") (text . ,prompt)))
-         (mapcar (lambda (item)
-                   (let ((text (noema-agent-worker--context-text item)))
-                     `((type . "resource")
-                       (resource . ((uri . ,(noema-agent-worker--string item "resolvedUri"))
-                                    (text . ,text)
-                                    (mimeType . ,(noema-agent-worker--string item "mediaType" "text/plain; charset=utf-8")))))))
-                 items))
-      (let ((fallback prompt))
-        (dolist (item items)
-          (setq fallback (concat fallback "\n\n[Noema context: "
-                                 (noema-agent-worker--string item "ref") "]\n"
-                                 (noema-agent-worker--context-text item))))
-        (list `((type . "text") (text . ,fallback)))))))
+  "Return exact prompt blocks for WORKER using the shared ACP builder."
+  (noema-agent-acp-context-blocks
+   (noema-agent-worker-buffer worker)
+   (noema-agent-worker--string (noema-agent-worker-spec worker) "prompt" "")
+   (noema-agent-worker-context-items worker)))
 
 (defun noema-agent-worker--capability (worker name &optional default)
   "Return normalized RunSpec capability NAME for WORKER."

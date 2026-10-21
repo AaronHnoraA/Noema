@@ -38,9 +38,9 @@
   :group 'noema-interaction)
 
 ;; ── Backend selection ─────────────────────────────────────────────────────────
-;; `noema-interaction' is the interactive Ghostel agent launcher.  Its picker offers
+;; `noema-interaction' is the interactive Portal agent launcher.  Its picker offers
 ;; the three CLI engines (CC, Codex, OpenCode); selecting one opens that tool's
-;; interactive Ghostel session.
+;; interactive Portal session.
 
 (defun noema-interaction--available-backends ()
   "Return available Magent API and CLI engine identifiers."
@@ -169,7 +169,7 @@
 (defalias 'noema-interaction #'noema-interaction-open)
 
 (defun noema-interaction-cycle-backend ()
-  "Cycle the current project Ghostel engine."
+  "Cycle the current project Portal engine."
   (interactive)
   (let* ((project-root (noema-interaction-project-root))
          (ids (noema-interaction--available-backends))

@@ -13,9 +13,9 @@ mechanical-assisted.
 - `title.txt` — writable only when the host requests a generated title.
 - `review.json` — writable, pre-seeded structured audit output. Complete it so
   the host can report which polish decisions were applied or kept.
-- The chosen template `.tex` — read it to learn the available theorem
+- `template.tex` — the chosen template; read it to learn the available theorem
   environments and macros. Read-only.
-- `../../docs/latex-export-style.md` — the style contract. Obey it.
+- `style.md` — the staged style contract. Obey it.
 
 ## Your task
 
@@ -24,8 +24,8 @@ editor, or subject-matter reviser. Academic polish is allowed only through LaTeX
 markup. Fidelity always wins: when a layout improvement risks changing source
 text or meaning, do not make that improvement.
 
-1. Read the style contract, both `skills/*/SKILL.md` files, then `source.md`,
-   `draft.tex`, and the template.
+1. Apply the frozen Noema Skill context attached to the prompt. Read
+   `style.md`, `source.md`, `draft.tex`, and `template.tex`.
 2. Edit `body.tex` with the **smallest** changes that:
    - make the assembled document compile, and
    - improve formatting/beautification per the contract.
@@ -37,8 +37,8 @@ text or meaning, do not make that improvement.
 4. **Do not** redefine macros, add packages, or emit a preamble — body only.
    Preserve every `tikzpicture` exactly as supplied; the host loads TikZ and
    its `calc` library and checks the figure payload before accepting polish.
-5. Also write a concise document title to `title.txt` (one plain-text line, no
-   markup or quotes) unless explicit source metadata already supplies one. A title
+5. When the host requests a generated title, write a concise document title to
+   `title.txt` (one plain-text line, no markup or quotes). A title
    is a compact application-facing label, not a content summary. Synthesize the
    semantic intent of the source name, the template's work type, and exactly one
    dominant subject. Expand internal slugs such as `assg`, `hw`, or `q1`; preserve

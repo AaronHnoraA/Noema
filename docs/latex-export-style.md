@@ -223,3 +223,9 @@ The embedded `% aaronnote-template: {...}` header supports `documentRole`,
 `placeholder`, `description`, `group`, and `escape`. Invalid engines, duplicate
 or reserved variables, unsafe shared paths, missing required values, and unknown
 template placeholders fail explicitly.
+
+The bundled templates and headerless-template default compile with XeLaTeX.
+Article and Report use `xeCJK` with the TeX Live Fandol fonts for Chinese text;
+their page geometry, Latin text styling, headings, colours, and shared macros
+remain the same. An explicit engine in a custom template or export request still
+takes precedence.

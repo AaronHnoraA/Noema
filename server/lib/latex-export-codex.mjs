@@ -11,11 +11,12 @@
 
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { LATEX_MARKS } from "../../shared/latex-marks.mjs";
 import { latexLogDiagnostics, latexNeedsAnotherPass } from "./latex-export.mjs";
+import { resolveProjectCapabilities, resolvedSkillsForRun } from "./noema-capabilities.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -216,6 +217,7 @@ function visibleContentSignature(text) {
     .replace(/(?<!\\)%[^\n]*/g, " ")
     .replace(/^\s*\\def\\LTcaptype\{none\}\s*$/gm, " ")
     .replace(/\\begin\{(?:longtable\*?|tabular\*?|tabularx|array)\}(?:\[[^\]]*\])?\{(?:[^{}]|\{[^{}]*\})*\}/g, " ")
+    .replace(/\\begin\{(?:enumerate|itemize|description)\}(?:\[[^\]]*\])?/g, " ")
     .replace(/\\(?:begin|end)\{[^{}]+\}/g, " ")
     .replace(/\\multicolumn\{[^{}]*\}\{[^{}]*\}\{/g, "{")
     .replace(/\\(?:noalign|Needspace|vspace\*?|hspace\*?|addvspace|setlength|addtolength|enlargethispage)(?:\[[^\]]*\])?(?:\{(?:[^{}]|\{[^{}]*\})*\})*/g, "")
@@ -313,12 +315,14 @@ export function strictFidelityIssues(draftBody, polishedBody) {
   return issues;
 }
 
-// The interactive agent contract carries the prose/math fidelity rules. The
-// host hard gate is deliberately narrower: it protects opaque payloads that a
-// typesetting agent never needs to rewrite, while allowing real structural and
-// mathematical-layout work (lists, paragraphs, aligned/split wrappers, breaks).
+// Preserve visible prose as well as opaque payloads while allowing markup-only
+// structural and mathematical-layout work (lists, paragraphs, aligned/split
+// wrappers, breaks).
 function criticalFidelityIssues(draftBody, polishedBody) {
   const issues = [];
+  if (visibleContentSignature(draftBody) !== visibleContentSignature(polishedBody)) {
+    issues.push("visible prose tokens changed or were reordered");
+  }
   const draftProtected = protectedPayloads(draftBody);
   const polishedProtected = protectedPayloads(polishedBody);
   for (const key of ["code", "citations", "resources", "anchors", "tikz"]) {
@@ -378,6 +382,8 @@ function reviewGateIssue(review, candidates) {
     if (!["applied", "kept"].includes(String(decision.action || ""))) return `review.json has invalid action for ${candidate.id}`;
     if (!String(decision.reason || "").trim()) return `review.json has no reason for ${candidate.id}`;
   }
+  const untouched = review.decisions.filter((decision) => String(decision.reason || "").startsWith("Host baseline:"));
+  if (untouched.length) return `agent left ${untouched.length} host baseline decision(s) unreviewed`;
   return "";
 }
 
@@ -391,7 +397,7 @@ function draftModeFlag(engine) {
   return engine === "xelatex" ? "-no-pdf" : "-draftmode";
 }
 
-async function compileLatex({ tex, dir, latexBin, engine = "pdflatex", sourceDir, timeoutMs, signal }) {
+async function compileLatex({ tex, dir, latexBin, engine = "xelatex", sourceDir, timeoutMs, signal }) {
   const texFile = join(dir, "out.tex");
   await writeFile(texFile, tex, "utf8");
   // Each candidate needs fresh cross-reference state. Otherwise a previous
@@ -433,67 +439,35 @@ async function compileLatex({ tex, dir, latexBin, engine = "pdflatex", sourceDir
 
 // ---- Agent invocation (codex / claude / opencode) --------------------------
 
-function buildPrompt({ retryLog, needsTitle = true, sourceTitle = "", documentRole = "" }) {
+function buildPrompt({ contextItems = [], retryLog, needsTitle = true, sourceTitle = "", documentRole = "", inlineContext = false }) {
+  const skills = contextItems.map((item) => item.ref).filter(Boolean);
   const base = [
-    "You are polishing a LaTeX export. This prompt is the complete contract; do",
-    "not search outside this working directory. Every required input has been",
-    "copied here. Never inspect parent directories, absolute host paths, user",
-    "configuration, repositories, or unrelated files. Read style.md and both local",
-    "skills/*/SKILL.md files once, then source.md (content truth),",
-    "draft.tex (mechanical conversion), template.tex (available environments and",
-    "macros), polish-candidates.json, and the pre-seeded review.json. body.tex is",
-    "already an exact copy of draft.tex; edit it only after the audit. Replace every",
-    "review placeholder and answer every id exactly once. Read support .cls/.sty",
-    "files only when template.tex leaves a",
-    "specific environment or macro ambiguous.",
+    "Polish this LaTeX export using the frozen Noema Skill context supplied with this request.",
+    ...(skills.length ? [`Apply ${skills.join(" and ")}.`] : []),
+    "All inputs are in this working directory. Do not search outside it or read",
+    "parent directories, absolute host paths, user configuration, or repositories.",
+    "Read style.md, source.md, draft.tex, template.tex, polish-candidates.json,",
+    "and the pre-seeded review.json once. Read support .cls/.sty files only when a",
+    "specific template macro is ambiguous. body.tex starts as a copy of draft.tex.",
     "",
-    "EFFICIENCY CONTRACT:",
-    "- Batch independent file reads when the tool supports it and never reread an",
-    "  unchanged file. Normally the five required inputs, body.tex, and review.json",
-    "  should fit within about 8-10 tool operations.",
-    "- Do not run LaTeX, tests, git, web searches, or exploratory shell commands; the",
-    "  host owns compilation and validation and will return exact diagnostics.",
-    "- If the draft is already optimal, do not make whitespace-only edits: fill the",
-    "  concrete `kept` reviews and finish immediately.",
-    sourceTitle ? `The original source-name title is: ${JSON.stringify(sourceTitle)}.` : "",
-    documentRole ? `The selected template's document role is: ${JSON.stringify(documentRole)}.` : "",
+    "Batch independent reads when possible. Never reread unchanged files. Do not",
+    "run LaTeX, tests, git, web searches, or exploratory shell commands; the host",
+    "compiles and validates. If the draft is already optimal, leave it unchanged,",
+    "complete the concrete `kept` reviews, and finish promptly.",
+    ...(sourceTitle ? [`The original source-name title is: ${JSON.stringify(sourceTitle)}.`] : []),
+    ...(documentRole ? [`The selected template's document role is: ${JSON.stringify(documentRole)}.`] : []),
     "",
-    "ROLE: You are a format converter and validator, NOT an author or copy editor.",
-    "GOAL: deliver a publication-ready LaTeX body that is faithful to source.md,",
-    "fits template.tex, and compiles cleanly. Priorities, in order:",
-    "1. Preserve every public statement and its logical order exactly.",
-    "2. Preserve semantic structure: headings, paragraphs, lists, math, proofs,",
-    "   theorem labels, citations, explicit line breaks, and code-like material.",
-    "3. Use only environments/macros supported by template.tex and style.md.",
-    "4. Apply restrained academic typesetting: coherent hierarchy and theorem/proof/",
-    "   list/math presentation, balanced spacing, and sensible page flow.",
-    "5. Improve layout only where source semantics justify it; do not add decorative",
-    "   boxes, colours, rules, abstracts, numbering, captions, or invented structure.",
-    "Do not interpret fidelity as a reason to skip useful typesetting. When evidence",
-    "exists, actively improve semantic lists/environments, theorem/proof rhythm, long",
-    "display math, break opportunities, page flow, TOC transitions, and title fit.",
-    "A `kept` decision must identify what was inspected and why the draft is already",
-    "best; generic reasons such as `looks fine` do not satisfy the review.",
-    "Review reasons are evidence, not marketing: describe exact source/draft/body",
-    "constructs and never claim a removal or fix that is absent from the actual diff.",
-    "Use `applied` only when body.tex contains a corresponding markup change.",
-    "Fidelity is the hard gate: if a formatting improvement might change text or",
-    "meaning, do not make it. It is correct to leave already-faithful markup alone.",
-    "Treat every tikzpicture as an opaque LaTeX figure. Preserve its complete",
-    "source verbatim; the host supplies TikZ and the calc library.",
+    "You are a format converter and validator, not a copy editor. Preserve every",
+    "visible word, number, punctuation mark, citation, math/code token, explicit",
+    "line break, TikZ figure, and their order. Improve only LaTeX markup justified",
+    "by source structure and supported by template.tex and style.md. Do not invent",
+    "content, decoration, packages, or macros. If uncertain, keep the draft.",
     "",
-    "Edit body.tex so that it compiles when the host inserts it into template.tex",
-    "and its formatting follows this contract. Do NOT add, remove, translate, or reword",
-    "any prose from source.md — only change markup. Emit body content only: no",
-    "\\documentclass, no preamble, no package or macro definitions.",
-    "",
-    "Before writing the final files, perform this mandatory review:",
-    "- compare source.md against body.tex from beginning to end for omissions,",
-    "  duplication, reordered text, leaked private commands, and broken math;",
-    "- check every begin/end pair, moving argument, list nesting, and explicit break;",
-    "- check likely overfull boxes, orphan headings, excessive whitespace, and title",
-    "  overflow against template.tex; make only markup-level corrections;",
-    "- leave body.tex unchanged when draft.tex is already the most faithful result.",
+    "Audit source.md against the final body end to end. Fill every review.json",
+    "candidate exactly once with `applied` or `kept` and a reason tied to actual",
+    "source and markup. Replace every Host baseline reason with concrete evidence.",
+    "Claim `applied` only for a matching body.tex change.",
+    "Emit body content only, with no preamble or documentclass.",
     "",
     needsTitle
       ? [
@@ -523,12 +497,17 @@ function buildPrompt({ retryLog, needsTitle = true, sourceTitle = "", documentRo
   if (retryLog) {
     base.push(
       "",
-      "The previous attempt did not pass the host gates. Diagnostic:",
+      "Host compile status and diagnostics:",
       "----",
       retryLog,
       "----",
-      "Fix only what the log indicates, without changing any prose.",
+      "Address the diagnostic only where a safe markup change helps; never change prose.",
     );
+  }
+  if (inlineContext) {
+    for (const item of contextItems) {
+      base.push("", `[Noema context: ${item.ref}]`, Buffer.from(item.contentBase64, "base64").toString("utf8"));
+    }
   }
   return base.join("\n");
 }
@@ -542,9 +521,8 @@ function agentArgs(backend, { workdir, model, prompt }) {
         "-p", prompt,
         "--safe-mode",
         "--permission-mode", "acceptEdits",
-        "--tools", "Read,Edit,Write,Glob,Grep,WebFetch,WebSearch",
-        "--allowedTools", "WebFetch,WebSearch",
-        "--disallowedTools", "Bash,Task",
+        "--tools", "Read,Edit,Write,Glob,Grep",
+        "--disallowedTools", "Bash,Task,Skill,WebFetch,WebSearch",
         "--settings", JSON.stringify({
           permissions: {
             deny: ["Bash", "Task", "Read(../**)", "Read(~/**)", "Edit(../**)", "Edit(~/**)"],
@@ -642,9 +620,9 @@ function progressEvent(backend, line) {
   return { label: "", report: "" };
 }
 
-function runAgent({ backend, bin, workdir, model, retryLog, needsTitle, sourceTitle, documentRole, idleTimeoutMs, hardTimeoutMs, signal, onProgress }) {
+function runAgent({ backend, bin, workdir, model, contextItems, retryLog, needsTitle, sourceTitle, documentRole, idleTimeoutMs, hardTimeoutMs, signal, onProgress }) {
   return new Promise((resolve) => {
-    const args = agentArgs(backend, { workdir, model, prompt: buildPrompt({ retryLog, needsTitle, sourceTitle, documentRole }) });
+    const args = agentArgs(backend, { workdir, model, prompt: buildPrompt({ contextItems, retryLog, needsTitle, sourceTitle, documentRole, inlineContext: true }) });
     let child;
     try {
       child = spawn(bin, args, {
@@ -765,29 +743,33 @@ async function stageAgentContext({ workdir, styleDoc, syntaxDoc, skillsDir, back
     stageOptionalFile(styleDoc, join(workdir, "style.md"), "# LaTeX export style\nPreserve source text and improve only LaTeX markup.\n"),
     stageOptionalFile(syntaxDoc, join(workdir, "syntax.md")),
   ];
+  let contextItems = [];
   if (String(skillsDir || "").trim()) {
-    try {
-      const entries = await readdir(skillsDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const source = join(skillsDir, entry.name, "SKILL.md");
-        const targetDir = join(workdir, "skills", entry.name);
-        writes.push(mkdir(targetDir, { recursive: true }).then(() => stageOptionalFile(source, join(targetDir, "SKILL.md"))));
-      }
-    } catch {}
+    const resolution = await resolveProjectCapabilities({
+      scope: "global", builtinSkillDirectory: skillsDir,
+      globalConfigPath: join(skillsDir, ".noema-export-global-config.json"),
+      globalSkillDirectory: join(skillsDir, ".noema-export-global-skills"),
+      requestedSkills: ["aaronnote-latex-polish", "academic-typesetting"],
+      includeContent: true,
+    });
+    const missing = ["aaronnote-latex-polish", "academic-typesetting"]
+      .filter((id) => !resolution.skills.some((skill) => skill.id === id && skill.enabled && skill.validation?.valid));
+    if (missing.length) throw new Error(`Noema export Skill unavailable: ${missing.join(", ")}`);
+    contextItems = resolvedSkillsForRun(resolution).items;
   }
   if (backend === "opencode") {
     writes.push(writeFile(join(workdir, "opencode.json"), `${JSON.stringify({
       $schema: "https://opencode.ai/config.json",
       permission: {
         read: "allow", edit: "allow", glob: "allow", grep: "allow", list: "allow",
-        webfetch: "allow", websearch: "allow",
+        webfetch: "deny", websearch: "deny",
         bash: "deny", task: "deny", skill: "deny", lsp: "deny",
         question: "deny", doom_loop: "deny", external_directory: "deny",
       },
     }, null, 2)}\n`, "utf8"));
   }
   await Promise.all(writes);
+  return contextItems;
 }
 
 // ---- Orchestrator ----------------------------------------------------------
@@ -838,7 +820,7 @@ export async function polishBodyWithAgent(opts) {
     syntaxDoc = "",
     agentsDoc = "",
     assemble,
-    engine = "pdflatex",
+    engine = "xelatex",
     latexBin = "",
     backend = "codex",
     agentBin = "",
@@ -878,8 +860,8 @@ export async function polishBodyWithAgent(opts) {
       decisions: polishCandidates.map((candidate) => ({
         id: candidate.id,
         kind: candidate.kind,
-        action: "REPLACE_WITH_applied_OR_kept",
-        reason: "REPLACE_WITH_concrete_evidence",
+        action: "kept",
+        reason: "Host baseline: verified Pandoc draft retained; replace with a concrete source and markup check.",
       })),
     };
     const prepare = [
@@ -893,7 +875,7 @@ export async function polishBodyWithAgent(opts) {
       if (file?.name && file?.content) prepare.push(writeFile(join(workdir, basename(file.name)), file.content));
     }
     await Promise.all(prepare);
-    await stageAgentContext({ workdir, styleDoc, syntaxDoc, skillsDir, backend });
+    const contextItems = await stageAgentContext({ workdir, styleDoc, syntaxDoc, skillsDir, backend });
 
     emit("Validating Pandoc draft…");
     const draftVerification = await compileLatex({
@@ -950,6 +932,7 @@ export async function polishBodyWithAgent(opts) {
         bin: agentBin,
         workdir,
         model,
+        contextItems,
         retryLog,
         needsTitle,
         sourceTitle,
@@ -986,17 +969,19 @@ export async function polishBodyWithAgent(opts) {
         break;
       }
       if (reviewIssue) {
-        // Review is quality evidence, not the exported content itself. Surface
-        // incomplete evidence, but do not discard an agent body that preserves
-        // protected payloads and compiles successfully.
+        // A compiled body is not an audited body. Keep the verified Pandoc
+        // draft when the agent did not account for every candidate.
         warnings.push(`${backend} review incomplete on attempt ${attempts}: ${reviewIssue}`);
-      } else {
-        const applied = review.decisions.filter((decision) => decision?.action === "applied").length;
-        if (body === draftBody && applied > 0) {
-          warnings.push(`${backend} review says ${applied} change(s) were applied, but body.tex is unchanged`);
-        } else if (body !== draftBody && applied === 0) {
-          warnings.push(`${backend} changed body.tex but review.json records no applied decision`);
-        }
+        break;
+      }
+      const applied = review.decisions.filter((decision) => decision?.action === "applied").length;
+      if (body === draftBody && applied > 0) {
+        warnings.push(`${backend} review says ${applied} change(s) were applied, but body.tex is unchanged`);
+        break;
+      }
+      if (body !== draftBody && applied === 0) {
+        warnings.push(`${backend} changed body.tex but review.json records no applied decision`);
+        break;
       }
       emit(`Compiling (attempt ${attempts})…`);
       const res = await compileLatex({ tex: assemble(body, candidateAiTitle), dir: workdir, latexBin, engine, sourceDir, timeoutMs: compileTimeoutMs, signal });
@@ -1008,10 +993,9 @@ export async function polishBodyWithAgent(opts) {
         if (res.log) {
           warnings.push(`${backend} output has non-fatal LaTeX layout warnings: ${res.log}`);
         }
-        // The hard gate deliberately allows structural typesetting work, so it
-        // cannot also require identical prose. This heuristic makes dropped or
-        // invented text visible in the export result without blocking a body
-        // that preserved every protected payload and compiles.
+        // The hard gate compares the mechanical draft with the agent body.
+        // This separate heuristic compares the original Markdown source and
+        // can flag conversion loss that predates the agent pass.
         warnings.push(...proseFidelityWarnings(sourceMarkdown, body).map((warning) => `${backend} ${warning}`));
         return { body, aiTitle: candidateAiTitle, backend, usedAgent: true, compiled: true, attempts, warnings, agentElapsedMs, review, agentSummary };
       }
@@ -1030,7 +1014,10 @@ export async function polishBodyWithAgent(opts) {
     warnings.push(`${backend} did not repair the mechanical LaTeX compile failure`);
     return { ...base, usedAgent: false, compiled: false, attempts, warnings, agentElapsedMs, agentSummary };
   } finally {
-    await rm(workdir, { recursive: true, force: true }).catch(() => {});
+    // The workdir contains source and draft copies; Skill context stays in
+    // the in-memory ACP request and is never installed into this directory.
+    // A cleanup failure must surface instead of silently retaining them.
+    await rm(workdir, { recursive: true, force: true });
   }
 }
 

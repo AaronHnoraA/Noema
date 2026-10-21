@@ -6579,7 +6579,7 @@ export async function listLatexTemplates() {
         key,
         file,
         name: header.name || key,
-        engine: header.engine || "pdflatex",
+        engine: header.engine || "xelatex",
         documentRole: header.documentRole,
         vars: header.vars,
         sharedFiles: header.sharedFiles,
@@ -6757,7 +6757,7 @@ export async function exportLatex(body = {}) {
     throw new Error(`Selected LaTeX template could not be read: ${resolve(requestedTemplate)}`);
   }
   const header = parseLatexTemplateHeader(template.text, template.file);
-  const engine = String(body.engine || header.engine || "pdflatex").toLowerCase();
+  const engine = String(body.engine || header.engine || "xelatex").toLowerCase();
   if (!["pdflatex", "xelatex", "lualatex"].includes(engine)) throw new Error(`Unsupported LaTeX engine: ${engine}`);
   const macroResult = await loadDocumentKatexMacros(sourceFile, documentContent);
   const declaredSharedFiles = await latexTemplateSharedFiles(template.file, header.sharedFiles);
@@ -6857,7 +6857,11 @@ export async function exportLatex(body = {}) {
       backend,
       agentBin,
       agentRunner,
-      model: latexExportModel || (backend === "codex" ? latexCodexModel : ""),
+      // Export polishing uses an everyday model even when the interactive
+      // agent is configured for a slower, high-effort model. Explicit export
+      // settings still take precedence for every backend.
+      model: latexExportModel || (backend === "codex" ? latexCodexModel || "gpt-5.6-terra"
+        : backend === "claude" ? "sonnet" : ""),
       needsTitle: false,
       sourceTitle: sourceNameTitle,
       documentRole: header.documentRole || header.name || "Document",

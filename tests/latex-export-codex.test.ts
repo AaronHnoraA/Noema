@@ -61,7 +61,7 @@ describe("latex-export-codex helpers", () => {
       polishVerifiedDraft: true,
       agentRunner: async ({ prompt }: { prompt: string }) => {
         called = true;
-        expect(prompt).toContain("Preserve its complete");
+        expect(prompt).toContain("TikZ figure");
         const review = JSON.parse(await readFile(join(workdir, "review.json"), "utf8"));
         review.decisions = review.decisions.map((decision: { id: string }) => ({
           id: decision.id, action: "kept", reason: "The draft already preserves the original TikZ figure and layout.",
@@ -238,6 +238,38 @@ describe("latex-export-codex helpers", () => {
     expect(result.aiTitle).toBe("");
   });
 
+  test("rejects an audited agent body that changes visible prose", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-prose-gate-"));
+    roots.push(root);
+    const workdir = join(root, "work");
+    await mkdir(workdir);
+    const result = await polishBodyWithAgent({
+      sourceMarkdown: "Answer A.",
+      draftBody: "Answer A.\n",
+      templateText: "{{body}}",
+      assemble: (body: string) => body,
+      latexBin: "/usr/bin/true",
+      backend: "codex",
+      needsTitle: false,
+      makeWorkdir: async () => workdir,
+      polishVerifiedDraft: true,
+      agentRunner: async ({ workdir: agentWorkdir }: { workdir: string }) => {
+        const { candidates } = JSON.parse(await readFile(join(agentWorkdir, "polish-candidates.json"), "utf8"));
+        await writeFile(join(agentWorkdir, "body.tex"), "Answer B.\n");
+        await writeFile(join(agentWorkdir, "review.json"), JSON.stringify({
+          decisions: candidates.map((candidate: { id: string }) => ({
+            id: candidate.id,
+            action: "applied",
+            reason: "Changed LaTeX markup after checking the source.",
+          })),
+        }));
+        return { ok: true, summary: "reviewed" };
+      },
+    });
+    expect(result).toMatchObject({ usedAgent: false, compiled: true, body: "Answer A.\n" });
+    expect(result.warnings.some((warning: string) => warning.includes("visible prose tokens changed"))).toBe(true);
+  });
+
   test("allows agent structural and math-layout polish when protected payloads remain intact", async () => {
     const root = await mkdtemp(join(tmpdir(), "aaronnote-layout-polish-"));
     roots.push(root);
@@ -246,13 +278,13 @@ describe("latex-export-codex helpers", () => {
     const agent = join(root, "layout-agent.sh");
     await writeFile(agent, [
       "#!/bin/sh",
-      "printf '\\\\begin{enumerate}\\n\\\\item Alpha\\n\\\\item Beta\\n\\\\end{enumerate}\\n\\\\[\\\\begin{aligned}x&=1\\\\end{aligned}\\\\]\\n' > body.tex",
-      "printf '%s\\n' '{\"decisions\":[{\"id\":\"whole-document-structure\",\"action\":\"applied\",\"reason\":\"semantic list\"},{\"id\":\"academic-layout\",\"action\":\"applied\",\"reason\":\"display alignment\"}]}' > review.json",
+      "printf '\\\\begin{enumerate}[label=(\\\\alph*)]\\n\\\\item Alpha\\n\\\\item Beta\\n\\\\end{enumerate}\\n\\\\[\\\\begin{aligned}x&=1\\\\end{aligned}\\\\]\\n' > body.tex",
+      "printf '%s\\n' '{\"decisions\":[{\"id\":\"whole-document-structure\",\"action\":\"applied\",\"reason\":\"semantic list\"},{\"id\":\"academic-layout\",\"action\":\"applied\",\"reason\":\"display alignment\"},{\"id\":\"alpha-enumeration\",\"action\":\"applied\",\"reason\":\"retained the source letter labels\"}]}' > review.json",
     ].join("\n"), "utf8");
     await chmod(agent, 0o755);
     const result = await polishBodyWithAgent({
-      sourceMarkdown: "Alpha\n\nBeta\n\n\\(x=1\\)",
-      draftBody: "Alpha\n\nBeta\n\n\\[x=1\\]\n",
+      sourceMarkdown: "(a) Alpha\n\n(b) Beta\n\n\\(x=1\\)",
+      draftBody: "(a) Alpha\n\n(b) Beta\n\n\\[x=1\\]\n",
       templateText: "{{body}}",
       assemble: (body: string) => body,
       latexBin: "/usr/bin/true",
@@ -414,7 +446,7 @@ describe("latex-export-codex helpers", () => {
       "#!/bin/sh",
       "sleep 0.08",
       "printf 'Answer A.\\n' > body.tex",
-      "printf '%s\\n' '{\"decisions\":[{\"id\":\"whole-document-structure\",\"action\":\"kept\",\"reason\":\"full structure checked\"},{\"id\":\"academic-layout\",\"action\":\"kept\",\"reason\":\"layout already restrained\"}]}' > review.json",
+      "printf '%s\\n' '{\"decisions\":[{\"id\":\"whole-document-structure\",\"action\":\"kept\",\"reason\":\"full structure checked\"},{\"id\":\"academic-layout\",\"action\":\"kept\",\"reason\":\"layout already restrained\"},{\"id\":\"role-environments\",\"action\":\"kept\",\"reason\":\"Answer is plain text\"}]}' > review.json",
     ].join("\n"), "utf8");
     await chmod(agent, 0o755);
     const progress: string[] = [];
@@ -437,16 +469,16 @@ describe("latex-export-codex helpers", () => {
     expect(progress.some((line) => line.includes("still alive"))).toBe(true);
   });
 
-  test("applies isolated, network-capable launch policy to all three backends", async () => {
+  test("uses frozen Noema Skill context and isolated launch policy for all three backends", async () => {
     const root = await mkdtemp(join(tmpdir(), "aaronnote-agent-policy-"));
     roots.push(root);
     const style = join(root, "style-source.md");
     const skills = join(root, "skills");
     await writeFile(style, "STYLE_SENTINEL\n", "utf8");
-    await mkdir(join(skills, "one"), { recursive: true });
-    await mkdir(join(skills, "two"), { recursive: true });
-    await writeFile(join(skills, "one", "SKILL.md"), "ONE_SENTINEL\n", "utf8");
-    await writeFile(join(skills, "two", "SKILL.md"), "TWO_SENTINEL\n", "utf8");
+    await mkdir(join(skills, "aaronnote-latex-polish"), { recursive: true });
+    await mkdir(join(skills, "academic-typesetting"), { recursive: true });
+    await writeFile(join(skills, "aaronnote-latex-polish", "SKILL.md"), "---\nname: aaronnote-latex-polish\ndescription: First export check\n---\nONE_SENTINEL\n", "utf8");
+    await writeFile(join(skills, "academic-typesetting", "SKILL.md"), "---\nname: academic-typesetting\ndescription: Second export check\n---\nTWO_SENTINEL\n", "utf8");
 
     for (const backend of ["codex", "claude", "opencode"]) {
       const workdir = join(root, `work-${backend}`);
@@ -457,18 +489,21 @@ describe("latex-export-codex helpers", () => {
             "case \" $* \" in *\" --ignore-user-config \"*) ;; *) exit 21 ;; esac",
             "case \" $* \" in *\" sandbox_workspace_write.network_access=true \"*) ;; *) exit 22 ;; esac",
             "case \" $* \" in *\" sandbox_workspace_write.writable_roots=[] \"*) ;; *) exit 23 ;; esac",
+            "case \" $* \" in *ONE_SENTINEL*TWO_SENTINEL*) ;; *) exit 32 ;; esac",
           ]
         : backend === "claude"
           ? [
               "case \" $* \" in *\" --safe-mode \"*) ;; *) exit 24 ;; esac",
               "case \" $* \" in *dangerously-skip-permissions*) exit 25 ;; *) ;; esac",
-              "case \" $* \" in *\" --disallowedTools Bash,Task \"*) ;; *) exit 26 ;; esac",
+              "case \" $* \" in *\" --disallowedTools Bash,Task,Skill,WebFetch,WebSearch \"*) ;; *) exit 26 ;; esac",
+              "case \" $* \" in *ONE_SENTINEL*TWO_SENTINEL*) ;; *) exit 31 ;; esac",
             ]
           : [
               "case \" $* \" in *\" --pure \"*) ;; *) exit 27 ;; esac",
               "case \" $* \" in *dangerously-skip-permissions*) exit 28 ;; *) ;; esac",
               "grep -q '\"external_directory\": \"deny\"' opencode.json || exit 29",
-              "grep -q '\"webfetch\": \"allow\"' opencode.json || exit 30",
+              "grep -q '\"webfetch\": \"deny\"' opencode.json || exit 30",
+              "grep -q '\"websearch\": \"deny\"' opencode.json || exit 31",
             ];
       const reportEvent = backend === "codex"
         ? '{"type":"item.completed","item":{"type":"agent_message","text":"codex concrete audit report"}}'
@@ -478,11 +513,11 @@ describe("latex-export-codex helpers", () => {
       await writeFile(agent, [
         "#!/bin/sh",
         "grep -q STYLE_SENTINEL style.md || exit 11",
-        "grep -q ONE_SENTINEL skills/one/SKILL.md || exit 12",
-        "grep -q TWO_SENTINEL skills/two/SKILL.md || exit 13",
+        "test ! -e .claude/skills && test ! -e .agents/skills && test ! -e skills || exit 12",
+        "case \" $* \" in *ONE_SENTINEL*TWO_SENTINEL*) ;; *) exit 13 ;; esac",
         ...policyChecks,
         "printf 'Answer A.\\n' > body.tex",
-        "printf '%s\\n' '{\"decisions\":[{\"id\":\"whole-document-structure\",\"action\":\"kept\",\"reason\":\"full structure checked\"},{\"id\":\"academic-layout\",\"action\":\"kept\",\"reason\":\"layout already restrained\"}]}' > review.json",
+        "printf '%s\\n' '{\"decisions\":[{\"id\":\"whole-document-structure\",\"action\":\"kept\",\"reason\":\"full structure checked\"},{\"id\":\"academic-layout\",\"action\":\"kept\",\"reason\":\"layout already restrained\"},{\"id\":\"role-environments\",\"action\":\"kept\",\"reason\":\"Answer is plain text\"}]}' > review.json",
         `printf '%s\\n' '${reportEvent}'`,
       ].join("\n"), "utf8");
       await chmod(agent, 0o755);
@@ -503,7 +538,41 @@ describe("latex-export-codex helpers", () => {
       });
       expect(result).toMatchObject({ usedAgent: true, compiled: true });
       expect(result.agentSummary).toContain("concrete audit report");
+      await expect(access(workdir)).rejects.toThrow();
     }
+  });
+
+  test("passes frozen Skill items to the ACP runner without project skill copies", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-export-acp-context-"));
+    roots.push(root);
+    const skills = join(root, "skills");
+    const workdir = join(root, "work");
+    await mkdir(join(skills, "aaronnote-latex-polish"), { recursive: true });
+    await mkdir(join(skills, "academic-typesetting"), { recursive: true });
+    await mkdir(workdir);
+    await writeFile(join(skills, "aaronnote-latex-polish", "SKILL.md"),
+      "---\nname: aaronnote-latex-polish\ndescription: Polish markup\n---\nONE_SENTINEL\n");
+    await writeFile(join(skills, "academic-typesetting", "SKILL.md"),
+      "---\nname: academic-typesetting\ndescription: Academic layout\n---\nTWO_SENTINEL\n");
+    let observed: any;
+    await polishBodyWithAgent({
+      sourceMarkdown: "Answer A.", draftBody: "Answer A.\n", templateText: "{{body}}",
+      assemble: (body: string) => body, latexBin: "/usr/bin/true", backend: "claude",
+      needsTitle: false, skillsDir: skills, makeWorkdir: async () => workdir,
+      polishVerifiedDraft: true,
+      agentRunner: async (options: any) => {
+        observed = options;
+        expect(options.prompt.startsWith("/")).toBe(false);
+        expect(options.contextItems.map((item: any) => item.ref)).toEqual([
+          "skill:aaronnote-latex-polish", "skill:academic-typesetting",
+        ]);
+        expect(Buffer.from(options.contextItems[0].contentBase64, "base64").toString("utf8")).toContain("ONE_SENTINEL");
+        await expect(access(join(workdir, ".claude", "skills"))).rejects.toThrow();
+        return { ok: true, summary: "Draft inspected; markup retained." };
+      },
+    });
+    expect(observed).toBeTruthy();
+    await expect(access(workdir)).rejects.toThrow();
   });
 
   test("invokes the Agent only after a real mechanical compile defect", async () => {
@@ -542,7 +611,7 @@ describe("latex-export-codex helpers", () => {
     expect(result).toMatchObject({ usedAgent: true, compiled: true, attempts: 1, body: "\\emph{Alpha}.\n" });
   });
 
-  test("surfaces incomplete review evidence without blocking compiled agent output", async () => {
+  test("keeps the verified draft when review evidence is incomplete", async () => {
     const root = await mkdtemp(join(tmpdir(), "aaronnote-fresh-review-"));
     roots.push(root);
     const workdir = join(root, "work");
@@ -566,7 +635,7 @@ describe("latex-export-codex helpers", () => {
       maxAttempts: 1,
       polishVerifiedDraft: true,
     });
-    expect(stale.usedAgent).toBe(true);
+    expect(stale.usedAgent).toBe(false);
     expect(stale.aiTitle).toBe("");
     expect(stale.warnings.some((warning: string) => warning.includes("review incomplete"))).toBe(true);
 
@@ -593,7 +662,7 @@ describe("latex-export-codex helpers", () => {
       maxAttempts: 1,
       polishVerifiedDraft: true,
     });
-    expect(duplicate.usedAgent).toBe(true);
+    expect(duplicate.usedAgent).toBe(false);
     expect(duplicate.warnings.some((warning: string) => warning.includes("duplicate candidate"))).toBe(true);
   });
 

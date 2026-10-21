@@ -1,4 +1,5 @@
 import type { Editor } from "../src/lib.ts";
+import { EditorView } from "@codemirror/view";
 import { inputMethodKey, type VimLiteController } from "./vim-lite.ts";
 import {
   runEditorDelete,
@@ -26,6 +27,29 @@ type XwidgetSpecialKey =
   | "End"
   | "PageUp"
   | "PageDown";
+
+// Safari may deliver the Enter that confirms an IME candidate just after
+// compositionend. CM6 ignores that key itself; this capture-phase host adapter
+// must make the same decision before it gets to CM6's listener.
+const recentCompositionEnds = new WeakMap<EditorView, number>();
+const IME_CONFIRMATION_GRACE_MS = 100;
+if (typeof document !== "undefined") {
+  document.addEventListener("compositionend", (event) => {
+    if (!(event.target instanceof HTMLElement)) return;
+    const view = EditorView.findFromDOM(event.target);
+    if (view) recentCompositionEnds.set(view, Date.now());
+  }, true);
+}
+
+function compositionJustEnded(view: EditorView): boolean {
+  const endedAt = recentCompositionEnds.get(view);
+  return endedAt !== undefined && Date.now() - endedAt < IME_CONFIRMATION_GRACE_MS;
+}
+
+/** The editor owns IME input until WebKit has finished its candidate confirmation. */
+export function editorIMEConfirmationPending(view: EditorView): boolean {
+  return view.composing || view.compositionStarted || compositionJustEnded(view);
+}
 type XwidgetKeyContext = {
   editor: Editor;
   editorHost: HTMLElement;
@@ -257,7 +281,12 @@ function shouldHandleXwidgetSpecialEvent(
   key: XwidgetSpecialKey | null,
 ): key is XwidgetSpecialKey {
   if (context.enabled === false || context.vim.mode() !== "insert") return false;
-  if (event.defaultPrevented || event.isComposing) return false;
+  // Embedded WebKit may omit isComposing on the Enter/beforeinput that accepts
+  // an IME candidate. CM6 owns composition for prose and table cells alike.
+  if (event.defaultPrevented || event.isComposing
+      || context.editor.view.composing || context.editor.view.compositionStarted
+      || (event instanceof KeyboardEvent && event.keyCode === 229)
+      || (key === "Enter" && editorIMEConfirmationPending(context.editor.view))) return false;
   if (!key) return false;
   if (event instanceof KeyboardEvent && (event.ctrlKey || event.metaKey || event.altKey)) return false;
   if (isTextEditingTarget(event.target, context.editorHost)) return false;
@@ -601,6 +630,14 @@ export function handleXwidgetControlBeforeInput(event: InputEvent, context: Xwid
 
 export function handleXwidgetSpecialBeforeInput(event: InputEvent, context: XwidgetKeyContext): boolean {
   const key = specialKeyFromInputEvent(event);
+  if (key === "Enter" && !event.defaultPrevented && context.enabled !== false
+      && context.vim.mode() === "insert" && compositionJustEnded(context.editor.view)
+      && !isTextEditingTarget(event.target, context.editorHost)
+      && !isTextEditingTarget(document.activeElement, context.editorHost)
+      && eventOwnedByEditor(event, context.editorHost, context.allowDetachedTarget !== false)) {
+    hardStop(event);
+    return true;
+  }
   if (!shouldHandleXwidgetSpecialEvent(event, context, key)) return false;
   if (key === "Tab") return false; // let CM6 insert \t naturally; snippet expansion happens in keydown
   hardStop(event);

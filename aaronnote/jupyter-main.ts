@@ -644,6 +644,17 @@ window.noemaJupyterOpenView = () => {
   // output; variables, sessions and kernel management belong to Emacs.
   render();
 };
+if (window.portalBridge) {
+  window.portalBridge.receive = async (message) => {
+    if (message.type === "jupyter-open" && message.payload) {
+      const payload = message.payload as Partial<DocumentRef> & { cellId?: string };
+      openDocument(payload);
+      if ("view" in payload) window.noemaJupyterOpenView?.("outputs");
+    } else if (message.type === "core-ready") {
+      await api.connection.reconnect("focus");
+    }
+  };
+}
 
 function button(label: string, title: string, run: () => void | Promise<void>, className = ""): HTMLButtonElement {
   const result = document.createElement("button");

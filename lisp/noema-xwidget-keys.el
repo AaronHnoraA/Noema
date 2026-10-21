@@ -371,17 +371,23 @@ normal result rather than a gateway error."
           (my/noema-command "host-owns-keyboard"))))))
 
 (defun my/noema--focus-xwidget-window (window)
-  "Focus Noema xwidget WINDOW like a direct window click."
+  "Focus the Noema page in WINDOW like a direct window click."
   (when (window-live-p window)
     (condition-case nil
         (let ((buffer (window-buffer window)))
-          (when (my/noema--xwidget-buffer-p buffer)
+          (when (or (my/noema--xwidget-buffer-p buffer)
+                    (and (fboundp 'my/noema-portal-buffer-p)
+                         (my/noema-portal-buffer-p buffer)))
             (select-window window)
             (my/noema--select-emacs-window window)
             (setq my/noema--app-buffer buffer)
-            (when (fboundp 'xwidget-webkit-edit-mode)
+            (when (and (my/noema--xwidget-buffer-p buffer)
+                       (fboundp 'xwidget-webkit-edit-mode))
               (with-current-buffer buffer
                 (ignore-errors (xwidget-webkit-edit-mode 1))))
+            (when (and (fboundp 'my/noema-portal-buffer-p)
+                       (my/noema-portal-buffer-p buffer))
+              (my/noema-portal-focus buffer))
             ;; Notification-only: no JavaScript evaluation and no reply wait
             ;; in Emacs' focus/window command path.
             (with-current-buffer buffer
@@ -418,6 +424,9 @@ Noema and the target is a normal Emacs window, restore Emacs frame focus."
                    (my/noema--xwidget-buffer-p source-buffer))
           (my/noema--release-xwidget-input-buffer source-buffer))
         (cond
+         ((and (fboundp 'my/noema-portal-buffer-p)
+               (my/noema-portal-buffer-p target-buffer))
+          (my/noema-portal-focus target-buffer))
          ((my/noema--xwidget-buffer-p target-buffer)
           (my/noema--focus-xwidget-window target-window)
           (run-at-time 0.05 nil
@@ -629,19 +638,18 @@ the page's pane."
   "Return non-nil when BUFFER hosts the local Noema xwidget page."
   (let ((buffer (or buffer (current-buffer))))
     (and (buffer-live-p buffer)
-         (or (eq buffer my/noema--app-buffer)
-             (with-current-buffer buffer
-               (and (eq major-mode 'xwidget-webkit-mode)
-                    (or
-                     my/noema--client-id
-                     my/noema-buffer-file-name
-                     my/noema--xwidget-forced-name
-                     (and (integerp my/noema--port)
-                          (fboundp 'my/xwidget-current-url)
-                          (when-let* ((url (my/xwidget-current-url buffer)))
-                            (string-prefix-p
-                             (format "http://127.0.0.1:%d/" my/noema--port)
-                             url))))))))))
+         (with-current-buffer buffer
+           (and (eq major-mode 'xwidget-webkit-mode)
+                (or (eq buffer my/noema--app-buffer)
+                    my/noema--client-id
+                    my/noema-buffer-file-name
+                    my/noema--xwidget-forced-name
+                    (and (integerp my/noema--port)
+                         (fboundp 'my/xwidget-current-url)
+                         (when-let* ((url (my/xwidget-current-url buffer)))
+                           (string-prefix-p
+                            (format "http://127.0.0.1:%d/" my/noema--port)
+                            url)))))))))
 
 (defun my/noema--jupyter-xwidget-buffer-p (&optional buffer)
   "Return non-nil when BUFFER hosts the Noema-owned Jupyter xwidget page."

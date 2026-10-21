@@ -16,6 +16,7 @@ const pausedDirtyViews = new Set<EditorView>();
 const viewGenerations = new WeakMap<EditorView, number>();
 // At most one background-parser continuation may exist for a live view.
 const parserWaitViews = new WeakSet<EditorView>();
+const compositionRefreshListeners = new Map<EditorView, () => void>();
 let viewportRefreshPaused = false;
 
 const VIEWPORT_PARSE_BUDGET_MS = 8;
@@ -33,6 +34,28 @@ function viewportParseTarget(view: EditorView): number {
 }
 
 function dispatchRefresh(view: EditorView, ranges: readonly ViewportRefreshRange[]): void {
+  if (view.compositionStarted) {
+    if (!compositionRefreshListeners.has(view)) {
+      const documentRef = view.contentDOM.ownerDocument;
+      const remove = (): void => {
+        documentRef.removeEventListener("compositionend", resume, true);
+        view.contentDOM.removeEventListener("blur", resume, true);
+        compositionRefreshListeners.delete(view);
+      };
+      const resume = (): void => {
+        remove();
+        // CM6 may commit the final input after compositionend; schedule from
+        // the next task so every visual family sees the committed document.
+        window.setTimeout(() => {
+          if (view.dom.isConnected) scheduleViewportDecorationRefresh(view);
+        }, 0);
+      };
+      compositionRefreshListeners.set(view, remove);
+      documentRef.addEventListener("compositionend", resume, true);
+      view.contentDOM.addEventListener("blur", resume, true);
+    }
+    return;
+  }
   if (view.dom.isConnected) view.dispatch({ effects: refreshViewportDecorations.of(ranges) });
 }
 
@@ -103,6 +126,7 @@ export function forgetViewportDecorationRefresh(view: EditorView): void {
   cancelPendingRefresh(view);
   advanceGeneration(view);
   pausedDirtyViews.delete(view);
+  compositionRefreshListeners.get(view)?.();
 }
 
 // Model-backed widgets (for example citations) already have a parsed editor

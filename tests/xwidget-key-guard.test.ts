@@ -775,6 +775,52 @@ describe("xwidget key guard", () => {
     }
   });
 
+  test("an IME confirmation Enter cannot split a table header through the xwidget key adapter", async () => {
+    const host = withMounted(document.createElement("section"));
+    const markdown = "| Name | Value |\n| --- | --- |\n| item | value |";
+    const editor = createEditor(host, { initialContent: markdown });
+    const vim = createVimLite(editor, host);
+    vim.setMode("insert");
+    editor.setMarkdownSelection(markdown.indexOf("Name") + 4);
+    try {
+      editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      expect(editor.view.compositionStarted).toBe(true);
+      // Some embedded WebKit paths omit isComposing on the confirming Enter.
+      const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      Object.defineProperty(event, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(event, { editor, editorHost: host, vim })).toBe(false);
+      const paragraph = new InputEvent("beforeinput", {
+        bubbles: true, cancelable: true, inputType: "insertParagraph",
+      });
+      Object.defineProperty(paragraph, "target", { value: document.body });
+      expect(handleXwidgetSpecialBeforeInput(paragraph, { editor, editorHost: host, vim })).toBe(false);
+      expect(editor.getMarkdown()).toBe(markdown);
+      editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      // Safari can report the candidate-confirming Enter after compositionend.
+      const lateEnter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      Object.defineProperty(lateEnter, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(lateEnter, { editor, editorHost: host, vim })).toBe(false);
+      const lateParagraph = new InputEvent("beforeinput", {
+        bubbles: true, cancelable: true, inputType: "insertParagraph",
+      });
+      Object.defineProperty(lateParagraph, "target", { value: document.body });
+      expect(handleXwidgetSpecialBeforeInput(lateParagraph, { editor, editorHost: host, vim })).toBe(true);
+      expect(lateParagraph.defaultPrevented).toBe(true);
+      expect(editor.getMarkdown()).toBe(markdown);
+      await new Promise((resolve) => setTimeout(resolve, 110));
+      const navigation = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      Object.defineProperty(navigation, "target", { value: document.body });
+      expect(handleXwidgetSpecialKeydown(navigation, { editor, editorHost: host, vim })).toBe(true);
+      expect(editor.getMarkdown().split("\n")[0]).toBe("| Name | Value |");
+      expect(editor.getMarkdown().split("\n")).toHaveLength(3);
+      expect(editor.view.state.doc.lineAt(editor.getMarkdownSelection().from).number).toBe(3);
+    } finally {
+      editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      editor.destroy();
+      host.remove();
+    }
+  });
+
   test("handles insert-mode Tab and Shift-Tab through CM6 list indentation", () => {
     const host = withMounted(document.createElement("section"));
     const editor = createEditor(host, { initialContent: "- parent\n- item" });

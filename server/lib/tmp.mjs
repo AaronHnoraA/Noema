@@ -1,9 +1,17 @@
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 
-let tmpRoot = resolve(process.env.AARONNOTE_TMP_DIR || join(tmpdir(), "aaronnote"));
+function canonicalPathForCreate(path) {
+  const absolute = resolve(path);
+  if (existsSync(absolute)) return realpathSync(absolute);
+  const parent = dirname(absolute);
+  return parent === absolute ? absolute : join(canonicalPathForCreate(parent), basename(absolute));
+}
+
+let tmpRoot = canonicalPathForCreate(process.env.AARONNOTE_TMP_DIR || join(tmpdir(), "aaronnote"));
 
 function safeKind(kind) {
   return String(kind || "runtime").replace(/[^A-Za-z0-9._-]+/g, "-") || "runtime";
@@ -23,7 +31,7 @@ function safeReadablePath(filePath) {
 
 export function configureTmpRoot(root) {
   const next = String(root || process.env.AARONNOTE_TMP_DIR || "").trim();
-  tmpRoot = resolve(next || join(tmpdir(), "aaronnote"));
+  tmpRoot = canonicalPathForCreate(next || join(tmpdir(), "aaronnote"));
   return tmpRoot;
 }
 

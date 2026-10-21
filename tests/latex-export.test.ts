@@ -652,7 +652,7 @@ describe("LaTeX export", () => {
     const article = templates.find((t) => t.key === "noema-article");
     const assignment = templates.find((t) => t.key === "noema-assignment");
     expect(templates[0]?.key).toBe("noema-article"); // default sorts first
-    expect(article?.engine).toBe("pdflatex"); // header-less falls back to pdflatex
+    expect(article?.engine).toBe("xelatex"); // header-less uses the Noema default
     expect(assignment?.name).toBe("Assignment");
     expect(assignment?.engine).toBe("xelatex");
     expect((assignment?.vars as Array<Record<string, unknown>>)[0]?.id).toBe("coursecode");
@@ -887,6 +887,30 @@ describe("LaTeX export", () => {
     expect(result.agent).toMatchObject({ backend: "opencode", attempts: 1, applied: 0, kept: 2 });
     expect(result.agent?.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(await readFile(out, "utf8")).toContain("Verified body.");
+  });
+
+  test("passes everyday export models to the injected ACP runner", async () => {
+    const { root, notes } = await setupRoot();
+    const note = join(notes, "models.md");
+    await writeFile(note, "Verified body.\n", "utf8");
+    for (const [backend, expected] of [["codex", "gpt-5.6-terra"], ["claude", "sonnet"]]) {
+      configure({
+        root: notes, workspaceRoot: root,
+        latexTemplatesRoot: join(root, "templates"),
+        latexExportEngine: "codex", latexExportAgent: backend,
+      });
+      let receivedModel = "";
+      await exportLatex({
+        file: note,
+        outputPath: join(notes, `models-${backend}.tex`),
+        polish: true,
+        agentRunner: async ({ model }: { model: string }) => {
+          receivedModel = model;
+          return { ok: false, message: "test runner stopped after recording model" };
+        },
+      });
+      expect(receivedModel).toBe(expected);
+    }
   });
 
   test("honors annotations:none from the whole note when exporting one scope", async () => {

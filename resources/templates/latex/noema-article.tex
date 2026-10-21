@@ -1,9 +1,11 @@
-% aaronnote-template: {"name":"Article","engine":"pdflatex","documentRole":"article","vars":[]}
+% aaronnote-template: {"name":"Article","engine":"xelatex","documentRole":"article","vars":[]}
 % Default Noema export: article / meeting-note / academic style.
 \documentclass[11pt]{article}
 \usepackage[a4paper,margin=1in]{geometry}
 \usepackage{amsmath,amssymb,amsthm,mathtools}
-\usepackage{CJKutf8}
+\usepackage{xeCJK}
+\setCJKmainfont[BoldFont=FandolSong-Bold.otf]{FandolSong-Regular.otf}
+\setCJKsansfont[BoldFont=FandolHei-Bold.otf]{FandolHei-Regular.otf}
 \usepackage{graphicx}
 \usepackage{microtype}
 \usepackage{enumitem}
@@ -11,8 +13,6 @@
 \usepackage{titlesec}
 \usepackage{hyperref}
 \hypersetup{colorlinks=true,linkcolor=MidnightBlue,citecolor=MidnightBlue,urlcolor=MidnightBlue,linktoc=all}
-\AtBeginDocument{\begin{CJK*}{UTF8}{gbsn}}
-\AtEndDocument{\end{CJK*}}
 
 \setlist{topsep=.35em,itemsep=.2em,parsep=0pt}
 \titleformat{\section}{\normalfont\Large\bfseries}{\thesection}{0.6em}{}

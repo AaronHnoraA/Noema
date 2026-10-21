@@ -3,7 +3,7 @@
 ;;; Commentary:
 ;;
 ;; Unified CLI-session core for noema-interaction terminal backends.
-;; Provides parametric terminal session management (interactive Ghostel/eat)
+;; Provides parametric terminal session management (interactive Portal/eat)
 ;; and headless exec (one-shot process) for CLI AI tools.
 ;;
 ;; Tools are registered via `noema-interaction-cli-register-tool'.
@@ -11,7 +11,7 @@
 ;; thin public wrappers that delegate to the generic functions.
 ;;
 ;; Session principle:
-;;   Interactive Ghostel sessions: CLI keeps its own session (process + buffer).
+;;   Interactive Portal sessions: CLI keeps its own session (process + buffer).
 ;;   Headless exec path: one-shot process, no persistent session needed.
 
 ;;; Code:
@@ -24,18 +24,18 @@
 (require 'noema-interaction-backend)
 
 (defvar my/terminal-startup-cd-inhibited)
-(defvar my/ghostel-popup-kind nil)
-(defvar my/ghostel-popup-title nil)
+(defvar my/portal-popup-kind nil)
+(defvar my/portal-popup-title nil)
+(defvar portal-view--target)
 (defvar eat-terminal)
 (defvar eat-term-name)
 
-(declare-function my/ghostel-popup-display-buffer "init-ghostel-popup" (buffer))
+(declare-function my/portal-popup-display-buffer "init-portal-popup" (buffer))
 (declare-function turn-off-evil-mode "evil" ())
 (declare-function evil-emacs-state "evil" ())
-(declare-function my/ghostel-create-hidden "init-utils" (name))
-(declare-function my/ghostel-send-command "init-ghostel" (buffer command &optional retries))
-(declare-function ghostel-paste-string "ghostel" (string))
-(declare-function ghostel-send-string "ghostel" (string))
+(declare-function my/portal-create "init-portal" (&rest args))
+(declare-function portal--terminal-paste "portal-terminal" (target text &optional enter))
+(declare-function portal-terminal-metadata "portal-terminal" (&optional buffer))
 (declare-function eat-mode "eat" ())
 (declare-function eat-exec "eat" (buffer name command startfile &rest switches))
 (declare-function eat-term-send-string "eat" (terminal string))
@@ -48,10 +48,10 @@ Each entry is (ID . SPEC) where SPEC is a plist with:
   :name                Display name string
   :executable-var      Symbol of defcustom holding the executable path
   :extra-args-var      Symbol of defcustom holding extra arg list (or nil)
-  :terminal-backend-var Symbol of defcustom holding terminal backend (ghostel/eat)
+  :terminal-backend-var Symbol of defcustom holding terminal backend (portal/eat)
   :env-vars            List of environment variable strings for the session
   :buffer-prefix       String prefix for buffer names (e.g. \"codex\")
-  :popup-kind          Symbol for the Ghostel popup kind
+  :popup-kind          Symbol for the Portal popup kind
   :minor-mode          Minor mode function symbol to activate in terminal buffers
   :exec-args-fn        Function (prompt output-file root) → command string list
   :exec-output         Symbol: \\='file or \\='stdout")
@@ -78,9 +78,11 @@ See `noema-interaction-cli--tools' for the expected plist keys."
              (noema-interaction-cli-draft-prompt id prompt root on-success on-error))
     :stop (lambda (root) (noema-interaction-cli-stop id root))
     :cancel (lambda (root)
-              (when-let* ((buf (noema-interaction-cli-buffer id root))
-                          (proc (get-buffer-process buf)))
-                (interrupt-process proc)))))
+              (if (eq (noema-interaction-cli--terminal-backend id) 'portal)
+                  (noema-interaction-cli-stop id root)
+                (when-let* ((buf (noema-interaction-cli-buffer id root))
+                            (proc (get-buffer-process buf)))
+                  (interrupt-process proc))))))
   id)
 
 (defun noema-interaction-cli--spec (id key)
@@ -101,9 +103,9 @@ See `noema-interaction-cli--tools' for the expected plist keys."
     (and var (boundp var) (symbol-value var))))
 
 (defun noema-interaction-cli--terminal-backend (id)
-  "Return the terminal backend symbol (ghostel or eat) for tool ID."
+  "Return the terminal backend symbol (portal or eat) for tool ID."
   (let ((var (noema-interaction-cli--spec id :terminal-backend-var)))
-    (or (and var (boundp var) (symbol-value var)) 'ghostel)))
+    (or (and var (boundp var) (symbol-value var)) 'portal)))
 
 ;; ── Process registry ──────────────────────────────────────────────────────────
 
@@ -139,7 +141,7 @@ See `noema-interaction-cli--tools' for the expected plist keys."
           (lambda ()
             (maphash
              (lambda (_key process)
-               (when (process-live-p process)
+               (when (and (processp process) (process-live-p process))
                  (delete-process process)))
              noema-interaction-cli--processes)))
 
@@ -169,8 +171,8 @@ See `noema-interaction-cli--tools' for the expected plist keys."
 (defun noema-interaction-cli--ensure-terminal-backend (id)
   "Ensure the configured terminal backend for tool ID is available."
   (pcase (noema-interaction-cli--terminal-backend id)
-    ('ghostel
-     (require 'ghostel))
+    ('portal
+     (require 'init-portal))
     ('eat
      (unless (featurep 'eat) (require 'eat nil t))
      (unless (featurep 'eat)
@@ -180,7 +182,7 @@ See `noema-interaction-cli--tools' for the expected plist keys."
 (defun noema-interaction-cli--terminal-paste-string (id string)
   "Send STRING using bracketed paste to the current buffer for tool ID."
   (pcase (noema-interaction-cli--terminal-backend id)
-    ('ghostel (ghostel-paste-string string))
+    ('portal (portal--terminal-paste portal-view--target string))
     ('eat
      (when eat-terminal
        (eat-term-send-string eat-terminal "\e[200~")
@@ -191,7 +193,7 @@ See `noema-interaction-cli--tools' for the expected plist keys."
 (defun noema-interaction-cli--terminal-send-return (id)
   "Send return to the current buffer for tool ID."
   (pcase (noema-interaction-cli--terminal-backend id)
-    ('ghostel (ghostel-send-string "\r"))
+    ('portal (portal--terminal-paste portal-view--target "" t))
     ('eat (when eat-terminal (eat-term-send-string eat-terminal "\r")))
     (tb (error "Unsupported terminal backend for %s: %s" id tb))))
 
@@ -202,12 +204,12 @@ See `noema-interaction-cli--tools' for the expected plist keys."
   (with-current-buffer buffer
     (setq default-directory project-root)
     (let ((kind (noema-interaction-cli--spec id :popup-kind)))
-      (when kind (setq-local my/ghostel-popup-kind kind)))
-    (setq-local my/ghostel-popup-title
+      (when kind (setq-local my/portal-popup-kind kind)))
+    (setq-local my/portal-popup-title
                 (format "%s  %s"
                         (or (noema-interaction-cli--spec id :name) (symbol-name id))
                         (abbreviate-file-name project-root)))
-    (unless (derived-mode-p 'ghostel-mode)
+    (unless (derived-mode-p 'portal-terminal-mode)
       (when (fboundp 'evil-emacs-state) (evil-emacs-state))
       (when (bound-and-true-p evil-local-mode) (turn-off-evil-mode)))
     (let ((mode (noema-interaction-cli--spec id :minor-mode)))
@@ -231,14 +233,14 @@ Returns a (BUFFER . PROCESS) cons cell."
          (env-vars (or (noema-interaction-cli--spec id :env-vars)
                        (list "TERM_PROGRAM=emacs"))))
     (pcase (noema-interaction-cli--terminal-backend id)
-      ('ghostel
-       (let* ((process-environment (append env-vars process-environment))
-              (buffer (my/ghostel-create-hidden buffer-name)))
+      ('portal
+       (let* ((parts (split-string-shell-command command-string))
+              (buffer (my/portal-create
+                       :directory project-root :name buffer-name
+                       :command (append (list "env") env-vars parts)
+                       :display nil)))
          (noema-interaction-cli--configure-buffer id buffer project-root)
-         (my/ghostel-send-command buffer (concat "exec " command-string))
-         (let ((process (get-buffer-process buffer)))
-           (unless process (error "Failed to get %s Ghostel process" id))
-           (cons buffer process))))
+         (cons buffer nil)))
       ('eat
        (let* ((buffer (get-buffer-create buffer-name))
               (eat-term-name "xterm-256color")
@@ -278,14 +280,17 @@ Returns a (BUFFER . PROCESS) cons cell."
 (defun noema-interaction-cli-session-live-p (id &optional project-root)
   "Return non-nil when a live session exists for tool ID and PROJECT-ROOT."
   (let* ((root (noema-interaction-cli--working-directory project-root))
+         (buffer (noema-interaction-cli-buffer id root))
          (tracked (noema-interaction-cli--get-process id root))
-         (buf-proc (when-let* ((buf (noema-interaction-cli-buffer id root)))
-                     (get-buffer-process buf)))
+         (buf-proc (and buffer (get-buffer-process buffer)))
          (live (cond
+                ((eq (noema-interaction-cli--terminal-backend id) 'portal)
+                 (and buffer (portal-terminal-metadata buffer)
+                      (not (plist-get (portal-terminal-metadata buffer) :exited))))
                 ((and tracked (process-live-p tracked)) tracked)
                 ((and buf-proc (process-live-p buf-proc)) buf-proc))))
     (when live
-      (unless (eq live tracked)
+      (when (and (processp live) (not (eq live tracked)))
         (noema-interaction-cli--set-process id root live))
       t)))
 
@@ -303,9 +308,8 @@ Returns the session buffer."
               (noema-interaction-cli--create-terminal-session id buffer-name root))
              (buffer (car buf-and-proc))
              (process (cdr buf-and-proc)))
-        (noema-interaction-cli--set-process id root process)
-        ;; Ghostel owns the process sentinel and closes its buffer on exit.
-        ;; Replacing that sentinel would leave its native terminal state stale.
+        (when (processp process)
+          (noema-interaction-cli--set-process id root process))
         (with-current-buffer buffer
           (add-hook 'kill-buffer-hook
                     (lambda ()
@@ -318,12 +322,15 @@ Returns the session buffer."
   "Open the terminal buffer for tool ID via the popup window system."
   (if-let* ((buf (noema-interaction-cli-buffer
                   id (noema-interaction-cli--working-directory project-root))))
-      (my/ghostel-popup-display-buffer buf)
+      (my/portal-popup-display-buffer buf)
     (user-error "No %s session for this project" id)))
 
 (defun noema-interaction-cli-stop (id &optional project-root)
   "Stop the terminal session for tool ID and PROJECT-ROOT."
   (let ((root (noema-interaction-cli--working-directory project-root)))
+    (when (eq (noema-interaction-cli--terminal-backend id) 'portal)
+      (when-let* ((buffer (noema-interaction-cli-buffer id root)))
+        (kill-buffer buffer)))
     (when-let* ((process (noema-interaction-cli--get-process id root)))
       (when (process-live-p process)
         (delete-process process)))
@@ -336,8 +343,7 @@ Returns the session buffer."
 (defun noema-interaction-cli--send-prompt-retry (id prompt root attempts on-success on-error)
   "Send PROMPT to tool ID session in ROOT, retrying up to ATTEMPTS times."
   (if-let* ((buffer (noema-interaction-cli-buffer id root))
-            (process (get-buffer-process buffer))
-            ((process-live-p process)))
+            ((noema-interaction-cli-session-live-p id root)))
       (condition-case err
           (with-current-buffer buffer
             (noema-interaction-cli--terminal-paste-string id prompt)
@@ -364,8 +370,7 @@ Returns the session buffer."
 (defun noema-interaction-cli--draft-prompt-retry (id prompt root attempts on-success on-error)
   "Insert PROMPT into the tool ID session in ROOT without submitting."
   (if-let* ((buffer (noema-interaction-cli-buffer id root))
-            (process (get-buffer-process buffer))
-            ((process-live-p process)))
+            ((noema-interaction-cli-session-live-p id root)))
       (condition-case err
           (with-current-buffer buffer
             (noema-interaction-cli--terminal-paste-string id prompt)

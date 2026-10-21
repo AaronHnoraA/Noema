@@ -22,11 +22,11 @@ const BUNDLED_ARTICLE_TEMPLATE = resolve(
 
 const MINIMAL_TEMPLATE = `\\documentclass[11pt]{article}
 \\usepackage[a4paper,margin=1in]{geometry}
-\\usepackage{CJKutf8}
+\\usepackage{xeCJK}
+\\setCJKmainfont[BoldFont=FandolSong-Bold.otf]{FandolSong-Regular.otf}
+\\setCJKsansfont[BoldFont=FandolHei-Bold.otf]{FandolHei-Regular.otf}
 \\usepackage{graphicx}
 \\usepackage{hyperref}
-\\AtBeginDocument{\\begin{CJK*}{UTF8}{gbsn}}
-\\AtEndDocument{\\end{CJK*}}
 
 \\usepackage{aaronnote-macros}
 

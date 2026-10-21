@@ -25,9 +25,9 @@
   :type '(repeat string)
   :group 'noema-interaction-codex)
 
-(defcustom noema-interaction-codex-terminal-backend 'ghostel
+(defcustom noema-interaction-codex-terminal-backend 'portal
   "Terminal backend used for Codex sessions."
-  :type '(choice (const ghostel) (const eat))
+  :type '(choice (const portal) (const eat))
   :group 'noema-interaction-codex)
 
 (defvar noema-interaction-codex-use-exec nil

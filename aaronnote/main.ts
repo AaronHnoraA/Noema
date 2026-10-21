@@ -82,6 +82,14 @@ import {
   type LanguageToolSettings,
   type WikiIndex,
 } from "./api-client.ts";
+
+if (window.portalBridge) {
+  window.portalBridge.receive = async (message) => {
+    if (message.type === "core-ready") {
+      await api.connection.reconnect("focus");
+    }
+  };
+}
 import { Epoch } from "../src/async-epoch.ts";
 import { CoalescedTimer } from "../src/coalesced-timer.ts";
 import { emojiCompletionContext, emojiCompletions } from "../src/emoji-shortcodes.ts";
@@ -241,6 +249,7 @@ import {
   handleXwidgetSpecialKeydown,
   handleXwidgetVimBeforeInput,
   handleXwidgetVimKeydown,
+  editorIMEConfirmationPending,
 } from "./xwidget-key-guard.ts";
 import { focusQuiescenceEnabled, serverMode, sourceEditorName } from "./host-mode.ts";
 import { installHostClipboard } from "./host-clipboard.ts";
@@ -784,6 +793,24 @@ function renderTaskManager(): void {
     }
     const actions = document.createElement("div");
     actions.className = "aaronnote-task-actions";
+    if (task.kind === "latex-export" && task.agentSessionAvailable) {
+      const openAgent = document.createElement("button");
+      openAgent.type = "button";
+      openAgent.textContent = "Open agent session";
+      openAgent.addEventListener("click", async () => {
+        openAgent.disabled = true;
+        try {
+          await api.latex.openAgent(task.id);
+          closeTaskManager();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          openAgent.disabled = false;
+          await refreshTaskManager(true);
+          taskManagerStatus.textContent = message;
+        }
+      });
+      actions.appendChild(openAgent);
+    }
     if (task.cancellable) {
       const cancel = document.createElement("button");
       cancel.type = "button";
@@ -11918,7 +11945,7 @@ function scheduleAsyncCompletion(
   completionTimer.schedule(() => {
     void fetchFn().then((items) => {
       if (!run.current) return;
-      if (!snippetCompletionArmed || !editorOwnsActiveSurface()
+      if (!snippetCompletionArmed || editorIMEConfirmationPending(editor.view) || !editorOwnsActiveSurface()
         || editor.view.state.selection.main.head !== requestSelection.head
         || editor.view.state.selection.main.anchor !== requestSelection.anchor
         || editor.view.state.doc !== requestDoc) {
@@ -12004,6 +12031,12 @@ function updateSnippetPopup(
   ctx: ReturnType<typeof editor.cursorContext>,
   activeMath: ReturnType<typeof mathAtCursor> | undefined = undefined,
 ): void {
+  if (editorIMEConfirmationPending(editor.view)) {
+    snippetCompletionArmed = false;
+    hideSnippetPopup();
+    clearCompletionCache();
+    return;
+  }
   if (!editorOwnsActiveSurface()) {
     hideSnippetPopup();
     clearCompletionCache();
@@ -12269,6 +12302,7 @@ function applySnippetPopupKeyAction(action: ReturnType<typeof snippetPopupKeyAct
 }
 
 function handleSnippetPopupKey(event: KeyboardEvent): boolean {
+  if (event.isComposing || event.keyCode === 229 || editorIMEConfirmationPending(editor.view)) return false;
   const handled = applySnippetPopupKeyAction(snippetPopupKeyAction({
     key: event.key === "\t" ? "Tab" : event.key, // xwidget may send "\t" instead of "Tab"
     shiftKey: event.shiftKey,
@@ -13771,6 +13805,7 @@ window.addEventListener("keydown", (event) => {
 }, { capture: true });
 
 document.addEventListener("keydown", (event) => {
+  if (editorIMEConfirmationPending(editor.view) && editorOwnsActiveSurface()) return;
   if (handleXwidgetMathKeydown(event, {
     editor,
     editorHost: host,
@@ -13970,6 +14005,15 @@ host.addEventListener("pointerdown", (event) => {
   hideSnippetPopup();
   clearCompletionCache();
 }, { capture: true });
+// A Chinese/Japanese/Korean candidate list owns the keyboard and screen while
+// CM6 composes. Invalidate any pending completion before its final input event.
+for (const type of ["compositionstart", "compositionend"] as const) {
+  editor.view.contentDOM.addEventListener(type, () => {
+    snippetCompletionArmed = false;
+    hideSnippetPopup();
+    clearCompletionCache();
+  }, true);
+}
 host.addEventListener("click", (event) => {
   const target = event.target instanceof Element
     ? event.target.closest(".cm-prose-diagnostic")
@@ -14047,12 +14091,14 @@ document.addEventListener("beforeinput", (event) => {
     event.preventDefault();
     return;
   }
-  if (ie.inputType === "insertText" && ie.data && ie.data !== "\t") {
+  if (ie.inputType === "insertText" && ie.data && ie.data !== "\t"
+      && !ie.isComposing && !editorIMEConfirmationPending(editor.view)) {
     snippetCompletionArmed = true;
   }
   // xwidget Tab: may arrive only as beforeinput(insertText, "\t") with no keydown.
   // Try snippet popup acceptance and snippet expansion before letting CM6 insert \t.
   if (ie.inputType === "insertText" && ie.data === "\t"
+      && !ie.isComposing && !editorIMEConfirmationPending(editor.view)
       && vim.mode() === "insert"
       && modal.hidden && toolsPanel.hidden && roamToolsPanel.hidden) {
     const accepted = applySnippetPopupKeyAction(snippetPopupKeyAction({

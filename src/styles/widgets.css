@@ -4829,6 +4829,11 @@ body.has-diagram-fullscreen {
   overflow: hidden;
   color: transparent;
 }
+/* The active cell owns its closing delimiter. Keep its text line box so
+ * WebKit can place a full-height IME caret before the hidden pipe. */
+.cm-editor .cm-table-source-active-cell > .cm-table-source-pipe {
+  display: inline;
+}
 /* CM6 can split the active cell's mark around another inline widget. In that
  * case preserve source order rather than letting the fragments become columns. */
 .cm-editor .cm-line.cm-table-source-row:has(> [contenteditable="false"]:not(.cm-table-source-rendered-cell)) {

@@ -2,10 +2,30 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 // @ts-ignore Node ESM module outside the TS app graph.
 import { CoreTaskManager } from "../server/lib/task-core.mjs";
+// @ts-ignore Node ESM module outside the TS app graph.
+import { createTasksApiHandlers } from "../server/Features/Tasks/api.mjs";
 
 const turn = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("Core task manager", () => {
+  test("task API decorates live export snapshots without retaining session state", async () => {
+    const manager = new CoreTaskManager();
+    let finish!: () => void;
+    const started = manager.start({
+      kind: "latex-export", title: "Export", run: () => new Promise<void>((resolve) => { finish = resolve; }),
+    });
+    await turn();
+    const handlers = createTasksApiHandlers(manager, {
+      decorateTask: (task: { id: string } | null) => task && {
+        ...task, agentSessionAvailable: task.id === started.id,
+      },
+    });
+    const listed = handlers["aaronnote:api:tasks:list"]({});
+    expect(listed.tasks[0].agentSessionAvailable).toBe(true);
+    expect(manager.get(started.id)).not.toHaveProperty("agentSessionAvailable");
+    finish();
+    await turn();
+  });
   test("pools generic work, runs several tasks concurrently, and queues overflow", async () => {
     const manager = new CoreTaskManager({ maxConcurrent: 2, maxRetained: 10 });
     const releases: Array<() => void> = [];

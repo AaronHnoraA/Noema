@@ -47,6 +47,126 @@ function type(editor: Editor, text: string) {
 // snippets are the main editor's (tests/vim-input-method.test.ts,
 // tests/host-input-focus.test.ts, tests/snippets.test.ts), not the table's.
 describe("table source edited through the main editor (keyboard entry)", () => {
+  it("keeps a cell's closing pipe inside its editable DOM at the caret boundary", () => {
+    const source = "| Header | Value |\n| --- | --- |\n| item| value |";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: source });
+    editors.push(editor);
+    const boundary = source.lastIndexOf("| value |");
+    editor.view.dispatch({ selection: { anchor: boundary } });
+    const active = host.querySelector<HTMLElement>(".cm-table-source-active-cell")!;
+    expect(active.querySelector(".cm-table-source-pipe")?.textContent).toBe("|");
+    expect(active.textContent).toBe(" item|");
+    editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    type(editor, "中文");
+    expect(editor.getMarkdown()).toContain("| item中文| value |");
+    expect(host.querySelector(".cm-table-source-active-cell .cm-table-source-pipe")?.textContent).toBe("|");
+    editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+  });
+
+  it("keeps text appended at a cell boundary inside the single visible grid cell", async () => {
+    const source = "| Name| Value|\n| --- | --- |\n| item | value |";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: source });
+    editors.push(editor);
+    const at = source.indexOf("Name") + "Name".length;
+    editor.view.dispatch({ selection: { anchor: at } });
+    const active = host.querySelector<HTMLElement>(".cm-table-source-active-cell")!;
+    expect(active).toBeTruthy();
+    editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    type(editor, "s");
+    type(editor, "中文");
+    expect(editor.getMarkdown().split("\n")[0]).toBe("| Names中文| Value|");
+    expect(active.textContent).toContain("Names中文");
+    expect(host.querySelectorAll(".cm-table-source-header .cm-table-source-cell")).toHaveLength(2);
+    editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    await frame();
+    expect(host.querySelectorAll(".cm-table-source-header .cm-table-source-cell")).toHaveLength(2);
+  });
+
+  it("keeps a selected header cell editable when composition replaces its entire text", async () => {
+    const source = "| Name | Value |\n| --- | --- |\n| item | value |";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: source });
+    editors.push(editor);
+    editor.view.dispatch({ selection: { anchor: source.indexOf("Name") + 4 } });
+    expect(host.querySelector(".cm-table-source-active-cell")).toBeTruthy();
+    editor.view.dispatch({ selection: { anchor: source.indexOf("Name"), head: source.indexOf("Name") + 4 } });
+    const active = host.querySelector<HTMLElement>(".cm-table-source-active-cell")!;
+    editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    type(editor, "中文");
+    expect(editor.getMarkdown().split("\n")[0]).toBe("| 中文 | Value |");
+    expect(active.textContent).toContain("中文");
+    expect(host.querySelectorAll(".cm-table-source-header .cm-table-source-cell")).toHaveLength(2);
+    editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    await frame();
+    expect(host.querySelectorAll(".cm-table-source-header .cm-table-source-cell")).toHaveLength(2);
+  });
+
+  it("keeps the editable cell DOM stable while a Chinese input method composes", async () => {
+    const { editor, host } = mount();
+    clickCell(host, 1, 0);
+    const active = host.querySelector<HTMLElement>(".cm-table-source-active-cell")!;
+    const neighbour = host.querySelector<HTMLElement>('.cm-table-source-rendered-cell[data-row="1"][data-col="1"]')!;
+    expect(active).toBeTruthy();
+    expect(neighbour).toBeTruthy();
+
+    editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    expect(editor.view.compositionStarted).toBe(true);
+    const from = editor.getMarkdown().indexOf("one");
+    editor.view.dispatch({
+      changes: { from, to: from + 3, insert: "ni|" },
+      selection: { anchor: from + 3 },
+      userEvent: "input.type.compose.start",
+    });
+    expect(host.querySelector(".cm-table-source-active-cell")).toBe(active);
+    expect(host.querySelector('.cm-table-source-rendered-cell[data-row="1"][data-col="1"]')).toBe(neighbour);
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    await frame();
+    await frame();
+    expect(host.querySelector(".cm-table-source-active-cell")).toBe(active);
+    expect(host.querySelector('.cm-table-source-rendered-cell[data-row="1"][data-col="1"]')).toBe(neighbour);
+
+    editor.view.dispatch({
+      changes: { from, to: from + 3, insert: "你" },
+      selection: { anchor: from + 1 },
+      userEvent: "input.type.compose",
+    });
+    expect(editor.getMarkdown()).toContain("| 你 | two |");
+    expect(host.querySelector(".cm-table-source-active-cell")).toBe(active);
+    editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    await frame();
+    await frame();
+    expect(host.querySelectorAll(".cm-table-source-active-cell")).toHaveLength(1);
+    expect(host.querySelectorAll(".cm-table-source-rendered-cell")).toHaveLength(5);
+    expect(editor.getMarkdown()).toContain("| 你 | two |");
+  });
+
+  it("clears stale grid decorations if a composed edit removes the table delimiter", async () => {
+    const { editor, host } = mount();
+    clickCell(host, 1, 0);
+    const delimiter = editor.getMarkdown().indexOf("| --- | --- |");
+    editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    editor.view.dispatch({
+      changes: { from: delimiter, to: delimiter + "| --- | --- |".length, insert: "| 中文 | 中文 |" },
+      selection: { anchor: delimiter + 3 },
+      userEvent: "input.type.compose",
+    });
+    editor.view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    await frame();
+    await frame();
+    expect(host.querySelector(".cm-table-source-row")).toBeNull();
+    expect(host.querySelector(".cm-table-block")).toBeNull();
+    expect(editor.view.contentDOM.textContent).toContain("中文");
+  });
+
   it("keeps the toolbar and layout attributes while a cell is active", () => {
     const source = "| A | B |\n| --- | --- |\n| one | two |\n{wrap=right width=40%}\n\nAfter";
     const host = document.createElement("div");

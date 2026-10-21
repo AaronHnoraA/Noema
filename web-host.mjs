@@ -16,6 +16,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import WebSocket from "ws";
+import { claudeExportDnsError } from "./server/lib/latex-agent-connectivity.mjs";
 
 import {
   bootstrapNote,
@@ -902,20 +903,51 @@ async function emacsLatexAgentStatus() {
 }
 
 let latexAgentRequestNumber = 0;
-async function runEmacsLatexAgent({ backend, workdir, prompt, hardTimeoutMs, signal }) {
+const latexAgentProgress = new Map();
+const latexAgentTaskRequests = new Map();
+async function runEmacsLatexAgent({ backend, workdir, prompt, contextItems, model, hardTimeoutMs, signal, onProgress, taskId }) {
+  // Claude's ACP adapter retries DNS failures internally without an ACP error
+  // event. Check only the provider host, before sending any document content.
+  const dnsError = await claudeExportDnsError({ backend });
+  if (dnsError) return { ok: false, message: dnsError };
   const requestId = `latex-${process.pid}-${++latexAgentRequestNumber}`;
   const cancel = () => gatewayNotify("aaronnote.latex.agent-cancel", { requestId, workdir });
   if (signal?.aborted) return { ok: false, message: "aborted" };
+  const startedAt = Date.now();
+  let lastAcpProgressAt = startedAt;
+  let lastHeartbeatAt = startedAt;
+  let receivedAcpEvent = false;
+  if (typeof onProgress === "function") {
+    latexAgentProgress.set(requestId, (message) => {
+      receivedAcpEvent = true;
+      lastAcpProgressAt = Date.now();
+      onProgress(message);
+    });
+  }
+  const heartbeat = typeof onProgress === "function" && setInterval(() => {
+    const now = Date.now();
+    if (!signal?.aborted && now - lastAcpProgressAt >= 45_000
+        && now - lastHeartbeatAt >= 45_000) {
+      lastHeartbeatAt = now;
+      onProgress(receivedAcpEvent
+        ? `Waiting for next ${backend} ACP event (${Math.floor((now - lastAcpProgressAt) / 1000)}s since last activity)…`
+        : `Waiting for first ${backend} ACP event (${Math.floor((now - startedAt) / 1000)}s)…`);
+    }
+  }, 15_000);
+  if (taskId) latexAgentTaskRequests.set(taskId, requestId);
   signal?.addEventListener("abort", cancel, { once: true });
   try {
     const result = await gatewayRequest("aaronnote.latex.agent-run", {
-      requestId, backend, workdir, prompt,
+      requestId, backend, workdir, prompt, contextItems, model,
     }, hardTimeoutMs + 15_000);
     return { ok: result?.ok === true, summary: String(result?.summary || ""), message: String(result?.message || "") };
   } catch (error) {
     cancel();
     return { ok: false, message: String(error?.message || error) };
   } finally {
+    if (heartbeat) clearInterval(heartbeat);
+    latexAgentProgress.delete(requestId);
+    if (taskId && latexAgentTaskRequests.get(taskId) === requestId) latexAgentTaskRequests.delete(taskId);
     signal?.removeEventListener("abort", cancel);
     // A completed export must not leave its private ACP session in Emacs.
     // The Emacs handler is idempotent, including after normal prompt finish.
@@ -2626,6 +2658,17 @@ const apiRouter = new ApiRouter().register({
       backend: status.agent,
     }, 10_000);
   },
+  "aaronnote:api:latex:open-agent": async (body) => {
+    const task = coreTasks.get(body?.id);
+    const requestId = latexAgentTaskRequests.get(task?.id);
+    if (hostMode !== "emacs" || task?.kind !== "latex-export"
+        || task.status !== "running" || !requestId) {
+      const error = new Error("This LaTeX export agent session is no longer active");
+      error.statusCode = 409;
+      throw error;
+    }
+    return gatewayRequest("aaronnote.latex.agent-open", { requestId }, 10_000);
+  },
   "aaronnote:api:latex:export": (body) => {
     const request = { ...(body || {}) };
     const file = String(request.file || request.sourceFile || "");
@@ -2663,7 +2706,7 @@ const apiRouter = new ApiRouter().register({
             ...(hostMode === "emacs" ? {
               agentRunner: (options) => {
                 agentWorkdirs.add(options.workdir);
-                return runEmacsLatexAgent(options);
+                return runEmacsLatexAgent({ ...options, taskId: id });
               },
             } : {}),
           });
@@ -2697,7 +2740,11 @@ const apiRouter = new ApiRouter().register({
     });
     return { type: "core-task-started", ok: true, task };
   },
-  ...createTasksApiHandlers(coreTasks),
+  ...createTasksApiHandlers(coreTasks, {
+    decorateTask: (task) => task?.kind === "latex-export"
+      ? { ...task, agentSessionAvailable: task.status === "running" && latexAgentTaskRequests.has(task.id) }
+      : task,
+  }),
   ...createResearchApiHandlers({ ...researchNotebooks, ...researchRuntime }),
   "aaronnote:api:notes:meta-add": async (body) => applyWikiMutationResult(
     await updateCurrentNoteMeta(body || {}, "add"),
@@ -2903,7 +2950,12 @@ async function handleGatewayRequest(message) {
   const hasId = Object.prototype.hasOwnProperty.call(message || {}, "id");
   try {
     let result;
-    if (message.method === "aaronnote.agenda.source-event") {
+    if (message.method === "aaronnote.latex.agent-progress") {
+      const requestId = String(message.params?.requestId || "");
+      const progress = latexAgentProgress.get(requestId);
+      if (progress) progress(String(message.params?.text || ""));
+      result = { ok: Boolean(progress) };
+    } else if (message.method === "aaronnote.agenda.source-event") {
       agendaSources.event(message.params || {});
       result = { ok: true };
     } else if (message.method === "aaronnote.agenda.apple-event") {
@@ -3384,6 +3436,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       templates: function() { return call("aaronnote:api:latex:templates", []); },
       chooseOutputPath: function(body) { return call("aaronnote:api:latex:choose-output-path", [body || {}]); },
       intervene: function(body) { return call("aaronnote:api:latex:intervene", [body || {}]); },
+      openAgent: function(body) { return call("aaronnote:api:latex:open-agent", [body || {}]); },
       export: function(body) { return call("aaronnote:api:latex:export", [body || {}]); }
     },
     tasks: {

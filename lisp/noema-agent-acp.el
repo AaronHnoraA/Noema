@@ -54,6 +54,40 @@
   "Read PATH from BUFFER's agent-shell state, returning DEFAULT if absent."
   (or (map-nested-elt (noema-agent-acp--state buffer) path) default))
 
+(defun noema-agent-acp--context-field (item key &optional default)
+  "Read KEY from a frozen Noema context ITEM."
+  (or (map-elt item key) (map-elt item (intern key)) default))
+
+(defun noema-agent-acp-context-blocks (buffer prompt items)
+  "Build ACP content for PROMPT and frozen ITEMS in BUFFER.
+Use the same resource block and text fallback contract for research Runs
+and private LaTeX exports."
+  (let ((embedded (noema-agent-acp-state-value buffer
+                                                '(:prompt-capabilities :embedded-context))))
+    (if (and embedded (not (memq embedded '(:false :null))))
+        (append
+         (list `((type . "text") (text . ,prompt)))
+         (mapcar (lambda (item)
+                   `((type . "resource")
+                     (resource . ((uri . ,(noema-agent-acp--context-field item "resolvedUri"))
+                                  (text . ,(decode-coding-string
+                                            (base64-decode-string
+                                             (noema-agent-acp--context-field item "contentBase64"))
+                                            'utf-8))
+                                  (mimeType . ,(noema-agent-acp--context-field
+                                                item "mediaType" "text/plain; charset=utf-8"))))))
+                 items))
+      (let ((fallback prompt))
+        (dolist (item items)
+          (setq fallback
+                (concat fallback "\n\n[Noema context: "
+                        (noema-agent-acp--context-field item "ref") "]\n"
+                        (decode-coding-string
+                         (base64-decode-string
+                          (noema-agent-acp--context-field item "contentBase64"))
+                         'utf-8))))
+        (list `((type . "text") (text . ,fallback)))))))
+
 (defvar noema-agent-acp-model-preferences-file
   (locate-user-emacs-file "var/noema/agent-models.json")
   "Local, non-project storage for the last successfully selected model per agent.")
@@ -78,13 +112,22 @@
             (insert (json-serialize models))))
       (error (message "Could not save agent model preference: %s" (error-message-string err))))))
 
+(defun noema-agent-acp--remember-interactive-model (identifier model)
+  "Remember MODEL for IDENTIFIER only outside private export sessions."
+  (unless (or (eq (bound-and-true-p noema-agent-acp-session-origin)
+                  'latex-export)
+              (map-nested-elt (agent-shell--state)
+                              '(:agent-config :noema-export-model)))
+    (noema-agent-acp--remember-model identifier model)))
+
 (defun noema-agent-acp--model-config (args)
   "Apply remembered defaults through upstream's normal startup pipeline in ARGS."
   (let* ((config (copy-tree (plist-get args :config)))
          (identifier (map-elt config :identifier))
          (saved (gethash (format "%s" identifier) (noema-agent-acp--read-models)))
          (fallback (map-elt config :default-model-id)))
-    (when (and config (stringp saved))
+    (when (and config (stringp saved)
+               (not (map-elt config :noema-export-model)))
       (setf (alist-get :default-model-id config)
             (lambda ()
               ;; Providers may remove a model. Do not block startup on a stale ID.
@@ -107,7 +150,7 @@
              (lambda ()
                (when (buffer-live-p buffer)
                  (with-current-buffer buffer
-                   (noema-agent-acp--remember-model identifier (agent-shell--current-model-id (agent-shell--state)))))
+                   (noema-agent-acp--remember-interactive-model identifier (agent-shell--current-model-id (agent-shell--state)))))
                (when on-success (funcall on-success))))))
 
 (advice-add 'agent-shell--start :filter-args #'noema-agent-acp--model-config)
@@ -123,7 +166,7 @@
                       (lambda ()
                         (when (buffer-live-p buffer)
                           (with-current-buffer buffer
-                            (noema-agent-acp--remember-model
+                            (noema-agent-acp--remember-interactive-model
                              identifier (agent-shell--current-model-id (agent-shell--state)))))
                         (when success (funcall success)))))))
 
@@ -139,6 +182,57 @@
   "Return the selected ACP model ID in BUFFER."
   (with-current-buffer (or buffer (current-buffer))
     (agent-shell--current-model-id (agent-shell--state))))
+
+(defun noema-agent-acp-export-model-id (model-id &optional buffer)
+  "Resolve export MODEL-ID against models advertised in BUFFER.
+Claude's Sonnet alias may be advertised with a versioned model ID."
+  (let ((available (noema-agent-acp-available-model-ids buffer)))
+    (or (and (member model-id available) model-id)
+        (and (equal model-id "sonnet")
+             (seq-find (lambda (id)
+                         (and (stringp id)
+                              (string-match-p "sonnet" (downcase id))))
+                       available)))))
+
+(defun noema-agent-acp-export-config (config model-id)
+  "Return a private export copy of CONFIG pinned to MODEL-ID.
+Interactive model preferences never override this export-only selection."
+  (let* ((copy (copy-tree config))
+         (identifier (map-elt copy :identifier))
+         (effort-key (pcase identifier
+                       ('codex "reasoning_effort")
+                       ('claude-code "effort")))
+         (default-options (map-elt copy :default-config-options)))
+    (when (eq identifier 'claude-code)
+      ;; Claude's SDK otherwise writes the private export prompt and note text
+      ;; under ~/.claude/projects after the temporary workdir is removed.
+      (let* ((meta (copy-tree (alist-get :session-meta copy)))
+             (claude (copy-tree (alist-get 'claudeCode meta)))
+             (options (copy-tree (alist-get 'options claude))))
+        (setf (alist-get 'persistSession options) :false
+              (alist-get 'settingSources options) []
+              (alist-get 'skills options) []
+              (alist-get 'tools options) ["Read" "Edit" "Write" "Glob" "Grep"]
+              (alist-get 'disallowedTools options) ["Bash" "Task" "Skill" "WebFetch" "WebSearch"]
+              (alist-get 'promptSuggestions options) :false
+              (alist-get 'options claude) options
+              (alist-get 'claudeCode meta) claude
+              (alist-get :session-meta copy) meta)))
+    (when (and (stringp model-id) (not (string-empty-p model-id)))
+      (setf (alist-get :noema-export-model copy) model-id
+            (alist-get :default-model-id copy)
+            (lambda () (noema-agent-acp-export-model-id model-id))))
+    (when effort-key
+      (setf (alist-get :default-config-options copy)
+            (lambda ()
+              (let ((options (if (functionp default-options)
+                                 (funcall default-options)
+                               default-options)))
+                (cons (cons effort-key "medium")
+                      (seq-remove (lambda (entry)
+                                    (equal (car-safe entry) effort-key))
+                                  options))))))
+    copy))
 
 (defun noema-agent-acp-set-model (model-id &optional buffer)
   "Select MODEL-ID in BUFFER through ACP after checking session state."
@@ -885,16 +979,45 @@ started by an origin in
     (unless (run-hook-with-args-until-success 'noema-agent-acp-stop-functions buffer)
       (noema-agent-acp-interrupt buffer t))))
 
+(defun noema-agent-acp--discard-export-codex-rollout (session-id)
+  "Remove only the native Codex rollout belonging to export SESSION-ID.
+codex-acp does not expose an ephemeral session flag, so the private export
+turn must be removed after its ACP buffer closes."
+  (when (and (stringp session-id)
+             (string-match-p
+              "\\`[[:xdigit:]]\\{8\\}-[[:xdigit:]]\\{4\\}-[[:xdigit:]]\\{4\\}-[[:xdigit:]]\\{4\\}-[[:xdigit:]]\\{12\\}\\'"
+              session-id))
+    (let ((root (expand-file-name
+                 "sessions" (or (getenv "CODEX_HOME")
+                                (expand-file-name ".codex" (getenv "HOME"))))))
+      (when (file-directory-p root)
+        (dolist (file (directory-files-recursively
+                       root (concat "-" (regexp-quote session-id) "\\.jsonl\\'") nil))
+          (when (and (file-regular-p file) (not (file-symlink-p file))
+                     (file-in-directory-p file root))
+            (condition-case err
+                (delete-file file)
+              (error (message "Could not remove private Codex export rollout: %s"
+                              (error-message-string err))))))))))
+
 (defun noema-agent-acp-kill (buffer)
   "Kill agent BUFFER, showing another session of its project in its windows."
   (let* ((root (buffer-local-value 'noema-agent-acp-session-root buffer))
-         (next (car (delq buffer (noema-agent-acp--project-buffers root)))))
+         (next (car (delq buffer (noema-agent-acp--project-buffers root))))
+         (export-codex-id
+          (and (eq (buffer-local-value 'noema-agent-acp-session-origin buffer)
+                   'latex-export)
+               (equal (noema-agent-acp--buffer-agent-id buffer) "codex")
+               (noema-agent-acp-state-value buffer '(:session :id)))))
     (dolist (window (get-buffer-window-list buffer nil t))
       (cond (next (set-window-buffer window next))
             ((window-parameter window 'noema-agent-workspace)
              (ignore-errors (delete-window window)))))
     (let ((kill-buffer-query-functions nil))
-      (kill-buffer buffer))))
+      (kill-buffer buffer))
+    (when export-codex-id
+      (run-at-time 2 nil #'noema-agent-acp--discard-export-codex-rollout
+                   export-codex-id))))
 
 (defun noema-agent-acp-close (&optional buffer)
   "Close agent BUFFER's tab.  Its process stops; its name and history remain."
