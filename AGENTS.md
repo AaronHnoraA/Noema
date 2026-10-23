@@ -15,6 +15,9 @@ incidents, written once and never authoritative). Only code-adjacent
 contracts stay here: this file, `CLAUDE.md`, `README.md` and `UPSTREAMS.md`.
 A change that alters behaviour updates the matching `design/` or `guide/`
 document in the Emacs repository and is committed there.
+Skills for developing this code (`noema-development`, `rendered-construct`)
+live beside those docs in `../../.agents/skills/`; `.claude/skills` here links
+to that directory.
 
 The design authority is `/Users/hc/Desktop/]/DESIGN.md` v1.8, interpreted with
 `AI-Docs/assignment-walkthrough.md` as the primary `.noema` workflow.
