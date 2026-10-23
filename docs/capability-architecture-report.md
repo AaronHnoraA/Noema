@@ -114,7 +114,7 @@ company and project scopes, including the complete source and patch chain.
 
 The scenario is covered by `tests/noema-capabilities.test.ts`, the
 `builds an agent RunSpec from resolved project Skills, MCPs, and patches` test in
-`tests/research-runtime.test.ts`, and `test/elisp/noema-api-tests.el`.
+`tests/research-runtime.test.ts`, and `tests/elisp/noema-api-tests.el`.
 
 For a live manual pass, open a project `.noema`, run
 `M-x noema-capability-manager`, enable `noema-elisp-api`, add

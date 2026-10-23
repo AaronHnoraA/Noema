@@ -1,5 +1,5 @@
 ;;; noema-completion-benchmark.el --- Repeatable CAPF timing -*- lexical-binding: t; -*-
-;; Run: emacs --batch -Q -L lisp -l test/elisp/noema-completion-benchmark.el
+;; Run: emacs --batch -Q -L lisp -l tests/elisp/noema-completion-benchmark.el
 (require 'benchmark)
 (require 'noema-research-mode)
 

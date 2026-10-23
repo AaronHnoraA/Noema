@@ -14,7 +14,7 @@ Noema 的普通 ACP 会话和研究 Run 共用一个项目记忆范围。会话�
 
 ## 安装与验证
 
-运行 `make memory-setup` 安装固定版本的 Hy Memory SDK，再运行 `make memory-test` 检查桥接层。Emacs 的隐藏 ACP 上下文契约测试位于 `test/elisp/noema-hy-memory-tests.el`。
+运行 `make memory-setup` 安装固定版本的 Hy Memory SDK，再运行 `make memory-test` 检查桥接层。Emacs 的隐藏 ACP 上下文契约测试位于 `tests/elisp/noema-hy-memory-tests.el`。
 
 当前 Mac 已写入胖胖服务凭据并完成真实写入与召回验证。可用以下命令查看配置就绪状态：
 

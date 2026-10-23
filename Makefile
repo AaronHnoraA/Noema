@@ -63,7 +63,7 @@ memory-test:
 	node --test tests/hy-memory-fail-open.contract.mjs
 	node --check scripts/noema-pi-memory-gateway.mjs
 	node --check server/lib/hy-memory-bridge.mjs
-	emacs -Q --batch -L lisp -L test/elisp -l test/elisp/noema-hy-memory-tests.el -f ert-run-tests-batch-and-exit
+	emacs -Q --batch -L lisp -L tests/elisp -l tests/elisp/noema-hy-memory-tests.el -f ert-run-tests-batch-and-exit
 
 build: check-env check-go prune-legacy-garbage build-web kernel-build
 

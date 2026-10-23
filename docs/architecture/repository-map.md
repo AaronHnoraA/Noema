@@ -38,8 +38,7 @@ Go kernel  kernel/（二进制 noema）
 | `kernel-resources/` | | kernel 运行所需的外观与 stage 资源 |
 | `vendor/` | | 以源码形式改造的第三方前端代码（`tikz-editor`、`adjustable-media-pure`） |
 | `upstream/` | | 参照与包装的上游 Elisp/CLI（gptel、agent-shell、acp、magent、org-mode…），规则见 `upstream/VENDORING.md` 与 `UPSTREAMS.md` |
-| `tests/` | ~300 个 | Vitest/Node 测试（TS 与 mjs），含架构守护测试 |
-| `test/elisp/` | | Elisp ERT 测试 |
+| `tests/` | ~300 个 | Vitest/Node 测试（TS 与 mjs），含架构守护测试；`tests/elisp/` 是全部 Elisp ERT 测试 |
 | `scripts/` | | 构建、迁移、审计脚本 |
 | `poc/` | | 原型（cm6-perf、org-agenda），不参与构建 |
 | `docs/` | | 设计、审计与工作流文档；`architecture/` 为当前结构 |
@@ -63,9 +62,6 @@ Go kernel  kernel/（二进制 noema）
 
 ## 已知结构问题
 
-- `lisp/` 中混有测试文件（`noema-agenda-tests.el`、`noema-agenda-attention-tests.el`、
-  `noema-agenda-capture-tests.el`），其他 Elisp 测试都在 `test/elisp/`。
-- 测试分为 `tests/`（TS/mjs）与 `test/elisp/`（ERT）两个顶层目录，名字只差一个字母。
 - `server/lib/` 仍承载大部分领域实现，`Features/` 迁移未完成（见
   [current-architecture.md](current-architecture.md) “Node host”）。
 - `aaronnote` 旧名同时用于页面目录、构建产物 `dist/aaronnote` 与 Emacs 侧状态目录，

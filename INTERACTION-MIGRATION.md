@@ -12,7 +12,7 @@ Current source layout:
 site-lisp/noema/
 ├── lisp/       # Noema-owned commands and domain adapters
 ├── upstream/   # complete internalized upstream implementations
-├── test/elisp/ # migrated interaction tests
+├── tests/elisp/ # migrated interaction tests
 └── ...         # Markdown/Wiki/Graph/Jupyter/Go/Node Noema source
 ```
 
