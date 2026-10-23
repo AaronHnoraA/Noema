@@ -1,4 +1,4 @@
-% aaronnote-template: {"name":"Assignment","engine":"xelatex","documentRole":"assignment","sharedFiles":["assignment.cls"],"vars":[{"id":"coursename","label":"Course / school","default":"CSE","input":"text","required":true,"placeholder":"MATH","group":"course","escape":"text"},{"id":"coursecode","label":"Course code","default":"COMP","input":"text","required":true,"placeholder":"MATH2601","group":"course","escape":"text"},{"id":"term","label":"Term","default":"2026 T2","input":"text","required":true,"placeholder":"2026 T2","group":"course","escape":"text"},{"id":"author","label":"Student name","default":"Chang He (Aaron)","input":"text","required":true,"group":"identity","escape":"text"},{"id":"studentid","label":"Student ID","default":"z5586493","input":"text","required":true,"group":"identity","escape":"text"},{"id":"affiliation","label":"Affiliation","default":"UNSW","input":"text","required":true,"group":"identity","escape":"text"},{"id":"authorurl","label":"Author URL","default":"https://aaronhnoraa.github.io/","input":"text","required":false,"placeholder":"https://…","group":"identity","escape":"url"}]}
+% noema-template: {"name":"Assignment","engine":"xelatex","documentRole":"assignment","sharedFiles":["assignment.cls"],"vars":[{"id":"coursename","label":"Course / school","default":"CSE","input":"text","required":true,"placeholder":"MATH","group":"course","escape":"text"},{"id":"coursecode","label":"Course code","default":"COMP","input":"text","required":true,"placeholder":"MATH2601","group":"course","escape":"text"},{"id":"term","label":"Term","default":"2026 T2","input":"text","required":true,"placeholder":"2026 T2","group":"course","escape":"text"},{"id":"author","label":"Student name","default":"Chang He (Aaron)","input":"text","required":true,"group":"identity","escape":"text"},{"id":"studentid","label":"Student ID","default":"z5586493","input":"text","required":true,"group":"identity","escape":"text"},{"id":"affiliation","label":"Affiliation","default":"UNSW","input":"text","required":true,"group":"identity","escape":"text"},{"id":"authorurl","label":"Author URL","default":"https://aaronhnoraa.github.io/","input":"text","required":false,"placeholder":"https://…","group":"identity","escape":"url"}]}
 % Noema export: UNSW-style assignment. Shared assignment.cls is synced beside the export.
 \documentclass{assignment}
 \assignmentinstitution{ {{coursename}} }
@@ -27,7 +27,7 @@
 \newtheorem{remark}{Remark}
 \newtheorem{example}{Example}
 
-\usepackage{aaronnote-macros}
+\usepackage{noema-macros}
 
 \begin{document}
 \maketitle

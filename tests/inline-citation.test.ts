@@ -5,10 +5,10 @@ import { refreshViewportDecorationsNow } from "../src/cm6/viewport-refresh.ts";
 import {
   bibliographyResolutionState,
   mapBibliographyRangesThroughChanges,
-} from "../aaronnote/bibliography-state.ts";
+} from "../pages/bibliography-state.ts";
 
 afterEach(() => {
-  delete window.AaronnoteBibliography;
+  delete window.NoemaBibliography;
 });
 
 describe("inline citation widget", () => {
@@ -17,7 +17,7 @@ describe("inline citation widget", () => {
     const markdown = `Contracting T here.\nSpace construction ${citation}.`;
     const commands = bibliographyResolutionState(markdown).commands;
     const model = { citations: [{ from: commands[0]!.from, to: commands[0]!.to }] };
-    window.AaronnoteBibliography = {
+    window.NoemaBibliography = {
       version: () => 1,
       mapChanges: (changes) => { mapBibliographyRangesThroughChanges(model, commands, changes); },
       citationLabel: (from, to) => model.citations.some((item) => item.from === from && item.to === to)
@@ -50,7 +50,7 @@ describe("inline citation widget", () => {
     let label = "[?]";
     let observedRange = { from: -1, to: -1 };
     const opened: Array<{ from: number; to: number; jump: boolean }> = [];
-    window.AaronnoteBibliography = {
+    window.NoemaBibliography = {
       version: () => version,
       citationLabel: (from, to) => {
         observedRange = { from, to };
@@ -108,7 +108,7 @@ describe("inline citation widget", () => {
     const citationFrom = markdown.indexOf(citation);
     const citationTo = citationFrom + citation.length;
     let opened = 0;
-    window.AaronnoteBibliography = {
+    window.NoemaBibliography = {
       version: () => 1,
       citationLabel: () => ({ label: "[1, p. 406]" }),
       openCitation: () => { opened += 1; },
@@ -153,7 +153,7 @@ describe("inline citation widget", () => {
     let label = "[4]";
     let observed = { from: -1, to: -1 };
     const opened: Array<{ from: number; to: number; jump: boolean }> = [];
-    window.AaronnoteBibliography = {
+    window.NoemaBibliography = {
       version: () => version,
       citationLabel: (from, to) => {
         observed = { from, to };
@@ -166,13 +166,13 @@ describe("inline citation widget", () => {
     document.body.appendChild(host);
     const editor = createEditor(host, { kernel: "cm6", initialContent: markdown });
     try {
-      expect(host.querySelector(".aaronnote-meta-abstract .inline-cite-label")?.textContent).toBe("[4]");
+      expect(host.querySelector(".noema-meta-abstract .inline-cite-label")?.textContent).toBe("[4]");
       expect(markdown.slice(observed.from, observed.to)).toBe(citation);
 
       label = "[5]";
       version += 1;
       refreshViewportDecorationsNow(editor.view);
-      const widget = host.querySelector<HTMLElement>(".aaronnote-meta-abstract .inline-cite-widget")!;
+      const widget = host.querySelector<HTMLElement>(".noema-meta-abstract .inline-cite-widget")!;
       expect(widget.querySelector(".inline-cite-label")?.textContent).toBe("[5]");
 
       widget.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, metaKey: true }));

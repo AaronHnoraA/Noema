@@ -10,17 +10,17 @@ import { createJupyterCellService } from "../server/lib/jupyter-cell.mjs";
 // globals()) and IPython's own execution bookkeeping (In/Out/_i/_N history),
 // showing only names the user's own code actually defined — matching real
 // Jupyter/VS Code variable explorers. Gated: real kernel process.
-const RUN = process.env.AARONNOTE_TEST_KERNEL === "1";
+const RUN = process.env.NOEMA_TEST_KERNEL === "1";
 const describeIfKernel = RUN ? describe : describe.skip;
 
-const aaronnoteRoot = join(import.meta.dirname, "..");
+const noemaRoot = join(import.meta.dirname, "..");
 
 describeIfKernel("jupyter-cell variables() (real kernel)", () => {
   test(
     "excludes the startup namespace and IPython history, keeping only user-defined names",
     async () => {
-      const noteRoot = await mkdtemp(join(tmpdir(), "aaronnote-vars-"));
-      const service = createJupyterCellService({ runtimeRoot: aaronnoteRoot, noteRoot, workspaceRoot: noteRoot, zmq });
+      const noteRoot = await mkdtemp(join(tmpdir(), "noema-vars-"));
+      const service = createJupyterCellService({ runtimeRoot: noemaRoot, noteRoot, workspaceRoot: noteRoot, zmq });
       const note = join(noteRoot, "note.md");
       await writeFile(note, "# note\n", "utf8");
 
@@ -42,8 +42,8 @@ describeIfKernel("jupyter-cell variables() (real kernel)", () => {
   );
 
   test("non-python kernels report unsupported without erroring", async () => {
-    const noteRoot = await mkdtemp(join(tmpdir(), "aaronnote-vars-bash-"));
-    const service = createJupyterCellService({ runtimeRoot: aaronnoteRoot, noteRoot, workspaceRoot: noteRoot, zmq });
+    const noteRoot = await mkdtemp(join(tmpdir(), "noema-vars-bash-"));
+    const service = createJupyterCellService({ runtimeRoot: noemaRoot, noteRoot, workspaceRoot: noteRoot, zmq });
     const note = join(noteRoot, "note.md");
     await writeFile(note, "# note\n", "utf8");
     try {

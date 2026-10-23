@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 // @ts-ignore Server ESM module lives outside the renderer TypeScript graph.
-import { aaronnoteMarkdownToLatexPandoc } from "../server/lib/latex-export-pandoc.mjs";
+import { noemaMarkdownToLatexPandoc } from "../server/lib/latex-export-pandoc.mjs";
 
 const roots: string[] = [];
 
@@ -28,7 +28,7 @@ describe("kernel-backed LaTeX transformation boundary", () => {
       })),
       postprocess: vi.fn(async (latex: string) => `postprocessed:${latex}`),
     };
-    const result = await aaronnoteMarkdownToLatexPandoc("private source", {
+    const result = await noemaMarkdownToLatexPandoc("private source", {
       pandocBin: pandoc,
       rules: { hiddenBlocks: ["secret"] },
       citationKeyMap: new Map([["refs\0Key", "refs:Key"]]),
@@ -55,7 +55,7 @@ describe("kernel-backed LaTeX transformation boundary", () => {
   });
 
   test("rejects a partial transform provider instead of mixing Go and Node transforms", async () => {
-    await expect(aaronnoteMarkdownToLatexPandoc("source", {
+    await expect(noemaMarkdownToLatexPandoc("source", {
       pandocBin: "/does/not/run",
       transformProvider: { prepare: vi.fn() },
     })).rejects.toThrow("provider is incomplete");
@@ -66,7 +66,7 @@ describe("kernel-backed LaTeX transformation boundary", () => {
       prepare: vi.fn(async () => { throw new Error("unclosed private block"); }),
       postprocess: vi.fn(),
     };
-    await expect(aaronnoteMarkdownToLatexPandoc("source", {
+    await expect(noemaMarkdownToLatexPandoc("source", {
       pandocBin: "/does/not/run",
       transformProvider: provider,
     })).rejects.toThrow("unclosed private block");

@@ -72,8 +72,8 @@ export function mathRenderCacheSize(): number {
 export function disposeMathRuntime(): void {
   clearMathRenderCache();
   if (typeof document !== "undefined") {
-    document.querySelectorAll<HTMLStyleElement>("style[data-aaronnote-katex-css]").forEach((style) => style.remove());
-    document.querySelectorAll<HTMLLinkElement>("link[data-aaronnote-katex-css]").forEach((link) => link.remove());
+    document.querySelectorAll<HTMLStyleElement>("style[data-noema-katex-css]").forEach((style) => style.remove());
+    document.querySelectorAll<HTMLLinkElement>("link[data-noema-katex-css]").forEach((link) => link.remove());
   }
 }
 
@@ -178,9 +178,9 @@ function katexOptions(options: KatexRenderOptions): KatexRenderOptions {
 
 function ensureKatexCss(): void {
   if (typeof document === "undefined") return;
-  if (document.querySelector("link[data-aaronnote-katex-css], style[data-aaronnote-katex-css]")) return;
+  if (document.querySelector("link[data-noema-katex-css], style[data-noema-katex-css]")) return;
   const link = document.createElement("link");
-  link.dataset.aaronnoteKatexCss = "embedded";
+  link.dataset.noemaKatexCss = "embedded";
   link.rel = "stylesheet";
   link.href = katexStylesheetHref();
   document.head.appendChild(link);

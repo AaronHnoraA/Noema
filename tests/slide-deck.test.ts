@@ -1,12 +1,12 @@
 import { EditorState } from "@codemirror/state";
 import { afterEach, beforeEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 
-import { createSlideDeckController, slideRangesFromState } from "../aaronnote/slide-deck.ts";
+import { createSlideDeckController, slideRangesFromState } from "../pages/slide-deck.ts";
 import {
   createRevealSlide,
   createSlidePresentation,
   sourceSlideIndexFromReveal,
-} from "../aaronnote/slide-presentation.ts";
+} from "../pages/slide-presentation.ts";
 import { jupyterCellsFromState } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
 import { tocIndexExtension } from "../src/cm6/toc-index.ts";
 import type { Editor } from "../src/lib.ts";
@@ -14,7 +14,7 @@ import type { Editor } from "../src/lib.ts";
 describe("slides deck ranges", () => {
   test("uses the actual Reveal slide marker before ambiguous stack coordinates", () => {
     const sourceSlide = document.createElement("section");
-    sourceSlide.dataset.aaronnoteSlideIndex = "2";
+    sourceSlide.dataset.noemaSlideIndex = "2";
     const authoredNestedSlide = document.createElement("section");
     sourceSlide.append(authoredNestedSlide);
 
@@ -44,7 +44,7 @@ describe("slides deck ranges", () => {
     });
 
     expect(root.querySelectorAll(".reveal .slides > section")).toHaveLength(1);
-    expect(root.querySelector(".aaronnote-rendered-slide")?.textContent).toContain("ordinary note");
+    expect(root.querySelector(".noema-rendered-slide")?.textContent).toContain("ordinary note");
     presentation.destroy();
   });
 
@@ -146,9 +146,9 @@ describe("slides deck controller", () => {
     Object.defineProperty(window, "localStorage", {
       configurable: true,
       value: {
-        getItem: (key: string) => key === "aaronnote.slides.theme" ? storedTheme : null,
+        getItem: (key: string) => key === "noema.slides.theme" ? storedTheme : null,
         setItem: (key: string, value: string) => {
-          if (key === "aaronnote.slides.theme") storedTheme = value;
+          if (key === "noema.slides.theme") storedTheme = value;
         },
       },
     });
@@ -221,15 +221,15 @@ describe("slides deck controller", () => {
   test("toggles and remembers the presentation palette without rebuilding the editor", () => {
     const setup = setupController();
     setup.controller.sync("slides");
-    const viewer = setup.root.querySelector<HTMLElement>(".aaronnote-reveal-view")!;
+    const viewer = setup.root.querySelector<HTMLElement>(".noema-reveal-view")!;
 
     expect(setup.controller.getTheme()).toBe("dark");
     expect(viewer.dataset.theme).toBe("dark");
-    expect(setup.root.querySelector(".aaronnote-deck-chrome")).toBeNull();
+    expect(setup.root.querySelector(".noema-deck-chrome")).toBeNull();
     expect(setup.controller.toggleTheme()).toBe("light");
     expect(viewer.dataset.theme).toBe("light");
     expect(setup.root.dataset.slidesTheme).toBe("light");
-    expect(window.localStorage.getItem("aaronnote.slides.theme")).toBe("light");
+    expect(window.localStorage.getItem("noema.slides.theme")).toBe("light");
     expect(setup.setMarkdownSelection).not.toHaveBeenCalled();
     setup.controller.destroy();
 
@@ -252,12 +252,12 @@ describe("slides deck controller", () => {
     const section = createRevealSlide([
       "# Native",
       "@@slides(reveal) []",
-      '<section class="authored" data-background-color="#fff" data-aaronnote-slide-index="99">Hello</section>',
+      '<section class="authored" data-background-color="#fff" data-noema-slide-index="99">Hello</section>',
     ].join("\n"), 3);
 
-    expect(section.classList.contains("aaronnote-raw-reveal-slide")).toBe(true);
+    expect(section.classList.contains("noema-raw-reveal-slide")).toBe(true);
     expect(section.classList.contains("authored")).toBe(true);
-    expect(section.dataset.aaronnoteSlideIndex).toBe("3");
+    expect(section.dataset.noemaSlideIndex).toBe("3");
     expect(section.dataset.backgroundColor).toBe("#fff");
     expect(section.querySelector(":scope > h1")?.textContent).toBe("Native");
   });

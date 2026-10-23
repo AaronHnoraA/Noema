@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import { EditorSelection } from "@codemirror/state";
 
 import { createEditor } from "../src/lib.ts";
-import { createVimLite } from "../aaronnote/vim-lite.ts";
+import { createVimLite } from "../pages/vim-lite.ts";
 import {
   guardXwidgetControlBeforeInput,
   handleXwidgetEmacsKeydown,
@@ -17,7 +17,7 @@ import {
   handleXwidgetSpecialKeydown,
   handleXwidgetVimBeforeInput,
   handleXwidgetVimKeydown,
-} from "../aaronnote/xwidget-key-guard.ts";
+} from "../pages/xwidget-key-guard.ts";
 
 function runGuard(
   target: HTMLElement,
@@ -51,11 +51,11 @@ type ForwardedEmacsKey = string | { key: string; client?: string };
 function withForwardedEmacsKeys(run: (forwarded: string[]) => void): void {
   const forwarded: string[] = [];
   const win = window as Window & {
-    aaronnoteApi?: { emacs?: { key?: (key: ForwardedEmacsKey) => unknown } };
+    noemaApi?: { emacs?: { key?: (key: ForwardedEmacsKey) => unknown } };
   };
-  const previousApi = win.aaronnoteApi;
+  const previousApi = win.noemaApi;
   try {
-    win.aaronnoteApi = {
+    win.noemaApi = {
       emacs: {
         key: async (key: ForwardedEmacsKey) => {
           forwarded.push(typeof key === "string" ? key : key.key);
@@ -64,18 +64,18 @@ function withForwardedEmacsKeys(run: (forwarded: string[]) => void): void {
     };
     run(forwarded);
   } finally {
-    win.aaronnoteApi = previousApi;
+    win.noemaApi = previousApi;
   }
 }
 
 function withForwardedEmacsPayloads(run: (forwarded: ForwardedEmacsKey[]) => void): void {
   const forwarded: ForwardedEmacsKey[] = [];
   const win = window as Window & {
-    aaronnoteApi?: { emacs?: { key?: (key: ForwardedEmacsKey) => unknown } };
+    noemaApi?: { emacs?: { key?: (key: ForwardedEmacsKey) => unknown } };
   };
-  const previousApi = win.aaronnoteApi;
+  const previousApi = win.noemaApi;
   try {
-    win.aaronnoteApi = {
+    win.noemaApi = {
       emacs: {
         key: async (key: ForwardedEmacsKey) => {
           forwarded.push(key);
@@ -84,7 +84,7 @@ function withForwardedEmacsPayloads(run: (forwarded: ForwardedEmacsKey[]) => voi
     };
     run(forwarded);
   } finally {
-    win.aaronnoteApi = previousApi;
+    win.noemaApi = previousApi;
   }
 }
 
@@ -138,7 +138,7 @@ describe("xwidget key guard", () => {
     const editable = withMounted(document.createElement("div"));
     const nativeWidget = withMounted(document.createElement("div"));
     editable.contentEditable = "true";
-    nativeWidget.dataset.aaronnoteVim = "native";
+    nativeWidget.dataset.noemaVim = "native";
     try {
       for (const target of [input, textarea, editable, nativeWidget]) {
         expect(runGuard(target, "Delete", host)).toEqual({ guarded: false, defaultPrevented: false });
@@ -159,7 +159,7 @@ describe("xwidget key guard", () => {
     const vim = createVimLite(editor, host);
     const visual = document.createElement("div");
     visual.dataset.cmVisualMath = "active";
-    visual.dataset.aaronnoteVim = "native";
+    visual.dataset.noemaVim = "native";
     const target = document.createElement("span");
     visual.append(target);
     host.append(visual);
@@ -169,7 +169,7 @@ describe("xwidget key guard", () => {
       routed.push(String(custom.detail?.key || ""));
       custom.preventDefault();
     };
-    document.addEventListener("aaronnote:math-host-key", listener);
+    document.addEventListener("noema:math-host-key", listener);
     try {
       const keydown = new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true });
       Object.defineProperty(keydown, "target", { value: target });
@@ -187,7 +187,7 @@ describe("xwidget key guard", () => {
       expect(beforeinput.defaultPrevented).toBe(true);
       expect(routed).toEqual(["Delete"]);
     } finally {
-      document.removeEventListener("aaronnote:math-host-key", listener);
+      document.removeEventListener("noema:math-host-key", listener);
       editor.destroy();
       host.remove();
     }
@@ -208,7 +208,7 @@ describe("xwidget key guard", () => {
       routed.push({ key: String(custom.detail?.key ?? ""), text: String(custom.detail?.text ?? "") });
       custom.preventDefault();
     };
-    document.addEventListener("aaronnote:math-host-key", listener);
+    document.addEventListener("noema:math-host-key", listener);
     try {
       const legacyKeydown = new KeyboardEvent("keydown", {
         key: "Spacebar",
@@ -281,7 +281,7 @@ describe("xwidget key guard", () => {
       expect(handleXwidgetMathBeforeInput(inputOnlyBackslash, { editor, editorHost: host, vim })).toBe(true);
       expect(routed.at(-1)).toEqual({ key: "\\", text: "\\" });
     } finally {
-      document.removeEventListener("aaronnote:math-host-key", listener);
+      document.removeEventListener("noema:math-host-key", listener);
       editor.destroy();
       host.remove();
     }
@@ -302,7 +302,7 @@ describe("xwidget key guard", () => {
       // to Noema's document-level Source/WYSIWYG boundary.
       if (custom.detail?.key !== "/") custom.preventDefault();
     };
-    document.addEventListener("aaronnote:math-host-key", listener);
+    document.addEventListener("noema:math-host-key", listener);
     try {
       for (const chord of [
         { key: "]", code: "BracketRight", leakedText: "\\" },
@@ -341,7 +341,7 @@ describe("xwidget key guard", () => {
         { key: "/", code: "Slash" },
       ]);
     } finally {
-      document.removeEventListener("aaronnote:math-host-key", listener);
+      document.removeEventListener("noema:math-host-key", listener);
       editor.destroy();
       host.remove();
     }
@@ -360,7 +360,7 @@ describe("xwidget key guard", () => {
       const custom = event as CustomEvent<{ key?: string }>;
       if (custom.detail?.key === "]") custom.preventDefault();
     };
-    document.addEventListener("aaronnote:math-host-key", listener);
+    document.addEventListener("noema:math-host-key", listener);
     try {
       const keydown = new KeyboardEvent("keydown", {
         key: "]",
@@ -383,7 +383,7 @@ describe("xwidget key guard", () => {
       expect(handleXwidgetMathBeforeInput(unrelated, { editor, editorHost: host, vim })).toBe(false);
       expect(unrelated.defaultPrevented).toBe(false);
     } finally {
-      document.removeEventListener("aaronnote:math-host-key", listener);
+      document.removeEventListener("noema:math-host-key", listener);
       editor.destroy();
       host.remove();
     }
@@ -404,7 +404,7 @@ describe("xwidget key guard", () => {
       routed.push(String(custom.detail?.key || ""));
       custom.preventDefault();
     };
-    document.addEventListener("aaronnote:math-host-key", listener);
+    document.addEventListener("noema:math-host-key", listener);
     try {
       const arrow = new KeyboardEvent("keydown", {
         key: "ArrowRight",
@@ -424,7 +424,7 @@ describe("xwidget key guard", () => {
       expect(handleXwidgetMathBeforeInput(space, { editor, editorHost: host, vim })).toBe(true);
       expect(routed).toEqual(["ArrowRight", " "]);
     } finally {
-      document.removeEventListener("aaronnote:math-host-key", listener);
+      document.removeEventListener("noema:math-host-key", listener);
       editor.destroy();
       host.remove();
     }
@@ -443,7 +443,7 @@ describe("xwidget key guard", () => {
       const custom = event as CustomEvent<{ key?: string }>;
       if (custom.detail?.key !== "v") custom.preventDefault();
     };
-    document.addEventListener("aaronnote:math-host-key", listener);
+    document.addEventListener("noema:math-host-key", listener);
     try {
       const pasteKey = new KeyboardEvent("keydown", {
         key: "v",
@@ -465,7 +465,7 @@ describe("xwidget key guard", () => {
       expect(handleXwidgetMathBeforeInput(paste, { editor, editorHost: host, vim })).toBe(false);
       expect(paste.defaultPrevented).toBe(false);
     } finally {
-      document.removeEventListener("aaronnote:math-host-key", listener);
+      document.removeEventListener("noema:math-host-key", listener);
       editor.destroy();
       host.remove();
     }
@@ -486,7 +486,7 @@ describe("xwidget key guard", () => {
       routed.push(String(custom.detail?.key || ""));
       custom.preventDefault();
     };
-    document.addEventListener("aaronnote:math-host-key", listener);
+    document.addEventListener("noema:math-host-key", listener);
     try {
       const keydown = new KeyboardEvent("keydown", {
         key: "Backspace",
@@ -507,7 +507,7 @@ describe("xwidget key guard", () => {
       expect(beforeinput.defaultPrevented).toBe(true);
       expect(routed).toEqual(["Backspace"]);
     } finally {
-      document.removeEventListener("aaronnote:math-host-key", listener);
+      document.removeEventListener("noema:math-host-key", listener);
       editor.destroy();
       host.remove();
     }
@@ -528,7 +528,7 @@ describe("xwidget key guard", () => {
       routed = String(custom.detail?.key || "");
       custom.preventDefault();
     };
-    document.addEventListener("aaronnote:math-host-key", listener);
+    document.addEventListener("noema:math-host-key", listener);
     try {
       const event = new InputEvent("beforeinput", {
         bubbles: true,
@@ -540,7 +540,7 @@ describe("xwidget key guard", () => {
       expect(handleXwidgetMathBeforeInput(event, { editor, editorHost: host, vim })).toBe(true);
       expect(routed).toBe("Delete");
     } finally {
-      document.removeEventListener("aaronnote:math-host-key", listener);
+      document.removeEventListener("noema:math-host-key", listener);
       editor.destroy();
       host.remove();
     }
@@ -1744,7 +1744,7 @@ describe("early Emacs chord claim", () => {
     const content = document.createElement("div");
     content.contentEditable = "true";
     const nativeHost = document.createElement("div");
-    nativeHost.dataset.aaronnoteVim = "native";
+    nativeHost.dataset.noemaVim = "native";
     const native = document.createElement("input");
     nativeHost.append(native);
     editor.append(content, nativeHost);

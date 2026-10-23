@@ -106,7 +106,7 @@ func githubSlug(text string) string {
 }
 
 // domSlug is one segment of a roam DOM target, as the page computes it
-// (slugDomTarget in aaronnote/main.ts): markup characters become spaces,
+// (slugDomTarget in pages/main.ts): markup characters become spaces,
 // spaces hyphens, letters lower case.
 func domSlug(label string) string {
 	cleaned := strings.Join(strings.Fields(strings.NewReplacer("[", " ", "]", " ", "\r", " ", "\n", " ").Replace(label)), " ")

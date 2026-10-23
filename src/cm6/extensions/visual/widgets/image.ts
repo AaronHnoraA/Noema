@@ -60,7 +60,7 @@ import {
 
 declare global {
   interface Window {
-    AaronnoteResolveAssetUrl?: (src: string) => string;
+    NoemaResolveAssetUrl?: (src: string) => string;
   }
 }
 
@@ -81,11 +81,11 @@ function resolveImageSrc(src: string): { src: string; card: boolean } {
   if (!raw) return { src: raw, card: false };
   if (drawioAttachmentP(raw)) {
     const { path, page } = splitDrawioSource(raw);
-    const resolved = window.AaronnoteResolveAssetUrl?.(path) ?? path;
+    const resolved = window.NoemaResolveAssetUrl?.(path) ?? path;
     const exported = drawioImageSrc(resolved, page);
     return exported ? { src: exported, card: false } : { src: resolved, card: true };
   }
-  return { src: window.AaronnoteResolveAssetUrl?.(raw) ?? raw, card: false };
+  return { src: window.NoemaResolveAssetUrl?.(raw) ?? raw, card: false };
 }
 
 function happyDomTestEnvironmentP(): boolean {
@@ -98,14 +98,14 @@ function setVisualFrameSource(
 ): void {
   if (frame.mode === "src") {
     if (happyDomTestEnvironmentP()) {
-      iframe.setAttribute("data-aaronnote-src", frame.src);
+      iframe.setAttribute("data-noema-src", frame.src);
     } else {
       iframe.setAttribute("src", frame.src);
     }
     return;
   }
   if (happyDomTestEnvironmentP()) {
-    iframe.setAttribute("data-aaronnote-srcdoc", frame.srcdoc);
+    iframe.setAttribute("data-noema-srcdoc", frame.srcdoc);
   } else {
     iframe.setAttribute("srcdoc", frame.srcdoc);
   }
@@ -392,8 +392,8 @@ function buildImageResizeHandle(
     event.preventDefault();
     event.stopPropagation();
     const startX = event.clientX;
-    const originalWidth = wrap.style.getPropertyValue("--aaronnote-image-width");
-    const originalMaxWidth = wrap.style.getPropertyValue("--aaronnote-image-max-width");
+    const originalWidth = wrap.style.getPropertyValue("--noema-image-width");
+    const originalMaxWidth = wrap.style.getPropertyValue("--noema-image-max-width");
     const rowItem = wrap.classList.contains("cm-image-row-item");
     const originalRowWeight = wrap.style.getPropertyValue("--cm-image-row-weight");
     const fallbackWidth = Number.parseFloat(layout.width) || 320;
@@ -417,8 +417,8 @@ function buildImageResizeHandle(
     const paint = (): void => {
       frame = 0;
       if (!wrap.isConnected || finished) return;
-      wrap.style.setProperty("--aaronnote-image-width", `${pendingWidth}px`);
-      wrap.style.setProperty("--aaronnote-image-max-width", "none");
+      wrap.style.setProperty("--noema-image-width", `${pendingWidth}px`);
+      wrap.style.setProperty("--noema-image-max-width", "none");
       if (rowItem) wrap.style.setProperty("--cm-image-row-weight", String(Math.max(0.25, Math.min(4, pendingWidth / 220))));
       view.requestMeasure();
     };
@@ -441,10 +441,10 @@ function buildImageResizeHandle(
       if (frame) window.cancelAnimationFrame(frame);
       handle.releasePointerCapture?.(cancelEvent.pointerId);
       detach();
-      if (originalWidth) wrap.style.setProperty("--aaronnote-image-width", originalWidth);
-      else wrap.style.removeProperty("--aaronnote-image-width");
-      if (originalMaxWidth) wrap.style.setProperty("--aaronnote-image-max-width", originalMaxWidth);
-      else wrap.style.removeProperty("--aaronnote-image-max-width");
+      if (originalWidth) wrap.style.setProperty("--noema-image-width", originalWidth);
+      else wrap.style.removeProperty("--noema-image-width");
+      if (originalMaxWidth) wrap.style.setProperty("--noema-image-max-width", originalMaxWidth);
+      else wrap.style.removeProperty("--noema-image-max-width");
       if (rowItem) {
         if (originalRowWeight) wrap.style.setProperty("--cm-image-row-weight", originalRowWeight);
         else wrap.style.removeProperty("--cm-image-row-weight");

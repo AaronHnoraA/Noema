@@ -85,7 +85,7 @@ See [capabilities.md](capabilities.md) for the precise file format and
 
 Private `noema-research-op-*` functions remain as the tested structural backend
 until every legacy caller is migrated. Wire channels retain their historical
-`aaronnote:api:*` prefix for compatibility.
+`noema:api:*` prefix for compatibility.
 
 ## Demonstrated scenario
 

@@ -63,10 +63,10 @@ describe("Noema block anchor badge", () => {
   });
 
   test("Source mode leaves the anchor literal", async () => {
-    const { toggleAaronnoteMarkdownSource } = await import("../../src/cm6/editor-cm6.ts");
+    const { toggleNoemaMarkdownSource } = await import("../../src/cm6/editor-cm6.ts");
     const text = `Paragraph text {#${BLOCK_ID}}`;
     const { editor, cleanup } = await mount(text);
-    toggleAaronnoteMarkdownSource(editor.view);
+    toggleNoemaMarkdownSource(editor.view);
     expect(document.querySelector(".cm-noema-block-id")).toBeNull();
     expect(editor.view.dom.textContent).toContain(`{#${BLOCK_ID}}`);
     cleanup();

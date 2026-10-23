@@ -31,13 +31,13 @@
 (require 'noema-research-completion)
 (require 'flymake)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
-(declare-function my/noema--host-file "init-aaronnote" (file))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
+(declare-function my/noema--ensure-server "init-noema" (&optional callback))
+(declare-function my/noema--host-file "init-noema" (file))
 (declare-function my/noema-jupyter-output-open-document
-                  "init-aaronnote" (payload &optional focus))
+                  "init-noema" (payload &optional focus))
 (declare-function my/noema-jupyter-cell--api-sync
-                  "init-aaronnote-jupyter-cell" (channel body &optional timeout))
+                  "init-noema-jupyter-cell" (channel body &optional timeout))
 (declare-function noema-research-graph-follow-source
                   "noema-research-graph" (source work-node-id))
 (declare-function noema-research-graph-buffer
@@ -841,7 +841,7 @@ The claim marker sets its own face; a blanket `propertize' would erase it."
                                      copy))
                                  (noema-research-cells preview))) preview)
       (my/noema-api-call
-       "aaronnote:api:research:session:names" (vector `((cwd . ,root)))
+       "noema:api:research:session:names" (vector `((cwd . ,root)))
        (lambda (result error-object)
          (when (and (buffer-live-p buffer) (not error-object))
            (with-current-buffer buffer
@@ -851,7 +851,7 @@ The claim marker sets its own face; a blanket `propertize' would erase it."
        30)
       (when cell-ids
         (my/noema-api-call
-         "aaronnote:api:research:session:resolve"
+         "noema:api:research:session:resolve"
          (vector `((file . ,(noema-project-host-file buffer-file-name)) (cwd . ,root)
                    (notebook . ,preview)
                    (cellIds . ,(vconcat cell-ids))))
@@ -1314,7 +1314,7 @@ An empty work block is a valid sketch of the DAG; it just cannot run yet."
               ((fboundp 'my/noema-api-call))
               ((bound-and-true-p my/noema--ready)))
     (my/noema-api-call
-     "aaronnote:api:research:notebook:sync"
+     "noema:api:research:notebook:sync"
      (vector (noema-research--table "file" file
                                     "actor" "emacs"
                                     "reason" reason))
@@ -1468,7 +1468,7 @@ project files are linked back to the Work as immutable Artifacts."
       (my/noema--ensure-server
        (lambda ()
          (my/noema-api-call
-          "aaronnote:api:research:run:project-file" request
+          "noema:api:research:run:project-file" request
           (lambda (result error-object)
             (if error-object
                 (message "Noema project-file Run failed: %s"
@@ -1632,7 +1632,7 @@ context and the budget it has to fit into."
     (unless (and root (fboundp 'my/noema-api-call))
       (user-error "This document has no Noema host"))
     (my/noema-api-call
-     "aaronnote:api:research:run:context-preview"
+     "noema:api:research:run:context-preview"
      (vector `((file . ,(noema-project-host-file buffer-file-name)) (cwd . ,root)
                (cellId . ,(noema-research-cell-id cell)) (notebook . ,document)
                ,@(when (boundp 'noema-agent-worker-context-rollover-ratio)
@@ -1741,7 +1741,7 @@ SNAPSHOT is ignored; the `.noema' file is the sole durable authority."
     (user-error "Noema host integration is unavailable"))
   (let* ((root (noema-research-repository-root buffer-file-name))
          (result (my/noema-jupyter-cell--api-sync
-                  "aaronnote:api:research:notebook:migrate"
+                  "noema:api:research:notebook:migrate"
                   `((file . ,(noema-project-host-file buffer-file-name))
                     (cwd . ,root)) 120))
          (migrated (or (noema-research--get result "migrated")
@@ -2522,7 +2522,7 @@ It only reports: what a changed foundation means is the person\='s judgement."
             (delete-region start-marker end-marker)
             (insert "Runtime index unavailable.\n"))))
     (my/noema-api-call
-     "aaronnote:api:research:source:changes"
+     "noema:api:research:source:changes"
      (vector (noema-research--table
               "cwd" root "notebookId" notebook-id
               "workNodeId" work-node-id "limit" 100))
@@ -2574,7 +2574,7 @@ It only reports: what a changed foundation means is the person\='s judgement."
             (delete-region start-marker end-marker)
             (insert "Runtime index unavailable; ordinary files remain accessible.\n"))))
     (my/noema-api-call
-     "aaronnote:api:research:artifact:links"
+     "noema:api:research:artifact:links"
      (vector (noema-research--table
               "cwd" root "notebookId" notebook-id
               "workNodeId" work-node-id "limit" 100))
@@ -2687,7 +2687,7 @@ It only reports: what a changed foundation means is the person\='s judgement."
             (delete-region start-marker end-marker)
             (insert "Runtime index unavailable.\n"))))
     (my/noema-api-call
-     "aaronnote:api:research:run:context-receipt"
+     "noema:api:research:run:context-receipt"
      (vector (noema-research--table "cwd" root "runId" run-id))
      (lambda (result error-object)
        (when (and (buffer-live-p buffer)

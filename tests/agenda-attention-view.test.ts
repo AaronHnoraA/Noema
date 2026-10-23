@@ -1,6 +1,6 @@
 import {describe,expect,test,vi} from '@voidzero-dev/vite-plus-test';
-import {renderAttention} from '../aaronnote/agenda-attention-view.ts';
-import type {AttentionSnapshot} from '../aaronnote/agenda-attention-view.ts';
+import {renderAttention} from '../pages/agenda-attention-view.ts';
+import type {AttentionSnapshot} from '../pages/agenda-attention-view.ts';
 
 function snapshot():AttentionSnapshot {
   return {revision:1,connection:{state:'unavailable',message:'Apple helper stopped'},items:[{

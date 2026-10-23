@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { createVersionControlView, type VersionControlApi, type VersionControlHost } from "../aaronnote/wiki-version-control.ts";
-import type { WikiBranch, WikiRemote, WikiRepository, WikiRepositoryStatus, WikiSyncState } from "../aaronnote/api-client.ts";
+import { createVersionControlView, type VersionControlApi, type VersionControlHost } from "../pages/wiki-version-control.ts";
+import type { WikiBranch, WikiRemote, WikiRepository, WikiRepositoryStatus, WikiSyncState } from "../pages/api-client.ts";
 
 const repository: WikiRepository = {
   id: "private/research",

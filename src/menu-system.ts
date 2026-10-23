@@ -253,7 +253,7 @@ class NoemaMenuController implements MenuController {
     const type = itemType(item);
     if (type === "separator") {
       const separator = document.createElement("div");
-      separator.className = "aaronnote-context-separator";
+      separator.className = "noema-context-separator";
       separator.setAttribute("role", "separator");
       return separator;
     }

@@ -7,14 +7,14 @@ import {
   writeSystemClipboard,
 } from "../src/system-clipboard.ts";
 import { copiedText } from "../src/cm6/copied-text.ts";
-import { installHostClipboard } from "../aaronnote/host-clipboard.ts";
+import { installHostClipboard } from "../pages/host-clipboard.ts";
 import { pasteDataTransfer } from "../src/paste.ts";
 
-type MutableWindow = Window & { __aaronnoteHostMode?: string };
+type MutableWindow = Window & { __noemaHostMode?: string };
 
 function setHostMode(mode: string | undefined): void {
-  if (mode === undefined) delete (window as MutableWindow).__aaronnoteHostMode;
-  else (window as MutableWindow).__aaronnoteHostMode = mode;
+  if (mode === undefined) delete (window as MutableWindow).__noemaHostMode;
+  else (window as MutableWindow).__noemaHostMode = mode;
 }
 
 afterEach(() => {

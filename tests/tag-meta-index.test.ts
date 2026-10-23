@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { configure } from "../server/lib/state.mjs";
 // @ts-ignore Node ESM server modules are outside the renderer TS graph.
 import { saveNote } from "../server/lib/runtime.mjs";
-import { planMarkdownTagChanges } from "../aaronnote/note-tag-transaction.ts";
+import { planMarkdownTagChanges } from "../pages/note-tag-transaction.ts";
 // @ts-ignore Node ESM server modules are outside the renderer TS graph.
 import { wikiMutationFiles } from "../server/lib/wiki-index-refresh.mjs";
 // @ts-ignore Node ESM server modules are outside the renderer TS graph.

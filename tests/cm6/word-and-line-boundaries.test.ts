@@ -57,7 +57,7 @@ describe("Mod-d occurrence selection agrees with Vim's w/b", () => {
 
   it("matches what Vim's w motion treats as one word", async () => {
     const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
-    const { createVimLite } = await import("../../aaronnote/vim-lite.ts");
+    const { createVimLite } = await import("../../pages/vim-lite.ts");
     const host = document.createElement("div");
     document.body.append(host);
     const editor = createEditorCM6(host, { initialContent: "foo-bar baz" });
@@ -134,7 +134,7 @@ describe("Mod-d selects the word under the caret before hunting for matches", ()
 describe("Vim 0/$ resolve against the visual row", () => {
   async function setup(text: string) {
     const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
-    const { createVimLite } = await import("../../aaronnote/vim-lite.ts");
+    const { createVimLite } = await import("../../pages/vim-lite.ts");
     const host = document.createElement("div");
     document.body.append(host);
     const editor = createEditorCM6(host, { initialContent: text });

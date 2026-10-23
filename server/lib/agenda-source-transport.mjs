@@ -12,7 +12,7 @@ export function createAgendaSourceTransport({ request, excludePatterns = [], nat
   const handles = new Map();
   const owns = (file) => /^\/fs:[^:]+:\//.test(String(file));
   async function rpc(body) {
-    const result = await request('aaronnote.agenda.source', body);
+    const result = await request('noema.agenda.source', body);
     if (result?.error) throw failure(result.error.message, result.error.code);
     return result;
   }

@@ -293,14 +293,14 @@ export function imageRowHeightHandle(view: EditorView, figure: HTMLElement): HTM
     const targets = figures.map((item) => figureLayoutTarget(view, item));
     if (targets.length !== row.images.length || targets.some((target) => !target || target.kind !== "image")) return null;
     const snapshot = view.state.doc;
-    const oldHeights = figures.map((item) => item.style.getPropertyValue("--aaronnote-image-height"));
+    const oldHeights = figures.map((item) => item.style.getPropertyValue("--noema-image-height"));
     const initialHeight = Number.parseFloat(targets[0]!.layout.height) ||
       figure.querySelector<HTMLImageElement>("img.cm-image-render")?.getBoundingClientRect().height || 220;
-    const paint = (height: number) => figures.forEach((item) => item.style.setProperty("--aaronnote-image-height", `${height}px`));
+    const paint = (height: number) => figures.forEach((item) => item.style.setProperty("--noema-image-height", `${height}px`));
     const restore = () => figures.forEach((item, at) => {
       const old = oldHeights[at];
-      if (old) item.style.setProperty("--aaronnote-image-height", old);
-      else item.style.removeProperty("--aaronnote-image-height");
+      if (old) item.style.setProperty("--noema-image-height", old);
+      else item.style.removeProperty("--noema-image-height");
     });
     const commit = (delta: number) => {
       if (view.state.doc !== snapshot) { restore(); return false; }

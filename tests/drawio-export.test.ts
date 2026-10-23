@@ -8,7 +8,7 @@ import {
   visualMarkdownAttachmentP,
 } from "../src/visual-attachments.ts";
 
-const MEDIA = "aaronnote-asset://media?file=./attachments/demo.drawio&base=/notes/demo.md";
+const MEDIA = "noema-asset://media?file=./attachments/demo.drawio&base=/notes/demo.md";
 
 describe("draw.io references", () => {
   test("a .drawio file is a picture, never an embedded editor", () => {
@@ -39,7 +39,7 @@ describe("draw.io references", () => {
 
   test("a Noema asset resolves to the export endpoint, carrying the page", () => {
     const url = new URL(drawioImageSrc(MEDIA, 2)!);
-    expect(url.protocol).toBe("aaronnote-asset:");
+    expect(url.protocol).toBe("noema-asset:");
     expect(url.hostname).toBe("drawio-svg");
     expect(url.searchParams.get("src")).toBe(MEDIA);
     expect(url.searchParams.get("page")).toBe("2");

@@ -180,7 +180,7 @@ describe("server note refs", () => {
   });
 
   test("suggests paths from relative, parent, and roam-root prefixes without hidden entries", async () => {
-    const root = await setupRoot("aaronnote-paths-");
+    const root = await setupRoot("noema-paths-");
     try {
       await mkdir(join(root, "project", "sub"), { recursive: true });
       await mkdir(join(root, "Proofs"), { recursive: true });
@@ -211,7 +211,7 @@ describe("server note refs", () => {
   });
 
   test("suggests standalone slash paths from detected project root", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-standalone-paths-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-standalone-paths-"));
     try {
       const notes = join(root, "roam");
       const project = join(root, "assignment");
@@ -234,7 +234,7 @@ describe("server note refs", () => {
   });
 
   test("reads note-code lean regions by roam-root path", async () => {
-    const root = await setupRoot("aaronnote-note-code-");
+    const root = await setupRoot("noema-note-code-");
     try {
       await mkdir(join(root, "project"), { recursive: true });
       await mkdir(join(root, "Proofs"), { recursive: true });
@@ -242,10 +242,10 @@ describe("server note refs", () => {
       const lean = join(root, "Proofs", "Sample.lean");
       await writeFile(note, "@@note-code(/Proofs/Sample.lean)[main]\n", "utf8");
       await writeFile(lean, [
-        "-- @aaronnote main",
+        "-- @noema main",
         "theorem sample : True := by",
         "  trivial",
-        "-- @aaronnote second",
+        "-- @noema second",
         "def x := 1",
         "",
       ].join("\n"), "utf8");
@@ -267,16 +267,16 @@ describe("server note refs", () => {
   });
 
   test("reads note-code regions by content-root slash path", async () => {
-    const root = await setupRoot("aaronnote-note-code-root-path-");
+    const root = await setupRoot("noema-note-code-root-path-");
     try {
       await mkdir(join(root, "project", "UNSW", "lab"), { recursive: true });
       const note = join(root, "project", "UNSW", "GraphTensor.md");
       const source = join(root, "project", "UNSW", "lab", "demo.py");
       await writeFile(note, "@@note-code(/project/UNSW/lab/demo.py)[main]\n", "utf8");
       await writeFile(source, [
-        "# @aaronnote main",
+        "# @noema main",
         "x = 1",
-        "# @aaronnote second",
+        "# @noema second",
         "x = 2",
         "",
       ].join("\n"), "utf8");
@@ -298,14 +298,14 @@ describe("server note refs", () => {
   });
 
   test("keeps legacy bare note-code project paths working when local path is missing", async () => {
-    const root = await setupRoot("aaronnote-note-code-legacy-path-");
+    const root = await setupRoot("noema-note-code-legacy-path-");
     try {
       await mkdir(join(root, "project", "UNSW", "lab"), { recursive: true });
       const note = join(root, "project", "UNSW", "GraphTensor.md");
       const source = join(root, "project", "UNSW", "lab", "demo.py");
       await writeFile(note, "@@note-code(project/UNSW/lab/demo.py)[main]\n", "utf8");
       await writeFile(source, [
-        "# @aaronnote main",
+        "# @noema main",
         "x = 1",
         "",
       ].join("\n"), "utf8");
@@ -325,7 +325,7 @@ describe("server note refs", () => {
   });
 
   test("serves a compact graph payload", async () => {
-    const root = await setupRoot("aaronnote-graph-");
+    const root = await setupRoot("noema-graph-");
     try {
       await writeFile(join(root, "target.md"), [
         "---",
@@ -367,7 +367,7 @@ describe("server note refs", () => {
   });
 
   test("serves a tag inverted index", async () => {
-    const root = await setupRoot("aaronnote-tags-");
+    const root = await setupRoot("noema-tags-");
     try {
       await writeFile(join(root, "a.md"), [
         "---",
@@ -418,7 +418,7 @@ describe("server note refs", () => {
   });
 
   test("roam: off notes and meta blocks without ids stay out of roam graph and tag index", async () => {
-    const root = await setupRoot("aaronnote-roam-off-");
+    const root = await setupRoot("noema-roam-off-");
     try {
       await writeFile(join(root, "visible.md"), [
         "---",
@@ -471,7 +471,7 @@ describe("server note refs", () => {
   });
 
   test("ordinary metadata edits keep an idless Markdown document outside Roam", async () => {
-    const root = await setupRoot("aaronnote-idless-meta-");
+    const root = await setupRoot("noema-idless-meta-");
     try {
       const file = join(root, "ordinary.md");
       await writeFile(file, "#+begin meta\ntitle: Ordinary\n#+end meta\n\n# Ordinary\n", "utf8");
@@ -492,7 +492,7 @@ describe("server note refs", () => {
   });
 
   test("meta update writes and preserves file-level project", async () => {
-    const root = await setupRoot("aaronnote-meta-project-");
+    const root = await setupRoot("noema-meta-project-");
     try {
       const file = join(root, "paper.md");
       await writeFile(file, [
@@ -530,7 +530,7 @@ describe("server note refs", () => {
   });
 
   test("indexes hierarchical DOM targets for note link completion without rescanning on demand", async () => {
-    const root = await setupRoot("aaronnote-dom-targets-");
+    const root = await setupRoot("noema-dom-targets-");
     try {
       await writeFile(join(root, "paper.md"), [
         "#+begin meta",
@@ -559,7 +559,7 @@ describe("server note refs", () => {
   });
 
   test("reports case duplicate and overlapping roam tags", async () => {
-    const root = await setupRoot("aaronnote-tag-tools-");
+    const root = await setupRoot("noema-tag-tools-");
     try {
       await writeFile(join(root, "a.md"), [
         "---",
@@ -591,7 +591,7 @@ describe("server note refs", () => {
   });
 
   test("previews markdown path reference rewrites without touching roam links", async () => {
-    const root = await setupRoot("aaronnote-path-rewrite-");
+    const root = await setupRoot("noema-path-rewrite-");
     try {
       await mkdir(join(root, "folder"), { recursive: true });
       await writeFile(join(root, "source.md"), [

@@ -95,7 +95,7 @@ describe("research runtime service", () => {
     const runContextReceipt = vi.fn(async () => receipt);
     const service = createResearchRuntimeService({ getProvider: () => ({ runContextReceipt }) as any });
     const handlers = createResearchApiHandlers(service);
-    await expect(handlers["aaronnote:api:research:run:context-receipt"]({ root, runId: "run_frozen" }))
+    await expect(handlers["noema:api:research:run:context-receipt"]({ root, runId: "run_frozen" }))
       .resolves.toMatchObject({ receipt, upstream: { state: "not_applicable", items: [] } });
     expect(runContextReceipt).toHaveBeenCalledExactlyOnceWith({ root, id: "run_frozen" });
   }));
@@ -304,7 +304,7 @@ describe("research runtime service", () => {
     await expect(service.proposeRunMemory({ ...request, statement: "Handoff never said this" }))
       .rejects.toMatchObject({ code: "ERR_RESEARCH_MEMORY" });
     expect(proposal).toHaveBeenCalledTimes(4);
-    expect(createResearchApiHandlers(service)["aaronnote:api:research:memory:propose-from-run"])
+    expect(createResearchApiHandlers(service)["noema:api:research:memory:propose-from-run"])
       .toBeTypeOf("function");
   }));
   test("route preview uses unsaved lineage changes and shares one runtime snapshot", async () => withProject(async (root) => {
@@ -329,7 +329,7 @@ describe("research runtime service", () => {
     const deliverWorkerCommand = vi.fn(() => true);
     const service = createResearchRuntimeService({ getProvider: () => provider as any, deliverWorkerCommand });
     const handlers = createResearchApiHandlers(service);
-    await expect(handlers["aaronnote:api:research:run:check-completion"]({ root, runId: "r" }))
+    await expect(handlers["noema:api:research:run:check-completion"]({ root, runId: "r" }))
       .resolves.toMatchObject({ detection: "requested", delivered: true });
     expect(deliverWorkerCommand).toHaveBeenCalledExactlyOnceWith({ type: "run-check-completion", root, runId: "r", sessionId: "s" });
     expect((await service.checkRunCompletion({ root })).detection).toBe("no-run");
@@ -377,7 +377,7 @@ describe("research runtime service", () => {
   test("global channels force global scope even with conflicting project arguments", async () => {
     const mutateCapability = vi.fn(async () => ({}));
     const handlers = createResearchApiHandlers({ mutateCapability });
-    await handlers["aaronnote:api:research:capability:global:mutate"]({ scope: "project", cwd: "/project" });
+    await handlers["noema:api:research:capability:global:mutate"]({ scope: "project", cwd: "/project" });
     expect(mutateCapability).toHaveBeenCalledWith({ scope: "global", cwd: "/project" });
   });
 
@@ -1315,7 +1315,7 @@ describe("research runtime service", () => {
     expect(await findResearchProjectRoot(join(root, "nested"))).toBe(root);
     const handlers = createResearchApiHandlers({} as any);
     for (const suffix of ["cache:status", "cache:maintain", "cell:resolve", "capability:list", "capability:config", "capability:mutate", "run:prepare", "run:cancel", "run:fail-preparing", "run:live", "artifact:read", "artifact:import", "corpus:index", "corpus:index-files", "corpus:search", "corpus:block-read", "worker:lease", "worker:attach", "worker:start", "worker:events", "worker:permission", "worker:input", "permission:decide", "input:get", "input:respond", "attention:list", "proposal:create", "supervisor:propose", "proposal:get", "proposal:list", "proposal:review", "finding:get", "finding:list", "finding:retire", "research-ir:list", "problem-model:list", "export:create", "task:create", "task:list", "task:transition", "job:create", "job:list", "job:claim", "job:start", "job:lease-renew", "job:lease-expire", "job:complete", "job:fail", "job:unresolved", "job:retry", "invocation:list", "scheduler-worker:register", "scheduler-worker:list", "delegation:create", "delegation:list", "orchestration:snapshot", "session:promote", "session:list", "session:get", "session:context", "session:compact", "session:takeover", "session:handback", "history:index", "history:search", "history:peek", "history:read"]) {
-      expect(handlers[`aaronnote:api:research:${suffix}`]).toBeTypeOf("function");
+      expect(handlers[`noema:api:research:${suffix}`]).toBeTypeOf("function");
     }
   }));
 

@@ -200,18 +200,18 @@ class InlineMathEditorWidget extends MeasuredWidget {
 
     // These events keep the widget testable without coupling tests to
     // MathLive's shadow DOM implementation.
-    span.addEventListener("aaronnote:inline-math-draft", (event) => {
+    span.addEventListener("noema:inline-math-draft", (event) => {
       const latex = (event as CustomEvent<{ latex?: unknown }>).detail?.latex;
       if (typeof latex === "string") {
         this.session.externalDraft = true;
         this.session.draft = normalizeVisualTexLatex(latex);
       }
     });
-    span.addEventListener("aaronnote:inline-math-commit", () => this.session.onCommit("forward"));
-    span.addEventListener("aaronnote:inline-math-unavailable", () => {
+    span.addEventListener("noema:inline-math-commit", () => this.session.onCommit("forward"));
+    span.addEventListener("noema:inline-math-unavailable", () => {
       this.session.onUnavailable(new Error("Visual formula editor unavailable"));
     });
-    span.addEventListener("aaronnote:inline-math-resize", () => {
+    span.addEventListener("noema:inline-math-resize", () => {
       // MathLive renders inside a shadow tree, so CM6's mutation observer does
       // not see a taller fraction/root. The outer widget has already received
       // its new stable size; explicitly refresh the line height map.
@@ -302,19 +302,19 @@ class BlockMathEditorWidget extends MeasuredWidget {
     else fallback.innerHTML = rendered.html;
     div.append(fallback);
 
-    div.addEventListener("aaronnote:display-math-draft", (event) => {
+    div.addEventListener("noema:display-math-draft", (event) => {
       const latex = (event as CustomEvent<{ latex?: unknown }>).detail?.latex;
       if (typeof latex === "string") {
         this.session.externalDraft = true;
         this.session.draft = normalizeVisualTexLatex(latex);
       }
     });
-    div.addEventListener("aaronnote:display-math-commit", (event) => {
+    div.addEventListener("noema:display-math-commit", (event) => {
       const direction = (event as CustomEvent<{ direction?: VisualTexInlineMoveDirection }>)
         .detail?.direction;
       commitBlockMathSession(view, this.session, direction ?? "forward");
     });
-    div.addEventListener("aaronnote:display-math-unavailable", () => {
+    div.addEventListener("noema:display-math-unavailable", () => {
       fallbackBlockMathSession(view, this.session, new Error("Visual formula editor unavailable"));
     });
 
@@ -1319,7 +1319,7 @@ function patchBlockMathDecosNearChanges(
 }
 
 function dispatchMathEditState(view: EditorView, active: boolean, kind: "inline" | "display"): void {
-  view.dom.dispatchEvent(new CustomEvent("aaronnote:inline-math-edit-state", {
+  view.dom.dispatchEvent(new CustomEvent("noema:inline-math-edit-state", {
     bubbles: true,
     detail: { active, kind },
   }));
@@ -1413,7 +1413,7 @@ function fallbackBlockMathSession(
     selection: { anchor: Math.min(session.contentTo, session.contentFrom) },
     effects: fallbackBlockMathSessionEffect.of(session.id),
   });
-  view.dom.dispatchEvent(new CustomEvent("aaronnote:inline-math-edit-error", {
+  view.dom.dispatchEvent(new CustomEvent("noema:inline-math-edit-error", {
     bubbles: true,
     detail: {
       message: error instanceof Error ? error.message : "Visual formula editor unavailable",
@@ -1976,7 +1976,7 @@ class MathInlinePlugin {
     session.editor?.destroy();
     session.editor = null;
     dispatchMathEditState(view, false, "inline");
-    view.dom.dispatchEvent(new CustomEvent("aaronnote:inline-math-edit-error", {
+    view.dom.dispatchEvent(new CustomEvent("noema:inline-math-edit-error", {
       bubbles: true,
       detail: { message, kind: "inline" },
     }));

@@ -72,9 +72,9 @@ function deferred<T>(): {
 }
 
 function installNativeCopilot(handler: (action: string, body: unknown) => Promise<unknown>): () => void {
-  const target = window as Window & { aaronnoteApi?: { copilot?: { request?: (action: string, body?: unknown) => Promise<unknown> } } };
-  const oldApi = target.aaronnoteApi;
-  target.aaronnoteApi = {
+  const target = window as Window & { noemaApi?: { copilot?: { request?: (action: string, body?: unknown) => Promise<unknown> } } };
+  const oldApi = target.noemaApi;
+  target.noemaApi = {
     ...(oldApi ?? {}),
     copilot: {
       ...(oldApi?.copilot ?? {}),
@@ -82,8 +82,8 @@ function installNativeCopilot(handler: (action: string, body: unknown) => Promis
     },
   };
   return () => {
-    if (oldApi) target.aaronnoteApi = oldApi;
-    else delete target.aaronnoteApi;
+    if (oldApi) target.noemaApi = oldApi;
+    else delete target.noemaApi;
   };
 }
 
@@ -207,7 +207,7 @@ function createCopilotHarness(options: {
     editor,
     handlers,
     requests,
-    ghost: () => document.querySelector<HTMLElement>(".aaronnote-copilot-ghost"),
+    ghost: () => document.querySelector<HTMLElement>(".noema-copilot-ghost"),
     async trigger() {
       handlers.action?.("trigger");
       await waitForMicrotasks();
@@ -238,7 +238,7 @@ function createCopilotHarness(options: {
       shiftKey?: boolean;
       isComposing?: boolean;
     }) {
-      const event = new CustomEvent("aaronnote:copilot-host-key", {
+      const event = new CustomEvent("noema:copilot-host-key", {
         bubbles: true,
         cancelable: true,
         detail: {
@@ -347,7 +347,7 @@ describe("copilot plugin insertion", () => {
       handlers.action?.("trigger");
       await waitForMicrotasks();
       await waitForMicrotasks();
-      expect(document.querySelector(".aaronnote-copilot-ghost")?.textContent).toBe("Suffix");
+      expect(document.querySelector(".noema-copilot-ghost")?.textContent).toBe("Suffix");
 
       target.addEventListener("keydown", (event) => {
         handlers.key?.(event);
@@ -662,13 +662,13 @@ describe("copilot plugin insertion", () => {
         bubbles: true,
         cancelable: true,
       }));
-      expect(document.querySelector(".aaronnote-copilot-jump-target")).toBeFalsy();
+      expect(document.querySelector(".noema-copilot-jump-target")).toBeFalsy();
       target.dispatchEvent(new KeyboardEvent("keydown", {
         key: "B",
         bubbles: true,
         cancelable: true,
       }));
-      const beta = [...document.querySelectorAll<HTMLElement>(".aaronnote-copilot-jump-target")]
+      const beta = [...document.querySelectorAll<HTMLElement>(".noema-copilot-jump-target")]
         .find((candidate) => candidate.textContent === "B");
       expect(beta?.dataset.copilotJumpLabel).toBeTruthy();
       for (const key of beta!.dataset.copilotJumpLabel!) {
@@ -745,7 +745,7 @@ describe("copilot plugin insertion", () => {
       await waitForMicrotasks();
       await waitForMicrotasks();
       expect(inlineRequests).toBe(1);
-      expect(document.querySelector(".aaronnote-copilot-ghost")?.textContent).toBe("Suffix");
+      expect(document.querySelector(".noema-copilot-ghost")?.textContent).toBe("Suffix");
     } finally {
       cleanup();
       restoreApi();
@@ -880,7 +880,7 @@ describe("copilot plugin insertion", () => {
       await waitForMicrotasks();
       await waitForMicrotasks();
       expect(inlineRequests).toBe(1);
-      expect(document.querySelector(".aaronnote-copilot-ghost")?.textContent).toBe("value");
+      expect(document.querySelector(".noema-copilot-ghost")?.textContent).toBe("value");
     } finally {
       cleanup();
       restoreApi();
@@ -936,7 +936,7 @@ describe("copilot plugin insertion", () => {
       await waitForMicrotasks();
       await waitForMicrotasks();
       expect(inlineRequests).toBe(0);
-      expect((document.querySelector(".aaronnote-copilot-ghost") as HTMLElement | null)?.hidden).toBe(true);
+      expect((document.querySelector(".noema-copilot-ghost") as HTMLElement | null)?.hidden).toBe(true);
     } finally {
       cleanup();
       restoreApi();
@@ -1003,7 +1003,7 @@ describe("copilot plugin insertion", () => {
       await waitForMicrotasks();
       await waitForMicrotasks();
       expect(inlineRequests).toBe(1);
-      expect(document.querySelector(".aaronnote-copilot-ghost")?.textContent).toBe("z");
+      expect(document.querySelector(".noema-copilot-ghost")?.textContent).toBe("z");
     } finally {
       cleanup();
       restoreApi();
@@ -1320,7 +1320,7 @@ describe("copilot plugin insertion", () => {
       expect(inlineBody!.offset).toBe(inlineBody!.content.indexOf("needle") + "needle".length);
       expect(inlineBody!.window?.from).toBeGreaterThan(0);
       expect(editor.getMarkdownCalls).toBe(0);
-      expect(document.querySelector(".aaronnote-copilot-ghost")?.textContent).toBe("Suffix");
+      expect(document.querySelector(".noema-copilot-ghost")?.textContent).toBe("Suffix");
     } finally {
       cleanup();
       restoreApi();
@@ -1515,12 +1515,12 @@ describe("copilot plugin insertion", () => {
       handlers.action?.("trigger");
       await waitForMicrotasks();
       await waitForMicrotasks();
-      expect(document.querySelector(".aaronnote-copilot-ghost")?.textContent).toBe("Suffix");
+      expect(document.querySelector(".noema-copilot-ghost")?.textContent).toBe("Suffix");
 
       firstInline.reject(new Error("jsonrpc-error-code . -32802 Request was superseded by a new request"));
       await waitForMicrotasks();
 
-      expect(document.querySelector(".aaronnote-copilot-ghost")?.textContent).toBe("Suffix");
+      expect(document.querySelector(".noema-copilot-ghost")?.textContent).toBe("Suffix");
       expect(statuses.some((status) => status.includes("superseded"))).toBe(false);
     } finally {
       cleanup();
@@ -1647,12 +1647,12 @@ describe("copilot plugin insertion", () => {
         isComposing: true,
       });
       expect(shortcut.defaultPrevented).toBe(true);
-      expect(document.querySelector(".aaronnote-copilot-jump-target")).toBeFalsy();
+      expect(document.querySelector(".noema-copilot-jump-target")).toBeFalsy();
       expect(harness.editor.insertions).toEqual([]);
 
       const targetKey = harness.key({ key: "x" });
       expect(targetKey.defaultPrevented).toBe(true);
-      const targets = [...document.querySelectorAll<HTMLElement>(".aaronnote-copilot-jump-target")];
+      const targets = [...document.querySelectorAll<HTMLElement>(".noema-copilot-jump-target")];
       expect(targets).toHaveLength(25);
       const target = targets.at(-1);
       const label = target?.dataset.copilotJumpLabel ?? "";
@@ -1660,7 +1660,7 @@ describe("copilot plugin insertion", () => {
 
       harness.key({ key: label[0] });
       harness.key({ key: "Backspace" });
-      const restored = [...document.querySelectorAll<HTMLElement>(".aaronnote-copilot-jump-target")]
+      const restored = [...document.querySelectorAll<HTMLElement>(".noema-copilot-jump-target")]
         .at(-1)?.dataset.copilotJumpLabel;
       expect(restored).toBe(label);
       for (const key of label) harness.key({ key });
@@ -1679,12 +1679,12 @@ describe("copilot plugin insertion", () => {
       expect(ordinaryIme.defaultPrevented).toBe(false);
 
       harness.key({ key: "]", code: "BracketRight", metaKey: true, shiftKey: true });
-      expect(document.querySelector(".aaronnote-copilot-jump-target")).toBeFalsy();
+      expect(document.querySelector(".noema-copilot-jump-target")).toBeFalsy();
 
       const composingTarget = harness.key({ key: "a", isComposing: true });
       expect(composingTarget.defaultPrevented).toBe(true);
       expect(harness.editor.insertions).toEqual([]);
-      const target = document.querySelector<HTMLElement>(".aaronnote-copilot-jump-target");
+      const target = document.querySelector<HTMLElement>(".noema-copilot-jump-target");
       expect(target?.textContent).toBe("a");
 
       const pairedTargetInput = harness.beforeInput("a");
@@ -1709,7 +1709,7 @@ describe("copilot plugin insertion", () => {
       expect(harness.editor.insertions).toEqual(["Sta"]);
       expect(harness.ghost()?.hidden).toBe(false);
       expect(harness.ghost()?.textContent).toBe("ble");
-      expect(document.querySelector(".aaronnote-copilot-jump-target")).toBeFalsy();
+      expect(document.querySelector(".noema-copilot-jump-target")).toBeFalsy();
     } finally {
       harness.dispose();
     }
@@ -1723,7 +1723,7 @@ describe("copilot plugin insertion", () => {
       const targetInput = harness.beforeInput("a");
       expect(targetInput.defaultPrevented).toBe(true);
       expect(harness.editor.markdown).toBe("prefix");
-      const target = document.querySelector<HTMLElement>(".aaronnote-copilot-jump-target");
+      const target = document.querySelector<HTMLElement>(".noema-copilot-jump-target");
       expect(target?.textContent).toBe("a");
 
       const labelInput = harness.hostKey({
@@ -1743,10 +1743,10 @@ describe("copilot plugin insertion", () => {
     const harness = await visibleHarness();
     try {
       harness.key({ key: "]", code: "BracketRight", metaKey: true, shiftKey: true });
-      const hint = document.querySelector<HTMLElement>(".aaronnote-copilot-jump-hint");
+      const hint = document.querySelector<HTMLElement>(".noema-copilot-jump-hint");
       expect(hint?.hidden).toBe(false);
       expect(hint?.textContent).toBe("S · target");
-      expect(document.querySelector(".aaronnote-copilot-jump-target")).toBeFalsy();
+      expect(document.querySelector(".noema-copilot-jump-target")).toBeFalsy();
 
       const paste = harness.beforeInput("pasted text", "insertFromPaste");
       expect(paste.defaultPrevented).toBe(false);
@@ -1766,7 +1766,7 @@ describe("copilot plugin insertion", () => {
       harness.key({ key: "]", code: "BracketRight", metaKey: true, shiftKey: true });
       const arrow = harness.key({ key: "ArrowLeft" });
       expect(arrow.defaultPrevented).toBe(false);
-      expect(document.querySelector<HTMLElement>(".aaronnote-copilot-jump-hint")?.hidden).toBe(true);
+      expect(document.querySelector<HTMLElement>(".noema-copilot-jump-hint")?.hidden).toBe(true);
 
       const text = harness.beforeInput("}");
       expect(text.defaultPrevented).toBe(false);
@@ -1781,7 +1781,7 @@ describe("copilot plugin insertion", () => {
     try {
       harness.key({ key: "]", code: "BracketRight", metaKey: true, shiftKey: true });
       harness.key({ key: "a" });
-      const label = document.querySelector<HTMLElement>(".aaronnote-copilot-jump-target")
+      const label = document.querySelector<HTMLElement>(".noema-copilot-jump-target")
         ?.dataset.copilotJumpLabel;
       expect(label).toBeTruthy();
       harness.key({ key: label! });
@@ -1849,9 +1849,9 @@ describe("copilot plugin insertion", () => {
     });
     try {
       jump.key({ key: "]", code: "BracketRight", metaKey: true, shiftKey: true });
-      expect(document.querySelector(".aaronnote-copilot-jump-target")).toBeFalsy();
+      expect(document.querySelector(".noema-copilot-jump-target")).toBeFalsy();
       jump.key({ key: family });
-      const familyTarget = [...document.querySelectorAll<HTMLElement>(".aaronnote-copilot-jump-target")]
+      const familyTarget = [...document.querySelectorAll<HTMLElement>(".noema-copilot-jump-target")]
         .find((candidate) => candidate.textContent === family);
       expect(familyTarget).toBeTruthy();
       for (const key of familyTarget!.dataset.copilotJumpLabel!) jump.key({ key });
@@ -1893,18 +1893,18 @@ describe("copilot plugin insertion", () => {
         : { ok: true },
     });
     try {
-      expect(document.querySelectorAll(".aaronnote-copilot-ghost-line")).toHaveLength(3);
-      expect([...document.querySelectorAll(".aaronnote-copilot-ghost-line")].map((line) => line.textContent))
+      expect(document.querySelectorAll(".noema-copilot-ghost-line")).toHaveLength(3);
+      expect([...document.querySelectorAll(".noema-copilot-ghost-line")].map((line) => line.textContent))
         .toEqual(["one", "two", "three"]);
 
       harness.key({ key: "]", code: "BracketRight", metaKey: true, shiftKey: true });
-      expect(document.querySelector(".aaronnote-copilot-jump-target")).toBeFalsy();
+      expect(document.querySelector(".noema-copilot-jump-target")).toBeFalsy();
       harness.key({ key: "t" });
-      const targets = [...document.querySelectorAll<HTMLElement>(".aaronnote-copilot-jump-target")];
+      const targets = [...document.querySelectorAll<HTMLElement>(".noema-copilot-jump-target")];
       expect(targets.map((target) => target.textContent)).toEqual(["t", "t"]);
       for (const key of targets[0]!.dataset.copilotJumpLabel!) harness.key({ key });
       expect(harness.editor.insertions).toEqual(["one\nt"]);
-      expect([...document.querySelectorAll(".aaronnote-copilot-ghost-line")].map((line) => line.textContent))
+      expect([...document.querySelectorAll(".noema-copilot-ghost-line")].map((line) => line.textContent))
         .toEqual(["wo", "three"]);
 
       harness.key({ key: "]", metaKey: true });
@@ -1990,9 +1990,9 @@ describe("copilot plugin insertion", () => {
       expect(harness.ghost()?.textContent?.length).toBe(2_048);
 
       harness.key({ key: "]", code: "BracketRight", metaKey: true, shiftKey: true });
-      expect(document.querySelector(".aaronnote-copilot-jump-target")).toBeFalsy();
+      expect(document.querySelector(".noema-copilot-jump-target")).toBeFalsy();
       harness.key({ key: "x" });
-      expect(document.querySelectorAll(".aaronnote-copilot-jump-target")).toHaveLength(2_048);
+      expect(document.querySelectorAll(".noema-copilot-jump-target")).toHaveLength(2_048);
     } finally {
       harness.dispose();
     }

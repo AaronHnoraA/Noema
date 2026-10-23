@@ -28,7 +28,7 @@ import {
   visualTexMathBottomLeftInsets,
   visualTexMathfieldTypedText,
 } from "../src/cm6/extensions/visual/widgets/visualtex-inline.ts";
-import { mathLiveSnippetTemplate } from "../aaronnote/snippets.ts";
+import { mathLiveSnippetTemplate } from "../pages/snippets.ts";
 
 function nextAnimationFrame(): Promise<void> {
   return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
@@ -1281,11 +1281,11 @@ describe("LiveTeX custom macro writeback", () => {
       direction = (event as CustomEvent<{ direction: string }>).detail.direction;
       event.preventDefault();
     };
-    owner.addEventListener("aaronnote:math-snippet-boundary", accept);
+    owner.addEventListener("noema:math-snippet-boundary", accept);
     expect(requestVisualTexSnippetBoundaryHandoff(host, false)).toBe(true);
     expect(direction).toBe("forward");
 
-    owner.removeEventListener("aaronnote:math-snippet-boundary", accept);
+    owner.removeEventListener("noema:math-snippet-boundary", accept);
     expect(requestVisualTexSnippetBoundaryHandoff(host, true)).toBe(false);
   });
 

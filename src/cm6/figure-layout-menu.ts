@@ -314,8 +314,8 @@ export function figureResizeHandle(view: EditorView, widget: HTMLElement, kind: 
   handle.title = `Drag to resize ${kind}; arrow keys adjust width`;
   handle.setAttribute("aria-label", handle.title);
   const cssKind = kind === "tikz" ? "image" : kind;
-  const widthVar = `--aaronnote-${cssKind}-width`;
-  const maxVar = `--aaronnote-${cssKind}-max-width`;
+  const widthVar = `--noema-${cssKind}-width`;
+  const maxVar = `--noema-${cssKind}-max-width`;
   const resize = (delta: number, target: FigureLayoutTarget, startWidth: number, oldWidth: string, oldMax: string): boolean => {
     const maxWidth = Math.max(96, view.contentDOM.clientWidth || surface.parentElement?.clientWidth || 960);
     const direction = target.layout.align === "right" ? -1 : target.layout.align === "center" && !target.layout.wrap ? 2 : 1;
@@ -407,7 +407,7 @@ export function figureHeightHandle(
   handle.title = `Drag to change ${kind} height; arrow keys adjust height`;
   handle.setAttribute("aria-label", handle.title);
   const cssKind = kind === "tikz" ? "image" : kind;
-  const heightVar = `--aaronnote-${cssKind}-height`;
+  const heightVar = `--noema-${cssKind}-height`;
   const change = (target: FigureLayoutTarget, delta: number, initial: number): boolean =>
     applyFigureLayout(view, target, { height: `${Math.max(80, Math.min(1200, Math.round(initial + delta)))}px` });
   const heightOf = (target: FigureLayoutTarget): number =>

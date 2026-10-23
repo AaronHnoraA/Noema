@@ -11,7 +11,7 @@ afterEach(async () => {
 });
 
 async function setup(): Promise<{ root: string; manager: SessionManager }> {
-  const root = await mkdtemp(join(tmpdir(), "aaronnote-session-"));
+  const root = await mkdtemp(join(tmpdir(), "noema-session-"));
   roots.push(root);
   return {
     root,

@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import type { Editor } from "../src/editor-api.ts";
-import { createZoomController } from "../aaronnote/features/zoom/controller.ts";
+import { createZoomController } from "../pages/features/zoom/controller.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
-  document.documentElement.style.removeProperty("--aaronnote-layout-zoom");
-  document.documentElement.style.removeProperty("--aaronnote-visual-zoom");
+  document.documentElement.style.removeProperty("--noema-block-layout-zoom");
+  document.documentElement.style.removeProperty("--noema-visual-zoom");
 });
 
 function setup() {
@@ -38,7 +38,7 @@ describe("zoom feature controller", () => {
   test("preserves layout zoom steps, status, measure and tool state", () => {
     const { controller, requestMeasure, statuses, toolsPanel } = setup();
     expect(controller.stepLayoutZoom(1, { announce: true })).toBe(true);
-    expect(document.documentElement.style.getPropertyValue("--aaronnote-layout-zoom")).toBe("1.080");
+    expect(document.documentElement.style.getPropertyValue("--noema-block-layout-zoom")).toBe("1.080");
     expect(controller.layoutZoomPercent()).toBe("108%");
     expect(statuses).toEqual(["Layout zoom 108%"]);
     expect(requestMeasure).toHaveBeenCalledOnce();
@@ -61,12 +61,12 @@ describe("zoom feature controller", () => {
       return event;
     };
     document.dispatchEvent(wheel());
-    const zoom = document.documentElement.style.getPropertyValue("--aaronnote-visual-zoom");
+    const zoom = document.documentElement.style.getPropertyValue("--noema-visual-zoom");
     expect(Number(zoom)).toBeGreaterThan(1);
     controller.destroy();
-    document.documentElement.style.removeProperty("--aaronnote-visual-zoom");
+    document.documentElement.style.removeProperty("--noema-visual-zoom");
     document.dispatchEvent(wheel());
-    expect(document.documentElement.style.getPropertyValue("--aaronnote-visual-zoom")).toBe("");
+    expect(document.documentElement.style.getPropertyValue("--noema-visual-zoom")).toBe("");
   });
 
   test("yields wheel and native pinch gestures to interactive diagrams", () => {
@@ -101,7 +101,7 @@ describe("zoom feature controller", () => {
 
     expect(diagramWheel).toHaveBeenCalledOnce();
     expect(diagramGesture).toHaveBeenCalledTimes(2);
-    expect(document.documentElement.style.getPropertyValue("--aaronnote-visual-zoom")).toBe("");
+    expect(document.documentElement.style.getPropertyValue("--noema-visual-zoom")).toBe("");
     controller.destroy();
   });
 });

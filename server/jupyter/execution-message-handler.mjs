@@ -3,7 +3,7 @@
 // WebSocket implementation in server/lib/jupyter-cell.mjs produced. Ported
 // concept from microsoft/vscode-jupyter's `cellExecutionMessageHandler.ts`
 // (iopub -> notebook-output mapping, display_id tracking, Output-widget
-// swallowing), adapted to aaronnote's flat `outputs[]` result shape.
+// swallowing), adapted to noema's flat `outputs[]` result shape.
 //
 // Captures ALL iopub/comm traffic visible on `kernel` for the lifetime of this
 // call (via `kernel.anyMessage`), not just messages for this execution's own
@@ -170,7 +170,7 @@ export function executeOnKernel(kernel, code, options = {}) {
         const marker = {
           output_type: "stream",
           name: "stderr",
-          text: `\n[aaronnote: output truncated at ${streamLimit} bytes]\n`,
+          text: `\n[noema: output truncated at ${streamLimit} bytes]\n`,
         };
         outputs.push(marker);
         emit?.({ kind: "set", index: outputs.length - 1, output: { ...marker } });
@@ -193,7 +193,7 @@ export function executeOnKernel(kernel, code, options = {}) {
         const marker = {
           output_type: "stream",
           name: "stderr",
-          text: `\n[aaronnote: further outputs dropped after ${outputLimit} entries]\n`,
+          text: `\n[noema: further outputs dropped after ${outputLimit} entries]\n`,
         };
         outputs.push(marker);
         emit?.({ kind: "set", index: outputs.length - 1, output: { ...marker } });

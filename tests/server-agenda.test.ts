@@ -43,7 +43,7 @@ const note = (file: string, title: string) => ({
 });
 
 async function withVault(fn: (root: string) => Promise<void>) {
-  const root = await mkdtemp(join(tmpdir(), "aaronnote-agenda-"));
+  const root = await mkdtemp(join(tmpdir(), "noema-agenda-"));
   try {
     await mkdir(join(root, "state"), { recursive: true });
     configure({ root, workspaceRoot: root, stateRoot: join(root, "state"), tmpRoot: join(root, "tmp") });

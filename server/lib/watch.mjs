@@ -103,10 +103,10 @@ export function startNoteWatcher({
   try {
     watcher = watchImplementation(root, { recursive: true, persistent: false }, handleEvent);
     watcher.on("error", (err) => {
-      process.stderr.write(`[aaronnote-watch] watcher error: ${err.message}\n`);
+      process.stderr.write(`[noema-watch] watcher error: ${err.message}\n`);
     });
   } catch (err) {
-    process.stderr.write(`[aaronnote-watch] could not watch ${root}: ${err.message}\n`);
+    process.stderr.write(`[noema-watch] could not watch ${root}: ${err.message}\n`);
     // Degrade gracefully: return a no-op handle; index stays manual-refresh only.
     return { close() {} };
   }

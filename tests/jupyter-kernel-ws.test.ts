@@ -26,17 +26,17 @@ describe("jupyterKernelWsId", () => {
 // execution connection), matching the two-independent-ZMQ-identities model
 // the "first-run ipywidgets" fix (Phase 4) depends on. Gated: real kernel + a
 // real HTTP/WS server.
-const RUN = process.env.AARONNOTE_TEST_KERNEL === "1";
+const RUN = process.env.NOEMA_TEST_KERNEL === "1";
 const describeIfKernel = RUN ? describe : describe.skip;
 
-const aaronnoteRoot = join(import.meta.dirname, "..");
-const jupyterDataDir = join(aaronnoteRoot, "jupyter", ".jupyter", "data");
+const noemaRoot = join(import.meta.dirname, "..");
+const jupyterDataDir = join(noemaRoot, "jupyter", ".jupyter", "data");
 
 describeIfKernel("jupyter kernel WebSocket bridge (real kernel)", () => {
   test(
     "a browser-style KernelConnection executes code entirely through the bridge",
     async () => {
-      const runtimeDir = await mkdtemp(join(tmpdir(), "aaronnote-ws-bridge-"));
+      const runtimeDir = await mkdtemp(join(tmpdir(), "noema-ws-bridge-"));
       const registry = createKernelRegistry({ runtimeDir, zmq, launchTimeoutMs: 15_000 });
       const searchDirs = defaultKernelSearchDirs({ dataDir: jupyterDataDir, useHomeKernels: false });
       const specs = await findKernelSpecs({ searchDirs });

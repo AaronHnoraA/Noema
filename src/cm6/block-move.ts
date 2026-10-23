@@ -341,7 +341,7 @@ export const blockMoveGutterExtension: Extension = gutter({
       if (!block) return false;
       draggedBlocks.set(view, block);
       const drag = event as DragEvent;
-      drag.dataTransfer?.setData("text/x-aaronnote-block", String(block.from));
+      drag.dataTransfer?.setData("text/x-noema-block", String(block.from));
       if (drag.dataTransfer) drag.dataTransfer.effectAllowed = "move";
       return true;
     },

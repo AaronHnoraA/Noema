@@ -56,7 +56,7 @@ export function tikzIntrinsicStyle(intrinsic: TikzIntrinsicEm | null | undefined
   if (!Number.isFinite(width) || width <= 0) return "";
   const height = Number(intrinsic?.heightEm);
   const ratio = Number.isFinite(height) && height > 0 ? `; aspect-ratio: ${width} / ${height}` : "";
-  return `--aaronnote-tikz-natural-width: ${width}em${ratio}`;
+  return `--noema-tikz-natural-width: ${width}em${ratio}`;
 }
 
 /**
@@ -67,5 +67,5 @@ export function tikzIntrinsicStyle(intrinsic: TikzIntrinsicEm | null | undefined
 export function renderTikzFigureBody(source: string, id: string): string {
   const tex = normalizeTikzSource(source);
   if (!tex) return "";
-  return `<noema-tikz data-source="${escapeHtml(source)}" aria-label="${escapeHtml(`TikZ ${id}`)}"><pre class="aaronnote-tikz-source"><code>${escapeHtml(tex)}</code></pre></noema-tikz>`;
+  return `<noema-tikz data-source="${escapeHtml(source)}" aria-label="${escapeHtml(`TikZ ${id}`)}"><pre class="noema-tikz-source"><code>${escapeHtml(tex)}</code></pre></noema-tikz>`;
 }

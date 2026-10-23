@@ -2,17 +2,17 @@ import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test"
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { api } from "../aaronnote/api-client.ts";
+import { api } from "../pages/api-client.ts";
 
 afterEach(() => {
-  delete window.aaronnoteApi;
+  delete window.noemaApi;
 });
 
 describe("block-reference browser facade", () => {
   test("keeps the typed API on the existing narrow shared-host bridge", async () => {
     const id = "0198fc34-7b32-7a11-8cb4-6c40e3b33d68";
     const calls: string[] = [];
-    window.aaronnoteApi = {
+    window.noemaApi = {
       notes: {
         async resolveBlock(candidate: string) {
           calls.push(candidate);
@@ -41,10 +41,10 @@ describe("block-reference browser facade", () => {
   test("wires the shared host channel to the production editor event", () => {
     const root = process.cwd();
     const host = readFileSync(join(root, "web-host.mjs"), "utf8");
-    const editor = readFileSync(join(root, "aaronnote", "main.ts"), "utf8");
-    expect(host).toContain('"aaronnote:api:notes:resolve-block"');
+    const editor = readFileSync(join(root, "pages", "main.ts"), "utf8");
+    expect(host).toContain('"noema:api:notes:resolve-block"');
     expect(host).toContain("resolveBlock: function(id)");
-    expect(editor).toContain('document.addEventListener("aaronnote:open-block-ref"');
+    expect(editor).toContain('document.addEventListener("noema:open-block-ref"');
     expect(editor).toContain("api.notes.resolveBlock(id)");
     expect(editor).toContain("markdownBlockSourceOffset(markdown, location.id, location.line)");
   });

@@ -15,7 +15,7 @@
 //
 // Usage:
 //   node scripts/migrate-dollar-to-bracket-math.mjs [--write] [root]
-//   AARONNOTE_ROOT=/path node scripts/migrate-dollar-to-bracket-math.mjs --write
+//   NOEMA_ROOT=/path node scripts/migrate-dollar-to-bracket-math.mjs --write
 
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, relative } from "node:path";
@@ -159,7 +159,7 @@ function main() {
   const write = args.includes("--write");
   const positional = args.find((a) => !a.startsWith("--"));
   const root = resolve(
-    positional || process.env.AARONNOTE_ROOT || join(__dirname, "..", "..", "..", "..", ".roam"),
+    positional || process.env.NOEMA_ROOT || join(__dirname, "..", "..", "..", "..", ".roam"),
   );
 
   let files = 0;

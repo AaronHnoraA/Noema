@@ -25,10 +25,10 @@
 (defvar-local my/noema--xwidget-forced-name nil)
 (defvar-local my/noema--xwidget-pending-file nil)
 
-(declare-function my/noema--buffer-for-client "init-aaronnote" (client))
-(declare-function my/noema--open-file-in-web "init-aaronnote" (file))
-(declare-function my/noema-command "init-aaronnote" (command &optional detail))
-(declare-function my/noema-jupyter-url-p "init-aaronnote-jupyter" (url))
+(declare-function my/noema--buffer-for-client "init-noema" (client))
+(declare-function my/noema--open-file-in-web "init-noema" (file))
+(declare-function my/noema-command "init-noema" (command &optional detail))
+(declare-function my/noema-jupyter-url-p "init-noema-jupyter" (url))
 (declare-function my/xwidget-current-url "init-browser" (&optional buffer))
 (declare-function my/xwidget-undo "init-browser" ())
 (declare-function my/xwidget-redo "init-browser" ())
@@ -354,7 +354,7 @@ normal result rather than a gateway error."
 
 (when (fboundp 'remote-gateway-register-method)
   (remote-gateway-register-method
-   "aaronnote.note.choose-path" #'noema-xwidget--choose-note-path))
+   "noema.note.choose-path" #'noema-xwidget--choose-note-path))
 
 (defun my/noema--release-xwidget-input-buffer (&optional buffer)
   "Exit xwidget edit mode in BUFFER when it is an Noema xwidget."
@@ -366,7 +366,7 @@ normal result rather than a gateway error."
           (ignore-errors (xwidget-webkit-edit-mode -1))
           ;; Tell the page too: macOS still offers WebKit arrows and other
           ;; function keys, which must not pull the keyboard back to it.
-          ;; Every Noema page honours this (aaronnote/host-keyboard.ts); a
+          ;; Every Noema page honours this (pages/host-keyboard.ts); a
           ;; pane without a client id receives it as a broadcast.
           (my/noema-command "host-owns-keyboard"))))))
 
@@ -659,10 +659,10 @@ the page's pane."
            (and (eq major-mode 'xwidget-webkit-mode)
                 (or (equal (and (boundp 'my/xwidget--session-id)
                                 my/xwidget--session-id)
-                           "aaronnote-jupyter")
+                           "noema-jupyter")
                     (and (progn
                            (unless (fboundp 'my/noema-jupyter-url-p)
-                             (require 'init-aaronnote-jupyter nil t))
+                             (require 'init-noema-jupyter nil t))
                            (fboundp 'my/noema-jupyter-url-p))
                          (fboundp 'my/xwidget-current-url)
                          (when-let* ((url (my/xwidget-current-url buffer)))

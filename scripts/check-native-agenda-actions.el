@@ -16,7 +16,7 @@
          (url-proxy-services nil)
          (url-request-data
           (encode-coding-string
-           (json-encode `((channel . ,(concat "aaronnote:api:agenda:" operation))
+           (json-encode `((channel . ,(concat "noema:api:agenda:" operation))
                           (args . ,(vector body)))) 'utf-8))
          (reply (url-retrieve-synchronously (concat (getenv "NOEMA_AGENDA_TEST_URL") "/api") t t 30))
          result)

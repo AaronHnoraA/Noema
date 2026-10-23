@@ -7,7 +7,7 @@ import {
   liveTexPaletteSourceTemplate,
   rebaseLiveTexPaletteRange,
   searchLiveTexPalette,
-} from "../aaronnote/live-tex-palette.ts";
+} from "../pages/live-tex-palette.ts";
 
 describe("LiveTeX click palette", () => {
   test("searches all categories by name and LaTeX command", () => {

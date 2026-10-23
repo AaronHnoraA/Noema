@@ -140,14 +140,14 @@ export function normalizeLanguageToolSettings(value = {}, defaults = HARD_DEFAUL
 export function languageToolSettingsDefaults(options = {}) {
   const env = optionEnv(options);
   return normalizeLanguageToolSettings({
-    automaticEnabled: envValue(env, "AARONNOTE_LANGUAGETOOL_AUTOMATIC_ENABLED"),
-    serverUrl: envValue(env, "AARONNOTE_LANGUAGETOOL_URL"),
-    language: envValue(env, "AARONNOTE_LANGUAGETOOL_LANGUAGE"),
-    level: envValue(env, "AARONNOTE_LANGUAGETOOL_LEVEL"),
-    performanceProfile: envValue(env, "AARONNOTE_LANGUAGETOOL_PERFORMANCE_PROFILE"),
-    manualLocalFallback: envValue(env, "AARONNOTE_LANGUAGETOOL_MANUAL_LOCAL_FALLBACK"),
-    remoteTimeoutMs: envValue(env, "AARONNOTE_LANGUAGETOOL_REMOTE_TIMEOUT_MS"),
-    retryCooldownMs: envValue(env, "AARONNOTE_LANGUAGETOOL_RETRY_COOLDOWN_MS"),
+    automaticEnabled: envValue(env, "NOEMA_LANGUAGETOOL_AUTOMATIC_ENABLED"),
+    serverUrl: envValue(env, "NOEMA_LANGUAGETOOL_URL"),
+    language: envValue(env, "NOEMA_LANGUAGETOOL_LANGUAGE"),
+    level: envValue(env, "NOEMA_LANGUAGETOOL_LEVEL"),
+    performanceProfile: envValue(env, "NOEMA_LANGUAGETOOL_PERFORMANCE_PROFILE"),
+    manualLocalFallback: envValue(env, "NOEMA_LANGUAGETOOL_MANUAL_LOCAL_FALLBACK"),
+    remoteTimeoutMs: envValue(env, "NOEMA_LANGUAGETOOL_REMOTE_TIMEOUT_MS"),
+    retryCooldownMs: envValue(env, "NOEMA_LANGUAGETOOL_RETRY_COOLDOWN_MS"),
   }, HARD_DEFAULTS);
 }
 
@@ -160,13 +160,13 @@ export function languageToolSettingsStateFile(options = {}) {
   const env = optionEnv(options);
   const workspaceRoot = resolve(String(
     options.workspaceRoot
-      || envValue(env, "AARONNOTE_WORKSPACE_ROOT")
+      || envValue(env, "NOEMA_WORKSPACE_ROOT")
       || join(homedir(), ".config", "emacs"),
   ));
   const stateRoot = resolve(String(
     options.stateRoot
-      || envValue(env, "AARONNOTE_STATE_DIR")
-      || join(workspaceRoot, "var", "aaronnote"),
+      || envValue(env, "NOEMA_STATE_DIR")
+      || join(workspaceRoot, "var", "noema"),
   ));
   return join(stateRoot, "languagetool.json");
 }

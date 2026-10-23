@@ -20,7 +20,7 @@ const DOC = LINES.join('\n');
 const lineStart = (index) => LINES.slice(0, index).join('\n').length + (index > 0 ? 1 : 0);
 
 const server = await createServer({
-  configFile: `${root}/vite.aaronnote.config.ts`,
+  configFile: `${root}/vite.pages.config.ts`,
   logLevel: 'error',
   server: { host: '127.0.0.1', port: 0, hmr: false },
 });
@@ -30,7 +30,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   page.on('pageerror', (error) => { throw error; });
   await page.addInitScript(() => {
-    window.aaronnoteApi = {
+    window.noemaApi = {
       copilot: { request: async () => ({ ok: true }) },
       notes: { bootstrap: () => new Promise(() => {}), save: async () => ({ ok: true }) },
       config: { katexMacros: async () => ({ macros: {} }) },

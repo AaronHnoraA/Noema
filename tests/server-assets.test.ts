@@ -47,7 +47,7 @@ describe("server asset refs", () => {
   });
 
   test("scans unused assets without reporting referenced files or note sources", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-unused-assets-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-unused-assets-"));
     roots.push(root);
     const notes = join(root, "roam");
     await mkdir(join(notes, "attachments"), { recursive: true });
@@ -56,7 +56,7 @@ describe("server asset refs", () => {
     await writeFile(join(notes, "attachments", "used.pdf"), "USED\n", "utf8");
     await writeFile(join(notes, "attachments", "orphan.pdf"), "ORPHAN\n", "utf8");
     await writeFile(join(notes, "attachments", "draft.md"), "# Draft\n", "utf8");
-    await writeFile(join(notes, "attachments", ".aaronnote-keep"), "", "utf8");
+    await writeFile(join(notes, "attachments", ".noema-keep"), "", "utf8");
 
     const assets = await scanUnusedAssets();
 
@@ -64,7 +64,7 @@ describe("server asset refs", () => {
   });
 
   test("copies native asset paths without base64 encoding", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-assets-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-assets-"));
     roots.push(root);
     const notes = join(root, "roam");
     const loose = join(root, "loose");
@@ -90,7 +90,7 @@ describe("server asset refs", () => {
   });
 
   test("resolves parent-directory media paths relative to the current note", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-media-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-media-"));
     roots.push(root);
     const notes = join(root, "roam");
     await mkdir(join(notes, "sub"), { recursive: true });
@@ -101,7 +101,7 @@ describe("server asset refs", () => {
   });
 
   test("resolves roam-root media paths from slash and roam prefixes", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-roam-root-media-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-roam-root-media-"));
     roots.push(root);
     const notes = join(root, "roam");
     await mkdir(join(notes, "project"), { recursive: true });
@@ -115,7 +115,7 @@ describe("server asset refs", () => {
   });
 
   test("resolves standalone note sibling image folders above the note directory", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-standalone-media-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-standalone-media-"));
     roots.push(root);
     const notes = join(root, "roam");
     const project = join(root, "lab01");
@@ -131,7 +131,7 @@ describe("server asset refs", () => {
   });
 
   test("resolves standalone slash paths from detected project root", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-project-root-media-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-project-root-media-"));
     roots.push(root);
     const notes = join(root, "roam");
     const project = join(root, "assignment");

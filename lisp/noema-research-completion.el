@@ -82,7 +82,7 @@
           (puthash key entry noema-research-completion--files)
           (condition-case nil
               (noema--host-call
-               "aaronnote:api:research:capability:files" `((cwd . ,(car key)) (directory . ,(cdr key)))
+               "noema:api:research:capability:files" `((cwd . ,(car key)) (directory . ,(cdr key)))
                (lambda (result err)
                  (setf (plist-get entry :pending) nil
                        (plist-get entry :time) (float-time)

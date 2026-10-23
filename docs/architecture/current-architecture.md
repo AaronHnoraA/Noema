@@ -48,7 +48,7 @@ widget，未测量前文档瞬间变短，浏览器自己把 `scrollTop` 夹到�
 视口就归谁；Vim 自己发起的移动（`j`/`k`/`w` 等）照常滚动。
 
 打开笔记后光标上方的图片、公式、图表会陆续拿到真实高度，所以“把光标带进视口”要在短时间
-内重复几次（`aaronnote/settled-reveal.ts`）。这些重复是对视口的一次占用，只属于打开笔记
+内重复几次（`pages/settled-reveal.ts`）。这些重复是对视口的一次占用，只属于打开笔记
 的那一刻：读者一旦滚动、点击、触摸或按键，或者选区、文档已经不是当时的那个，后续的定时
 居中全部作废。不要再写“延时若干毫秒后再滚一次”的裸定时器；需要等布局稳定时用这个函数。
 已经显示在本窗格里的笔记不会因为宿主再次要求打开而重开（那会清空撤销历史并把视图拉回
@@ -141,19 +141,19 @@ Meta 只在文档前 12 行识别。共享范围扫描器将内嵌 summary 作�
 ## Emacs 内的 CM6 组件
 
 ```text
-aaronnote/
+pages/
   features/zoom/controller.ts   缩放状态、手势 listener、timer 生命周期
   features/writing-stats/       文档/章节缓存、idle 调度与大文档延迟
   main.ts                       兼容装配入口；其他 feature 按相同边界逐步拆分
 ```
 
-Controller 显式返回 `destroy()`；`window.aaronnoteApi`、宿主事件和 xwidget wire
+Controller 显式返回 `destroy()`；`window.noemaApi`、宿主事件和 xwidget wire
 protocol 保持不变。
 
 ### Emacs 单一 UI 契约
 
-`web-host.mjs` 向 Emacs xwidget/Appine 提供 `dist/aaronnote`，页面只执行一次
-`aaronnote/main.ts -> createEditor(host)`。Emacs 是唯一第一方 UI/UX：window、buffer、
+`web-host.mjs` 向 Emacs xwidget/Appine 提供 `dist/pages`，页面只执行一次
+`pages/main.ts -> createEditor(host)`。Emacs 是唯一第一方 UI/UX：window、buffer、
 minibuffer、Graph Board、JuText、Inspector、Attention、agent-shell、vterm、审批、输入和
 Proposal 复核都由 Emacs 拥有。CM6 只负责私有 Markdown 文档面及其 document widgets，
 不得出现第二套工作流 GUI、应用标题栏、原生窗口菜单或 Electron preload API。
@@ -206,7 +206,7 @@ Emacs 内的 ACP agent 完成一轮时，Noema 订阅 agent-shell 的 `turn-comp
 无草稿时重新投影外部正文变更，有草稿时保留本地内容并合并运行输出。
 ACP 回合完成只先查 JuText 文件时间戳；没有变化就不读取或哈希整份 `.noema`。
 本地文件通知携带实际写入信号，即使时间戳相同也核对内容修订。
-Emacs 网关的 `aaronnote.command` 只把 `detail` 内的 `file`、`mtimeMs`、`clientId`
+Emacs 网关的 `noema.command` 只把 `detail` 内的 `file`、`mtimeMs`、`clientId`
 转发给页面；顶层 `command`、`client` 属于 host 路由协议。
 页面仅在无草稿时自动重读当前文件；所有重读在异步结果返回时再次核对文件与
 页面版本，自动重读还核对期间是否收到新的文件事件。没有为库外
@@ -230,7 +230,7 @@ generation 变化会精确清空 10 分钟有界 LRU。Node 只转发窄 mention
 ## Emacs
 
 ```text
-lisp/roam/init-aaronnote.el
+lisp/roam/init-noema.el
   进程、buffer/session、公开命令和 UI 装配
 site-lisp/noema/lisp/noema-xwidget-keys.el
   md/xwidget 输入、焦点、Undo/Redo、Shift-Tab 与 Emacs windmove 焦点修复
@@ -243,9 +243,9 @@ site-lisp/noema/lisp/noema-xwidget-keys.el
 
 ```text
 src/cm6/text-boundaries.ts       共享 Unicode grapheme 边界
-aaronnote/vim-lite.ts            Vim mode、operator/register、visual selection、s-jump glue
+pages/vim-lite.ts            Vim mode、operator/register、visual selection、s-jump glue
 src/cm6/vim-jump.ts              viewport 候选、prefix-free 标签与 decorations
-aaronnote/xwidget-key-guard.ts   Emacs/xwidget 事件归一化；编辑动作仍落到 CM6 source
+pages/xwidget-key-guard.ts   Emacs/xwidget 事件归一化；编辑动作仍落到 CM6 source
 ```
 
 普通/Visual 模式的 `j/k` 委托 `EditorView.moveVertically`，因此按 CM6 折行后的

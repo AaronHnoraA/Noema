@@ -12,7 +12,7 @@ describe("Jupyter project defaults", () => {
 
   test("keeps Sage as a Python-language kernelspec", () => {
     expect(jupyterDefaultsFromEnv({
-      AARONNOTE_JUPYTER_DEFAULT_LANGUAGE: "sage",
+      NOEMA_JUPYTER_DEFAULT_LANGUAGE: "sage",
     })).toEqual({
       language: "python",
       kernel: "sagemath",
@@ -22,9 +22,9 @@ describe("Jupyter project defaults", () => {
 
   test("honours complete project overrides", () => {
     expect(jupyterDefaultsFromEnv({
-      AARONNOTE_JUPYTER_DEFAULT_LANGUAGE: "python",
-      AARONNOTE_JUPYTER_DEFAULT_KERNEL: "research-python",
-      AARONNOTE_JUPYTER_DEFAULT_SESSION: "analysis",
+      NOEMA_JUPYTER_DEFAULT_LANGUAGE: "python",
+      NOEMA_JUPYTER_DEFAULT_KERNEL: "research-python",
+      NOEMA_JUPYTER_DEFAULT_SESSION: "analysis",
     })).toEqual({
       language: "python",
       kernel: "research-python",

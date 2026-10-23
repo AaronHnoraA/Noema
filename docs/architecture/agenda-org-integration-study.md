@@ -33,7 +33,7 @@ Noema 仅保留这些对象的轻量关联与待处理同步记录。
 | Planning DSL | `shared/planning-dsl.mjs`、`planning-values.mjs`、`planning-semantic.mjs` | 已有 `@@todo/itodo/project/milestone/clock`，别名、日期、重复、源文补丁 |
 | 任务语义 | `kernel/noema/planning/semantic.go`、`kernel/noema/agenda/agenda.go` | Go 已有语义写入、依赖、日程、项目汇总、计时模型 |
 | Node 服务 | `server/lib/runtime.mjs` 的 `extractTodos/buildAgenda/patchTodo/clockIn` | 已有扫描缓存、串行保存和 provider 分派，原生 UI 应调用这里的现有能力 |
-| Web 更新 | `web-host.mjs`、`aaronnote/agenda-view.ts` | 已有 `agenda-changed` / `notes-index-changed` 推送、隐藏视图不刷新 |
+| Web 更新 | `web-host.mjs`、`pages/agenda-view.ts` | 已有 `agenda-changed` / `notes-index-changed` 推送、隐藏视图不刷新 |
 | Emacs 入口 | `lisp/roam/init-md-roam.el`（AaronEmacs） | 已有任务定位与 Web Agenda 入口，适合增加原生 dispatcher |
 | org-env | `shared/block-identity.mjs`、`block-properties.mjs` | 定理、证明等环境已有 UUIDv7 身份与属性；可以成为任务上下文 |
 | 工作树 | `kernel/noema/research/notebook.go`、`server/lib/research-notebook.mjs` | WorkNode 与 Cell 分离，`lineage` 与 `depends` 已有独立边类型 |

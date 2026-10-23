@@ -6,12 +6,12 @@
  */
 
 import { describe, expect, it } from "@voidzero-dev/vite-plus-test";
-import { inputMethodKey } from "../aaronnote/vim-lite.ts";
-import { handleXwidgetVimBeforeInput, handleXwidgetVimKeydown } from "../aaronnote/xwidget-key-guard.ts";
+import { inputMethodKey } from "../pages/vim-lite.ts";
+import { handleXwidgetVimBeforeInput, handleXwidgetVimKeydown } from "../pages/xwidget-key-guard.ts";
 
 async function setup(initial = "alpha\nbeta\ngamma") {
   const { createEditorCM6 } = await import("../src/cm6/editor-cm6.ts");
-  const { createVimLite } = await import("../aaronnote/vim-lite.ts");
+  const { createVimLite } = await import("../pages/vim-lite.ts");
   const host = document.createElement("div");
   document.body.append(host);
   const editor = createEditorCM6(host, { initialContent: initial });

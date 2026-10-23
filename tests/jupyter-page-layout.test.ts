@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 describe("Noema Jupyter Emacs-owned output surface", () => {
-  const main = readFileSync(join(process.cwd(), "aaronnote/jupyter-main.ts"), "utf8");
-  const css = readFileSync(join(process.cwd(), "aaronnote/jupyter-page.css"), "utf8");
+  const main = readFileSync(join(process.cwd(), "pages/jupyter-main.ts"), "utf8");
+  const css = readFileSync(join(process.cwd(), "pages/jupyter-page.css"), "utf8");
 
   test("keeps cell selection local until an explicit Emacs open command", () => {
     expect(main).not.toContain("notifyEmacsCellSelection");
@@ -33,14 +33,14 @@ describe("Noema Jupyter Emacs-owned output surface", () => {
     expect(menu).not.toContain("Delete Cell");
     expect(menu).not.toContain('execute("current")');
     expect(menu).not.toContain('mutate("');
-    const keys = main.slice(main.indexOf('window.addEventListener("keydown"'), main.indexOf('window.addEventListener("aaronnote:jupyter-cell"'));
+    const keys = main.slice(main.indexOf('window.addEventListener("keydown"'), main.indexOf('window.addEventListener("noema:jupyter-cell"'));
     expect(keys).not.toContain("execute(");
     expect(keys).not.toContain("mutate(");
   });
 
   test("keeps live OutputAreas stable across execution events", () => {
-    const start = main.indexOf('window.addEventListener("aaronnote:jupyter-cell"');
-    const end = main.indexOf('window.addEventListener("aaronnote:jupyter-session"', start);
+    const start = main.indexOf('window.addEventListener("noema:jupyter-cell"');
+    const end = main.indexOf('window.addEventListener("noema:jupyter-session"', start);
     const handler = main.slice(start, end);
     expect(handler).toContain("ensureCellOutputView(tab, cell)?.setOutput");
     expect(handler).toContain("if (!isWidgetOutput(patch.output))");

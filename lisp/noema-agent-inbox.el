@@ -16,7 +16,7 @@
 (require 'noema-sessions)
 (require 'noema-agent-worktree)
 
-(declare-function my/noema-workspace-root "init-aaronnote" ())
+(declare-function my/noema-workspace-root "init-noema" ())
 (declare-function remote-file-name-target "remote-fs" (file-name))
 
 (defvar-local noema-agent-inbox--roots nil)
@@ -221,7 +221,7 @@ live buffer."
   (let ((serial (cl-incf noema-agent-inbox--serial)))
     (puthash root serial noema-agent-inbox--request-serials)
     (noema-sessions--api
-     "aaronnote:api:research:session:names" `((root . ,root))
+     "noema:api:research:session:names" `((root . ,root))
      (lambda (result error-object)
        (when (and (buffer-live-p buffer)
                   (= generation (buffer-local-value 'noema-agent-inbox--generation buffer)))

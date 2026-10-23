@@ -18,7 +18,7 @@ function splitRequest(bytes: Buffer, cuts: number[]): Readable {
 describe("HTTP request bodies", () => {
   test("preserves UTF-8 when network chunks split Chinese characters", async () => {
     const payload = {
-      channel: "aaronnote:api:notes:save",
+      channel: "noema:api:notes:save",
       args: [{
         content: "证明 tensor direct-sum decomposition；陈述 support hypergraph。",
       }],

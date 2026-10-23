@@ -1,6 +1,6 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { renderSearchExcerpt } from "../aaronnote/search-excerpt.ts";
+import { renderSearchExcerpt } from "../pages/search-excerpt.ts";
 
 function render(excerpt: string, query: string): HTMLElement {
   const host = document.createElement("p");

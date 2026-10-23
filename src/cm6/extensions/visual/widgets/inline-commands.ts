@@ -41,7 +41,7 @@ import { latexMark } from "../../../../../shared/latex-marks.mjs";
 
 declare global {
   interface Window {
-    AaronnoteBibliography?: {
+    NoemaBibliography?: {
       citationLabel?: (from: number, to: number) => { label: string; title?: string; error?: boolean } | null;
       version?: () => number;
       mapChanges?: (changes: readonly {
@@ -718,7 +718,7 @@ class RevisionWidget extends MeasuredWidget {
     const reason = decodeRevisionAttribute(this.cmd.args.reason || "");
     const kind = revisionKindOf(this.cmd.switchValue);
     const wrap = document.createElement("span");
-    wrap.className = "aaronnote-revision inline-command-token";
+    wrap.className = "noema-revision inline-command-token";
     wrap.dataset.revisionStyle = kind.id;
     wrap.dataset.cmSourceFrom = String(this.cmd.fullFrom);
     wrap.dataset.cmSourceTo = String(this.cmd.fullTo);
@@ -726,26 +726,26 @@ class RevisionWidget extends MeasuredWidget {
     wrap.setAttribute("aria-label", `Revision: replace ${original} with ${advice || "missing advice"}`);
 
     const shown = document.createElement("span");
-    shown.className = "aaronnote-revision-original";
+    shown.className = "noema-revision-original";
     shown.innerHTML = renderInlineMarkdownHTML(original);
     shown.tabIndex = 0;
 
     const card = document.createElement("span");
-    card.className = "aaronnote-revision-card";
+    card.className = "noema-revision-card";
     const label = document.createElement("strong");
     label.textContent = kind.label;
     const replacement = document.createElement("span");
-    replacement.className = "aaronnote-revision-advice";
+    replacement.className = "noema-revision-advice";
     replacement.innerHTML = advice ? renderInlineMarkdownHTML(advice) : "Missing advice";
     card.append(label, replacement);
     if (reason) {
       const why = document.createElement("span");
-      why.className = "aaronnote-revision-reason";
+      why.className = "noema-revision-reason";
       why.textContent = reason;
       card.append(why);
     }
     const actions = document.createElement("span");
-    actions.className = "aaronnote-revision-actions";
+    actions.className = "noema-revision-actions";
     const action = (text: string, title: string, run: () => void): HTMLButtonElement => {
       const button = document.createElement("button");
       button.type = "button";
@@ -785,7 +785,7 @@ class RevisionWidget extends MeasuredWidget {
           reason,
           style: kind.id,
         };
-        const handled = !view.dom.dispatchEvent(new CustomEvent("aaronnote-edit-revision", {
+        const handled = !view.dom.dispatchEvent(new CustomEvent("noema-edit-revision", {
           detail,
           bubbles: true,
           cancelable: true,
@@ -817,7 +817,7 @@ class CiteWidget extends MeasuredWidget {
   constructor(cmd: InlineCommand) {
     super();
     this.cmd = cmd;
-    this.bibliographyVersion = window.AaronnoteBibliography?.version?.() ?? 0;
+    this.bibliographyVersion = window.NoemaBibliography?.version?.() ?? 0;
   }
 
   protected measureKey(): string { return ""; }
@@ -841,7 +841,7 @@ class CiteWidget extends MeasuredWidget {
 
 /** Build the interactive citation used by both ordinary prose and meta summaries. */
 export function createInteractiveCiteElement(cmd: InlineCommand): HTMLElement {
-  const cite = window.AaronnoteBibliography?.citationLabel?.(cmd.fullFrom, cmd.fullTo);
+  const cite = window.NoemaBibliography?.citationLabel?.(cmd.fullFrom, cmd.fullTo);
   const wrap = document.createElement("span");
   const error = cite?.error === true;
   const label = cite?.label || `[${cmd.context.trim() || "?"}]`;
@@ -875,16 +875,16 @@ export function createInteractiveCiteElement(cmd: InlineCommand): HTMLElement {
     if (!event.metaKey && !event.ctrlKey) return;
     event.preventDefault();
     event.stopPropagation();
-    window.AaronnoteBibliography?.openCitation?.(cmd.fullFrom, cmd.fullTo, wrap.getBoundingClientRect(), true);
+    window.NoemaBibliography?.openCitation?.(cmd.fullFrom, cmd.fullTo, wrap.getBoundingClientRect(), true);
   });
   wrap.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") return;
     event.preventDefault();
     event.stopPropagation();
-    window.AaronnoteBibliography?.openCitation?.(cmd.fullFrom, cmd.fullTo, wrap.getBoundingClientRect(), true);
+    window.NoemaBibliography?.openCitation?.(cmd.fullFrom, cmd.fullTo, wrap.getBoundingClientRect(), true);
   });
   wrap.addEventListener("contextmenu", (event) => {
-    const handler = window.AaronnoteBibliography?.contextMenu;
+    const handler = window.NoemaBibliography?.contextMenu;
     if (!handler) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1142,7 +1142,7 @@ function activeInlineCommandKey(view: EditorView): string {
 
 /** Keep the bibliography's citation positions in step with every edit. */
 function mapBibliographyPositions(update: ViewUpdate): void {
-  if (!update.docChanged || !window.AaronnoteBibliography?.mapChanges) return;
+  if (!update.docChanged || !window.NoemaBibliography?.mapChanges) return;
   const changes: Array<{ from: number; to: number; insertedLength: number; insertedText: string; deletedText: string }> = [];
   update.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
     changes.push({
@@ -1153,7 +1153,7 @@ function mapBibliographyPositions(update: ViewUpdate): void {
       deletedText: update.startState.doc.sliceString(from, to),
     });
   });
-  window.AaronnoteBibliography.mapChanges(changes);
+  window.NoemaBibliography.mapChanges(changes);
 }
 
 export const inlineCommandsExtension = constructViewPlugin<Array<{ from: number; to: number }>>({

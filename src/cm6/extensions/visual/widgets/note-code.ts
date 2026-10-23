@@ -1,10 +1,10 @@
 import { EditorView } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
-import { api } from "../../../../../aaronnote/api-client.ts";
+import { api } from "../../../../../pages/api-client.ts";
 import { highlightCodeForEditor, onCodeHighlightReady } from "../../../../code-highlight-async.ts";
 import { scheduleViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { parseNoteCodeLine } from "../../../../../shared/note-code.mjs";
-import { sourceEditorName } from "../../../../../aaronnote/host-mode.ts";
+import { sourceEditorName } from "../../../../../pages/host-mode.ts";
 import { noemaPlatformLabels } from "../../../../platform-compat.ts";
 import { inlineConstruct } from "../constructs/index.ts";
 

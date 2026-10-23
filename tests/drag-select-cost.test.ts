@@ -5,8 +5,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { createEditor } from "../src/editor-api.ts";
-import { createWritingStatsController } from "../aaronnote/features/writing-stats/controller.ts";
-import { countWritingStats } from "../aaronnote/writing-stats.ts";
+import { createWritingStatsController } from "../pages/features/writing-stats/controller.ts";
+import { countWritingStats } from "../pages/writing-stats.ts";
 import {
   isPointerSelecting,
   pointerSelectionEffect,

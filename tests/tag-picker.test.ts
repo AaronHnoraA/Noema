@@ -6,13 +6,13 @@ import {
   filterTagSuggestions,
   normalizeCreatedTag,
   parseTagPickerValue,
-} from "../aaronnote/tag-picker.ts";
+} from "../pages/tag-picker.ts";
 import {
   metadataTagsFromMarkdown,
   planMarkdownMetadataChanges,
   planMarkdownTagChanges,
   tagChangesBetween,
-} from "../aaronnote/note-tag-transaction.ts";
+} from "../pages/note-tag-transaction.ts";
 
 describe("interactive tag picker", () => {
   test("normalizes tags and ranks prefix matches before substring matches", () => {
@@ -115,7 +115,7 @@ describe("interactive tag picker", () => {
     });
     document.body.appendChild(picker.root);
     expect(picker.value()).toBe("logic");
-    expect(picker.root.querySelectorAll(".aaronnote-tag-picker-chip")).toHaveLength(1);
+    expect(picker.root.querySelectorAll(".noema-tag-picker-chip")).toHaveLength(1);
 
     picker.search.value = "lin";
     picker.search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -126,9 +126,9 @@ describe("interactive tag picker", () => {
     expect(picker.value()).toBe("logic, linear-algebra");
     expect(picker.changes()).toEqual({ add: ["linear-algebra"], remove: [] });
 
-    picker.root.querySelector<HTMLElement>(".aaronnote-tag-picker-chip-label")!.click();
+    picker.root.querySelector<HTMLElement>(".noema-tag-picker-chip-label")!.click();
     expect(picker.value()).toBe("logic, linear-algebra");
-    picker.root.querySelector<HTMLButtonElement>(".aaronnote-tag-picker-chip-remove")!.click();
+    picker.root.querySelector<HTMLButtonElement>(".noema-tag-picker-chip-remove")!.click();
     expect(picker.value()).toBe("linear-algebra");
     expect(picker.changes()).toEqual({ add: ["linear-algebra"], remove: ["logic"] });
     picker.root.remove();
@@ -149,7 +149,7 @@ describe("interactive tag picker", () => {
 
     picker.search.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
     expect(picker.value()).toBe("linear");
-    picker.root.querySelector<HTMLButtonElement>(".aaronnote-tag-picker-chip-remove")!.click();
+    picker.root.querySelector<HTMLButtonElement>(".noema-tag-picker-chip-remove")!.click();
     expect(picker.value()).toBe("");
     picker.root.remove();
   });

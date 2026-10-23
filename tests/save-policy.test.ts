@@ -1,6 +1,6 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { noteAutoSaveEnabled } from "../aaronnote/save-policy.ts";
+import { noteAutoSaveEnabled } from "../pages/save-policy.ts";
 
 describe("note save policy", () => {
   test("keeps local note autosave enabled", () => {

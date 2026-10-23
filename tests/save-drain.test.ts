@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 
-import { defaultSaveRetryDelayMs, SaveDrain } from "../aaronnote/save-drain.ts";
+import { defaultSaveRetryDelayMs, SaveDrain } from "../pages/save-drain.ts";
 
 describe("SaveDrain", () => {
   test("coalesces edits made in flight and applies the first mtime before the follow-up write", async () => {

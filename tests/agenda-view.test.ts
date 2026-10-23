@@ -2,9 +2,9 @@
 import {createAgendaCaptureTemplates} from "../server/lib/agenda-capture-templates.mjs";
 import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 
-import { closeAgendaView, openAgendaView, refreshAgendaView } from "../aaronnote/agenda-view.ts";
-import type { AgendaViewDeps } from "../aaronnote/agenda-view.ts";
-import type { AgendaMsg } from "../aaronnote/api-client.ts";
+import { closeAgendaView, openAgendaView, refreshAgendaView } from "../pages/agenda-view.ts";
+import type { AgendaViewDeps } from "../pages/agenda-view.ts";
+import type { AgendaMsg } from "../pages/api-client.ts";
 
 const emptyAgenda: AgendaMsg = {
   type: "agenda",
@@ -159,21 +159,21 @@ describe("agenda keyboard handling", () => {
     const overlayDeps = deps();
     overlayDeps.api.notes.agenda = async () => ({ ...emptyAgenda, evaluationSource: "kernel-agenda" });
     await openAgendaView({ ...overlayDeps, onOpenChange });
-    const overlay = document.querySelector<HTMLElement>(".aaronnote-agenda-full")!;
+    const overlay = document.querySelector<HTMLElement>(".noema-agenda-full")!;
 
     expect(overlay.hidden).toBe(false);
     expect(overlay.dataset.agendaSurface).toBe("overlay");
     expect(overlay.dataset.agendaSource).toBe("kernel-agenda");
     expect(onOpenChange).toHaveBeenCalledWith(true);
 
-    overlay.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-close")?.click();
+    overlay.querySelector<HTMLButtonElement>(".noema-agenda-full-close")?.click();
     expect(overlay.hidden).toBe(true);
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
   });
 
   test("does not treat Meta-q as the agenda q shortcut", async () => {
     await openAgendaView(deps());
-    const overlay = document.querySelector<HTMLElement>(".aaronnote-agenda-full")!;
+    const overlay = document.querySelector<HTMLElement>(".noema-agenda-full")!;
 
     const metaQ = new KeyboardEvent("keydown", {
       key: "q",
@@ -231,7 +231,7 @@ describe("agenda keyboard handling", () => {
     await openAgendaView(d);
     expect(agenda).toHaveBeenCalledTimes(1);
 
-    const refresh = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-header button")]
+    const refresh = [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-header button")]
       .find((button) => button.textContent === "Refresh")!;
     refresh.click();
     await Promise.resolve();
@@ -275,7 +275,7 @@ describe("agenda keyboard handling", () => {
 
     expect(document.body.textContent).toContain("Open task");
     expect(document.body.textContent).not.toContain("Finished task");
-    const button = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-header button")]
+    const button = [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-header button")]
       .find((item) => item.textContent === "Done")!;
     expect(button.getAttribute("aria-pressed")).toBe("false");
     button.click();
@@ -290,7 +290,7 @@ describe("agenda keyboard handling", () => {
 
   test("? opens the keyboard shortcut help in the agenda", async () => {
     await openAgendaView(deps());
-    const overlay = document.querySelector<HTMLElement>(".aaronnote-agenda-full")!;
+    const overlay = document.querySelector<HTMLElement>(".noema-agenda-full")!;
 
     const key = new KeyboardEvent("keydown", {
       key: "?",
@@ -322,7 +322,7 @@ describe("agenda keyboard handling", () => {
 
   test("? still opens help when the search field has focus", async () => {
     await openAgendaView(deps());
-    const search = document.querySelector<HTMLInputElement>(".aaronnote-agenda-full-header input[type='search']")!;
+    const search = document.querySelector<HTMLInputElement>(".noema-agenda-full-header input[type='search']")!;
     search.focus();
 
     const key = new KeyboardEvent("keydown", {
@@ -346,7 +346,7 @@ describe("agenda keyboard handling", () => {
     expect(document.body.textContent).toContain("Alpha task");
     expect(document.body.textContent).toContain("Beta task");
 
-    const projectButton = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-project-filter > button")]
+    const projectButton = [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-project-filter > button")]
       .find((button) => button.textContent === "Scope: Roam + demo")!;
     projectButton.click();
 
@@ -363,7 +363,7 @@ describe("agenda keyboard handling", () => {
     expect(document.body.textContent).toContain("Alpha task");
     expect(document.body.textContent).toContain("Beta task");
 
-    const any = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-project-menu button")]
+    const any = [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-project-menu button")]
       .find((button) => button.textContent === "Current scopes")!;
     any.click();
     expect(document.body.textContent).toContain("Scope: Roam + demo");
@@ -376,20 +376,20 @@ describe("agenda keyboard handling", () => {
     d.api.notes.agenda = async () => projectAgenda;
     await openAgendaView(d);
 
-    const projectsTab = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-tabs button")]
+    const projectsTab = [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-tabs button")]
       .find((button) => button.textContent === "Projects")!;
     projectsTab.click();
     await Promise.resolve();
     await Promise.resolve();
 
-    const alphaCard = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-project")]
+    const alphaCard = [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-project")]
       .find((button) => button.textContent?.includes("Alpha Project"))!;
     alphaCard.click();
 
     expect(document.body.textContent).toContain("Project: Alpha Project");
     expect(document.body.textContent).toContain("Alpha task");
     expect(document.body.textContent).not.toContain("Beta task");
-    const listTab = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-tabs button")]
+    const listTab = [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-tabs button")]
       .find((button) => button.textContent === "List")!;
     expect(listTab.className).toContain("is-active");
   });
@@ -399,12 +399,12 @@ describe("agenda keyboard handling", () => {
     d.api.notes.agenda = async () => projectAgenda;
     await openAgendaView(d);
 
-    document.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-project-filter > button")!.click();
+    document.querySelector<HTMLButtonElement>(".noema-agenda-full-project-filter > button")!.click();
     document.querySelector<HTMLButtonElement>("[data-project-key='alpha']")!.click();
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
 
     for (const label of ["Gantt", "Clock", "Lints"]) {
-      const tab = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-tabs button")]
+      const tab = [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-tabs button")]
         .find((button) => button.textContent === label)!;
       tab.click();
       await Promise.resolve();
@@ -434,7 +434,7 @@ describe("agenda keyboard handling", () => {
     });
     await openAgendaView(d);
 
-    document.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-project-filter > button")!.click();
+    document.querySelector<HTMLButtonElement>(".noema-agenda-full-project-filter > button")!.click();
 
     expect(document.body.textContent).toContain("No projects");
     expect(document.body.textContent).not.toContain("Graph Tensor (0/0)");
@@ -445,13 +445,13 @@ describe("agenda keyboard handling", () => {
     d.api.notes.agenda = async () => projectAgenda;
     await openAgendaView(d);
 
-    const search = document.querySelector<HTMLInputElement>(".aaronnote-agenda-full-header input[type='search']")!;
+    const search = document.querySelector<HTMLInputElement>(".noema-agenda-full-header input[type='search']")!;
     search.focus();
     search.value = "Alpha";
     search.dispatchEvent(new Event("input", { bubbles: true }));
 
     expect(document.activeElement).toBe(search);
-    expect(document.querySelector<HTMLInputElement>(".aaronnote-agenda-full-header input[type='search']")).toBe(search);
+    expect(document.querySelector<HTMLInputElement>(".noema-agenda-full-header input[type='search']")).toBe(search);
     expect(document.body.textContent).toContain("Alpha task");
     expect(document.body.textContent).not.toContain("Beta task");
     expect(document.body.textContent).toContain("1 open");
@@ -472,8 +472,8 @@ describe("agenda keyboard handling", () => {
     first.resolve(agendaWithTodo("initial", "Initial task"));
     await opened;
 
-    document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-nav button")[2].click();
-    document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-nav button")[0].click();
+    document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-nav button")[2].click();
+    document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-nav button")[0].click();
     newer.resolve(agendaWithTodo("newer", "Newer task"));
     await flushAsync();
     expect(document.body.textContent).toContain("Newer task");
@@ -511,9 +511,9 @@ describe("agenda keyboard handling", () => {
     });
 
     await openAgendaView(d);
-    document.querySelectorAll<HTMLElement>(".aaronnote-agenda-full-mark")[0].click();
-    document.querySelectorAll<HTMLElement>(".aaronnote-agenda-full-mark")[1].click();
-    document.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-bulk")!.click();
+    document.querySelectorAll<HTMLElement>(".noema-agenda-full-mark")[0].click();
+    document.querySelectorAll<HTMLElement>(".noema-agenda-full-mark")[1].click();
+    document.querySelector<HTMLButtonElement>(".noema-agenda-full-bulk")!.click();
     await flushAsync();
 
     expect(patchTodo).toHaveBeenCalledTimes(2);
@@ -531,7 +531,7 @@ describe("agenda keyboard handling", () => {
     d.api.notes.patchTodo = patchTodo;
 
     await openAgendaView(d);
-    document.querySelector<HTMLElement>(".aaronnote-agenda-full-status")!.click();
+    document.querySelector<HTMLElement>(".noema-agenda-full-status")!.click();
     await flushAsync();
     expect(patchTodo).toHaveBeenCalledTimes(1);
     expect(agenda).toHaveBeenCalledTimes(2);
@@ -547,18 +547,18 @@ describe("agenda keyboard handling", () => {
     d.api.notes.agenda = async () => projectAgenda;
     await openAgendaView(d);
 
-    const monthTab = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-tabs button")]
+    const monthTab = [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-tabs button")]
       .find((button) => button.textContent === "Month")!;
     monthTab.click();
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(document.querySelectorAll(".aaronnote-calendar-weekdays div")).toHaveLength(7);
-    expect(document.querySelectorAll(".aaronnote-calendar-day")).toHaveLength(42);
-    expect(document.querySelector<HTMLElement>(".aaronnote-calendar-head h2")?.textContent).toBe("2026-07");
+    expect(document.querySelectorAll(".noema-calendar-weekdays div")).toHaveLength(7);
+    expect(document.querySelectorAll(".noema-calendar-day")).toHaveLength(42);
+    expect(document.querySelector<HTMLElement>(".noema-calendar-head h2")?.textContent).toBe("2026-07");
     expect(document.querySelector<HTMLElement>("[data-date='2026-07-07']")?.className).toContain("is-today");
 
-    const alpha = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-calendar-event")]
+    const alpha = [...document.querySelectorAll<HTMLButtonElement>(".noema-calendar-event")]
       .find((button) => button.textContent?.includes("Alpha task"))!;
     expect(alpha).toBeTruthy();
     expect(alpha.draggable).toBe(true);
@@ -575,13 +575,13 @@ describe("agenda keyboard handling", () => {
     d.api.notes.patchTodo = patchTodo;
     await openAgendaView(d);
 
-    const monthTab = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-tabs button")]
+    const monthTab = [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-tabs button")]
       .find((button) => button.textContent === "Month")!;
     monthTab.click();
     await Promise.resolve();
     await Promise.resolve();
 
-    const alpha = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-calendar-event")]
+    const alpha = [...document.querySelectorAll<HTMLButtonElement>(".noema-calendar-event")]
       .find((button) => button.textContent?.includes("Alpha task"))!;
     const dragStart = new Event("dragstart", { bubbles: true, cancelable: true });
     Object.defineProperty(dragStart, "dataTransfer", {
@@ -613,21 +613,21 @@ describe("agenda keyboard handling", () => {
     d.api.notes.agenda = async () => projectAgenda;
     await openAgendaView(d);
 
-    const ganttTab = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-tabs button")]
+    const ganttTab = [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-tabs button")]
       .find((button) => button.textContent === "Gantt")!;
     ganttTab.click();
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(document.querySelector(".aaronnote-gantt-toolbar")?.textContent).toContain("Day");
-    expect(document.querySelector(".aaronnote-gantt-toolbar")?.textContent).toContain("Week");
-    expect(document.querySelector(".aaronnote-gantt-toolbar")?.textContent).toContain("Collapse all");
-    const taskTitles = () => [...document.querySelectorAll<HTMLElement>(".aaronnote-gantt-line:not(.is-milestone) .aaronnote-gantt-task-title")]
+    expect(document.querySelector(".noema-gantt-toolbar")?.textContent).toContain("Day");
+    expect(document.querySelector(".noema-gantt-toolbar")?.textContent).toContain("Week");
+    expect(document.querySelector(".noema-gantt-toolbar")?.textContent).toContain("Collapse all");
+    const taskTitles = () => [...document.querySelectorAll<HTMLElement>(".noema-gantt-line:not(.is-milestone) .noema-gantt-task-title")]
       .map((node) => node.textContent || "");
     expect(taskTitles()).toContain("Alpha task");
     expect(taskTitles()).toContain("Beta task");
 
-    const alphaLane = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-gantt-lane-toggle")]
+    const alphaLane = [...document.querySelectorAll<HTMLButtonElement>(".noema-gantt-lane-toggle")]
       .find((button) => button.textContent?.includes("Alpha Project"))!;
     alphaLane.click();
 
@@ -641,35 +641,35 @@ describe("agenda keyboard handling", () => {
     d.jumpToTodo = vi.fn();
     await openAgendaView(d);
 
-    const dagTab = [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-tabs button")]
+    const dagTab = [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-tabs button")]
       .find((button) => button.textContent === "DAG")!;
     dagTab.click();
     await flushAsync();
 
-    expect(document.querySelectorAll(".aaronnote-agenda-dag-node")).toHaveLength(3);
-    expect(document.querySelectorAll(".aaronnote-agenda-dag-edge")).toHaveLength(2);
-    expect(document.querySelector(".aaronnote-agenda-dag-toolbar")?.textContent).toContain("Current project graph");
+    expect(document.querySelectorAll(".noema-agenda-dag-node")).toHaveLength(3);
+    expect(document.querySelectorAll(".noema-agenda-dag-edge")).toHaveLength(2);
+    expect(document.querySelector(".noema-agenda-dag-toolbar")?.textContent).toContain("Current project graph");
 
     document.querySelector<SVGGElement>("[data-dag-node-id='work-without-agenda']")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(d.jumpToTodo).toHaveBeenCalledWith(expect.objectContaining({ file: "/demo/work.noema", sourceKind: "work-node" }));
 
-    const search = document.querySelector<HTMLInputElement>(".aaronnote-agenda-full-header input[type='search']")!;
+    const search = document.querySelector<HTMLInputElement>(".noema-agenda-full-header input[type='search']")!;
     search.value = "Alpha";
     search.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(document.querySelectorAll(".aaronnote-agenda-dag-node")).toHaveLength(3);
-    expect(document.querySelectorAll(".aaronnote-agenda-dag-node.is-match")).toHaveLength(1);
-    expect(document.querySelectorAll(".aaronnote-agenda-dag-node.is-muted")).toHaveLength(2);
+    expect(document.querySelectorAll(".noema-agenda-dag-node")).toHaveLength(3);
+    expect(document.querySelectorAll(".noema-agenda-dag-node.is-match")).toHaveLength(1);
+    expect(document.querySelectorAll(".noema-agenda-dag-node.is-muted")).toHaveLength(2);
 
     search.value = "";
     search.dispatchEvent(new Event("input", { bubbles: true }));
-    document.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-project-filter > button")!.click();
+    document.querySelector<HTMLButtonElement>(".noema-agenda-full-project-filter > button")!.click();
     document.querySelector<HTMLButtonElement>("[data-project-key='alpha']")!.click();
-    expect(document.querySelectorAll(".aaronnote-agenda-dag-node")).toHaveLength(1);
-    expect(document.querySelectorAll(".aaronnote-agenda-dag-edge")).toHaveLength(0);
+    expect(document.querySelectorAll(".noema-agenda-dag-node")).toHaveLength(1);
+    expect(document.querySelectorAll(".noema-agenda-dag-edge")).toHaveLength(0);
     expect(document.querySelector("[data-dag-node-id='alpha-todo']")).toBeTruthy();
     expect(document.querySelector("[data-dag-node-id='beta-todo']")).toBeNull();
     expect(document.querySelector("[data-dag-node-id='work-without-agenda']")).toBeNull();
-    expect(document.querySelector(".aaronnote-agenda-dag-toolbar")?.textContent).toContain("Selected project graph");
+    expect(document.querySelector(".noema-agenda-dag-toolbar")?.textContent).toContain("Selected project graph");
   });
 
   test("DAG hard-switches to a selected project from another requested scope", async () => {
@@ -697,13 +697,13 @@ describe("agenda keyboard handling", () => {
     d.api.notes.agenda = async () => snapshot;
     await openAgendaView(d);
 
-    [...document.querySelectorAll<HTMLButtonElement>(".aaronnote-agenda-full-tabs button")]
+    [...document.querySelectorAll<HTMLButtonElement>(".noema-agenda-full-tabs button")]
       .find((button) => button.textContent === "DAG")!.click();
     await flushAsync();
-    document.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-project-filter > button")!.click();
+    document.querySelector<HTMLButtonElement>(".noema-agenda-full-project-filter > button")!.click();
     document.querySelector<HTMLButtonElement>(`[data-project-key='${knowledgeProject}']`)!.click();
 
-    expect(document.querySelectorAll(".aaronnote-agenda-dag-node")).toHaveLength(1);
+    expect(document.querySelectorAll(".noema-agenda-dag-node")).toHaveLength(1);
     expect(document.querySelector("[data-dag-node-id='iso-todo']")).toBeTruthy();
     expect(document.querySelector("[data-dag-node-id='alpha-todo']")).toBeNull();
     expect(document.querySelector("[data-dag-node-id='work-without-agenda']")).toBeNull();
@@ -755,9 +755,9 @@ describe("native Agenda Web integration", () => {
     d.api.notes.patchTodo = vi.fn(async () => ({}));
     vi.spyOn(window, "prompt").mockReturnValue("done");
     await openAgendaView(d);
-    document.querySelectorAll<HTMLElement>(".aaronnote-agenda-full-mark")[0].click();
-    document.querySelectorAll<HTMLElement>(".aaronnote-agenda-full-mark")[1].click();
-    document.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-bulk")!.click();
+    document.querySelectorAll<HTMLElement>(".noema-agenda-full-mark")[0].click();
+    document.querySelectorAll<HTMLElement>(".noema-agenda-full-mark")[1].click();
+    document.querySelector<HTMLButtonElement>(".noema-agenda-full-bulk")!.click();
     await flushAsync();
     expect(d.api.notes.batchTodos).toHaveBeenCalledWith({ items: [
       expect.objectContaining({ uid: "alpha-todo", scopeId: "knowledge", revision: "version" }),
@@ -776,7 +776,7 @@ describe("native Agenda Web integration", () => {
     d.api.notes.createTodo = vi.fn(async () => ({}));
     vi.spyOn(window, "prompt").mockReturnValue("Follow up");
     await openAgendaView(d);
-    document.querySelector<HTMLButtonElement>(".aaronnote-agenda-full-primary")!.click();
+    document.querySelector<HTMLButtonElement>(".noema-agenda-full-primary")!.click();
     await flushAsync();
     expect(d.api.notes.createTodo).toHaveBeenCalledWith({ text: "Follow up", scopeId: "project:test", project: "paper" });
   });
@@ -788,7 +788,7 @@ describe("native Agenda Web integration", () => {
     snapshot.errors = [{ file: "/vault/bad.noema", message: "Invalid DAG" }];
     d.api.notes.agenda = vi.fn(async () => snapshot);
     await openAgendaView(d);
-    expect(document.querySelector(".aaronnote-agenda-full-lints")?.textContent).toContain("Invalid DAG");
+    expect(document.querySelector(".noema-agenda-full-lints")?.textContent).toContain("Invalid DAG");
     await refreshAgendaView();
     expect(d.api.notes.agenda).toHaveBeenCalledTimes(2);
   });
@@ -822,7 +822,7 @@ test('capture dialog owns its keys and closes with Agenda',async()=>{
   await openAgendaView(d);
   document.dispatchEvent(new KeyboardEvent('keydown',{key:'n',bubbles:true,cancelable:true}));
   await flushAsync();
-  const dialog=document.querySelector<HTMLDialogElement>('.aaronnote-agenda-capture')!;
+  const dialog=document.querySelector<HTMLDialogElement>('.noema-agenda-capture')!;
   expect(dialog).not.toBeNull();
   dialog.querySelector('button')!.dispatchEvent(new KeyboardEvent('keydown',{key:'t',bubbles:true,cancelable:true}));
   expect(d.api.notes.patchTodo).not.toHaveBeenCalled();

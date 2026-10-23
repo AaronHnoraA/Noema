@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
-const receiptFile = resolve("dist", "aaronnote", ".noema-renderer-build.json");
+const receiptFile = resolve("dist", "pages", ".noema-renderer-build.json");
 const temporary = `${receiptFile}.${process.pid}.tmp`;
 const receipt = {
   version: 1,

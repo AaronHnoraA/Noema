@@ -43,7 +43,7 @@ describe("self-contained HTML export", () => {
     const html = await createSelfContainedNoteHTML("# Offline\n\n![Pixel](assets/pixel.png)", {
       title: "Offline",
       themeId: "mediki",
-      alternateThemeId: "aaronnote",
+      alternateThemeId: "noema",
       document,
       baseUrl: "http://noema.test/note",
       assetResolver: (source) => new URL(source, "http://noema.test/").toString(),

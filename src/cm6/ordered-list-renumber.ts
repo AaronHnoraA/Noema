@@ -1,12 +1,12 @@
 /**
  * Auto-renumber ordered Markdown lists whenever the document changes.
  *
- * Ported from ZenNotes cm-ordered-list-renumber, adapted for aaronnote:
+ * Ported from ZenNotes cm-ordered-list-renumber, adapted for noema:
  * - `getReadyTree` is bounded to changed ranges + 4 KB slack instead of
  *   ensureSyntaxTree(state, state.doc.length) to avoid full-document parses.
  *   Lists extending past the slack window are best-effort (renumbered on the
  *   next edit inside them).
- * - Wires into aaronnote's buildExtensions.
+ * - Wires into noema's buildExtensions.
  *
  * Marker punctuation (`.` vs `)`) is preserved per-list from the first item.
  * Starting number: kept when only later items are touched; reset to 1 when the

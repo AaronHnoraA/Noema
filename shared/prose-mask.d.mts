@@ -1,6 +1,6 @@
-export const AARONNOTE_ACCEPTED_WORDS: string[];
+export const NOEMA_ACCEPTED_WORDS: string[];
 
-export function maskAaronnoteProse(text: string): string;
+export function maskNoemaProse(text: string): string;
 
 export function lineStartOffsets(text: string): number[];
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { createEditor } from "../src/editor-api.ts";
-import { AARONNOTE_AUTHORING_SNIPPETS } from "../src/authoring-syntax.ts";
+import { NOEMA_AUTHORING_SNIPPETS } from "../src/authoring-syntax.ts";
 
 function mount(initialContent = "") {
   const host = document.createElement("div");
@@ -11,10 +11,10 @@ function mount(initialContent = "") {
 
 describe("Noema authoring commands and snippets", () => {
   test("ships metadata, review, script and footnote snippets", () => {
-    expect(AARONNOTE_AUTHORING_SNIPPETS.map((snippet) => snippet.key)).toEqual([
+    expect(NOEMA_AUTHORING_SNIPPETS.map((snippet) => snippet.key)).toEqual([
       "meta", "metafield", "summary", "rev", "sup", "sub", "fnref", "fndef",
     ]);
-    expect(AARONNOTE_AUTHORING_SNIPPETS.find((snippet) => snippet.key === "rev")?.body)
+    expect(NOEMA_AUTHORING_SNIPPETS.find((snippet) => snippet.key === "rev")?.body)
       .toContain("@@revision");
   });
 

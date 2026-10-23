@@ -61,8 +61,8 @@ describe("org-env title math", () => {
     const id = "0198fbac-0780-7c99-85e6-333333333333";
     const md = `#+begin theorem Spectral {#${id} phase=proof owner="Aaron He"}\nBody.\n#+end theorem\n\nAfter.`;
     const copied: string[] = [];
-    window.AaronnoteBlockTarget = (blockId) => `roam://page-id#${blockId}`;
-    window.AaronnoteCopyBlockTarget = async (blockId) => {
+    window.NoemaBlockTarget = (blockId) => `roam://page-id#${blockId}`;
+    window.NoemaCopyBlockTarget = async (blockId) => {
       const target = `roam://page-id#${blockId}`;
       copied.push(target);
       return target;
@@ -79,8 +79,8 @@ describe("org-env title math", () => {
       await Promise.resolve();
       expect(copied).toEqual([`roam://page-id#${id}`]);
     } finally {
-      window.AaronnoteBlockTarget = undefined;
-      window.AaronnoteCopyBlockTarget = undefined;
+      window.NoemaBlockTarget = undefined;
+      window.NoemaCopyBlockTarget = undefined;
       cleanup();
     }
   });

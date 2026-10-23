@@ -15,7 +15,7 @@ const entries = [
   "shared",
   "resources",
   "js",
-  "dist/aaronnote",
+  "dist/pages",
   "src/styles/themes",
 ];
 

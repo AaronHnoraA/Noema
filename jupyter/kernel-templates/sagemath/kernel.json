@@ -1,6 +1,6 @@
 {
   "argv": [
-    "@AARONNOTE_JUPYTER_ROOT@/bin/sage-jupyter-kernel",
+    "@NOEMA_JUPYTER_ROOT@/bin/sage-jupyter-kernel",
     "-f",
     "{connection_file}"
   ],
@@ -8,15 +8,15 @@
   "language": "sage",
   "env": {
     "HOME": "@NOEMA_USER_HOME@",
-    "AARONNOTE_JUPYTER_STATE_ROOT": "@AARONNOTE_JUPYTER_STATE_ROOT@",
-    "JUPYTER_CONFIG_DIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/config",
-    "JUPYTER_DATA_DIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/data",
-    "JUPYTER_RUNTIME_DIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/runtime",
+    "NOEMA_JUPYTER_STATE_ROOT": "@NOEMA_JUPYTER_STATE_ROOT@",
+    "JUPYTER_CONFIG_DIR": "@NOEMA_JUPYTER_STATE_ROOT@/config",
+    "JUPYTER_DATA_DIR": "@NOEMA_JUPYTER_STATE_ROOT@/data",
+    "JUPYTER_RUNTIME_DIR": "@NOEMA_JUPYTER_STATE_ROOT@/runtime",
     "PYTHONNOUSERSITE": "",
-    "SAGE_JUPYTER_LOG": "@AARONNOTE_JUPYTER_STATE_ROOT@/logs/sagemath-kernel.log",
-    "DOT_SAGE": "@AARONNOTE_JUPYTER_STATE_ROOT@/sage",
-    "IPYTHONDIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/ipython",
-    "TMPDIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/tmp/"
+    "SAGE_JUPYTER_LOG": "@NOEMA_JUPYTER_STATE_ROOT@/logs/sagemath-kernel.log",
+    "DOT_SAGE": "@NOEMA_JUPYTER_STATE_ROOT@/sage",
+    "IPYTHONDIR": "@NOEMA_JUPYTER_STATE_ROOT@/ipython",
+    "TMPDIR": "@NOEMA_JUPYTER_STATE_ROOT@/tmp/"
   },
   "metadata": {
     "debugger": false,
@@ -24,7 +24,7 @@
       "runtime": {
         "family": "python",
         "probe_argv": [
-          "@AARONNOTE_JUPYTER_ROOT@/bin/sage-jupyter-kernel",
+          "@NOEMA_JUPYTER_ROOT@/bin/sage-jupyter-kernel",
           "--runtime-probe"
         ]
       }

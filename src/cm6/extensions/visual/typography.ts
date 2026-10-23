@@ -75,7 +75,7 @@ function roundedPixels(value: number): number {
 
 /** Read production layout without changing CM state or note content. */
 export function auditVisualTypography(root: ParentNode = document): VisualTypographyAudit {
-  const editor = root.querySelector<HTMLElement>(".cm-editor.aaronnote-visual-typography");
+  const editor = root.querySelector<HTMLElement>(".cm-editor.noema-visual-typography");
   const content = editor?.querySelector<HTMLElement>(".cm-content");
   const ownerDocument = editor?.ownerDocument;
   const ownerWindow = ownerDocument?.defaultView;
@@ -153,7 +153,7 @@ function createContentWidthTheme(contentWidth: string): Extension {
   return [
     currentContentWidth.of(contentWidth),
     EditorView.editorAttributes.of({
-      class: "aaronnote-visual-typography",
+      class: "noema-visual-typography",
       style: `--content-width: ${contentWidth}`,
     }),
   ];
@@ -178,7 +178,7 @@ const contentWidthSetter = EditorView.updateListener.of((update) => {
 const visualTypographyTheme = EditorView.theme({
   "&.cm-editor": {
     "--visual-font-family": "var(--aaron-font-prose)",
-    "--visual-font-size": "calc(var(--aaron-prose-size) * var(--aaronnote-layout-zoom, 1))",
+    "--visual-font-size": "calc(var(--aaron-prose-size) * var(--noema-block-layout-zoom, 1))",
     "--visual-inline-gutter": VISUAL_TYPOGRAPHY_INLINE_GUTTER,
     minWidth: "var(--aaron-prose-layout-floor)",
     fontFamily: "var(--visual-font-family)",

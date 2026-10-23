@@ -447,7 +447,7 @@ func markdownAssetCandidate(relativePath string) bool {
 			break
 		}
 	}
-	if !inAssetDir || filepath.Base(relativePath) == ".aaronnote-keep" {
+	if !inAssetDir || filepath.Base(relativePath) == ".noema-keep" {
 		return false
 	}
 	ext := strings.ToLower(filepath.Ext(relativePath))

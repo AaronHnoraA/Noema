@@ -6,8 +6,8 @@ import {
   provesHostInputFocus,
   reclaimHostInputFocus,
   releaseHostInputFocus,
-} from "../aaronnote/host-input-focus.ts";
-import { handleHostOwnedKey, hostOwnedKeyFromEvent } from "../aaronnote/xwidget-key-guard.ts";
+} from "../pages/host-input-focus.ts";
+import { handleHostOwnedKey, hostOwnedKeyFromEvent } from "../pages/xwidget-key-guard.ts";
 
 function trusted(event: KeyboardEvent): KeyboardEvent {
   Object.defineProperty(event, "isTrusted", { value: true });
@@ -15,14 +15,14 @@ function trusted(event: KeyboardEvent): KeyboardEvent {
 }
 
 function withForwarded(run: (forwarded: unknown[]) => void): void {
-  const win = window as Window & { aaronnoteApi?: unknown };
-  const previous = win.aaronnoteApi;
+  const win = window as Window & { noemaApi?: unknown };
+  const previous = win.noemaApi;
   const forwarded: unknown[] = [];
-  win.aaronnoteApi = { emacs: { key: async (payload: unknown) => { forwarded.push(payload); } } };
+  win.noemaApi = { emacs: { key: async (payload: unknown) => { forwarded.push(payload); } } };
   try {
     run(forwarded);
   } finally {
-    win.aaronnoteApi = previous;
+    win.noemaApi = previous;
     reclaimHostInputFocus();
   }
 }

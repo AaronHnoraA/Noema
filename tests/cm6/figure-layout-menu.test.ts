@@ -197,7 +197,7 @@ describe("figure layout context menu", () => {
       menu.find((item) => item.label === "Align Right")?.run?.();
       expect(editor.getMarkdown()).toBe('before\n![a](picture.png "title"){data-note=keep align=right}\nafter');
       const updated = host.querySelector<HTMLElement>(".cm-image-widget");
-      expect(updated?.classList.contains("aaronnote-image-align-right")).toBe(true);
+      expect(updated?.classList.contains("noema-image-align-right")).toBe(true);
       const width = figureLayoutMenuItems(editor.view, figureLayoutTarget(editor.view, updated)!).find((item) => item.label === "Width");
       width?.submenu?.find((item) => item.label === "50%")?.run?.();
       expect(editor.getMarkdown()).toContain("{data-note=keep align=right width=50%}");
@@ -233,17 +233,17 @@ describe("figure layout context menu", () => {
       expect(target?.kind).toBe("tikz");
       expect(applyFigureLayout(editor.view, target!, { align: "right", wrap: false, width: "50%" })).toBe(true);
       expect(editor.getMarkdown()).toContain("#+begin tikz diagram-id {align=right width=50%}\n\\draw (0,0) -- (1,1);\n#+end tikz");
-      expect(host.querySelector(".cm-tikz-env-widget")?.classList.contains("aaronnote-image-align-right")).toBe(true);
+      expect(host.querySelector(".cm-tikz-env-widget")?.classList.contains("noema-image-align-right")).toBe(true);
       const next = figureLayoutTarget(editor.view, host.querySelector(".cm-tikz-env-widget"));
       expect(applyFigureLayout(editor.view, next!, { align: "left", wrap: true })).toBe(true);
       expect(editor.getMarkdown()).toContain("{wrap=left width=50%}");
-      expect(host.querySelector(".cm-tikz-env-widget")?.classList.contains("aaronnote-image-wrap")).toBe(true);
+      expect(host.querySelector(".cm-tikz-env-widget")?.classList.contains("noema-image-wrap")).toBe(true);
     } finally { cleanup(); setTikzRendererForTests(null); }
   });
 
   test("repeated TikZ wrap choices replace old attributes and keep the picture visible", async () => {
-    const originalCurrentFile = window.AaronnoteCurrentFile;
-    window.AaronnoteCurrentFile = () => "/notes/layout-wrap.md";
+    const originalCurrentFile = window.NoemaCurrentFile;
+    window.NoemaCurrentFile = () => "/notes/layout-wrap.md";
     setTikzRendererForTests(async () => '<svg viewBox="0 0 20 10"><path d="M0 0L20 10"/></svg>');
     const body = "\\draw (0,0) -- (1,1);\n#+end tikz";
     const source = `before\n#+begin tikz aaa {wrap=left} {wrap=left} {wrap=right} {wrap=right}\n${body}\nafter`;
@@ -251,19 +251,19 @@ describe("figure layout context menu", () => {
     try {
       const figure = () => host.querySelector<HTMLElement>(".cm-tikz-env-widget")!;
       expect(figureLayoutTarget(editor.view, figure())?.layout).toMatchObject({ align: "right", wrap: true });
-      expect(figure().classList.contains("aaronnote-image-align-right")).toBe(true);
+      expect(figure().classList.contains("noema-image-align-right")).toBe(true);
       await new Promise((resolve) => window.setTimeout(resolve, 0));
       expect(figure().querySelector("svg")).toBeTruthy();
       expect(applyFigureLayout(editor.view, figureLayoutTarget(editor.view, figure())!, { align: "left", wrap: true })).toBe(true);
       expect(editor.getMarkdown()).toBe(`before\n#+begin tikz aaa {wrap=left}\n${body}\nafter`);
-      expect(figure().classList.contains("aaronnote-image-align-left")).toBe(true);
-      expect(figure().classList.contains("cm-aaronnote-measured-widget")).toBe(false);
+      expect(figure().classList.contains("noema-image-align-left")).toBe(true);
+      expect(figure().classList.contains("cm-noema-measured-widget")).toBe(false);
       await new Promise((resolve) => window.setTimeout(resolve, 0));
       expect(figure().querySelector("svg")).toBeTruthy();
       expect(applyFigureLayout(editor.view, figureLayoutTarget(editor.view, figure())!, { align: "left", wrap: true })).toBe(false);
       expect(applyFigureLayout(editor.view, figureLayoutTarget(editor.view, figure())!, { align: "right", wrap: true })).toBe(true);
       expect(editor.getMarkdown()).toBe(`before\n#+begin tikz aaa {wrap=right}\n${body}\nafter`);
-    } finally { cleanup(); window.AaronnoteCurrentFile = originalCurrentFile; setTikzRendererForTests(null); }
+    } finally { cleanup(); window.NoemaCurrentFile = originalCurrentFile; setTikzRendererForTests(null); }
   });
 
   test("TikZ layout changes preserve unrelated title attributes", () => {
@@ -271,10 +271,10 @@ describe("figure layout context menu", () => {
     const { editor, host, cleanup } = mount(source);
     try {
       const figure = host.querySelector<HTMLElement>(".cm-tikz-env-widget")!;
-      expect(figure.classList.contains("aaronnote-image-align-left")).toBe(true);
+      expect(figure.classList.contains("noema-image-align-left")).toBe(true);
       expect(applyFigureLayout(editor.view, figureLayoutTarget(editor.view, figure)!, { align: "right", wrap: true })).toBe(true);
       expect(editor.getMarkdown()).toContain("#+begin tikz aaa {note=keep} {wrap=right}\n");
-      expect(host.querySelector(".cm-tikz-env-widget")?.classList.contains("aaronnote-image-align-right")).toBe(true);
+      expect(host.querySelector(".cm-tikz-env-widget")?.classList.contains("noema-image-align-right")).toBe(true);
     } finally { cleanup(); }
   });
 

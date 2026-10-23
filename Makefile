@@ -89,7 +89,7 @@ agenda-apple-test: check-env agenda-apple-build
 install: build kernel-install
 
 build-web: check-env
-	npm run build:aaronnote
+	npm run build:pages
 
 server-config-init: check-env
 	node scripts/init-server-config.mjs
@@ -100,7 +100,7 @@ server-build: check-env build-web
 server-start: check-env
 	@test -f "$(CURDIR)/server-config/runtime.json" || \
 		(echo "Missing server-config/runtime.json; run 'make server-config-init'" && exit 1)
-	AARONNOTE_HOST_MODE=server NOEMA_SERVER_CONFIG="$(CURDIR)/server-config/runtime.json" node web-host.mjs
+	NOEMA_HOST_MODE=server NOEMA_SERVER_CONFIG="$(CURDIR)/server-config/runtime.json" node web-host.mjs
 
 server-deploy: server-build
 	node scripts/deploy-server.mjs

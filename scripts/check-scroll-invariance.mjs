@@ -40,7 +40,7 @@ const markdown = [prose(40), ...constructs.flatMap((c) => [c, prose(6)]),
   ...wrapTables.flatMap((c) => [c, prose(6)]), prose(40), "[^1]: The note."].join("\n\n");
 
 const server = await createServer({
-  configFile: repo + "vite.aaronnote.config.ts", root: repo + "aaronnote",
+  configFile: repo + "vite.pages.config.ts", root: repo + "pages",
   logLevel: "error", server: { host: "127.0.0.1", port: 0, hmr: false },
 });
 await server.listen();
@@ -62,7 +62,7 @@ try {
       }));
       await page.route("**/scroll-invariance", (route) => route.fulfill({
         contentType: "text/html",
-        body: `<!doctype html><html><head><link rel="stylesheet" href="${root}src/styles/widgets.css"><link rel="stylesheet" href="${root}aaronnote/style.css"></head><body style="margin:0"><div id="host" class="aaronnote-focused-editor" style="height:800px;width:1000px;overflow:auto;--aaronnote-visual-zoom:1"></div></body></html>`,
+        body: `<!doctype html><html><head><link rel="stylesheet" href="${root}src/styles/widgets.css"><link rel="stylesheet" href="${root}pages/style.css"></head><body style="margin:0"><div id="host" class="noema-focused-editor" style="height:800px;width:1000px;overflow:auto;--noema-visual-zoom:1"></div></body></html>`,
       }));
       const appUrl = process.env.NOEMA_SCROLL_APP_URL;
       if (appUrl) {
@@ -262,7 +262,7 @@ try {
         });
         await page.waitForTimeout(400);
         const formulaPoint = await page.locator(
-          ".cm-markdown-table-preview tbody tr:first-child td:nth-child(2) .aaronnote-math-inline",
+          ".cm-markdown-table-preview tbody tr:first-child td:nth-child(2) .noema-math-inline",
         ).boundingBox();
         assert.ok(formulaPoint, "table formula is rendered");
         const beforeFormula = await page.evaluate(() => host.scrollTop);
@@ -312,13 +312,13 @@ try {
           const wrapFrom = markdown.indexOf(`| wrap ${side} |`);
           await scrollTo(wrapFrom, "start");
           await page.evaluate((side) => {
-            const wrap = document.querySelector(`.cm-table-block.aaronnote-table-wrap.aaronnote-table-align-${side}`);
+            const wrap = document.querySelector(`.cm-table-block.noema-table-wrap.noema-table-align-${side}`);
             host.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
             host.scrollTop += wrap.getBoundingClientRect().top - host.getBoundingClientRect().top - 200;
           }, side);
           await page.waitForTimeout(400);
           const wrapFormula = await page.locator(
-            `.cm-table-block.aaronnote-table-wrap.aaronnote-table-align-${side} .cm-markdown-table-preview .aaronnote-math-inline`,
+            `.cm-table-block.noema-table-wrap.noema-table-align-${side} .cm-markdown-table-preview .noema-math-inline`,
           ).boundingBox();
           assert.ok(wrapFormula, `${side} wrapped table formula is visible`);
           const wrapBefore = await page.evaluate(() => host.scrollTop);

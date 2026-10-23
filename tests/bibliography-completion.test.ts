@@ -5,7 +5,7 @@ import {
   citeKeyRenderPrefix,
   citeNamespaceCompletionPrefix,
   citeNamespaceRenderPrefix,
-} from "../aaronnote/bibliography-completion.ts";
+} from "../pages/bibliography-completion.ts";
 
 describe("bibliography completion context", () => {
   test("recognizes namespace completion from a bounded cursor tail", () => {

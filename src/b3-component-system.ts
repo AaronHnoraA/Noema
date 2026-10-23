@@ -14,30 +14,30 @@ export type B3ComponentAudit = {
 };
 
 const DIALOG_CONTAINER_TOKENS = new Set([
-  "aaronnote-modal-panel",
+  "noema-modal-panel",
 ]);
 
 const PANEL_TOKENS = new Set([
-  "aaronnote-tools-panel",
-  "aaronnote-jupyter-panel",
-  "aaronnote-floating-toc",
-  "aaronnote-local-graph-panel",
-  "aaronnote-find-panel",
+  "noema-tools-panel",
+  "noema-jupyter-panel",
+  "noema-floating-toc",
+  "noema-local-graph-panel",
+  "noema-find-panel",
   "noema-knowledge-dock",
-  "aaronnote-agenda-full",
-  "aaronnote-roam-tools",
+  "noema-agenda-full",
+  "noema-roam-tools",
   "noema-config-section",
   "noema-jupyter-inspector",
   "noema-jupyter-manager",
   "noema-jupyter-tasks",
-  "aaronnote-link-preview",
-  "aaronnote-math-preview",
+  "noema-link-preview",
+  "noema-math-preview",
   "noema-wiki-sidebar",
   "noema-wiki-tools",
 ]);
 
 const CARD_TOKENS = new Set([
-  "aaronnote-task-card",
+  "noema-task-card",
   "noema-config-plugin",
   "noema-config-theme",
   "noema-jupyter-manager-card",
@@ -64,7 +64,7 @@ const CONTROL_SELECTOR = "button, input, select, textarea, [role='option'], [rol
 const SURFACE_TOKEN_SELECTORS = [
   ...DIALOG_CONTAINER_TOKENS,
   ...PANEL_TOKENS,
-  "aaronnote-modal",
+  "noema-modal",
 ].map((token) => `[class~="${token}"]`);
 const SURFACE_SUFFIX_SELECTORS = ["backdrop", "menu", "popup"]
   .map((word) => `[class*="${word}"]`);
@@ -87,7 +87,7 @@ function tokenEndsWithSurface(token: string, suffix: string): boolean {
 }
 
 function isDialogHost(tokens: string[]): boolean {
-  if (tokens.includes("aaronnote-modal")) return true;
+  if (tokens.includes("noema-modal")) return true;
   return tokens.some((token) => tokenEndsWithSurface(token, "backdrop"));
 }
 

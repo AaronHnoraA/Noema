@@ -48,7 +48,7 @@
 ```sh
 # 只有编辑器
 NOEMA_PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs npm run check:scroll
-# 整个应用（含宿主的焦点处理）：先 AARONNOTE_WEB_PORT=50999 node web-host.mjs
+# 整个应用（含宿主的焦点处理）：先 NOEMA_WEB_PORT=50999 node web-host.mjs
 NOEMA_SCROLL_APP_URL=http://127.0.0.1:50999 NOEMA_SCROLL_APP_FILE=/tmp/scroll-fixture.md \
   NOEMA_PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs npm run check:scroll
 ```

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { outputDialogEnterCloses, outputShortcut } from "../aaronnote/jupyter-output-keys.ts";
+import { outputDialogEnterCloses, outputShortcut } from "../pages/jupyter-output-keys.ts";
 
 function shortcut(target: HTMLElement, key: string, options: KeyboardEventInit = {}) {
   const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...options });

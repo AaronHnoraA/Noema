@@ -38,7 +38,7 @@ function embed(options: { explicitHeight?: boolean } = {}): { frame: HTMLIFrameE
   document.body.append(figure);
   sources.set(frame, []);
   const handle = mountHtmlEmbed(frame, {
-    src: "aaronnote-asset://page.html",
+    src: "noema-asset://page.html",
     title: "page.html",
     container: figure,
     explicitHeight: options.explicitHeight,
@@ -72,7 +72,7 @@ describe("HTML embed lifecycle", () => {
     expect(sources.get(frame)).toEqual([]);
     observer().show(frame, true);
     expect(handle.state()).toBe("live");
-    expect(sources.get(frame)).toEqual(["aaronnote-asset://page.html"]);
+    expect(sources.get(frame)).toEqual(["noema-asset://page.html"]);
   });
 
   test("parks a frame that stays off screen and reloads it on return", () => {
@@ -86,7 +86,7 @@ describe("HTML embed lifecycle", () => {
     expect(sources.get(frame)!.at(-1)).toBe("about:blank");
     observer().show(frame, true);
     expect(handle.state()).toBe("live");
-    expect(sources.get(frame)!.at(-1)).toBe("aaronnote-asset://page.html");
+    expect(sources.get(frame)!.at(-1)).toBe("noema-asset://page.html");
   });
 
   test("a brief scroll away does not unload the page", () => {
@@ -135,7 +135,7 @@ describe("HTML embed lifecycle", () => {
     observer().show(frame, false);
     handle.dispose();
     vi.advanceTimersByTime(HTML_EMBED_PARK_OFFSCREEN_MS);
-    expect(sources.get(frame)!.at(-1)).toBe("aaronnote-asset://page.html");
+    expect(sources.get(frame)!.at(-1)).toBe("noema-asset://page.html");
   });
 });
 
@@ -148,7 +148,7 @@ describe("HTML embed bridge", () => {
     const { frame, figure } = embed();
     observer().show(frame, true);
     const opened: unknown[] = [];
-    figure.addEventListener("aaronnote:open-url", (event) => opened.push((event as CustomEvent).detail));
+    figure.addEventListener("noema:open-url", (event) => opened.push((event as CustomEvent).detail));
     post(frame, { type: "noema:open-url", href: "roam://20261016T101010" });
     post(frame, { type: "noema:open-url", href: "javascript:alert(1)" });
     expect(opened).toEqual([{ href: "roam://20261016T101010", newWindow: false }]);
@@ -158,7 +158,7 @@ describe("HTML embed bridge", () => {
     const { frame, figure } = embed();
     observer().show(frame, true);
     const opened: unknown[] = [];
-    figure.addEventListener("aaronnote:open-url", (event) => opened.push(event));
+    figure.addEventListener("noema:open-url", (event) => opened.push(event));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "noema:open-url", href: "roam://x" }, source: window }));
     expect(opened).toEqual([]);
   });

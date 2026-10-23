@@ -1,7 +1,7 @@
 # Noema Jupyter Kernel Stack
 
 This directory holds Noema's project-owned kernelspec templates and stable
-kernel launchers. Python packages live in the `aaronnote-python` Conda
+kernel launchers. Python packages live in the `noema-python` Conda
 environment; Sage is resolved dynamically from the installed `sage` command.
 There is **no Jupyter server process**. The Node cell service
 (`server/lib/jupyter-cell.mjs`, orchestrating `server/jupyter/*`) talks to
@@ -20,12 +20,12 @@ Node launcher remains the local fallback when no broker target is attached.
 
 The runtime provides:
 
-- an `aaronnote-python` Conda environment, reconciled from
-  `etc/conda/aaronnote-python.yml`, with `ipykernel`, `ipywidgets`, and
+- an `noema-python` Conda environment, reconciled from
+  `etc/conda/noema-python.yml`, with `ipykernel`, `ipywidgets`, and
   `bash_kernel`
 - stable, source-owned `python3`, `bash`, and `sagemath` kernelspec templates;
   their launchers discover installed runtimes or read an explicitly supplied
-  `AARONNOTE_*_RUNTIME_ENV`, so the Node host never resolves through an Emacs tree
+  `NOEMA_*_RUNTIME_ENV`, so the Node host never resolves through an Emacs tree
 - kernelspec discovery matching Jupyter's own search order (this project's
   data dir and — unless disabled — the user's
   `~/Library/Jupyter`/`~/.local/share/jupyter` and system dirs)
@@ -108,14 +108,14 @@ The Node cell service owns kernel lifecycle and each cell run:
 - Output streams live. iopub is published as patches over the editor's existing
   SSE channel while the cell runs; the execute response stays authoritative and
   the client reconciles against it, so a dropped frame costs only smoothness.
-- A hung execution (no `execute_reply` within `AARONNOTE_JUPYTER_EXEC_TIMEOUT_MS`)
-  is escalated: interrupt the kernel, wait `AARONNOTE_JUPYTER_INTERRUPT_GRACE_MS`,
+- A hung execution (no `execute_reply` within `NOEMA_JUPYTER_EXEC_TIMEOUT_MS`)
+  is escalated: interrupt the kernel, wait `NOEMA_JUPYTER_INTERRUPT_GRACE_MS`,
   then surface a timeout error — the kernel process itself is left alive so
   the next cell doesn't lose in-kernel state.
 - On startup, and whenever `web-host.mjs` shuts down cleanly, kernel processes
   this instance owns are torn down; a `process.on("exit")` fallback SIGKILLs
   any still-alive owned process groups if the async shutdown path didn't run.
-  A previous instance's crash leaves an `aaronnote-owned.json` sidecar under
+  A previous instance's crash leaves an `noema-owned.json` sidecar under
   `<stateRoot>/jupyter/runtime/`; the next instance sweeps it on first use,
   killing any orphaned kernel process it can still find and confirm (by PID +
   matching connection-file path in its command line).
@@ -157,28 +157,28 @@ owns the source buffer, windows, commands, kernel controls, and navigation.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `AARONNOTE_JUPYTER_KERNEL_IDLE_TTL_MS` | `600000` | Idle kernel reap delay. |
-| `AARONNOTE_JUPYTER_CLEANUP_INTERVAL_MS` | `30000` | How often the idle sweep runs. |
-| `AARONNOTE_JUPYTER_EXEC_TIMEOUT_MS` | `0` (off) | Per-execution timeout before interrupt escalation. |
-| `AARONNOTE_JUPYTER_INTERRUPT_GRACE_MS` | `5000` | Grace period after interrupting a timed-out execution. |
-| `AARONNOTE_JUPYTER_MAX_STREAM_BYTES` | `1048576` | Cap on merged stream text per run before truncation. |
-| `AARONNOTE_JUPYTER_MAX_WIDGET_MESSAGES` / `_BYTES` | `512` / `8388608` | Caps on captured widget comm messages per run. |
-| `AARONNOTE_JUPYTER_STATE_ROOT` | `<AARONNOTE_STATE_DIR>/jupyter` in a host; platform Noema state otherwise | Explicit config/data/runtime/log/temp root used by kernels and maintenance scripts. |
-| `AARONNOTE_JUPYTER_USE_HOME_KERNELS` | `1` | Also search `~/Library/Jupyter`, `~/.local/share/jupyter`, and system Jupyter dirs for kernelspecs. |
-| `AARONNOTE_JUPYTER_ALLOWED_KERNELS` | unset | Comma-separated kernelspec name allowlist. |
-| `AARONNOTE_JUPYTER_ATTACH_DIRS` | unset | `:`-separated extra directories to search for attachable `kernel-*.json` connection files, beyond `<stateRoot>/jupyter/runtime`. |
-| `AARONNOTE_PYTHON_RUNTIME_ENV` / `AARONNOTE_SAGE_RUNTIME_ENV` | unset | Optional explicit shell metadata files for a host-managed runtime; they are never discovered through an Emacs path. |
-| `AARONNOTE_RUNTIME_ENV` | unset | Generic explicit runtime metadata fallback used only when the language-specific variable is unset. |
-| `AARONNOTE_JUPYTER_DEFAULT_LANGUAGE` | `python` | Default language for a newly inserted bare cell; supplied from project `:aaronnote-jupyter` settings. |
-| `AARONNOTE_JUPYTER_DEFAULT_KERNEL` | derived | Stable default kernelspec id (`sagemath` for Sage, otherwise `python3`) unless the project overrides it. |
-| `AARONNOTE_JUPYTER_DEFAULT_SESSION` | `default` | Default persistent cell session name. |
-| `AARONNOTE_JUPYTER_SHUTDOWN_GRACE_MS` | `2000` | How long an owned kernel gets to answer `shutdown_request` before SIGTERM. |
-| `AARONNOTE_JUPYTER_INTROSPECT_TIMEOUT_MS` | `3000` | Bound on completion/inspection replies (doubled for inspect and history). |
-| `AARONNOTE_JUPYTER_STDIN_TIMEOUT_MS` | `300000` | How long a cell may wait for `input()`; `0` waits forever, as Jupyter does. |
-| `AARONNOTE_JUPYTER_LIVE_FLUSH_MS` | `80` | Coalescing window for live output frames. |
-| `AARONNOTE_JUPYTER_SERVERS` | unset | Server-mode remote Jupyter servers, as JSON (see below). Emacs normally supplies them through its broker. |
+| `NOEMA_JUPYTER_KERNEL_IDLE_TTL_MS` | `600000` | Idle kernel reap delay. |
+| `NOEMA_JUPYTER_CLEANUP_INTERVAL_MS` | `30000` | How often the idle sweep runs. |
+| `NOEMA_JUPYTER_EXEC_TIMEOUT_MS` | `0` (off) | Per-execution timeout before interrupt escalation. |
+| `NOEMA_JUPYTER_INTERRUPT_GRACE_MS` | `5000` | Grace period after interrupting a timed-out execution. |
+| `NOEMA_JUPYTER_MAX_STREAM_BYTES` | `1048576` | Cap on merged stream text per run before truncation. |
+| `NOEMA_JUPYTER_MAX_WIDGET_MESSAGES` / `_BYTES` | `512` / `8388608` | Caps on captured widget comm messages per run. |
+| `NOEMA_JUPYTER_STATE_ROOT` | `<NOEMA_STATE_DIR>/jupyter` in a host; platform Noema state otherwise | Explicit config/data/runtime/log/temp root used by kernels and maintenance scripts. |
+| `NOEMA_JUPYTER_USE_HOME_KERNELS` | `1` | Also search `~/Library/Jupyter`, `~/.local/share/jupyter`, and system Jupyter dirs for kernelspecs. |
+| `NOEMA_JUPYTER_ALLOWED_KERNELS` | unset | Comma-separated kernelspec name allowlist. |
+| `NOEMA_JUPYTER_ATTACH_DIRS` | unset | `:`-separated extra directories to search for attachable `kernel-*.json` connection files, beyond `<stateRoot>/jupyter/runtime`. |
+| `NOEMA_PYTHON_RUNTIME_ENV` / `NOEMA_SAGE_RUNTIME_ENV` | unset | Optional explicit shell metadata files for a host-managed runtime; they are never discovered through an Emacs path. |
+| `NOEMA_RUNTIME_ENV` | unset | Generic explicit runtime metadata fallback used only when the language-specific variable is unset. |
+| `NOEMA_JUPYTER_DEFAULT_LANGUAGE` | `python` | Default language for a newly inserted bare cell; supplied from project `:noema-jupyter` settings. |
+| `NOEMA_JUPYTER_DEFAULT_KERNEL` | derived | Stable default kernelspec id (`sagemath` for Sage, otherwise `python3`) unless the project overrides it. |
+| `NOEMA_JUPYTER_DEFAULT_SESSION` | `default` | Default persistent cell session name. |
+| `NOEMA_JUPYTER_SHUTDOWN_GRACE_MS` | `2000` | How long an owned kernel gets to answer `shutdown_request` before SIGTERM. |
+| `NOEMA_JUPYTER_INTROSPECT_TIMEOUT_MS` | `3000` | Bound on completion/inspection replies (doubled for inspect and history). |
+| `NOEMA_JUPYTER_STDIN_TIMEOUT_MS` | `300000` | How long a cell may wait for `input()`; `0` waits forever, as Jupyter does. |
+| `NOEMA_JUPYTER_LIVE_FLUSH_MS` | `80` | Coalescing window for live output frames. |
+| `NOEMA_JUPYTER_SERVERS` | unset | Server-mode remote Jupyter servers, as JSON (see below). Emacs normally supplies them through its broker. |
 
-Removed: `AARONNOTE_JUPYTER_HOST`/`_PORT`/`_URL`/`_SERVER_IDLE_TTL_MS`. Noema
+Removed: `NOEMA_JUPYTER_HOST`/`_PORT`/`_URL`/`_SERVER_IDLE_TTL_MS`. Noema
 still never *starts* a Jupyter server, and pointing one env var at a URL was
 never enough to describe one. To use a kernel this project didn't launch:
 
@@ -206,7 +206,7 @@ it reads secrets from `auth-source`, and for a server that only exists on a
 Remote target it opens a channel and hands Noema a client-side URL. A target
 that cannot provide a channel is an error, never a client-side connection.
 
-In **server host mode** the same shape comes from `AARONNOTE_JUPYTER_SERVERS`,
+In **server host mode** the same shape comes from `NOEMA_JUPYTER_SERVERS`,
 a JSON array of `{ id, displayName, url, kind, auth, token, password, user,
 allowUnauthorized, serverName }`. There is no Remote framework here, so every
 server must already be reachable from this machine.

@@ -1452,7 +1452,7 @@ func PostprocessPandocLatex(value string) string {
 			break
 		}
 		end := bestAt + relEnd + len(endMarker)
-		token := "\uE100AARONNOTECODEBLOCK" + strconv.Itoa(len(blocks)) + "\uE101"
+		token := "\uE100NOEMACODEBLOCK" + strconv.Itoa(len(blocks)) + "\uE101"
 		blocks = append(blocks, protected[bestAt:end])
 		protected = protected[:bestAt] + token + protected[end:]
 	}
@@ -1463,7 +1463,7 @@ func PostprocessPandocLatex(value string) string {
 	}
 	normalized := strings.TrimSpace(strings.Join(lines, "\n")) + "\n"
 	for index, block := range blocks {
-		token := "\uE100AARONNOTECODEBLOCK" + strconv.Itoa(index) + "\uE101"
+		token := "\uE100NOEMACODEBLOCK" + strconv.Itoa(index) + "\uE101"
 		normalized = strings.ReplaceAll(normalized, token, block)
 	}
 	return normalized

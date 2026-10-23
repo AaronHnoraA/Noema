@@ -58,7 +58,7 @@ requests remain visible after errors; inspect the Clock view before starting
 another task. They can be resolved with `K` after entering the source project.
 
 The host keeps a small SQLite journal at `agenda-clocks.sqlite` inside its state
-directory (`AARONNOTE_STATE_DIR`). It commits an intent before changing a source
+directory (`NOEMA_STATE_DIR`). It commits an intent before changing a source
 and acknowledges it only after observing the result. A lost acknowledgement is
 reconciled by clock identity instead of creating another interval. The journal
 contains clock references and pending operations, not project documents or a
@@ -420,7 +420,7 @@ Agenda keeps two local, disposable cache layers under
 
 Both layers are invalidated by `markNotesDirty(file)`/watcher changes and are
 best-effort only: cache read/write failures fall back to the in-memory scanner
-path. Set `AARONNOTE_AGENDA_CACHE=0` to disable the persistent cache.
+path. Set `NOEMA_AGENDA_CACHE=0` to disable the persistent cache.
 
 ## Creating todos
 
@@ -457,14 +457,14 @@ first, then open statuses before closed ones. Each candidate's `ref` is
 text ref `depRefForTodo` generates for the explicit dependency picker.
 Browsing candidates never mints an id (see [Stable ids](#stable-ids)).
 
-- **Web** (`aaronnote/main.ts`): `depRefCompletionContext`/
+- **Web** (`pages/main.ts`): `depRefCompletionContext`/
   `matchingTodoRefCompletions` slot into the same completion-popup waterfall
   as tag/roam/path completion (`updateSnippetPopup`), triggered by the
   cursor sitting inside an `after=`/`blocks=`/`task=` attr value.
 - **Emacs**: `my/noema-roam-capf` gets a matching `cond` branch that
   calls the `todo-refs` action through the same `/api` bridge other roam
   actions use.
-- **API**: `aaronnote:api:completions:todo-refs` (web-host.mjs), bridged as
+- **API**: `noema:api:completions:todo-refs` (web-host.mjs), bridged as
   `api.completions.todoRefs(...)`.
 
 ## Project rollup

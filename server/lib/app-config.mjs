@@ -7,6 +7,7 @@ import {
   NOEMA_APP_THEMES,
   NOEMA_DEFAULT_THEME_ID,
   noemaAppTheme,
+  canonicalNoemaAppThemeId,
   validNoemaAppThemeId,
 } from "../../shared/app-themes.mjs";
 import {
@@ -128,9 +129,9 @@ function normalizeParsedConfig(raw) {
     });
   }
 
-  const requestedTheme = String(
+  const requestedTheme = canonicalNoemaAppThemeId(
     plainObject(source.appearance) ? source.appearance.theme || "" : "",
-  ).trim().toLowerCase();
+  );
   const theme = validNoemaAppThemeId(requestedTheme) ? requestedTheme : DEFAULT_CONFIG.appearance.theme;
   if (requestedTheme && requestedTheme !== theme) {
     diagnostics.push({

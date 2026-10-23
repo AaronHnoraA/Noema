@@ -29,7 +29,7 @@ describe("shared markdown HTML renderer", () => {
     const root = document.createElement("div");
     root.innerHTML = html;
     expect(root.querySelectorAll("p")).toHaveLength(1);
-    expect(root.querySelectorAll(".aaronnote-math-inline .katex")).toHaveLength(1);
+    expect(root.querySelectorAll(".noema-math-inline .katex")).toHaveLength(1);
     expect(root.textContent).toContain("before");
     expect(root.textContent).toContain("after");
   });
@@ -39,7 +39,7 @@ describe("shared markdown HTML renderer", () => {
     const root = document.createElement("div");
     root.innerHTML = html;
     expect(root.querySelectorAll("li")).toHaveLength(1);
-    expect(root.querySelectorAll("li .aaronnote-math-inline .katex")).toHaveLength(1);
+    expect(root.querySelectorAll("li .noema-math-inline .katex")).toHaveLength(1);
     expect(root.querySelector("li .katex-display")).toBeNull();
     expect(root.querySelector("li")?.textContent).toContain("before");
     expect(root.querySelector("li")?.textContent).toContain("after");
@@ -50,11 +50,11 @@ describe("shared markdown HTML renderer", () => {
     // no-output mode; a rule that matches there without advancing aborts the
     // whole render.
     const cases: Array<[string, string]> = [
-      ["[\\(x^2\\)](http://a)", "aaronnote-math-inline"],
+      ["[\\(x^2\\)](http://a)", "noema-math-inline"],
       ["[==hi== x^2^ H~2~O](http://a)", "<mark>hi</mark>"],
-      ["[see[^1]](http://a)\n\n[^1]: note", "aaronnote-footnote-reference"],
-      ["*[\\(a\\)](u)* and **[[Wiki]] \\(b\\)**", "aaronnote-math-inline"],
-      ["[![i](a.png) \\(y\\)](u)", "aaronnote-math-inline"],
+      ["[see[^1]](http://a)\n\n[^1]: note", "noema-footnote-reference"],
+      ["*[\\(a\\)](u)* and **[[Wiki]] \\(b\\)**", "noema-math-inline"],
+      ["[![i](a.png) \\(y\\)](u)", "noema-math-inline"],
       ["| a |\n| --- |\n| [\\(x\\)](u) |", "<table>"],
     ];
     for (const [markdown, expected] of cases) {
@@ -111,8 +111,8 @@ describe("shared markdown HTML renderer", () => {
     const html = renderMarkdownHTML(markdown, {
       renderJupyterCells: true,
     });
-    expect(html).toContain("aaronnote-slide-jupyter-cell");
-    expect(html).toContain('data-aaronnote-cell-command="@@cell(python, python3) [demo-cell]"');
+    expect(html).toContain("noema-slide-jupyter-cell");
+    expect(html).toContain('data-noema-cell-command="@@cell(python, python3) [demo-cell]"');
   });
 
   test("optionally renders authored HTML and sanitizes unsafe attributes", () => {
@@ -133,7 +133,7 @@ y^2
 
     expect(html).toContain("<org-env-block");
     expect(html).toContain('data-kind="theorem"');
-    expect(html).toContain("aaronnote-math-inline");
+    expect(html).toContain("noema-math-inline");
     expect(html).toContain("<math");
     expect(html).toContain("<math-block");
     expect(html).toContain("math-block-rendered");
@@ -171,7 +171,7 @@ y^2
 \notacommand
 \]`);
 
-    expect(html.match(/aaronnote-math-error/g)).toHaveLength(2);
+    expect(html.match(/noema-math-error/g)).toHaveLength(2);
     expect(html).toContain("KaTeX parse error");
     expect(html).toContain("Undefined control sequence");
   });
@@ -298,12 +298,12 @@ y^2
   test("keeps markdown and math literal inside fenced and inline code", () => {
     const fenced = renderMarkdownHTML("```\ninline \\(x+1\\) and [[wiki]] and **bold**\n```");
     expect(fenced).toContain("<code");
-    expect(fenced).not.toContain("aaronnote-math-inline");
+    expect(fenced).not.toContain("noema-math-inline");
     expect(fenced).not.toContain("<strong");
     expect(fenced).toContain("\\(x+1\\)");
 
     const inline = renderMarkdownHTML("a `\\(x+1\\)` b");
-    expect(inline).not.toContain("aaronnote-math-inline");
+    expect(inline).not.toContain("noema-math-inline");
     expect(inline).toContain("<code>\\(x+1\\)</code>");
   });
 
@@ -318,13 +318,13 @@ y^2
 
     expect(html).toContain("<code");
     expect(html).toContain("#+begin meta");
-    expect(html).not.toContain("aaronnote-meta-cover");
+    expect(html).not.toContain("noema-meta-cover");
   });
 
   test("marks roam core links for special rendering", () => {
     const html = renderMarkdownHTML("[section](roam://node-id@main-heading) and [tag](node-id#anchor)");
 
-    expect(html).toContain('class="aaronnote-roam-link noema-internal-link"');
+    expect(html).toContain('class="noema-roam-link noema-internal-link"');
     expect(html).toContain('data-roam-link="true"');
     expect(html).toContain('data-internal-link="true"');
   });
@@ -382,7 +382,7 @@ y^2
   test("marks Zotero links for the Emacs system opener UI", () => {
     const html = renderMarkdownHTML("[paper](zotero://select/items/1_ABCD)");
 
-    expect(html).toContain('class="aaronnote-zotero-link"');
+    expect(html).toContain('class="noema-zotero-link"');
     expect(html).toContain('data-zotero-link="true"');
     expect(html).toContain('href="zotero://select/items/1_ABCD"');
   });
@@ -397,13 +397,13 @@ y^2
     ].join("\n"));
 
     expect(html).toContain('<div class="cm-org-env-block org-env-block" data-kind="meta" data-label="Meta">');
-    expect(html).toContain('<div class="org-env-meta aaronnote-meta-cover">');
-    expect(html).toContain('<header class="aaronnote-meta-masthead">');
-    expect(html).toContain('<h1 class="aaronnote-meta-title">Meta Cover</h1>');
-    expect(html).toContain('<p class="aaronnote-meta-date">2026-05-21</p>');
-    expect(html).toContain('<button class="aaronnote-meta-tag">#preview</button>');
-    expect(html).toContain('<button class="aaronnote-meta-tag">#publish</button>');
-    expect(html).toContain('class="aaronnote-meta-roam-badge"');
+    expect(html).toContain('<div class="org-env-meta noema-meta-cover">');
+    expect(html).toContain('<header class="noema-meta-masthead">');
+    expect(html).toContain('<h1 class="noema-meta-title">Meta Cover</h1>');
+    expect(html).toContain('<p class="noema-meta-date">2026-05-21</p>');
+    expect(html).toContain('<button class="noema-meta-tag">#preview</button>');
+    expect(html).toContain('<button class="noema-meta-tag">#publish</button>');
+    expect(html).toContain('class="noema-meta-roam-badge"');
     expect(html).not.toContain("#internal_tag");
   });
 
@@ -423,8 +423,8 @@ y^2
     ].join("\n");
     const html = renderMarkdownHTML(`#+begin meta\n${body}\n#+end meta`);
 
-    expect(html).toContain('class="aaronnote-meta-abstract"');
-    expect(html).toContain('<span class="aaronnote-meta-abstract-title">Abstract</span>');
+    expect(html).toContain('class="noema-meta-abstract"');
+    expect(html).toContain('<span class="noema-meta-abstract-title">Abstract</span>');
     expect(html).toContain("<strong>three results</strong>");
     expect(html).toContain("<ol>");
     expect(html).not.toContain('data-kind="summary"');
@@ -446,8 +446,8 @@ y^2
       "#+end meta",
     ].join("\n"));
 
-    expect(indexed).not.toContain("aaronnote-meta-roam-badge");
-    expect(off).toContain('class="aaronnote-meta-roam-badge"');
+    expect(indexed).not.toContain("noema-meta-roam-badge");
+    expect(off).toContain('class="noema-meta-roam-badge"');
   });
 
   test("renders html org env as sanitized html content", () => {
@@ -458,7 +458,7 @@ y^2
       "#+end html",
     ].join("\n"));
 
-    expect(html).toContain('class="aaronnote-html"');
+    expect(html).toContain('class="noema-html"');
     expect(html).toContain('<section class="raw-panel"><strong>Raw HTML</strong></section>');
     expect(html).not.toContain("&lt;section");
     expect(html).not.toContain("onclick");
@@ -473,7 +473,7 @@ y^2
       "#+ end tikz",
     ].join("\n"), { noteFile: "/vault/Notes/demo.md" });
 
-    expect(html).toContain("aaronnote-tikz");
+    expect(html).toContain("noema-tikz");
     expect(html).toContain('<noema-tikz data-source="\\draw (0,0) -- (1,1);"');
     expect(html).not.toContain('src="./images/');
     expect(html).not.toContain("tikzjax");
@@ -488,7 +488,7 @@ y^2
       "#+ end tikz",
     ].join("\n"));
 
-    expect(html).toContain("aaronnote-tikz-source");
+    expect(html).toContain("noema-tikz-source");
     expect(html).toContain("\\begin{tikzpicture}");
     expect(html).toContain("\\draw (0,0) -- (1,1);");
     expect(html).not.toContain("<img");
@@ -501,10 +501,10 @@ y^2
       "#+ end tikz",
     ].join("\n"));
 
-    expect(html).toContain("aaronnote-image-align-right");
-    expect(html).toContain("aaronnote-image-wrap");
-    expect(html).toContain('data-aaronnote-image-wrap="true"');
-    expect(html).toContain("--aaronnote-image-width: 320px");
+    expect(html).toContain("noema-image-align-right");
+    expect(html).toContain("noema-image-wrap");
+    expect(html).toContain('data-noema-image-wrap="true"');
+    expect(html).toContain("--noema-image-width: 320px");
   });
 
   test("uses the last layout choice in TikZ titles with repeated attribute groups", () => {
@@ -513,8 +513,8 @@ y^2
       "\\draw (0,0) -- (1,1);",
       "#+ end tikz",
     ].join("\n"));
-    expect(html).toContain("aaronnote-image-align-left");
-    expect(html).toContain('data-aaronnote-image-wrap="true"');
+    expect(html).toContain("noema-image-align-left");
+    expect(html).toContain('data-noema-image-wrap="true"');
   });
 
   test("does not treat lean4 begin/end syntax as an org env", () => {
@@ -530,7 +530,7 @@ y^2
 
     expect(html).not.toContain('data-kind="lean4"');
     expect(html).not.toContain('class="language-lean4"');
-    expect(html).not.toContain("aaronnote-lean-code");
+    expect(html).not.toContain("noema-lean-code");
     expect(html).toContain("#+begin lean4 basic");
   });
 
@@ -543,7 +543,7 @@ Body.
     root.innerHTML = html;
     const title = root.querySelector(".org-env-heading-title");
     expect(title).toBeTruthy();
-    expect(title!.querySelector(".aaronnote-math-inline")).toBeTruthy();
+    expect(title!.querySelector(".noema-math-inline")).toBeTruthy();
     expect(title!.querySelector(".katex")).toBeTruthy();
   });
 
@@ -556,64 +556,64 @@ Body.
       "# Markdown detail",
     ].join("\n"));
 
-    expect(html).toContain('class="aaronnote-section-heading"');
+    expect(html).toContain('class="noema-section-heading"');
     expect(html).toContain('data-outline-level="1"');
     expect(html).toContain('data-outline-level="3"');
     expect(html).toContain('id="inner-products"');
-    expect(html).toContain('class="aaronnote-section-heading-inner"');
-    expect(html).toContain('<span class="aaronnote-section-title">Inner products</span>');
+    expect(html).toContain('class="noema-section-heading-inner"');
+    expect(html).toContain('<span class="noema-section-title">Inner products</span>');
     expect(html).not.toContain("@@section");
   });
 
   test("keeps resolved Noema asset image URLs", () => {
     const html = renderMarkdownHTML("![plot](./images/plot.png)", {
-      assetResolver: (src) => `aaronnote-asset://media/?file=${encodeURIComponent(src)}`,
+      assetResolver: (src) => `noema-asset://media/?file=${encodeURIComponent(src)}`,
     });
 
-    expect(html).toContain('src="aaronnote-asset://media/?file=.%2Fimages%2Fplot.png"');
+    expect(html).toContain('src="noema-asset://media/?file=.%2Fimages%2Fplot.png"');
     expect(html).toContain('alt="plot"');
-    expect(html).toContain("aaronnote-image-align-center");
-    expect(html).toContain('data-aaronnote-image-wrap="false"');
+    expect(html).toContain("noema-image-align-center");
+    expect(html).toContain('data-noema-image-wrap="false"');
   });
 
   test("native adjacent images stay side by side in reading and published HTML", () => {
     const html = renderMarkdownHTML("![A](a.png){width=60%} ![B](b.png){width=40%}");
-    expect(html).toContain("aaronnote-image-layout-row");
+    expect(html).toContain("noema-image-layout-row");
     expect((html.match(/<img\b/g) ?? [])).toHaveLength(2);
     expect(html).toContain("--cm-image-row-weight: 0.6");
     expect(html).toContain("--cm-image-row-weight: 0.4");
-    expect(renderMarkdownHTML("![A](a.png) and ![B](b.png)")).not.toContain("aaronnote-image-layout-row");
+    expect(renderMarkdownHTML("![A](a.png) and ![B](b.png)")).not.toContain("noema-image-layout-row");
   });
 
   test("keeps parent-directory image URLs for asset resolution", () => {
     const html = renderMarkdownHTML('![plot](<../images/plot.png> "Plot")', {
-      assetResolver: (src) => `aaronnote-asset://media/?file=${encodeURIComponent(src)}`,
+      assetResolver: (src) => `noema-asset://media/?file=${encodeURIComponent(src)}`,
     });
 
-    expect(html).toContain('src="aaronnote-asset://media/?file=..%2Fimages%2Fplot.png"');
+    expect(html).toContain('src="noema-asset://media/?file=..%2Fimages%2Fplot.png"');
     expect(html).toContain('alt="plot"');
   });
 
   test("applies Noema image trailing attrs", () => {
     const html = renderMarkdownHTML("![plot](./images/plot.png){size:300%; align:right; wrap:on}");
 
-    expect(html).toContain("aaronnote-image");
-    expect(html).toContain("aaronnote-image-align-right");
-    expect(html).toContain("aaronnote-image-wrap");
-    expect(html).toContain('data-aaronnote-image-align="right"');
-    expect(html).toContain('data-aaronnote-image-wrap="true"');
-    expect(html).toContain("--aaronnote-image-width: 300%");
-    expect(html).toContain("--aaronnote-image-max-width: none");
-    expect(html).toContain("--aaronnote-image-max-height: none");
+    expect(html).toContain("noema-image");
+    expect(html).toContain("noema-image-align-right");
+    expect(html).toContain("noema-image-wrap");
+    expect(html).toContain('data-noema-image-align="right"');
+    expect(html).toContain('data-noema-image-wrap="true"');
+    expect(html).toContain("--noema-image-width: 300%");
+    expect(html).toContain("--noema-image-max-width: none");
+    expect(html).toContain("--noema-image-max-height: none");
     expect(html).not.toContain("{size:300%");
   });
 
   test("accepts bare wrap layout attrs", () => {
     const imageHtml = renderMarkdownHTML("![plot](./images/plot.png){size:40% align:left wrap}");
-    expect(imageHtml).toContain("aaronnote-image-wrap");
-    expect(imageHtml).toContain("aaronnote-image-align-left");
-    expect(imageHtml).toContain('data-aaronnote-image-wrap="true"');
-    expect(imageHtml).toContain("--aaronnote-image-width: 40%");
+    expect(imageHtml).toContain("noema-image-wrap");
+    expect(imageHtml).toContain("noema-image-align-left");
+    expect(imageHtml).toContain('data-noema-image-wrap="true"');
+    expect(imageHtml).toContain("--noema-image-width: 40%");
 
     const diagramHtml = renderMarkdownHTML([
       "```marmind",
@@ -621,14 +621,14 @@ Body.
       "```",
       "{wrap}",
     ].join("\n"));
-    expect(diagramHtml).toContain("aaronnote-diagram-wrap");
+    expect(diagramHtml).toContain("noema-diagram-wrap");
   });
 
   test("renders draw.io image syntax as the host's SVG export, not an editor", () => {
     const html = renderMarkdownHTML("![diagram](./attachments/demo.drawio){size:640; align:left}");
 
-    expect(html).toContain("aaronnote-visual-attachment-drawio");
-    expect(html).toContain('data-aaronnote-visual-kind="drawio"');
+    expect(html).toContain("noema-visual-attachment-drawio");
+    expect(html).toContain('data-noema-visual-kind="drawio"');
     expect(html).toContain("cm-visual-file-card-drawio");
     expect(html).toContain("draw.io diagram: diagram");
     expect(html).not.toContain("embed.diagrams.net");
@@ -636,23 +636,23 @@ Body.
   });
 
   test("routes proxied Noema draw.io assets through the local SVG exporter", () => {
-    const mediaUrl = "aaronnote-asset://media?file=./attachments/demo.drawio&base=/notes/demo.md";
-    const proxied = `http://127.0.0.1:50815/aaronnote-asset?url=${encodeURIComponent(mediaUrl)}`;
+    const mediaUrl = "noema-asset://media?file=./attachments/demo.drawio&base=/notes/demo.md";
+    const proxied = `http://127.0.0.1:50815/noema-asset?url=${encodeURIComponent(mediaUrl)}`;
     const html = renderMarkdownHTML("![diagram](./attachments/demo.drawio)", {
       assetResolver: () => proxied,
     });
 
-    expect(html).toContain("aaronnote-visual-attachment-drawio");
+    expect(html).toContain("noema-visual-attachment-drawio");
     expect(html).toContain("cm-drawio-render");
-    expect(html).toContain('src="http://127.0.0.1:50815/aaronnote-asset?url=');
-    expect(html).toContain(encodeURIComponent("aaronnote-asset://drawio-svg/"));
+    expect(html).toContain('src="http://127.0.0.1:50815/noema-asset?url=');
+    expect(html).toContain(encodeURIComponent("noema-asset://drawio-svg/"));
     expect(html).toContain(encodeURIComponent(encodeURIComponent(mediaUrl)));
     expect(html).not.toContain("<iframe");
     expect(html).not.toContain("embed.diagrams.net");
   });
 
   test("a draw.io page marker reaches the exporter and never the asset path", () => {
-    const mediaUrl = "aaronnote-asset://media?file=./attachments/demo.drawio&base=/notes/demo.md";
+    const mediaUrl = "noema-asset://media?file=./attachments/demo.drawio&base=/notes/demo.md";
     const seen: string[] = [];
     const html = renderMarkdownHTML("![diagram](./attachments/demo.drawio#page=2)", {
       assetResolver: (src) => {
@@ -668,11 +668,11 @@ Body.
   test("renders html image syntax as an isolated visual attachment iframe", () => {
     const html = renderMarkdownHTML("![panel](./attachments/demo.html){size:640; align:left}");
 
-    expect(html).toContain("aaronnote-visual-attachment-html");
-    expect(html).toContain("aaronnote-visual-embed-html");
+    expect(html).toContain("noema-visual-attachment-html");
+    expect(html).toContain("noema-visual-embed-html");
     expect(html).toContain('src="./attachments/demo.html"');
     expect(html).toContain('sandbox="allow-scripts allow-forms allow-popups allow-downloads"');
-    expect(html).toContain('data-aaronnote-visual-kind="html"');
+    expect(html).toContain('data-noema-visual-kind="html"');
     expect(html).toContain("panel");
     expect(html).not.toContain("<img");
     expect(html).not.toContain("allow-same-origin");
@@ -681,10 +681,10 @@ Body.
   test("renders empty html links as isolated iframes", () => {
     const html = renderMarkdownHTML("[](./attachments/demo.html)");
 
-    expect(html).toContain("aaronnote-visual-attachment-html");
-    expect(html).toContain("aaronnote-visual-embed-html");
+    expect(html).toContain("noema-visual-attachment-html");
+    expect(html).toContain("noema-visual-embed-html");
     expect(html).toContain('src="./attachments/demo.html"');
-    expect(html).toContain('data-aaronnote-visual-kind="html"');
+    expect(html).toContain('data-noema-visual-kind="html"');
     expect(html).not.toContain("<img");
   });
 
@@ -697,9 +697,9 @@ Body.
     ].join("\n"));
 
     expect(html).toContain("<table");
-    expect(html).toContain("aaronnote-table-align-right");
-    expect(html).toContain("aaronnote-table-wrap");
-    expect(html).toContain("--aaronnote-table-width: 75%");
+    expect(html).toContain("noema-table-align-right");
+    expect(html).toContain("noema-table-wrap");
+    expect(html).toContain("--noema-table-width: 75%");
     expect(html).not.toContain("{size:75%");
   });
 
@@ -712,10 +712,10 @@ Body.
       "{size:180%; align:left; wrap:on}",
     ].join("\n"));
 
-    expect(html).toContain("aaronnote-diagram-code");
-    expect(html).toContain("aaronnote-diagram-align-left");
-    expect(html).toContain("aaronnote-diagram-wrap");
-    expect(html).toContain("--aaronnote-diagram-width: 180%");
+    expect(html).toContain("noema-diagram-code");
+    expect(html).toContain("noema-diagram-align-left");
+    expect(html).toContain("noema-diagram-wrap");
+    expect(html).toContain("--noema-diagram-width: 180%");
     expect(html).not.toContain("{size:180%");
   });
 
@@ -729,12 +729,12 @@ Body.
       noteThemeVersion: "test",
     });
 
-    expect(html).toContain('<main class="aaronnote-shell published-note-page" data-note-kind="default">');
-    expect(html).toContain('<section class="aaronnote-body">');
-    expect(html).toContain('<section class="aaronnote-editor" id="editor">');
-    expect(html).toContain('<span class="aaronnote-vim-mode">READ</span>');
+    expect(html).toContain('<main class="noema-shell published-note-page" data-note-kind="default">');
+    expect(html).toContain('<section class="noema-body">');
+    expect(html).toContain('<section class="noema-editor" id="editor">');
+    expect(html).toContain('<span class="noema-vim-mode">READ</span>');
     expect(html).toContain('../Noema/src/styles/typography.css?v=test');
-    expect(html).toContain('data-aaronnote-katex-css="embedded"');
+    expect(html).toContain('data-noema-katex-css="embedded"');
     expect(html).toContain('href="data:text/css;charset=utf-8,');
     expect(html).not.toContain("cdn.jsdelivr.net");
     expect(html).toContain("<p>Body</p>");
@@ -755,14 +755,14 @@ Body.
     });
 
     expect(html).toContain('src="/note-asset?src=images%2Fplot.png"');
-    expect(html).toContain('data-aaronnote-note-css href="/note-asset?src=file%3A%2F%2F%2Ftmp%2Ftheme.css"');
+    expect(html).toContain('data-noema-note-css href="/note-asset?src=file%3A%2F%2F%2Ftmp%2Ftheme.css"');
   });
 
   test("published notes append meta css after built-in and kind styles", () => {
     const markdown = [
       "#+begin meta",
       "title: Styled Note",
-      "css: /tmp/aaronnote/css/note override.css",
+      "css: /tmp/noema/css/note override.css",
       "#+end meta",
       "",
       "Body",
@@ -774,10 +774,10 @@ Body.
       kindAssetsHtml: '  <link rel="stylesheet" href="./kinds/slides/index.css" />',
     });
 
-    expect(noteCssHrefFromMarkdown(markdown)).toBe("file:///tmp/aaronnote/css/note%20override.css");
-    expect(html).toContain('data-aaronnote-note-css href="file:///tmp/aaronnote/css/note%20override.css"');
-    expect(html.indexOf("./kinds/slides/index.css")).toBeLessThan(html.indexOf("data-aaronnote-note-css"));
-    expect(html.indexOf("css/aaronnote-published.css")).toBeLessThan(html.indexOf("data-aaronnote-note-css"));
+    expect(noteCssHrefFromMarkdown(markdown)).toBe("file:///tmp/noema/css/note%20override.css");
+    expect(html).toContain('data-noema-note-css href="file:///tmp/noema/css/note%20override.css"');
+    expect(html.indexOf("./kinds/slides/index.css")).toBeLessThan(html.indexOf("data-noema-note-css"));
+    expect(html.indexOf("css/noema-published.css")).toBeLessThan(html.indexOf("data-noema-note-css"));
   });
 
   test("ignores relative meta css paths", () => {
@@ -804,7 +804,7 @@ Body.
     });
 
     expect(html).toContain(previewHtml);
-    expect(html).toContain('<h1 class="aaronnote-meta-title">Meta Title</h1>');
+    expect(html).toContain('<h1 class="noema-meta-title">Meta Title</h1>');
     expect(html).toContain('data-kind="meta"');
     expect(html).toContain("<h1>Meta Title</h1>");
     expect(html).toContain("<h2>Body Heading</h2>");
@@ -818,7 +818,7 @@ Body.
       "[^proof]: **Proof sketch** on one line.",
     ].join("\n"));
 
-    expect(html.match(/aaronnote-footnote-reference/g)).toHaveLength(2);
+    expect(html.match(/noema-footnote-reference/g)).toHaveLength(2);
     expect(html).toContain('href="#fn-proof"');
     expect(html).toContain('id="fn-proof"');
     expect(html).toContain("<strong>Proof sketch</strong>");
@@ -830,12 +830,12 @@ Body.
     const html = renderMarkdownHTML("`[^code]` and undefined [^missing].");
     expect(html).toContain("[^code]");
     expect(html).toContain("[^missing]");
-    expect(html).not.toContain("aaronnote-footnote-reference");
+    expect(html).not.toContain("noema-footnote-reference");
   });
 
   test("always exports unresolved revisions with original, advice, and reason", () => {
     const html = renderMarkdownHTML('@@revision(red) [old **claim**] {advice: "new claim"; reason: "clearer"}');
-    expect(html).toContain('class="aaronnote-revision"');
+    expect(html).toContain('class="noema-revision"');
     // `red` is the legacy spelling of the `error` review kind.
     expect(html).toContain('data-revision-style="error"');
     expect(html).toContain("<strong>claim</strong>");

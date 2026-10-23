@@ -7,8 +7,8 @@
 (require 'seq)
 (require 'subr-x)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-aaronnote" (callback))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
+(declare-function my/noema--ensure-server "init-noema" (callback))
 (declare-function noema-open-node "noema-api" (node))
 (declare-function noema-research-graph-buffer "noema-research-graph" (&optional source))
 (declare-function noema-research-graph-pop-buffer "noema-research-graph" (graph))
@@ -73,13 +73,13 @@ an error before any host request or project scan.")
       "Knowledge"))
 (defun noema-agenda--call (operation body callback)
   "Use the existing long-lived host gateway, without spawning a reader."
-  (unless (fboundp 'my/noema-api-call) (require 'init-aaronnote))
+  (unless (fboundp 'my/noema-api-call) (require 'init-noema))
   (let ((protected (delq nil (mapcar (lambda (buffer)
                                       (with-current-buffer buffer
                                         (when (buffer-modified-p) buffer-file-name))) (buffer-list)))))
     (my/noema--ensure-server
      (lambda () (my/noema-api-call
-                 (concat "aaronnote:api:agenda:" operation)
+                 (concat "noema:api:agenda:" operation)
                  (vector (cons (cons 'protectedFiles (vconcat protected)) body))
                  (lambda (result error-object)
                    (noema-agenda--reconcile-files (noema-agenda--list (noema-agenda--get result 'changedPaths)))

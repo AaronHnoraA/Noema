@@ -4,8 +4,8 @@ import {
   currentNoteFromIndex,
   openedNoteNeedsIndexReload,
   payloadUpdatesNoteIndex,
-} from "../aaronnote/note-index.ts";
-import type { NoteSummary } from "../aaronnote/types.ts";
+} from "../pages/note-index.ts";
+import type { NoteSummary } from "../pages/types.ts";
 
 function note(file: string, path: string, title: string): NoteSummary {
   return { file, path, title, id: title.toLocaleLowerCase().replaceAll(" ", "-") };

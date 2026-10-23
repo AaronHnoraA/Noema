@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 
 async function setupRoot() {
-  const root = await mkdtemp(join(tmpdir(), "aaronnote-save-"));
+  const root = await mkdtemp(join(tmpdir(), "noema-save-"));
   const notes = join(root, "roam");
   await mkdir(notes, { recursive: true });
   roots.push(root);
@@ -105,7 +105,7 @@ describe("server save API", () => {
   });
 
   test("symlinked note root still treats real-path files as roam notes", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-symlink-root-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-symlink-root-"));
     const notes = join(root, "Noema");
     const linkedNotes = join(root, ".roam");
     await mkdir(notes, { recursive: true });
@@ -283,8 +283,8 @@ describe("server save API", () => {
       path: "nested/clean-node.md",
     });
 
-    expect(await readdir(notes)).not.toContain(".aaronnote-keep");
-    expect(await readdir(join(notes, "nested"))).not.toContain(".aaronnote-keep");
+    expect(await readdir(notes)).not.toContain(".noema-keep");
+    expect(await readdir(join(notes, "nested"))).not.toContain(".noema-keep");
   });
 
   test("new notes get an editable meta summary with and without template metadata", async () => {

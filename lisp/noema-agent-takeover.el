@@ -14,7 +14,7 @@
 (require 'subr-x)
 (require 'noema-agent-acp)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
 (declare-function my/portal-create "init-portal" (&rest args))
 (defvar my/noema--ready)
 (defvar-local noema-agent-promote--session-id)
@@ -60,7 +60,7 @@ REASON is stored in the durable handback event."
 	  (when (and restart (get-buffer-process buffer))
 	    (delete-process (get-buffer-process buffer)))
           (my/noema-api-call
-           "aaronnote:api:research:session:handback"
+           "noema:api:research:session:handback"
            (vector `((root . ,root) (interventionId . ,intervention-id)
                      (expectedVersion . ,version) (endedBy . "emacs") (reason . ,reason)))
            (lambda (_result error-object)
@@ -99,7 +99,7 @@ REASON is stored in the durable handback event."
 	 (root (noema-agent-takeover--value result "root")))
     (when (and id version root)
       (my/noema-api-call
-       "aaronnote:api:research:session:handback"
+       "noema:api:research:session:handback"
        (vector `((root . ,root) (interventionId . ,id) (expectedVersion . ,version)
 		 (endedBy . "emacs") (reason . ,reason)))
        (lambda (_result error-object)
@@ -168,7 +168,7 @@ REASON is stored in the durable handback event."
                   (expand-file-name default-directory)))
         (session-id noema-agent-promote--session-id))
     (my/noema-api-call
-     "aaronnote:api:research:session:takeover"
+     "noema:api:research:session:takeover"
      (vector `((root . ,root) (sessionId . ,session-id) (startedBy . "emacs")))
      (lambda (result error-object)
        (if error-object

@@ -76,7 +76,7 @@ export function createKernelHeartbeat({
         socket = new zmq.Request({ receiveTimeout: timeoutMs, sendTimeout: timeoutMs });
         socket.connect(endpoint);
       }
-      const payload = Buffer.from(`aaronnote-hb-${Date.now()}`);
+      const payload = Buffer.from(`noema-hb-${Date.now()}`);
       await socket.send(payload);
       const [echo] = await socket.receive();
       if (!Buffer.from(echo).equals(payload)) {

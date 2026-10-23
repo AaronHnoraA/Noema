@@ -2,7 +2,7 @@ import { EditorState } from "@codemirror/state";
 import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import type { Editor } from "../src/editor-api.ts";
 import { tocIndexExtension } from "../src/cm6/toc-index.ts";
-import { createWritingStatsController } from "../aaronnote/features/writing-stats/controller.ts";
+import { createWritingStatsController } from "../pages/features/writing-stats/controller.ts";
 
 describe("writing stats feature controller", () => {
   test("keeps full-document and heading-subtree output behavior", () => {

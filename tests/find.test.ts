@@ -8,7 +8,7 @@ import {
   escapeFindQuery,
   replacementText,
   replaceAllFindMatches,
-} from "../aaronnote/find.ts";
+} from "../pages/find.ts";
 
 describe("find helpers", () => {
   test("escapes plain text queries", () => {

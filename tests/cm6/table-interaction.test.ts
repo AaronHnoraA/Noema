@@ -178,9 +178,9 @@ describe("table source edited through the main editor (keyboard entry)", () => {
     cell.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
     expect(host.querySelector(".cm-table-source-toolbar .cm-table-toolbar")).toBeTruthy();
     const row = host.querySelector<HTMLElement>(".cm-table-source-row")!;
-    expect(row.classList.contains("aaronnote-table-wrap")).toBe(true);
-    expect(row.classList.contains("aaronnote-table-align-right")).toBe(true);
-    expect(row.style.getPropertyValue("--aaronnote-table-width")).toBe("40%");
+    expect(row.classList.contains("noema-table-wrap")).toBe(true);
+    expect(row.classList.contains("noema-table-align-right")).toBe(true);
+    expect(row.style.getPropertyValue("--noema-table-width")).toBe("40%");
     expect(host.querySelector(".cm-table-source-attrs-hidden")?.textContent).toBe("");
     expect(host.querySelector('.cm-table-source-toolbar button[title="Insert row below"]')).toBeTruthy();
     expect(editor.getMarkdown()).toBe(source);
@@ -197,7 +197,7 @@ describe("table source edited through the main editor (keyboard entry)", () => {
     first.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
     expect(host.querySelectorAll(".cm-table-source-active-cell")).toHaveLength(1);
     expect(host.querySelectorAll(".cm-table-source-rendered-cell")).toHaveLength(5);
-    const formula = host.querySelector<HTMLElement>(".cm-table-source-rendered-cell .aaronnote-math-inline")!;
+    const formula = host.querySelector<HTMLElement>(".cm-table-source-rendered-cell .noema-math-inline")!;
     expect(formula).toBeTruthy();
     formula.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
     await new Promise((resolve) => window.setTimeout(resolve, 0));

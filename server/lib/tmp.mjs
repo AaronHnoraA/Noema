@@ -11,7 +11,7 @@ function canonicalPathForCreate(path) {
   return parent === absolute ? absolute : join(canonicalPathForCreate(parent), basename(absolute));
 }
 
-let tmpRoot = canonicalPathForCreate(process.env.AARONNOTE_TMP_DIR || join(tmpdir(), "aaronnote"));
+let tmpRoot = canonicalPathForCreate(process.env.NOEMA_TMP_DIR || join(tmpdir(), "noema"));
 
 function safeKind(kind) {
   return String(kind || "runtime").replace(/[^A-Za-z0-9._-]+/g, "-") || "runtime";
@@ -30,12 +30,12 @@ function safeReadablePath(filePath) {
 }
 
 export function configureTmpRoot(root) {
-  const next = String(root || process.env.AARONNOTE_TMP_DIR || "").trim();
-  tmpRoot = canonicalPathForCreate(next || join(tmpdir(), "aaronnote"));
+  const next = String(root || process.env.NOEMA_TMP_DIR || "").trim();
+  tmpRoot = canonicalPathForCreate(next || join(tmpdir(), "noema"));
   return tmpRoot;
 }
 
-export function aaronnoteTmpRoot() {
+export function noemaTmpRoot() {
   return tmpRoot;
 }
 

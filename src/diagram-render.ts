@@ -264,7 +264,7 @@ function dispatchDiagramLink(element: HTMLElement, event: MouseEvent, href: stri
   if (!safeHref(href)) return;
   event.preventDefault();
   event.stopPropagation();
-  const openEvent = new CustomEvent("aaronnote:open-url", {
+  const openEvent = new CustomEvent("noema:open-url", {
     bubbles: true,
     cancelable: true,
     detail: { href, newWindow: event.button === 1 || primaryLinkModifier(event) },
@@ -927,7 +927,7 @@ export async function renderDiagramSVG(
     mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default", legacyMathML: true, ...labelConfig });
   }
   try {
-    const result = await mermaid.render(`aaronnote-mermaid-export-${Date.now()}-${++renderSeq}`, renderSource);
+    const result = await mermaid.render(`noema-mermaid-export-${Date.now()}-${++renderSeq}`, renderSource);
     const html = preserveDiagramTextSpacing(sanitizeDiagramSvg(result.svg));
     rememberMermaid(key, { html });
     return html;
@@ -961,7 +961,7 @@ export function renderMermaidLazy(
   const renderSource = staticMindmap ? aaronMindmapThemeSource(trimmed) : trimmed;
   const key = `mermaid\n${staticMindmap ? "aaron-mindmap" : "interactive"}\n${renderSource}`;
   element.setAttribute("data-diagram-render-key", key);
-  element.classList.remove("aaronnote-diagram-error");
+  element.classList.remove("noema-diagram-error");
   element.classList.toggle("cm-aaron-mindmap", staticMindmap);
   if (!trimmed) {
     element.replaceChildren();
@@ -1008,7 +1008,7 @@ export function renderMermaidLazy(
       } else {
         mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default", legacyMathML: true });
       }
-      const id = `aaronnote-mermaid-${Date.now()}-${seq}`;
+      const id = `noema-mermaid-${Date.now()}-${seq}`;
       const result = await mermaid.render(id, renderSource);
       if (element.getAttribute("data-diagram-render-key") !== key || !element.isConnected) return;
       const html = sanitizeDiagramSvg(result.svg);

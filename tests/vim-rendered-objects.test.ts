@@ -2,7 +2,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import { createEditor } from "../src/editor-api.ts";
-import { createVimLite } from "../aaronnote/vim-lite.ts";
+import { createVimLite } from "../pages/vim-lite.ts";
 import { isVisualMode, setVisualMode } from "../src/cm6/extensions/visual/visual-mode.ts";
 import { revealFormulaSource } from "../src/cm6/extensions/visual/widgets/math.ts";
 

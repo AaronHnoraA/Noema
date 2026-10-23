@@ -1,6 +1,6 @@
 {
   "argv": [
-    "@AARONNOTE_JUPYTER_ROOT@/bin/python-jupyter-kernel",
+    "@NOEMA_JUPYTER_ROOT@/bin/python-jupyter-kernel",
     "-m",
     "ipykernel_launcher",
     "-f",
@@ -9,11 +9,11 @@
   "display_name": "Noema Python (Conda)",
   "language": "python",
   "env": {
-    "AARONNOTE_JUPYTER_STATE_ROOT": "@AARONNOTE_JUPYTER_STATE_ROOT@",
-    "JUPYTER_CONFIG_DIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/config",
-    "JUPYTER_DATA_DIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/data",
-    "JUPYTER_RUNTIME_DIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/runtime",
-    "IPYTHONDIR": "@AARONNOTE_JUPYTER_STATE_ROOT@/ipython"
+    "NOEMA_JUPYTER_STATE_ROOT": "@NOEMA_JUPYTER_STATE_ROOT@",
+    "JUPYTER_CONFIG_DIR": "@NOEMA_JUPYTER_STATE_ROOT@/config",
+    "JUPYTER_DATA_DIR": "@NOEMA_JUPYTER_STATE_ROOT@/data",
+    "JUPYTER_RUNTIME_DIR": "@NOEMA_JUPYTER_STATE_ROOT@/runtime",
+    "IPYTHONDIR": "@NOEMA_JUPYTER_STATE_ROOT@/ipython"
   },
   "metadata": {
     "debugger": true,
@@ -21,7 +21,7 @@
       "runtime": {
         "family": "python",
         "probe_argv": [
-          "@AARONNOTE_JUPYTER_ROOT@/bin/python-jupyter-kernel"
+          "@NOEMA_JUPYTER_ROOT@/bin/python-jupyter-kernel"
         ]
       }
     }

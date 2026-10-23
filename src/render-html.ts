@@ -55,7 +55,7 @@ import {
 
 declare global {
   interface Window {
-    AaronnoteResolveAssetUrl?: (src: string) => string;
+    NoemaResolveAssetUrl?: (src: string) => string;
   }
 }
 
@@ -206,11 +206,11 @@ function renderMetaCover(md: MarkdownIt, body: string): string {
   const { entries, summary } = metaDocument;
   const roamBadge = metaRoamIndexed(entries)
     ? ""
-    : '<span class="aaronnote-meta-roam-badge" title="Not in roam database" aria-label="Not in roam database">🔕</span>';
+    : '<span class="noema-meta-roam-badge" title="Not in roam database" aria-label="Not in roam database">🔕</span>';
   if (entries.length === 0 && !summary) {
     return [
       '<div class="cm-org-env-block org-env-block" data-kind="meta" data-label="Meta">',
-      '<div class="org-env-meta aaronnote-meta-cover">',
+      '<div class="org-env-meta noema-meta-cover">',
       roamBadge,
       '<span class="org-env-meta-empty">No metadata</span>',
       "</div>",
@@ -223,27 +223,27 @@ function renderMetaCover(md: MarkdownIt, body: string): string {
   const date = byKey.get("date") || "";
   const tags = metaTags(byKey.get("tags") || "")
     .filter(showMetaTag)
-    .map((tag) => `<button class="aaronnote-meta-tag">#${escapeHtml(tag)}</button>`)
+    .map((tag) => `<button class="noema-meta-tag">#${escapeHtml(tag)}</button>`)
     .join("");
   const abstract = summary
     ? [
-        '<section class="aaronnote-meta-abstract">',
-        '<div class="aaronnote-meta-abstract-heading">',
-        `<span class="aaronnote-meta-abstract-title">${md.renderInline(summary.title || "Abstract")}</span>`,
+        '<section class="noema-meta-abstract">',
+        '<div class="noema-meta-abstract-heading">',
+        `<span class="noema-meta-abstract-title">${md.renderInline(summary.title || "Abstract")}</span>`,
         "</div>",
-        `<div class="aaronnote-meta-abstract-content">${summary.body.trim() ? md.render(summary.body) : ""}</div>`,
+        `<div class="noema-meta-abstract-content">${summary.body.trim() ? md.render(summary.body) : ""}</div>`,
         "</section>",
       ].join("")
     : "";
 
   return [
     '<div class="cm-org-env-block org-env-block" data-kind="meta" data-label="Meta">',
-    `<div class="org-env-meta aaronnote-meta-cover"${summary ? ' data-has-abstract="true"' : ""}>`,
+    `<div class="org-env-meta noema-meta-cover"${summary ? ' data-has-abstract="true"' : ""}>`,
     roamBadge,
-    '<header class="aaronnote-meta-masthead">',
-    `<h1 class="aaronnote-meta-title">${md.renderInline(title)}</h1>`,
-    date ? `<p class="aaronnote-meta-date">${escapeHtml(date)}</p>` : "",
-    tags ? `<nav class="aaronnote-meta-tags" aria-label="Tags">${tags}</nav>` : "",
+    '<header class="noema-meta-masthead">',
+    `<h1 class="noema-meta-title">${md.renderInline(title)}</h1>`,
+    date ? `<p class="noema-meta-date">${escapeHtml(date)}</p>` : "",
+    tags ? `<nav class="noema-meta-tags" aria-label="Tags">${tags}</nav>` : "",
     "</header>",
     abstract,
     "</div>",
@@ -254,7 +254,7 @@ function renderMetaCover(md: MarkdownIt, body: string): string {
 function resolveAssetSrc(src: string, resolver?: (src: string) => string): string {
   const raw = String(src || "").trim();
   if (!raw) return raw;
-  return resolver?.(raw) ?? window.AaronnoteResolveAssetUrl?.(raw) ?? raw;
+  return resolver?.(raw) ?? window.NoemaResolveAssetUrl?.(raw) ?? raw;
 }
 
 function envLabel(kind: string): string {
@@ -440,10 +440,10 @@ function privateCommandLineRule(state: StateBlock, startLine: number, _endLine: 
 }
 
 function ensureFootnoteEnvironment(env: Record<string, unknown>): FootnoteEnvironment {
-  const existing = env.aaronnoteFootnotes as FootnoteEnvironment | undefined;
+  const existing = env.noemaFootnotes as FootnoteEnvironment | undefined;
   if (existing) return existing;
   const created: FootnoteEnvironment = { labels: [], numbers: Object.create(null), references: Object.create(null) };
-  env.aaronnoteFootnotes = created;
+  env.noemaFootnotes = created;
   return created;
 }
 
@@ -711,12 +711,12 @@ function renderRevisionInline(tokens: Token[], idx: number): string {
   const advice = String(meta.advice || "");
   const reason = String(meta.reason || "");
   return [
-    `<span class="aaronnote-revision" data-revision-style="${escapeAttr(kind.id)}" role="note" aria-label="${escapeAttr(kind.label)} revision">`,
-    `<span class="aaronnote-revision-original">${renderMarkdownInlineHTML(original)}</span>`,
-    '<span class="aaronnote-revision-card">',
+    `<span class="noema-revision" data-revision-style="${escapeAttr(kind.id)}" role="note" aria-label="${escapeAttr(kind.label)} revision">`,
+    `<span class="noema-revision-original">${renderMarkdownInlineHTML(original)}</span>`,
+    '<span class="noema-revision-card">',
     `<strong>${escapeAttr(kind.label)}</strong>`,
-    `<span class="aaronnote-revision-advice">${renderMarkdownInlineHTML(advice)}</span>`,
-    reason ? `<span class="aaronnote-revision-reason">${renderMarkdownInlineHTML(reason)}</span>` : "",
+    `<span class="noema-revision-advice">${renderMarkdownInlineHTML(advice)}</span>`,
+    reason ? `<span class="noema-revision-reason">${renderMarkdownInlineHTML(reason)}</span>` : "",
     "</span></span>",
   ].join("");
 }
@@ -760,18 +760,18 @@ function renderMathBlock(tokens: Token[], idx: number, _options: unknown, _env: 
   const tex = tokens[idx]!.content;
   const escaped = escapeAttr(tex);
   const rendered = renderMath(tex, true);
-  const cls = rendered.error ? "aaronnote-math-block math-block-render aaronnote-math-error" : "aaronnote-math-block math-block-render";
+  const cls = rendered.error ? "noema-math-block math-block-render noema-math-error" : "noema-math-block math-block-render";
   const html = rendered.error
     ? escapeHtml(rendered.error)
     : rendered.html || renderer.rules.text?.(tokens, idx, {}, {}, renderer) || renderer.renderToken(tokens, idx, {});
-  return `<math-block data-aaronnote-math-block="" class="math-block-rendered" data-tex="${escaped}"><div class="${cls}" data-tex="${escaped}" data-math-render-key="display\n${escaped}">${html}</div></math-block>`;
+  return `<math-block data-noema-math-block="" class="math-block-rendered" data-tex="${escaped}"><div class="${cls}" data-tex="${escaped}" data-math-render-key="display\n${escaped}">${html}</div></math-block>`;
 }
 
 function renderMathInline(tokens: Token[], idx: number, _options: unknown, _env: unknown, _renderer: MarkdownIt["renderer"]): string {
   const tex = tokens[idx]!.content;
   const escaped = escapeAttr(tex);
   const rendered = renderMath(tex, false);
-  const cls = rendered.error ? "aaronnote-math-inline aaronnote-math-error" : "aaronnote-math-inline";
+  const cls = rendered.error ? "noema-math-inline noema-math-error" : "noema-math-inline";
   const html = rendered.error ? escapeHtml(rendered.error) : rendered.html || escapeHtml(`\\(${tex}\\)`);
   return `<span class="${cls}" data-tex="${escaped}" data-math-render-key="inline\n${escaped}">${html}</span>`;
 }
@@ -814,8 +814,8 @@ function applyImageAttrs(tokens: Token[], idx: number): void {
   // on one centered/max-width contract instead of leaving published images as
   // browser-default inline replaced elements.
   token.attrJoin("class", imageLayoutClasses(layout));
-  token.attrSet("data-aaronnote-image-align", layout.align);
-  token.attrSet("data-aaronnote-image-wrap", layout.wrap ? "true" : "false");
+  token.attrSet("data-noema-image-align", layout.align);
+  token.attrSet("data-noema-image-wrap", layout.wrap ? "true" : "false");
   joinTokenStyle(token, imageLayoutStyle(layout));
 }
 
@@ -842,14 +842,14 @@ function renderDrawioImage(token: Token, src: string, resolver?: (src: string) =
   const exported = drawioImageSrc(resolved, page);
   const classes = [
     "cm-image-widget",
-    "aaronnote-visual-attachment",
-    "aaronnote-visual-attachment-drawio",
+    "noema-visual-attachment",
+    "noema-visual-attachment-drawio",
     token.attrGet("class") || "",
   ].join(" ").trim().replace(/\s+/g, " ");
   const style = token.attrGet("style");
-  const attrs = [`class="${escapeAttr(classes)}"`, 'data-aaronnote-visual-kind="drawio"'];
+  const attrs = [`class="${escapeAttr(classes)}"`, 'data-noema-visual-kind="drawio"'];
   if (style) attrs.push(`style="${escapeAttr(style)}"`);
-  for (const name of ["data-aaronnote-image-align", "data-aaronnote-image-wrap"]) {
+  for (const name of ["data-noema-image-align", "data-noema-image-wrap"]) {
     const value = token.attrGet(name);
     if (value) attrs.push(`${name}="${escapeAttr(value)}"`);
   }
@@ -857,9 +857,9 @@ function renderDrawioImage(token: Token, src: string, resolver?: (src: string) =
   // The export URL only resolves against a live host, so every rendering also
   // carries the diagram's own path: a standalone or published file has the
   // publish step inline the SVG instead, the way it already does for TikZ.
-  const pathAttrs = `data-aaronnote-drawio-src="${escapeAttr(path)}"${page > 0 ? ` data-aaronnote-drawio-page="${page}"` : ""}`;
+  const pathAttrs = `data-noema-drawio-src="${escapeAttr(path)}"${page > 0 ? ` data-noema-drawio-page="${page}"` : ""}`;
   const body = exported
-    ? `<img class="cm-image-render aaronnote-image cm-drawio-render" src="${escapeAttr(exported)}" alt="${escapeAttr(alt)}" title="${escapeAttr(drawioAttachmentTitle(alt))}" ${pathAttrs} loading="lazy" decoding="async">`
+    ? `<img class="cm-image-render noema-image cm-drawio-render" src="${escapeAttr(exported)}" alt="${escapeAttr(alt)}" title="${escapeAttr(drawioAttachmentTitle(alt))}" ${pathAttrs} loading="lazy" decoding="async">`
     : `<div class="cm-image-render cm-visual-file-card cm-visual-file-card-drawio" ${pathAttrs} title="${escapeAttr(`System Open: ${resolved}`)}">${escapeHtml(drawioAttachmentTitle(alt))}</div>`;
   const caption = alt ? `<figcaption class="cm-image-caption">${escapeHtml(alt)}</figcaption>` : "";
   return `<figure ${attrs.join(" ")}>${body}${caption}</figure>`;
@@ -869,17 +869,17 @@ function renderVisualAttachmentImage(token: Token, kind: VisualAttachmentKind, r
   const alt = token.content || token.attrGet("alt") || "";
   const classes = [
     "cm-image-widget",
-    "aaronnote-visual-attachment",
-    `aaronnote-visual-attachment-${kind}`,
+    "noema-visual-attachment",
+    `noema-visual-attachment-${kind}`,
     token.attrGet("class") || "",
   ].join(" ").trim().replace(/\s+/g, " ");
   const attrs = [
     `class="${escapeAttr(classes)}"`,
-    `data-aaronnote-visual-kind="${escapeAttr(kind)}"`,
+    `data-noema-visual-kind="${escapeAttr(kind)}"`,
   ];
   const style = token.attrGet("style");
   if (style) attrs.push(`style="${escapeAttr(style)}"`);
-  for (const name of ["data-aaronnote-image-align", "data-aaronnote-image-wrap"]) {
+  for (const name of ["data-noema-image-align", "data-noema-image-wrap"]) {
     const value = token.attrGet(name);
     if (value) attrs.push(`${name}="${escapeAttr(value)}"`);
   }
@@ -888,7 +888,7 @@ function renderVisualAttachmentImage(token: Token, kind: VisualAttachmentKind, r
     ? (() => {
       const frame = visualAttachmentFrame(kind, resolvedSrc);
       const frameAttrs = [
-        `class="cm-image-render aaronnote-visual-embed aaronnote-visual-embed-${escapeAttr(kind)}"`,
+        `class="cm-image-render noema-visual-embed noema-visual-embed-${escapeAttr(kind)}"`,
         `title="${escapeAttr(visualAttachmentTitle(kind, alt))}"`,
         'loading="lazy"',
         `allow="${escapeAttr(VISUAL_ATTACHMENT_IFRAME_ALLOW)}"`,
@@ -922,18 +922,18 @@ function protectIframeNavigationAttrsForDom(html: string): { html: string; attrs
     html: html.replace(/<iframe\b[^>]*>/g, (tag) =>
       tag.replace(/\s(srcdoc|src)="([^"]*)"/g, (_match, name: string, value: string) => {
         const index = attrs.push(`${name}="${value}"`) - 1;
-        return ` data-aaronnote-dom-${name}-index="${index}"`;
+        return ` data-noema-dom-${name}-index="${index}"`;
       })),
   };
 }
 
 function restoreIframeNavigationAttrsFromDom(html: string, attrs: readonly string[]): string {
   return html
-    .replace(/\sdata-aaronnote-dom-srcdoc-index="(\d+)"/g, (_match, rawIndex: string) => {
+    .replace(/\sdata-noema-dom-srcdoc-index="(\d+)"/g, (_match, rawIndex: string) => {
       const attr = attrs[Number(rawIndex)];
       return attr ? ` ${attr}` : "";
     })
-    .replace(/\sdata-aaronnote-dom-src-index="(\d+)"/g, (_match, rawIndex: string) => {
+    .replace(/\sdata-noema-dom-src-index="(\d+)"/g, (_match, rawIndex: string) => {
       const attr = attrs[Number(rawIndex)];
       return attr ? ` ${attr}` : "";
     });
@@ -1144,9 +1144,9 @@ function joinNewClasses(token: Token, ...names: readonly string[]): void {
 
 function applyLayoutToToken(token: Token, kind: string, layout: LayoutAttrs): void {
   token.attrJoin("class", layoutClasses(kind, layout));
-  token.attrSet("data-aaronnote-layout", kind);
-  token.attrSet("data-aaronnote-layout-align", layout.align);
-  token.attrSet("data-aaronnote-layout-wrap", layout.wrap ? "true" : "false");
+  token.attrSet("data-noema-layout", kind);
+  token.attrSet("data-noema-block-layout-align", layout.align);
+  token.attrSet("data-noema-block-layout-wrap", layout.wrap ? "true" : "false");
   joinTokenStyle(token, layoutStyle(kind, layout));
 }
 
@@ -1199,13 +1199,13 @@ function renderDiagramFence(token: Token, layout: LayoutAttrs, diagrams?: Record
   if (svg) {
     const figureCls = classList(
       "cm-mermaid-block-preview",
-      "aaronnote-diagram-figure",
+      "noema-diagram-figure",
       layoutClasses("diagram", layout),
     );
-    return `<figure class="${escapeAttr(figureCls)}"${styleAttr} data-aaronnote-diagram-lang="${escapeAttr(lang)}">${hydrateDiagramForeignObjectMarkup(sanitizeDiagramSvg(svg))}</figure>\n`;
+    return `<figure class="${escapeAttr(figureCls)}"${styleAttr} data-noema-diagram-lang="${escapeAttr(lang)}">${hydrateDiagramForeignObjectMarkup(sanitizeDiagramSvg(svg))}</figure>\n`;
   }
 
-  const cls = classList("aaronnote-diagram-code", layoutClasses("diagram", layout));
+  const cls = classList("noema-diagram-code", layoutClasses("diagram", layout));
   const codeClass = lang ? ` class="language-${escapeAttr(lang)}"` : "";
   return `<pre class="${escapeAttr(cls)}"${styleAttr}><code${codeClass}>${escapeHtml(token.content)}</code></pre>\n`;
 }
@@ -1218,7 +1218,7 @@ function renderSemanticHeading(tokens: Token[], idx: number): string {
   const meta = tokens[idx]!.meta as SemanticHeadingTokenMeta;
   const attrs = [
     `id="${escapeAttr(meta.slug)}"`,
-    'class="aaronnote-section-heading"',
+    'class="noema-section-heading"',
     `data-section-kind="${escapeAttr(meta.kind)}"`,
     `data-section-label="${escapeAttr(meta.label)}"`,
     `data-outline-level="${escapeAttr(String(meta.level))}"`,
@@ -1229,9 +1229,9 @@ function renderSemanticHeading(tokens: Token[], idx: number): string {
   }
   return [
     `<div ${attrs.join(" ")}>`,
-    '<div class="aaronnote-section-heading-inner">',
-    `<span class="aaronnote-section-label">${escapeHtml(meta.label)}</span>`,
-    `<span class="aaronnote-section-title">${escapeHtml(meta.text)}</span>`,
+    '<div class="noema-section-heading-inner">',
+    `<span class="noema-section-label">${escapeHtml(meta.label)}</span>`,
+    `<span class="noema-section-title">${escapeHtml(meta.text)}</span>`,
     "</div>",
     "</div>",
   ].join("");
@@ -1264,16 +1264,16 @@ function renderOrgEnv(
   const kind = meta.kind;
   if (kind.toLowerCase() === "meta") return renderMetaCover(md, meta.body);
   if (kind.toLowerCase() === "html") {
-    return meta.body.trim() ? `<div class="aaronnote-html">${meta.body}</div>` : "";
+    return meta.body.trim() ? `<div class="noema-html">${meta.body}</div>` : "";
   }
   if (kind.toLowerCase() === "tikz") {
     if (!meta.body.trim()) return "";
     const layout = tikzTitleLayout(meta.title);
-    const classes = classList("aaronnote-tikz", "aaronnote-visual-attachment", imageLayoutClasses(layout));
+    const classes = classList("noema-tikz", "noema-visual-attachment", imageLayoutClasses(layout));
     const style = imageLayoutStyle(layout);
     const styleAttr = style ? ` style="${escapeAttr(style)}"` : "";
     const body = renderTikzFigureBody(meta.body, tikzTitleId(meta.title));
-    return `<figure class="${escapeAttr(classes)}" data-aaronnote-image-align="${escapeAttr(layout.align)}" data-aaronnote-image-wrap="${layout.wrap ? "true" : "false"}"${styleAttr}>${body}</figure>`;
+    return `<figure class="${escapeAttr(classes)}" data-noema-image-align="${escapeAttr(layout.align)}" data-noema-image-wrap="${layout.wrap ? "true" : "false"}"${styleAttr}>${body}</figure>`;
   }
   if (kind.toLowerCase() === "layout") {
     const group = layoutGroupFromTitle(meta.title);
@@ -1336,7 +1336,7 @@ function isolateBlockLayoutAttrLines(markdown: string): string {
 // Transforms blockquotes whose first paragraph starts with [!type] into
 // `<blockquote class="callout callout-<type>" data-callout="<type>">` with a
 // `<div class="callout-title">` header. Body content is unchanged.
-function aaronnoteCalloutsRule(state: StateCore): void {
+function noemaCalloutsRule(state: StateCore): void {
   const { tokens } = state;
   for (let i = 0; i < tokens.length; i++) {
     const bqOpen = tokens[i];
@@ -1464,7 +1464,7 @@ function literalInlineRanges(source: string): Array<{ from: number; to: number }
  * makes a label like `"a*b*c"` work: by the time children exist, markdown-it has
  * split that label across `em_open`/`text`/`em_close`, and no per-child scan can
  * put it back together. Each surviving text segment is re-tokenized the way
- * aaronnoteCalloutsRule re-tokenizes a callout title.
+ * noemaCalloutsRule re-tokenizes a callout title.
  */
 function blockIdentityChildren(state: StateCore, token: Token): Token[] | null {
   const source = token.content;
@@ -1550,7 +1550,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
   md.block.ruler.before("paragraph", "toc_block", tocRule, { alt: ["paragraph"] });
   md.block.ruler.before("paragraph", "private_command_line", privateCommandLineRule, { alt: ["paragraph"] });
   md.block.ruler.before("reference", "footnote_definition", footnoteDefinitionRule, { alt: ["paragraph", "reference", "blockquote"] });
-  md.core.ruler.push("aaronnote_callouts", aaronnoteCalloutsRule);
+  md.core.ruler.push("noema_callouts", noemaCalloutsRule);
   md.core.ruler.push("noema_block_identity", blockIdentityRule);
   md.inline.ruler.before("link", "empty_html_link_embed", emptyHtmlLinkEmbedRule);
   md.inline.ruler.before("link", "spaced_fragment_link", spacedFragmentLinkRule);
@@ -1585,21 +1585,21 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
     const occurrence = (state.references[meta.label] ?? 0) + 1;
     state.references[meta.label] = occurrence;
     const id = footnoteDomId(meta.label);
-    return `<sup class="aaronnote-footnote-reference" id="fnref-${id}-${occurrence}"><a href="#fn-${id}" role="doc-noteref" aria-label="Footnote ${meta.number}">${meta.number}</a></sup>`;
+    return `<sup class="noema-footnote-reference" id="fnref-${id}-${occurrence}"><a href="#fn-${id}" role="doc-noteref" aria-label="Footnote ${meta.number}">${meta.number}</a></sup>`;
   };
   md.renderer.rules.footnote_definition = (tokens, idx, _opts, env) => {
     const token = tokens[idx]!;
     const meta = token.meta as FootnoteTokenMeta;
     const id = footnoteDomId(meta.label);
     const body = md.renderInline(token.content, env as Record<string, unknown>);
-    return `<div class="aaronnote-footnote-definition" id="fn-${id}" role="doc-footnote"><span class="aaronnote-footnote-number">${meta.number}.</span> <span class="aaronnote-footnote-body">${body}</span> <a class="aaronnote-footnote-backref" href="#fnref-${id}-1" aria-label="Back to reference">↩</a></div>\n`;
+    return `<div class="noema-footnote-definition" id="fn-${id}" role="doc-footnote"><span class="noema-footnote-number">${meta.number}.</span> <span class="noema-footnote-body">${body}</span> <a class="noema-footnote-backref" href="#fnref-${id}-1" aria-label="Back to reference">↩</a></div>\n`;
   };
   md.renderer.rules.private_command_line = (tokens, idx) => {
     const token = tokens[idx]!;
     const meta = token.meta as PrivateCommandTokenMeta | undefined;
     if (!options.renderJupyterCells || meta?.kind !== "cell") return "";
     return [
-      `<div class="aaronnote-slide-jupyter-cell cm-ceil-cell-widget" data-aaronnote-cell-command="${escapeAttr(meta.raw)}">`,
+      `<div class="noema-slide-jupyter-cell cm-ceil-cell-widget" data-noema-cell-command="${escapeAttr(meta.raw)}">`,
       '<div class="cm-ceil-output-empty">Loading Jupyter cell…</div>',
       "</div>",
     ].join("");
@@ -1620,15 +1620,15 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
     } else if (href && isRoamCoreHref(href)) {
       // wikiLinkRule already marks its own links internal, so plain attrJoin
       // emitted `noema-internal-link` twice on every [[wiki link]].
-      joinNewClasses(token, "aaronnote-roam-link", "noema-internal-link");
+      joinNewClasses(token, "noema-roam-link", "noema-internal-link");
       token.attrSet("data-roam-link", "true");
       token.attrSet("data-internal-link", "true");
       if (isStableWikiHref(href)) token.attrSet("data-roam-stable", "true");
     } else if (href && isJupyterHref(href)) {
-      token.attrJoin("class", "aaronnote-jupyter-link");
+      token.attrJoin("class", "noema-jupyter-link");
       token.attrSet("data-jupyter-link", "true");
     } else if (href && isZoteroHref(href)) {
-      token.attrJoin("class", "aaronnote-zotero-link");
+      token.attrJoin("class", "noema-zotero-link");
       token.attrSet("data-zotero-link", "true");
     }
     return originalLinkOpen(tokens, idx, opts, env, self);
@@ -1747,9 +1747,9 @@ export function renderMarkdownHTML(
     const elements = [...paragraph.childNodes].filter((node) => node.nodeType === Node.ELEMENT_NODE) as HTMLElement[];
     if (elements.length < 2 || !elements.every((element) => ["IMG", "VIDEO"].includes(element.tagName))) return;
     if ([...paragraph.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && Boolean(node.textContent?.trim()))) return;
-    paragraph.classList.add("aaronnote-image-layout-row");
+    paragraph.classList.add("noema-image-layout-row");
     elements.forEach((element) => {
-      const width = element.style.getPropertyValue("--aaronnote-image-width");
+      const width = element.style.getPropertyValue("--noema-image-width");
       const size = Number.parseFloat(width);
       if (Number.isFinite(size) && size > 0) {
         const weight = width.endsWith("%") ? size / 100 : size / 220;
@@ -1790,7 +1790,7 @@ export function renderPublishedNoteHTML(
     ? '<p class="sealed-note-message">This note has been sealed by the administrator.</p>'
     : renderMarkdownHTML(markdown, { assetResolver: options.assetResolver, noteFile: options.noteFile });
   const shellClass = classList(
-    "aaronnote-shell",
+    "noema-shell",
     "published-note-page",
     pdf && "published-note-pdf",
     hidden && "hidden-note-page",
@@ -1802,38 +1802,38 @@ export function renderPublishedNoteHTML(
     ? options.assetResolver(noteCssHref)
     : noteCssHref;
   const noteCssHtml = resolvedNoteCssHref && !standalone
-    ? `  <link rel="stylesheet" data-aaronnote-note-css href="${escapeAttr(resolvedNoteCssHref)}" />\n`
+    ? `  <link rel="stylesheet" data-noema-note-css href="${escapeAttr(resolvedNoteCssHref)}" />\n`
     : "";
-  const toolbarHtml = pdf ? "" : standalone ? `    <header class="aaronnote-toolbar aaronnote-standalone-toolbar">
-      <div class="aaronnote-title">
+  const toolbarHtml = pdf ? "" : standalone ? `    <header class="noema-toolbar noema-standalone-toolbar">
+      <div class="noema-title">
         <strong>Noema</strong>
         <span data-file-label>${escapeHtml(title)}</span>
       </div>
-      <nav class="aaronnote-actions" aria-label="Standalone note actions">
+      <nav class="noema-actions" aria-label="Standalone note actions">
         <button type="button" data-standalone-theme>Theme</button>
       </nav>
-      <span class="aaronnote-vim-mode">READ</span>
-      <span class="aaronnote-status">Self-contained HTML</span>
+      <span class="noema-vim-mode">READ</span>
+      <span class="noema-status">Self-contained HTML</span>
     </header>
-` : `    <header class="aaronnote-toolbar">
-      <div class="aaronnote-title">
+` : `    <header class="noema-toolbar">
+      <div class="noema-title">
         <strong>Noema</strong>
         <span data-file-label>${escapeHtml(group)} / ${escapeHtml(date)}</span>
       </div>
-      <nav class="aaronnote-actions" aria-label="Published note navigation">
+      <nav class="noema-actions" aria-label="Published note navigation">
         <a href="${assetRoot}index.html">Home</a>
         <a href="${assetRoot}notes.html">Archive</a>
       </nav>
-      <span class="aaronnote-vim-mode">READ</span>
-      <span class="aaronnote-status">Published HTML</span>
+      <span class="noema-vim-mode">READ</span>
+      <span class="noema-status">Published HTML</span>
     </header>
 `;
-  const tocHtml = pdf ? "" : `      <aside class="aaronnote-floating-toc is-collapsed" data-floating-toc data-published-toc>
+  const tocHtml = pdf ? "" : `      <aside class="noema-floating-toc is-collapsed" data-floating-toc data-published-toc>
         <button type="button" data-toc-toggle aria-expanded="false" title="Toggle page outline">Page</button>
         <nav data-toc-list aria-label="Page outline"></nav>
       </aside>
 `;
-  const localGraphHtml = pdf || standalone ? "" : `      <div class="aaronnote-local-graph-trigger-wrap" data-published-local-graph>
+  const localGraphHtml = pdf || standalone ? "" : `      <div class="noema-local-graph-trigger-wrap" data-published-local-graph>
         <button type="button" class="macwin-graph-trigger" data-local-graph-open aria-label="Open local graph">
           ⬡ Graph
         </button>
@@ -1843,7 +1843,7 @@ export function renderPublishedNoteHTML(
     const root = document.documentElement;
     const theme = document.querySelector('[data-standalone-theme]');
     theme?.addEventListener('click', () => {
-      const current = root.dataset.noemaTheme || root.dataset.noemaThemePrimary || 'aaronnote';
+      const current = root.dataset.noemaTheme || root.dataset.noemaThemePrimary || 'noema';
       const next = current === root.dataset.noemaThemePrimary
         ? root.dataset.noemaThemeAlternate
         : root.dataset.noemaThemePrimary;
@@ -1867,23 +1867,23 @@ export function renderPublishedNoteHTML(
     });
   })();</script>\n`;
   const scriptHtml = pdf ? "" : standalone ? standaloneScript : `  <script src="${assetRoot}js/note-page.js?v=${escapeAttr(version)}"></script>
-  <script src="${assetRoot}Noema/aaronnote/published-toc.js?v=${escapeAttr(version)}"></script>
+  <script src="${assetRoot}Noema/pages/published-toc.js?v=${escapeAttr(version)}"></script>
   <script src="${assetRoot}js/mac-window.js?v=${escapeAttr(version)}"></script>
-  <script type="module" src="${assetRoot}Noema/aaronnote/published-local-graph.js?v=${escapeAttr(version)}"></script>
+  <script type="module" src="${assetRoot}Noema/pages/published-local-graph.js?v=${escapeAttr(version)}"></script>
 `;
   const stylesheetHtml = standalone
     ? `  <style data-noema-self-contained>${standalone.styles.replace(/<\/style/giu, "<\\/style")}</style>`
-    : `  <link rel="stylesheet" href="${assetRoot}Noema/aaronnote/style.css?v=${escapeAttr(version)}" />
+    : `  <link rel="stylesheet" href="${assetRoot}Noema/pages/style.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/widgets.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/themes/theme-typora.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/typography.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/aaron-ui-tokens.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}Noema/src/styles/aaron-ui-elegant.css?v=${escapeAttr(version)}" />
-  <link rel="stylesheet" data-aaronnote-katex-css="embedded" href="${escapeAttr(katexStylesheetHref())}" />
-  <link rel="stylesheet" href="${assetRoot}css/aaronnote-published.css?v=${escapeAttr(version)}" />
+  <link rel="stylesheet" data-noema-katex-css="embedded" href="${escapeAttr(katexStylesheetHref())}" />
+  <link rel="stylesheet" href="${assetRoot}css/noema-published.css?v=${escapeAttr(version)}" />
   <link rel="stylesheet" href="${assetRoot}css/mac-window.css?v=${escapeAttr(version)}" />`;
   const themeAttributes = standalone
-    ? ` data-noema-theme="${escapeAttr(standalone.themeId || "aaronnote")}" data-noema-theme-primary="${escapeAttr(standalone.themeId || "aaronnote")}" data-noema-theme-alternate="${escapeAttr(standalone.alternateThemeId || "daylight")}"`
+    ? ` data-noema-theme="${escapeAttr(standalone.themeId || "noema")}" data-noema-theme-primary="${escapeAttr(standalone.themeId || "noema")}" data-noema-theme-alternate="${escapeAttr(standalone.alternateThemeId || "daylight")}"`
     : "";
   return `<!DOCTYPE html>
 <html lang="en"${themeAttributes}>
@@ -1893,11 +1893,11 @@ export function renderPublishedNoteHTML(
   <title>${escapeHtml(title)} | Aaron He</title>
 ${stylesheetHtml}
 ${kindAssetsHtml}${noteCssHtml}</head>
-<body class="${pdf ? "aaronnote-published-document aaronnote-pdf-document" : "aaronnote-published-document"}" data-note-kind="${escapeAttr(kind)}">
+<body class="${pdf ? "noema-published-document noema-pdf-document" : "noema-published-document"}" data-note-kind="${escapeAttr(kind)}">
   <main class="${escapeAttr(shellClass)}" data-note-kind="${escapeAttr(kind)}">
 ${toolbarHtml}
-    <section class="aaronnote-body">
-      <section class="aaronnote-editor" id="editor">
+    <section class="noema-body">
+      <section class="noema-editor" id="editor">
         <div class="typora-web-wrap">
           <div class="typora-web-editor-host">
             <article id="content" class="cm-editor" data-note-title="${escapeAttr(title)}" data-note-kind="${escapeAttr(kind)}">

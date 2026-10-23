@@ -153,7 +153,7 @@ function onMessage(event: MessageEvent): void {
       if (!href || href.length > 4096 || !safeHref(href) || !record.options.container.isConnected) return;
       const newWindow = data.newWindow === true;
       if (!newWindow) exitFullscreen(record);
-      record.options.container.dispatchEvent(new CustomEvent("aaronnote:open-url", {
+      record.options.container.dispatchEvent(new CustomEvent("noema:open-url", {
         bubbles: true, cancelable: true, detail: { href, newWindow },
       }));
       break;

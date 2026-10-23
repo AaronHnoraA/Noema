@@ -23,7 +23,7 @@ const RECORD = process.env.NOEMA_PARITY_RECORD === "1";
 
 it("reproduces Neovim for every recorded command", async () => {
   const { createEditorCM6 } = await import("../src/cm6/editor-cm6.ts");
-  const { createVimLite } = await import("../aaronnote/vim-lite.ts");
+  const { createVimLite } = await import("../pages/vim-lite.ts");
   const fixture = JSON.parse(readFileSync(FIXTURE, "utf8")) as Fixture;
   const host = document.createElement("div");
   document.body.append(host);

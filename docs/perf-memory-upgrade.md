@@ -229,7 +229,7 @@ prose-check:cancel     103 B
 窗口化代码（游标前 72% / 后 28%）一直存在，只是阈值高到实际永不触发。语言服务器
 只从游标附近取几千 token 建 prompt，多发的部分是纯浪费：前端序列化 + HTTP + 服务端
 重新解析。改为 **64 KB**（约 16k token，仍远超模型消耗），`plugins/noema-copilot/renderer.ts`
-的默认值与 `aaronnote/main.ts` 的 `getSettings` 同步。
+的默认值与 `pages/main.ts` 的 `getSettings` 同步。
 
 覆盖缺口是这个默认值从没被测过——既有的窗口化测试都显式传 `largeBufferThresholdKb`
 （1 或 512），所以默认值走的分支无人验证。新增用例故意**不传**该项，让插件默认值生效，
@@ -247,7 +247,7 @@ prose-check:cancel     103 B
 - 浏览器端滚动实测：真实滚轮 20 tick 只有 1 个 58 ms 长任务；程序化滚动 32000 px（80 帧）
   零长任务、中位帧 12 ms、p95 30 ms。12 ms 中位帧对功耗仍偏高（滚动时约占一个核心的
   70%），但没有发现病理性尖峰。**注意**：`.cm-scroller` 不是滚动容器，真正的滚动宿主是
-  `section.aaronnote-focused-editor`；在错的元素上做滚动基准会得到完全虚假的数字
+  `section.noema-focused-editor`；在错的元素上做滚动基准会得到完全虚假的数字
   （我一度测出 564 ms/帧，全是假的）。
 - Emacs xwidget 宿主下的功耗无法用 Chrome 复现（Emacs 要用自己的 redisplay 重绘 xwidget，
   每帧成本翻倍），上述浏览器数字只是下界。
@@ -278,7 +278,7 @@ signature 去重本来就把它限制在每个文档修订一次。真正省电�
 （宿主表面隐藏时），它仍然取消一切——这和 `focus-quiescence.ts` 里 `setQuiescent`
 早已被改成 no-op 的结论是同一个：quiescent 是调度状态，不是「停掉一切」。
 
-改动：`aaronnote/prose-check-lifecycle.ts`。
+改动：`pages/prose-check-lifecycle.ts`。
 
 **行为变化（如实记录）**：滚动也会 `scheduleAutomaticProseCheck(scrollMs)`，且
 `proseAutoSignature()` 含 `visibleRanges`。修复前，纯阅读式滚动产生的检查全部被挂起、
@@ -385,7 +385,7 @@ atomic write 180 µs、self-write 24 µs、scan 156 µs、signature 55 µs、ide
 结果空闲 1 秒后 widget 高度重测全停：图片解码完成、KaTeX 渲染完成、Jupyter 输出到达都不会被
 测量，CM6 高度图一直失准到用户下次敲键。在 Emacs xwidget 里表现为光标和滚动漂移。
 
-修在接线处（`aaronnote/main.ts` 的 `hiddenSurfaceOnly`），不改这两个模块自身的语义。它们空闲
+修在接线处（`pages/main.ts` 的 `hiddenSurfaceOnly`），不改这两个模块自身的语义。它们空闲
 且静止时本来就不排帧，所以这不增加任何空闲开销。
 
 **3. `updateTitle()`：每个按键 6 次 DOM 写 + 一次 IPC**
@@ -679,9 +679,9 @@ profile 之外。
 
 ```sh
 # 临时 vault + 隔离 workspace，绝不要指向真实 vault
-NOEMA_ROOT=<tmp>/vault AARONNOTE_STATE_DIR=<tmp>/state \
+NOEMA_ROOT=<tmp>/vault NOEMA_STATE_DIR=<tmp>/state \
 NOEMA_KERNEL_WORKSPACE=<tmp>/ws/kernel-workspace NOEMA_KERNEL_CONFIG_DIR=<tmp>/ws/kernel-config \
-AARONNOTE_WEB_PORT=39871 node web-host.mjs
+NOEMA_WEB_PORT=39871 node web-host.mjs
 ```
 
 然后：接一个 `/events` SSE 客户端并在 `notes-index-changed` 上重取 `notes:list`（模拟
@@ -768,7 +768,7 @@ Emacs 侧 xwidget 后的占位 buffer 维持 inert：不开插件、不接收逃
 - 安装后的 `/Applications/Noema.app` smoke：`hostMode: "desktop"`、preload true、54 px 标题栏，
   Back / Forward / Refresh / Editor actions / Window actions 全部存在。
 - Emacs `site-lisp/noema` 指向本仓库；snippets、templates、KaTeX macros 和 prose 词表全部解析到
-  `resources/`，已退役的 `lisp/roam/aaronnote` 不存在。
+  `resources/`，已退役的 `lisp/roam/noema` 不存在。
 
 ### 2026-08-29（第十轮）：Node→Go 优化补齐清单，以及 git 水位设计的去向
 

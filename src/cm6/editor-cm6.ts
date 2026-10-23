@@ -185,7 +185,7 @@ function nativeCaretPositionFromPoint(x: number, y: number): NativeCaretPosition
 }
 
 function hasWrappedLayout(view: EditorView): boolean {
-  return Boolean(view.dom.querySelector(".aaronnote-layout-wrap"));
+  return Boolean(view.dom.querySelector(".noema-block-layout-wrap"));
 }
 
 function realRectContainsY(el: Element, y: number): boolean {
@@ -368,7 +368,7 @@ function openMarkdownLinkFromEvent(view: EditorView, event: MouseEvent): boolean
 
   event.preventDefault();
   event.stopPropagation();
-  const customEvent = new CustomEvent("aaronnote:open-url", {
+  const customEvent = new CustomEvent("noema:open-url", {
     bubbles: true,
     cancelable: true,
     detail: { href, newWindow: markdownLinkOpensNewWindow(href, event), sourcePos: pos },
@@ -396,7 +396,7 @@ function previewMarkdownLinkFromEvent(view: EditorView, event: MouseEvent): bool
 
   event.preventDefault();
   event.stopPropagation();
-  view.dom.dispatchEvent(new CustomEvent("aaronnote:preview-url", {
+  view.dom.dispatchEvent(new CustomEvent("noema:preview-url", {
     bubbles: true,
     detail: { href, x: event.clientX, y: event.clientY, persistent: true },
   }));
@@ -448,7 +448,7 @@ function openAttachmentSmartFromEvent(view: EditorView, event: MouseEvent): bool
   if (!attachmentHref(widgetHref) && !/\.(png|jpe?g|gif|svg|webp|bmp|tiff?|avif|heic|pdf|mp4|mov|mp3|wav|docx?|xlsx?|pptx?|zip|tar|gz)$/i.test(widgetHref)) return false;
   event.preventDefault();
   event.stopPropagation();
-  view.dom.dispatchEvent(new CustomEvent("aaronnote:open-attachment", {
+  view.dom.dispatchEvent(new CustomEvent("noema:open-attachment", {
     bubbles: true,
     cancelable: true,
     detail: { href: widgetHref },
@@ -466,7 +466,7 @@ function openAttachmentContextMenuFromEvent(view: EditorView, event: MouseEvent)
 
   event.preventDefault();
   event.stopPropagation();
-  view.dom.dispatchEvent(new CustomEvent("aaronnote:attachment-context-menu", {
+  view.dom.dispatchEvent(new CustomEvent("noema:attachment-context-menu", {
     bubbles: true,
     detail: { href, x: event.clientX, y: event.clientY },
   }));
@@ -1292,23 +1292,23 @@ export function wrapSelectedMarkdownInput(view: EditorView, _from: number, _to: 
   return true;
 }
 
-export type AaronnoteMarkdownExtensionMode = "standalone" | "embedded";
+export type NoemaMarkdownExtensionMode = "standalone" | "embedded";
 
-export function toggleAaronnoteMarkdownSource(view: EditorView): boolean {
+export function toggleNoemaMarkdownSource(view: EditorView): boolean {
   if (!hasVisualMode(view)) return false;
   view.dispatch(setVisualMode(!isVisualMode(view)));
   return true;
 }
 
-export function isAaronnoteMarkdownSource(view: EditorView): boolean {
+export function isNoemaMarkdownSource(view: EditorView): boolean {
   return hasVisualMode(view) ? !isVisualMode(view) : false;
 }
 
-export function createAaronnoteMarkdownExtensions(
+export function createNoemaMarkdownExtensions(
   options: EditorOptions = {},
 ): Extension {
   return [
-    EditorView.editorAttributes.of({ class: "aaronnote-embedded-markdown" }),
+    EditorView.editorAttributes.of({ class: "noema-embedded-markdown" }),
     buildExtensions(
       options,
       true,
@@ -1322,7 +1322,7 @@ function buildExtensions(
   options: EditorOptions,
   initialVisualMode: boolean,
   onFoldStateChanged: () => void,
-  mode: AaronnoteMarkdownExtensionMode,
+  mode: NoemaMarkdownExtensionMode,
   notifyExternalUpdate?: (update: import("@codemirror/view").ViewUpdate) => void,
   standaloneHistory: Extension = history({ minDepth: 200, newGroupDelay: 500, joinToEvent: joinTypingEvent }),
 ): Extension[] {

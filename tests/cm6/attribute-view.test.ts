@@ -24,7 +24,7 @@ describe("portable attribute-view widget", () => {
     const { editor, cleanup } = await mount(source);
     editor.setSelection(source.length, source.length);
     let request: any = null;
-    editor.view.dom.addEventListener("aaronnote:attribute-view-request", (event) => {
+    editor.view.dom.addEventListener("noema:attribute-view-request", (event) => {
       event.preventDefault();
       request = (event as CustomEvent).detail;
       request.respond({
@@ -69,7 +69,7 @@ describe("portable attribute-view widget", () => {
   test("double-clicking an editable cell emits a stable row patch request", async () => {
     const { editor, cleanup } = await mount(source);
     editor.setSelection(source.length, source.length);
-    editor.view.dom.addEventListener("aaronnote:attribute-view-request", (event) => {
+    editor.view.dom.addEventListener("noema:attribute-view-request", (event) => {
       event.preventDefault();
       (event as CustomEvent).detail.respond({
         title: "Open work", source: "todo",
@@ -81,13 +81,13 @@ describe("portable attribute-view widget", () => {
     editor.view.dom.querySelector<HTMLButtonElement>(".cm-attribute-view-action")?.click();
     await Promise.resolve();
     let patch: any = null;
-    editor.view.dom.addEventListener("aaronnote:attribute-view-cell-patch", (event) => {
+    editor.view.dom.addEventListener("noema:attribute-view-cell-patch", (event) => {
       event.preventDefault();
       patch = (event as CustomEvent).detail;
       patch.respond(false, "fixture stops before mutation");
     });
     let opened: any = null;
-    editor.view.dom.addEventListener("aaronnote:attribute-view-open-row", (event) => {
+    editor.view.dom.addEventListener("noema:attribute-view-open-row", (event) => {
       event.preventDefault();
       opened = (event as CustomEvent).detail;
     });
@@ -107,7 +107,7 @@ describe("portable attribute-view widget", () => {
   test("edits arbitrary property columns but keeps block identity fields read-only", async () => {
     const { editor, cleanup } = await mount(source);
     editor.setSelection(source.length, source.length);
-    editor.view.dom.addEventListener("aaronnote:attribute-view-request", (event) => {
+    editor.view.dom.addEventListener("noema:attribute-view-request", (event) => {
       event.preventDefault();
       (event as CustomEvent).detail.respond({
         title: "Claims", source: "block",
@@ -123,7 +123,7 @@ describe("portable attribute-view widget", () => {
     await Promise.resolve();
     expect(editor.view.dom.querySelector('td[data-column="id"]')?.classList.contains("cm-attribute-view-cell-editable")).toBe(false);
     let patch: any = null;
-    editor.view.dom.addEventListener("aaronnote:attribute-view-cell-patch", (event) => {
+    editor.view.dom.addEventListener("noema:attribute-view-cell-patch", (event) => {
       event.preventDefault();
       patch = (event as CustomEvent).detail;
       patch.respond(false, "fixture stops before mutation");
@@ -143,7 +143,7 @@ describe("portable attribute-view widget", () => {
   test("renders gallery cards with the same stable open and property-patch events", async () => {
     const { editor, cleanup } = await mount(source);
     editor.setSelection(source.length, source.length);
-    editor.view.dom.addEventListener("aaronnote:attribute-view-request", (event) => {
+    editor.view.dom.addEventListener("noema:attribute-view-request", (event) => {
       event.preventDefault();
       (event as CustomEvent).detail.respond({
         title: "Claims", source: "block", view: "gallery",
@@ -161,7 +161,7 @@ describe("portable attribute-view widget", () => {
     expect(editor.view.dom.querySelector(".cm-attribute-view-table")).toBeNull();
     expect(editor.view.dom.querySelector(".cm-attribute-view-card-title")?.textContent).toBe("Portable claim");
     let opened: any = null;
-    editor.view.dom.addEventListener("aaronnote:attribute-view-open-row", (event) => {
+    editor.view.dom.addEventListener("noema:attribute-view-open-row", (event) => {
       event.preventDefault();
       opened = (event as CustomEvent).detail;
     });
@@ -169,7 +169,7 @@ describe("portable attribute-view widget", () => {
       ?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     expect(opened).toMatchObject({ row: { id: "#0198fc34-7b32-7a11-8cb4-6c40e3b33d68", file: "/paper.md", line: 3 } });
     let patch: any = null;
-    editor.view.dom.addEventListener("aaronnote:attribute-view-cell-patch", (event) => {
+    editor.view.dom.addEventListener("noema:attribute-view-cell-patch", (event) => {
       event.preventDefault();
       patch = (event as CustomEvent).detail;
       patch.respond(false, "fixture stops before mutation");
@@ -186,7 +186,7 @@ describe("portable attribute-view widget", () => {
   test("renders kanban lanes and keeps visible grouping cells editable", async () => {
     const { editor, cleanup } = await mount(source);
     editor.setSelection(source.length, source.length);
-    editor.view.dom.addEventListener("aaronnote:attribute-view-request", (event) => {
+    editor.view.dom.addEventListener("noema:attribute-view-request", (event) => {
       event.preventDefault();
       (event as CustomEvent).detail.respond({
         title: "Work board", source: "todo", view: "kanban", groupBy: "status",
@@ -205,7 +205,7 @@ describe("portable attribute-view widget", () => {
     expect(Array.from(editor.view.dom.querySelectorAll(".cm-attribute-view-kanban-lane")).map((lane) => lane.getAttribute("data-group"))).toEqual(["doing", "todo"]);
     expect(Array.from(editor.view.dom.querySelectorAll(".cm-attribute-view-kanban-header strong")).map((node) => node.textContent)).toEqual(["doing", "todo"]);
     let patch: any = null;
-    editor.view.dom.addEventListener("aaronnote:attribute-view-cell-patch", (event) => {
+    editor.view.dom.addEventListener("noema:attribute-view-cell-patch", (event) => {
       event.preventDefault();
       patch = (event as CustomEvent).detail;
       patch.respond(false, "fixture stops before mutation");

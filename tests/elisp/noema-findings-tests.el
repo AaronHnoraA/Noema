@@ -15,7 +15,7 @@
     (let (body callback)
       (cl-letf (((symbol-function 'my/noema-api-call)
                  (lambda (channel args done &optional _timeout)
-                   (should (equal channel "aaronnote:api:research:finding:list"))
+                   (should (equal channel "noema:api:research:finding:list"))
                    (setq body (aref args 0) callback done))))
         (noema-findings-refresh)
         (should (equal (alist-get 'cwd body) "/tmp/noema-findings-test/"))
@@ -58,7 +58,7 @@
     (cl-letf (((symbol-function 'noema-current-project) (lambda (&optional _) "/tmp/project/"))
               ((symbol-function 'my/noema-api-call)
                (lambda (channel args callback &optional _timeout)
-                 (should (equal channel "aaronnote:api:research:memory:propose-from-run"))
+                 (should (equal channel "noema:api:research:memory:propose-from-run"))
                  (setq request (aref args 0))
                  (let ((proposal (make-hash-table :test 'equal))
                        (response (make-hash-table :test 'equal)))
@@ -86,7 +86,7 @@
       (cl-letf (((symbol-function 'my/noema-api-call)
                  (lambda (channel args done &optional _timeout)
                    (push channel channels)
-                   (when (equal channel "aaronnote:api:research:finding:retire")
+                   (when (equal channel "noema:api:research:finding:retire")
                      (setq body (aref args 0))
                      (funcall done '((finding . ((id . "finding_1")))) nil))))
                 ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
@@ -97,7 +97,7 @@
         (should (equal (alist-get 'reason body) "mislabelled benchmark"))
         (should (equal (alist-get 'expectedVersion body) 3))
         ;; The list reloads after the kernel confirms.
-        (should (equal (car channels) "aaronnote:api:research:finding:list"))))))
+        (should (equal (car channels) "noema:api:research:finding:list"))))))
 
 (provide 'noema-findings-tests)
 ;;; noema-findings-tests.el ends here

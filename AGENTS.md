@@ -289,18 +289,22 @@ that disabled `noema` meant all of it.
 
 ## Host and compatibility
 
-`init-aaronnote.el` owns the CM6 xwidget/Appine lifecycle, header line, buffer
+`init-noema.el` owns the CM6 xwidget/Appine lifecycle, header line, buffer
 integration, gateway, and every `my/noema-*` entry point. Graph Board, JuText,
 Inspector, approvals and project navigation are composed by Emacs. CM6
 Markdown, private Wiki/Graph, Agenda/Config and Jupyter output retain their
 Web implementations as Emacs-hosted surfaces; do not delete or downgrade them,
 and do not add a parallel browser or desktop workflow product.
 
-Existing lowercase `aaronnote` paths, `AARONNOTE_*` environment variables and
-API channels remain protocol compatibility contracts until separately
-migrated. They do not imply a second product host. The Emacs Lisp public
-implementation uses `my/noema-*`; the searchable `noema-*` menus own their
-Transient layouts directly. Do not add new `my/aaronnote-*` aliases.
+The product was called Aaronnote before it was Noema. Every path, channel
+(`noema:api:*`), environment variable (`NOEMA_*`), CSS class and Elisp name
+now uses `noema`; the Emacs-hosted page sources live in `pages/` and build to
+`dist/pages`. The old name survives only where existing data must still be
+read: `@aaronnote` code markers beside `@noema`/`@note-code`, the `aaronnote`
+theme id in a saved config (`canonicalNoemaAppThemeId`), and the Emacs side's
+one-time move of `var/aaronnote/` into `var/noema/`. Do not add new
+`aaronnote` names. The Emacs Lisp public implementation uses `my/noema-*`; the
+searchable `noema-*` menus own their Transient layouts directly.
 
 Chrome plus the Noema extension is an explicit external capture boundary, not
 a Noema UI. Public server pages are read-only publication surfaces, not an
@@ -365,7 +369,7 @@ make install
 ```
 
 Also run `go test -tags fts5 ./...` from `kernel/` and AaronEmacs's
-`make research-test` and `make jupyter-test`. Verify `AARONNOTE_HOST_MODE=desktop` cannot select a desktop runtime, no
+`make research-test` and `make jupyter-test`. Verify `NOEMA_HOST_MODE=desktop` cannot select a desktop runtime, no
 Electron package/build/install entry remains, the headless host defaults to
 Emacs mode, and `.noema` kernel operations fail before a process is created.
 A usable demo must open through Emacs, stream an Agent Run into the right-side

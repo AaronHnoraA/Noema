@@ -57,7 +57,7 @@ describe("LiveTeX Cmd-bracket boundaries", () => {
       };
       field.position = field.lastOffset - 2;
       const press = (): void => {
-        document.dispatchEvent(new CustomEvent("aaronnote:math-host-key", {
+        document.dispatchEvent(new CustomEvent("noema:math-host-key", {
           cancelable: true,
           detail: { key: "]", code: "BracketRight", metaKey: true },
         }));
@@ -94,7 +94,7 @@ describe("LiveTeX Cmd-bracket boundaries", () => {
         }) | null;
         expect(field).not.toBeNull();
         field!.position = field!.lastOffset;
-        const forward = new CustomEvent("aaronnote:math-host-key", {
+        const forward = new CustomEvent("noema:math-host-key", {
           cancelable: true,
           detail: { key: "]", code: "BracketRight", metaKey: true },
         });
@@ -103,7 +103,7 @@ describe("LiveTeX Cmd-bracket boundaries", () => {
         expect(commits).toEqual(["forward"]);
 
         field!.position = 0;
-        const backward = new CustomEvent("aaronnote:math-host-key", {
+        const backward = new CustomEvent("noema:math-host-key", {
           cancelable: true,
           detail: { key: "[", code: "BracketLeft", metaKey: true },
         });

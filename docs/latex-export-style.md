@@ -20,7 +20,7 @@ than failing.
    undefined environments, stray Markdown that leaked through), but only by
    correcting markup — not by deleting content.
 3. **Do not touch the preamble or macros.** Title, date, author fields, the
-   shared `aaronnote-macros.sty`, and `\documentclass` are filled by
+   shared `noema-macros.sty`, and `\documentclass` are filled by
    the host. Do not redefine macros or add packages inside the body. Emit body
    content only (what goes between `\begin{document}` … `\end{document}`).
 4. **Preserve math verbatim.** Keep inline math `\(...\)` and display math
@@ -212,13 +212,13 @@ files are committed only after two compiler passes and log linting succeed. See
 maintenance workflow.
 
 Templates may declare reusable support files through `sharedFiles` in their
-`aaronnote-template` header. The host compares file contents and atomically
+`noema-template` header. The host compares file contents and atomically
 copies a dependency beside the exported `.tex` only when it is missing or
 outdated. Large classes and shared macro libraries belong there rather than in
 `filecontents`; bibliography output deliberately remains in the document body
 so citation data cannot drift from the exported note.
 
-The embedded `% aaronnote-template: {...}` header supports `documentRole`,
+The embedded `% noema-template: {...}` header supports `documentRole`,
 `sharedFiles`, and typed `vars` with `input`, `options`, `required`,
 `placeholder`, `description`, `group`, and `escape`. Invalid engines, duplicate
 or reserved variables, unsafe shared paths, missing required values, and unknown

@@ -141,7 +141,7 @@ export function requestVisualTexSnippetBoundaryHandoff(
   backward: boolean,
 ): boolean {
   const event = new CustomEvent<{ direction: "forward" | "backward" }>(
-    "aaronnote:math-snippet-boundary",
+    "noema:math-snippet-boundary",
     {
       bubbles: true,
       cancelable: true,
@@ -2364,7 +2364,7 @@ function requestCompletion(
 ): void {
   const prefix = completionPrefix(field);
   const rect = visualTexCompletionRect(field);
-  host.dispatchEvent(new CustomEvent<VisualTexMathCompletionRequest>("aaronnote:math-completion-request", {
+  host.dispatchEvent(new CustomEvent<VisualTexMathCompletionRequest>("noema:math-completion-request", {
     bubbles: true,
     detail: {
       prefix,
@@ -2402,11 +2402,11 @@ function refreshCompletion(
 }
 
 function closeCompletion(host: HTMLElement): void {
-  host.dispatchEvent(new CustomEvent("aaronnote:math-completion-close", { bubbles: true }));
+  host.dispatchEvent(new CustomEvent("noema:math-completion-close", { bubbles: true }));
 }
 
 function completionConsumesKey(host: HTMLElement, key: VisualTexMathHostKey): boolean {
-  const event = new CustomEvent<VisualTexMathHostKey>("aaronnote:math-completion-key", {
+  const event = new CustomEvent<VisualTexMathHostKey>("noema:math-completion-key", {
     bubbles: true,
     cancelable: true,
     detail: key,
@@ -2616,7 +2616,7 @@ export function visualTexExplicitCommitDirection(
 function requestVisualTexSave(): void {
   // Committing removes in-place widget hosts synchronously. Dispatch from the
   // stable document on the next microtask, after the source transaction lands.
-  queueMicrotask(() => document.dispatchEvent(new CustomEvent("aaronnote:visualtex-save-request")));
+  queueMicrotask(() => document.dispatchEvent(new CustomEvent("noema:visualtex-save-request")));
 }
 
 export function visualTexMathfieldMovementCommand(
@@ -2995,8 +2995,8 @@ function addHostKeyBridge(
     custom.preventDefault();
     custom.stopPropagation();
   };
-  document.addEventListener("aaronnote:math-host-key", listener);
-  return () => document.removeEventListener("aaronnote:math-host-key", listener);
+  document.addEventListener("noema:math-host-key", listener);
+  return () => document.removeEventListener("noema:math-host-key", listener);
 }
 
 export function insertVisualTexInlineRow(field: MathfieldElement): string {
@@ -3692,7 +3692,7 @@ export function mountVisualTexInlineEditor(
       // MathLive already encodes TeX ascent/depth with struts. Its own border
       // box is the only reliable geometry; interpreting nested vlist offsets
       // as host padding double-counts them and creates enormous blank space.
-      host.dispatchEvent(new CustomEvent("aaronnote:inline-math-resize", {
+      host.dispatchEvent(new CustomEvent("noema:inline-math-resize", {
         detail: { width: rect.width, height: rect.height },
       }));
     });

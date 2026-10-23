@@ -98,7 +98,7 @@ export async function sweepOrphanKernels({ sidecarPath, stderr = process.stderr,
 }
 
 /**
- * Reap aaronnote kernel processes whose spawning server process is gone
+ * Reap noema kernel processes whose spawning server process is gone
  * entirely (e.g. an ephemeral diagnostics/test harness that mkdtemp'd its
  * own one-off `runtimeDir` and exited without calling `shutdown()`).
  *
@@ -109,7 +109,7 @@ export async function sweepOrphanKernels({ sidecarPath, stderr = process.stderr,
  * group) but keep the spawning node process as their ppid while it's
  * alive — once that parent exits, they're reparented to init (ppid 1).
  * Since only this module ever launches a process matching
- * `ipykernel_launcher ... aaronnote-kernel-*.json`, any such process with
+ * `ipykernel_launcher ... noema-kernel-*.json`, any such process with
  * ppid 1 is unowned by construction and safe to kill regardless of which
  * runtimeDir spawned it.
  */
@@ -128,7 +128,7 @@ export async function sweepGlobalOrphanKernels({ stderr = process.stderr, platfo
     const [, pidStr, ppidStr, args] = match;
     if (ppidStr !== "1") continue;
     if (!args.includes("ipykernel_launcher")) continue;
-    if (!/aaronnote-kernel-[0-9a-f-]+\.json/.test(args)) continue;
+    if (!/noema-kernel-[0-9a-f-]+\.json/.test(args)) continue;
     const pid = Number(pidStr);
     log.warn(`reaping orphaned kernel process ${pid} (parent server process is gone)`);
     try {
@@ -186,7 +186,7 @@ export function createKernelRegistry({
   const log = makeLogger(stderr);
   /** @type {Map<string, object>} key -> record */
   const records = new Map();
-  const sidecarPath = path.join(runtimeDir, "aaronnote-owned.json");
+  const sidecarPath = path.join(runtimeDir, "noema-owned.json");
   let sidecarChain = Promise.resolve();
 
   function newId() {
@@ -453,7 +453,7 @@ export function createKernelRegistry({
       ports = await allocateKernelPorts(5);
       try {
         connectionInfo = makeConnectionInfo(ports, kernelSpecEntry.name);
-        connectionFilePath = path.join(runtimeDir, `aaronnote-kernel-${crypto.randomUUID()}.json`);
+        connectionFilePath = path.join(runtimeDir, `noema-kernel-${crypto.randomUUID()}.json`);
         await writeConnectionFile(connectionFilePath, connectionInfo);
 
         const env = buildKernelEnv({

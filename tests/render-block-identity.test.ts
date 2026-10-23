@@ -100,7 +100,7 @@ describe("wiki links carry each class once", () => {
     const names = classes.split(/\s+/u).filter(Boolean);
     expect(new Set(names).size).toBe(names.length);
     expect(names).toContain("noema-internal-link");
-    expect(names).toContain("aaronnote-roam-link");
+    expect(names).toContain("noema-roam-link");
   });
 });
 
@@ -140,7 +140,7 @@ describe("labels survive markdown-special characters", () => {
 
   test("inline math next to an anchor stays math", () => {
     const html = renderMarkdownHTML(String.raw`\(x^2\) {#${ID}}`);
-    expect(html).toContain("aaronnote-math-inline");
+    expect(html).toContain("noema-math-inline");
     expect(html).toContain("cm-noema-block-id");
   });
 });

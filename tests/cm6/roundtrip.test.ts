@@ -24,9 +24,9 @@ import {
 } from "../../src/cm6/editor-cm6.ts";
 import { setKnownRoamRefs } from "../../src/cm6/roam-link-status.ts";
 import { MATH_RENDER_ERROR_MAX_LENGTH, renderMathHTML } from "../../src/math-render.ts";
-import { createVimLite } from "../../aaronnote/vim-lite.ts";
+import { createVimLite } from "../../pages/vim-lite.ts";
 import { fixedWidthRowLayout, setVimRowLayoutForTesting } from "../../src/cm6/screen-rows.ts";
-import { SnippetSession } from "../../aaronnote/snippets.ts";
+import { SnippetSession } from "../../pages/snippets.ts";
 import { indentMarkdownBlock } from "../../src/cm6/commands/index.ts";
 import { runEditorEnter, runEditorMovement } from "../../src/cm6/input-commands.ts";
 import {
@@ -84,7 +84,7 @@ function mountCM6(initialContent = "", options: Parameters<typeof createEditor>[
 }
 
 function iframeSrc(iframe: HTMLIFrameElement): string {
-  return iframe.getAttribute("src") || iframe.getAttribute("data-aaronnote-src") || "";
+  return iframe.getAttribute("src") || iframe.getAttribute("data-noema-src") || "";
 }
 
 function nextTick(): Promise<void> {
@@ -195,10 +195,10 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
     const md = "@@part [Foundations]\n\nBody text";
     const { editor, cleanup } = mountCM6(md);
     editor.setMarkdownSelection(md.length);
-    const heading = document.querySelector<HTMLElement>(".aaronnote-section-heading");
+    const heading = document.querySelector<HTMLElement>(".noema-section-heading");
     expect(heading).toBeTruthy();
-    expect(heading!.classList.contains("cm-aaronnote-measured-widget")).toBe(true);
-    expect(heading!.firstElementChild?.classList.contains("aaronnote-section-heading-inner")).toBe(true);
+    expect(heading!.classList.contains("cm-noema-measured-widget")).toBe(true);
+    expect(heading!.firstElementChild?.classList.contains("noema-section-heading-inner")).toBe(true);
     expect(heading!.dataset.cmMeasureKey).toContain("sem:");
     expect(heading!.dataset.cmMeasureGroupKey).toContain("sem:level:1");
     cleanup();
@@ -421,7 +421,7 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
       posAtCoords: (coords: { x: number; y: number }) => number | null;
     };
     const originalDescriptor = Object.getOwnPropertyDescriptor(view, "posAtCoords");
-    document.addEventListener("aaronnote:open-url", listener);
+    document.addEventListener("noema:open-url", listener);
     Object.defineProperty(view, "posAtCoords", {
       configurable: true,
       value: () => md.indexOf("Note Title"),
@@ -441,7 +441,7 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
     // The stable `[[roam://<id>|Label]]` form is already canonical; it must
     // reach the opener untouched rather than re-wrapped as a wiki title.
     expect(events[0]?.detail).toEqual({ href: "roam://page-id", newWindow: false, sourcePos: md.indexOf("Note Title") });
-    document.removeEventListener("aaronnote:open-url", listener);
+    document.removeEventListener("noema:open-url", listener);
     if (originalDescriptor) Object.defineProperty(view, "posAtCoords", originalDescriptor);
     else delete (view as { posAtCoords?: unknown }).posAtCoords;
     cleanup();
@@ -1024,7 +1024,7 @@ y^2
     const firstCloseLine = md.indexOf("   \\]");
     expect(Number(mathBlocks[0]!.dataset.cmSourceFrom)).toBe(firstOpenLine);
     expect(Number(mathBlocks[0]!.dataset.cmSourceTo)).toBe(firstCloseLine + "   \\]".length);
-    expect(document.querySelector("link[data-aaronnote-katex-css]")).toBeTruthy();
+    expect(document.querySelector("link[data-noema-katex-css]")).toBeTruthy();
     cleanup();
   });
 
@@ -1164,7 +1164,7 @@ y^2
     };
     const originalDescriptor = Object.getOwnPropertyDescriptor(view, "posAtCoords");
 
-    document.addEventListener("aaronnote:open-url", listener);
+    document.addEventListener("noema:open-url", listener);
     Object.defineProperty(view, "posAtCoords", {
       configurable: true,
       value: () => md.indexOf("there"),
@@ -1183,7 +1183,7 @@ y^2
     expect(event.defaultPrevented).toBe(true);
     expect(events[0]?.detail).toEqual({ href: "target.md#eq-x", newWindow: false, sourcePos: md.indexOf("there") });
 
-    document.removeEventListener("aaronnote:open-url", listener);
+    document.removeEventListener("noema:open-url", listener);
     if (originalDescriptor) Object.defineProperty(view, "posAtCoords", originalDescriptor);
     else delete (view as { posAtCoords?: unknown }).posAtCoords;
     cleanup();
@@ -1201,9 +1201,9 @@ y^2
     const { host, cleanup } = mountCM6(md);
     const events: CustomEvent[] = [];
     const listener = (event: Event) => events.push(event as CustomEvent);
-    document.addEventListener("aaronnote:open-url", listener);
+    document.addEventListener("noema:open-url", listener);
 
-    const anchor = host.querySelector<HTMLAnchorElement>(".aaronnote-meta-abstract a[href]")!;
+    const anchor = host.querySelector<HTMLAnchorElement>(".noema-meta-abstract a[href]")!;
     const plainClick = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
     anchor.dispatchEvent(plainClick);
     expect(plainClick.defaultPrevented).toBe(true);
@@ -1219,7 +1219,7 @@ y^2
     expect(open.defaultPrevented).toBe(true);
     expect(events[0]?.detail).toEqual({ href: "target.md#result", newWindow: false });
 
-    document.removeEventListener("aaronnote:open-url", listener);
+    document.removeEventListener("noema:open-url", listener);
     cleanup();
   });
 
@@ -1234,7 +1234,7 @@ y^2
     };
     const originalDescriptor = Object.getOwnPropertyDescriptor(view, "posAtCoords");
 
-    document.addEventListener("aaronnote:open-url", listener);
+    document.addEventListener("noema:open-url", listener);
     Object.defineProperty(view, "posAtCoords", {
       configurable: true,
       value: () => md.indexOf("nb"),
@@ -1252,7 +1252,7 @@ y^2
     expect(event.defaultPrevented).toBe(false);
     expect(events).toEqual([]);
 
-    document.removeEventListener("aaronnote:open-url", listener);
+    document.removeEventListener("noema:open-url", listener);
     if (originalDescriptor) Object.defineProperty(view, "posAtCoords", originalDescriptor);
     else delete (view as { posAtCoords?: unknown }).posAtCoords;
     cleanup();
@@ -1269,7 +1269,7 @@ y^2
     };
     const originalDescriptor = Object.getOwnPropertyDescriptor(view, "posAtCoords");
 
-    document.addEventListener("aaronnote:open-url", listener);
+    document.addEventListener("noema:open-url", listener);
     Object.defineProperty(view, "posAtCoords", {
       configurable: true,
       value: () => md.indexOf("there"),
@@ -1287,7 +1287,7 @@ y^2
     expect(event.defaultPrevented).toBe(true);
     expect(events[0]?.detail).toEqual({ href: "target.md@heading", newWindow: true, sourcePos: md.indexOf("there") });
 
-    document.removeEventListener("aaronnote:open-url", listener);
+    document.removeEventListener("noema:open-url", listener);
     if (originalDescriptor) Object.defineProperty(view, "posAtCoords", originalDescriptor);
     else delete (view as { posAtCoords?: unknown }).posAtCoords;
     cleanup();
@@ -1303,7 +1303,7 @@ y^2
       posAtCoords: (coords: { x: number; y: number }) => number | null;
     };
     const originalDescriptor = Object.getOwnPropertyDescriptor(view, "posAtCoords");
-    document.addEventListener("aaronnote:open-url", listener);
+    document.addEventListener("noema:open-url", listener);
     Object.defineProperty(view, "posAtCoords", {
       configurable: true,
       value: () => md.indexOf("there"),
@@ -1315,7 +1315,7 @@ y^2
     view.contentDOM.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
     expect(events[0]?.detail).toEqual({ href: "target.md", newWindow: true, sourcePos: md.indexOf("there") });
-    document.removeEventListener("aaronnote:open-url", listener);
+    document.removeEventListener("noema:open-url", listener);
     if (originalDescriptor) Object.defineProperty(view, "posAtCoords", originalDescriptor);
     else delete (view as { posAtCoords?: unknown }).posAtCoords;
     cleanup();
@@ -1332,7 +1332,7 @@ y^2
     };
     const originalDescriptor = Object.getOwnPropertyDescriptor(view, "posAtCoords");
 
-    document.addEventListener("aaronnote:attachment-context-menu", listener);
+    document.addEventListener("noema:attachment-context-menu", listener);
     Object.defineProperty(view, "posAtCoords", {
       configurable: true,
       value: () => md.indexOf("IMG_6118.jpeg"),
@@ -1350,7 +1350,7 @@ y^2
     expect(event.defaultPrevented).toBe(true);
     expect(events[0]?.detail).toEqual({ href: "./images/GraphTensor/IMG_6118.jpeg", x: 1, y: 1 });
 
-    document.removeEventListener("aaronnote:attachment-context-menu", listener);
+    document.removeEventListener("noema:attachment-context-menu", listener);
     if (originalDescriptor) Object.defineProperty(view, "posAtCoords", originalDescriptor);
     else delete (view as { posAtCoords?: unknown }).posAtCoords;
     cleanup();
@@ -1382,14 +1382,14 @@ y^2
   });
 
   test("jupyter cell Run sends the complete context and displays host errors", async () => {
-    const originalApi = window.aaronnoteApi;
-    const originalCurrentFile = window.AaronnoteCurrentFile;
+    const originalApi = window.noemaApi;
+    const originalCurrentFile = window.NoemaCurrentFile;
     const file = "/tmp/noema-jupyter-run-error.md";
     const executeScriptCell = vi.fn(async () => {
       throw new Error("Unknown Jupyter kernel: python3");
     });
-    window.AaronnoteCurrentFile = () => file;
-    window.aaronnoteApi = {
+    window.NoemaCurrentFile = () => file;
+    window.noemaApi = {
       jupyterCell: {
         readScriptCell: async () => ({ ok: true, code: 'print("sada")', exists: true }),
         executeScriptCell,
@@ -1420,8 +1420,8 @@ y^2
       expect(document.querySelector(".cm-ceil-output-empty")?.textContent).toBe("Unknown Jupyter kernel: python3");
     } finally {
       cleanup();
-      window.aaronnoteApi = originalApi;
-      window.AaronnoteCurrentFile = originalCurrentFile;
+      window.noemaApi = originalApi;
+      window.NoemaCurrentFile = originalCurrentFile;
     }
   });
 
@@ -1455,8 +1455,8 @@ y^2
   });
 
   test("tikz env stays previewed as a browser rendered SVG", async () => {
-    const originalCurrentFile = window.AaronnoteCurrentFile;
-    window.AaronnoteCurrentFile = () => "/notes/demo.md";
+    const originalCurrentFile = window.NoemaCurrentFile;
+    window.NoemaCurrentFile = () => "/notes/demo.md";
     setTikzRendererForTests(async () => '<svg viewBox="0 0 20 10"><path d="M0 0L20 10"/></svg>');
     const md = [
       "before",
@@ -1473,10 +1473,10 @@ y^2
       editor.setMarkdownSelection(md.length);
 
       expect(document.querySelector(".cm-tikz-env-widget")?.classList.contains("cm-image-widget")).toBe(true);
-      expect(document.querySelector(".cm-tikz-env-widget")?.classList.contains("aaronnote-image-align-right")).toBe(true);
-      expect(document.querySelector(".cm-tikz-env-widget")?.classList.contains("aaronnote-image-wrap")).toBe(true);
+      expect(document.querySelector(".cm-tikz-env-widget")?.classList.contains("noema-image-align-right")).toBe(true);
+      expect(document.querySelector(".cm-tikz-env-widget")?.classList.contains("noema-image-wrap")).toBe(true);
       expect(document.querySelector(".cm-tikz-env-widget")?.parentElement?.className).toBe("cm-float-anchor");
-      expect((document.querySelector<HTMLElement>(".cm-tikz-env-widget")?.style.getPropertyValue("--aaronnote-image-width") || "").trim()).toBe("320px");
+      expect((document.querySelector<HTMLElement>(".cm-tikz-env-widget")?.style.getPropertyValue("--noema-image-width") || "").trim()).toBe("320px");
       expect(document.querySelector('.cm-org-env-rail[data-org-env-kind="tikz"]')).toBeNull();
       expect(view.contentDOM.textContent).not.toContain("#+ begin tikz");
 
@@ -1497,7 +1497,7 @@ y^2
       expect(view.contentDOM.textContent).toContain("#+ begin tikz");
     } finally {
       cleanup();
-      window.AaronnoteCurrentFile = originalCurrentFile;
+      window.NoemaCurrentFile = originalCurrentFile;
       setTikzRendererForTests(null);
     }
   });
@@ -1527,8 +1527,8 @@ y^2
   });
 
   test("tikz env fills a missing id on first preview", async () => {
-    const originalCurrentFile = window.AaronnoteCurrentFile;
-    window.AaronnoteCurrentFile = () => "/notes/demo.md";
+    const originalCurrentFile = window.NoemaCurrentFile;
+    window.NoemaCurrentFile = () => "/notes/demo.md";
     setTikzRendererForTests(async () => '<svg viewBox="0 0 20 10"/>');
     const md = [
       "#+ begin tikz {wrap}",
@@ -1543,14 +1543,14 @@ y^2
       expect(editor.getMarkdown()).toMatch(/^#\+ begin tikz [0-9a-f-]{36} \{wrap\}\n/);
     } finally {
       cleanup();
-      window.AaronnoteCurrentFile = originalCurrentFile;
+      window.NoemaCurrentFile = originalCurrentFile;
       setTikzRendererForTests(null);
     }
   });
 
   test("TikZ stays idle during source edits and unrelated edits keep the same preview", async () => {
-    const originalCurrentFile = window.AaronnoteCurrentFile;
-    window.AaronnoteCurrentFile = () => "/notes/lazy-tikz.md";
+    const originalCurrentFile = window.NoemaCurrentFile;
+    window.NoemaCurrentFile = () => "/notes/lazy-tikz.md";
     const renderCalls: string[] = [];
     setTikzRendererForTests(async (source) => {
       renderCalls.push(source);
@@ -1613,7 +1613,7 @@ y^2
       expect(renderCalls.at(-1)).toContain("(6,1)");
     } finally {
       cleanup();
-      window.AaronnoteCurrentFile = originalCurrentFile;
+      window.NoemaCurrentFile = originalCurrentFile;
       setTikzRendererForTests(null);
     }
   });
@@ -1625,8 +1625,8 @@ y^2
       "\\draw (0,0) -- (1,1);", "\\end{tikzpicture}",
       "#+end tikz", "After the diagram.",
     ].join("\n");
-    const originalCurrentFile = window.AaronnoteCurrentFile;
-    window.AaronnoteCurrentFile = () => "/notes/adjacent-graph.md";
+    const originalCurrentFile = window.NoemaCurrentFile;
+    window.NoemaCurrentFile = () => "/notes/adjacent-graph.md";
     const renderCalls: string[] = [];
     setTikzRendererForTests(async (source) => {
       renderCalls.push(source);
@@ -1648,14 +1648,14 @@ y^2
       }
     } finally {
       cleanup();
-      window.AaronnoteCurrentFile = originalCurrentFile;
+      window.NoemaCurrentFile = originalCurrentFile;
       setTikzRendererForTests(null);
     }
   });
 
   test("tikz env rerenders from the edited body without touching the source", async () => {
-    const originalCurrentFile = window.AaronnoteCurrentFile;
-    window.AaronnoteCurrentFile = () => "/notes/demo.md";
+    const originalCurrentFile = window.NoemaCurrentFile;
+    window.NoemaCurrentFile = () => "/notes/demo.md";
     const renderCalls: string[] = [];
     setTikzRendererForTests(async (source) => {
       renderCalls.push(source);
@@ -1696,7 +1696,7 @@ y^2
         .not.toBe(initialMeasureKey);
     } finally {
       cleanup();
-      window.AaronnoteCurrentFile = originalCurrentFile;
+      window.NoemaCurrentFile = originalCurrentFile;
       setTikzRendererForTests(null);
     }
   });
@@ -1889,11 +1889,11 @@ After`;
 
     const tableBlock = document.querySelector<HTMLElement>(".cm-table-block");
     expect(tableBlock).toBeTruthy();
-    expect(tableBlock!.classList.contains("cm-aaronnote-measured-widget")).toBe(false);
+    expect(tableBlock!.classList.contains("cm-noema-measured-widget")).toBe(false);
     expect(tableBlock!.parentElement?.className).toBe("cm-float-anchor");
-    expect(tableBlock!.classList.contains("aaronnote-table-align-right")).toBe(true);
-    expect(tableBlock!.classList.contains("aaronnote-table-wrap")).toBe(true);
-    expect(tableBlock!.style.getPropertyValue("--aaronnote-table-width")).toBe("75%");
+    expect(tableBlock!.classList.contains("noema-table-align-right")).toBe(true);
+    expect(tableBlock!.classList.contains("noema-table-wrap")).toBe(true);
+    expect(tableBlock!.style.getPropertyValue("--noema-table-width")).toBe("75%");
     expect((editor.view as unknown as { contentDOM: HTMLElement }).contentDOM.textContent)
       .not.toContain("{size:75%");
 
@@ -2161,11 +2161,11 @@ After`;
     const diagram = document.querySelector<HTMLElement>(".cm-mermaid-block");
     expect(widget).toBeTruthy();
     expect(diagram).toBeTruthy();
-    expect(widget!.classList.contains("cm-aaronnote-measured-widget")).toBe(false); // zero-height anchor; observe the inner float
-    expect(widget!.classList.contains("aaronnote-image-wrap")).toBe(false);
-    expect(diagram!.classList.contains("aaronnote-diagram-align-right")).toBe(true);
-    expect(diagram!.classList.contains("aaronnote-diagram-wrap")).toBe(true);
-    expect(diagram!.style.getPropertyValue("--aaronnote-diagram-width")).toBe("180px");
+    expect(widget!.classList.contains("cm-noema-measured-widget")).toBe(false); // zero-height anchor; observe the inner float
+    expect(widget!.classList.contains("noema-image-wrap")).toBe(false);
+    expect(diagram!.classList.contains("noema-diagram-align-right")).toBe(true);
+    expect(diagram!.classList.contains("noema-diagram-wrap")).toBe(true);
+    expect(diagram!.style.getPropertyValue("--noema-diagram-width")).toBe("180px");
     expect((editor.view as unknown as { contentDOM: HTMLElement }).contentDOM.textContent)
       .not.toContain("{size:180");
 
@@ -2454,7 +2454,7 @@ Body`;
     const { editor, cleanup } = mountCM6(md);
     editor.setMarkdownSelection(md.length);
 
-    expect(document.querySelector(".cm-toc .toc-item-text .aaronnote-toc-math .katex")).toBeTruthy();
+    expect(document.querySelector(".cm-toc .toc-item-text .noema-toc-math .katex")).toBeTruthy();
     expect(document.querySelector(".cm-toc .toc-item-text")?.textContent).not.toContain(String.raw`\(E=mc^2\)`);
     cleanup();
   });
@@ -2727,17 +2727,17 @@ title: Alpha
 tags: one, two
 #+end meta`;
     const { editor, cleanup } = mountCM6(md);
-    expect(document.querySelector(".aaronnote-meta-title")?.textContent).toBe("Alpha");
-    expect(document.querySelector(".aaronnote-meta-roam-badge")).toBeTruthy();
-    const details = document.querySelector<HTMLDetailsElement>(".aaronnote-meta-properties")!;
+    expect(document.querySelector(".noema-meta-title")?.textContent).toBe("Alpha");
+    expect(document.querySelector(".noema-meta-roam-badge")).toBeTruthy();
+    const details = document.querySelector<HTMLDetailsElement>(".noema-meta-properties")!;
     details.open = true;
-    const values = document.querySelectorAll<HTMLInputElement>(".aaronnote-meta-property-value");
+    const values = document.querySelectorAll<HTMLInputElement>(".noema-meta-property-value");
     expect(values).toHaveLength(2);
     values[0]!.value = "Beta";
     values[0]!.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
     await nextTick();
     expect(editor.getMarkdown()).toBe(md.replace("title: Alpha", "title: Beta"));
-    expect(document.querySelector(".aaronnote-meta-title")?.textContent).toBe("Beta");
+    expect(document.querySelector(".noema-meta-title")?.textContent).toBe("Beta");
     cleanup();
   });
 
@@ -2756,9 +2756,9 @@ We present **three results**.
     const { editor, cleanup } = mountCM6(md);
 
     expect(document.querySelectorAll(".cm-org-env-block[data-kind='meta']")).toHaveLength(1);
-    expect(document.querySelector(".aaronnote-meta-abstract-title")?.textContent).toBe("Abstract");
-    expect(document.querySelector(".aaronnote-meta-abstract-content strong")?.textContent).toBe("three results");
-    expect(document.querySelectorAll(".aaronnote-meta-tags .aaronnote-meta-tag")).toHaveLength(3);
+    expect(document.querySelector(".noema-meta-abstract-title")?.textContent).toBe("Abstract");
+    expect(document.querySelector(".noema-meta-abstract-content strong")?.textContent).toBe("three results");
+    expect(document.querySelectorAll(".noema-meta-tags .noema-meta-tag")).toHaveLength(3);
     expect(document.querySelector("[data-kind='summary']")).toBeNull();
     expect(editor.getMarkdown()).toBe(md);
     cleanup();
@@ -2772,12 +2772,12 @@ First draft.
 #+end summary
 #+end meta`;
     const { editor, host, cleanup } = mountCM6(md);
-    const summaryEditor = host.querySelector<HTMLElement>(".aaronnote-meta-summary-editor")!;
+    const summaryEditor = host.querySelector<HTMLElement>(".noema-meta-summary-editor")!;
     const textarea = summaryEditor.querySelector<HTMLTextAreaElement>("textarea")!;
     const vim = createVimLite(editor, host);
     vim.setMode("normal");
 
-    expect(summaryEditor.dataset.aaronnoteVim).toBe("native");
+    expect(summaryEditor.dataset.noemaVim).toBe("native");
     for (const key of ["a", "x", "Escape"]) {
       const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
       Object.defineProperty(event, "target", { value: textarea });
@@ -3055,9 +3055,9 @@ $x$
   });
 
   test("renders note-code commands as highlighted read-only code cards", async () => {
-    const previous = window.aaronnoteApi;
+    const previous = window.noemaApi;
     const openCalls: Array<{ file?: string; tag?: string }> = [];
-    window.aaronnoteApi = {
+    window.noemaApi = {
       noteCode: {
         readRegion: async (body: unknown) => ({
           ok: true,
@@ -3098,7 +3098,7 @@ $x$
       expect(openCalls).toEqual([{ file: "/Proofs/Sample.lean", tag: "sample" }]);
     } finally {
       cleanup();
-      window.aaronnoteApi = previous;
+      window.noemaApi = previous;
     }
   });
 
@@ -3529,27 +3529,27 @@ after
   });
 
   test("image widgets resolve note-relative asset urls through Noema resolver", () => {
-    const original = window.AaronnoteResolveAssetUrl;
-    window.AaronnoteResolveAssetUrl = (src) => `/api/media?file=${encodeURIComponent(src)}&base=note.md`;
+    const original = window.NoemaResolveAssetUrl;
+    window.NoemaResolveAssetUrl = (src) => `/api/media?file=${encodeURIComponent(src)}&base=note.md`;
     const { editor, cleanup } = mountCM6("before\n\n![alt](img/example.png)");
     editor.setMarkdownSelection(0);
     const image = document.querySelector<HTMLImageElement>(".cm-image-widget img");
     expect(image).toBeTruthy();
     expect(image!.getAttribute("src")).toBe("/api/media?file=img%2Fexample.png&base=note.md");
     cleanup();
-    window.AaronnoteResolveAssetUrl = original;
+    window.NoemaResolveAssetUrl = original;
   });
 
   test("image widgets keep parent-directory asset paths before resolving", () => {
-    const original = window.AaronnoteResolveAssetUrl;
-    window.AaronnoteResolveAssetUrl = (src) => `/api/media?file=${encodeURIComponent(src)}&base=notes%2Ftopic.md`;
+    const original = window.NoemaResolveAssetUrl;
+    window.NoemaResolveAssetUrl = (src) => `/api/media?file=${encodeURIComponent(src)}&base=notes%2Ftopic.md`;
     const { editor, cleanup } = mountCM6("before\n\n![alt](<../images/example.png> \"Plot\")");
     editor.setMarkdownSelection(0);
     const image = document.querySelector<HTMLImageElement>(".cm-image-widget img");
     expect(image).toBeTruthy();
     expect(image!.getAttribute("src")).toBe("/api/media?file=..%2Fimages%2Fexample.png&base=notes%2Ftopic.md");
     cleanup();
-    window.AaronnoteResolveAssetUrl = original;
+    window.NoemaResolveAssetUrl = original;
   });
 
   test("image widgets render alt text as a caption", () => {
@@ -3564,21 +3564,21 @@ after
 
   test("draw.io attachments render as the exported picture, not an editor", () => {
     const md = "![Diagram title](attachments/demo.drawio)\n\ntext";
-    const previous = window.AaronnoteResolveAssetUrl;
-    window.AaronnoteResolveAssetUrl = (src) =>
-      `aaronnote-asset://media?file=${encodeURIComponent(src)}`;
+    const previous = window.NoemaResolveAssetUrl;
+    window.NoemaResolveAssetUrl = (src) =>
+      `noema-asset://media?file=${encodeURIComponent(src)}`;
     try {
       const { editor, cleanup } = mountCM6(md);
       editor.setMarkdownSelection(md.length);
 
       const img = document.querySelector<HTMLImageElement>(".cm-image-widget img.cm-drawio-render");
       expect(img).toBeTruthy();
-      expect(img!.getAttribute("src")).toContain("aaronnote-asset://drawio-svg/");
+      expect(img!.getAttribute("src")).toContain("noema-asset://drawio-svg/");
       expect(img!.title).toBe("draw.io diagram: Diagram title");
       expect(document.querySelector(".cm-visual-embed-drawio")).toBeNull();
       cleanup();
     } finally {
-      window.AaronnoteResolveAssetUrl = previous;
+      window.NoemaResolveAssetUrl = previous;
     }
   });
 
@@ -3631,12 +3631,12 @@ after
 
     const figure = document.querySelector<HTMLElement>(".cm-image-widget");
     expect(figure).toBeTruthy();
-    expect(figure!.classList.contains("cm-aaronnote-measured-widget")).toBe(false); // wrap images are non-measured (float)
-    expect(figure!.classList.contains("aaronnote-image-align-left")).toBe(true);
-    expect(figure!.classList.contains("aaronnote-image-wrap")).toBe(true);
-    expect(figure!.style.getPropertyValue("--aaronnote-image-width")).toBe("300%");
-    expect(figure!.style.getPropertyValue("--aaronnote-image-max-width")).toBe("none");
-    expect(figure!.style.getPropertyValue("--aaronnote-image-max-height")).toBe("none");
+    expect(figure!.classList.contains("cm-noema-measured-widget")).toBe(false); // wrap images are non-measured (float)
+    expect(figure!.classList.contains("noema-image-align-left")).toBe(true);
+    expect(figure!.classList.contains("noema-image-wrap")).toBe(true);
+    expect(figure!.style.getPropertyValue("--noema-image-width")).toBe("300%");
+    expect(figure!.style.getPropertyValue("--noema-image-max-width")).toBe("none");
+    expect(figure!.style.getPropertyValue("--noema-image-max-height")).toBe("none");
     expect((editor.view as unknown as { contentDOM: HTMLElement }).contentDOM.textContent)
       .not.toContain("{size:300%");
 

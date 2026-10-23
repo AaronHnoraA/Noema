@@ -32,7 +32,7 @@
    (noema-agenda-poc-test-find "Check the theorem assumptions")
    (let* ((before (buffer-string))
           (request (noema-agenda-poc-completion-intent)))
-     (should (equal (alist-get 'operation request) "aaronnote:api:notes:patch-todo"))
+     (should (equal (alist-get 'operation request) "noema:api:notes:patch-todo"))
      (should (equal (alist-get 'selectorId (alist-get 'body request)) "#proof1"))
      (should (equal (alist-get 'op (alist-get 'body request)) "complete"))
      (should (equal before (buffer-string))))

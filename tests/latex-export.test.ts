@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 // @ts-ignore The converter is a Node ESM module outside the TS app graph.
-import { aaronnoteMarkdownToLatex, applyLatexTemplate, escapeLatexText, escapeLatexTitle, latexMacrosPackage, latexSideCommentPreamble, writeLatexExport } from "../server/lib/latex-export.mjs";
+import { noemaMarkdownToLatex, applyLatexTemplate, escapeLatexText, escapeLatexTitle, latexMacrosPackage, latexSideCommentPreamble, writeLatexExport } from "../server/lib/latex-export.mjs";
 // @ts-ignore Node ESM module outside the TS app graph.
-import { academicLatexPostprocess, aaronnoteMarkdownToLatexPandoc, extractAaronnoteMetadata, preprocessAaronnoteForPandoc } from "../server/lib/latex-export-pandoc.mjs";
+import { academicLatexPostprocess, noemaMarkdownToLatexPandoc, extractNoemaMetadata, preprocessNoemaForPandoc } from "../server/lib/latex-export-pandoc.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
 import { configure, configureLatexProvider, exportLatex, latexExportAgentStatus, latexExportDefaults, listLatexTemplates, setLatexExportAgent } from "../server/lib/index.mjs";
 
@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 
 async function setupRoot() {
-  const root = await mkdtemp(join(tmpdir(), "aaronnote-latex-"));
+  const root = await mkdtemp(join(tmpdir(), "noema-latex-"));
   const notes = join(root, "roam");
   const templates = join(root, "templates");
   await mkdir(notes, { recursive: true });
@@ -26,7 +26,7 @@ async function setupRoot() {
   await writeFile(join(templates, "latex", "noema-article.tex"), [
     "\\documentclass{article}",
     "\\usepackage{amsmath,amsthm}",
-    "\\usepackage{aaronnote-macros}",
+    "\\usepackage{noema-macros}",
     "\\newtheorem{theorem}{Theorem}",
     "\\title{ {{title}} }",
     "\\date{ {{date}} }",
@@ -50,7 +50,7 @@ async function setupRoot() {
 
 describe("LaTeX export", () => {
   test("uses Pandoc for broad native Markdown and academic list structure", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc([
+    const result = await noemaMarkdownToLatexPandoc([
       "Setext heading",
       "==============",
       "",
@@ -85,14 +85,14 @@ describe("LaTeX export", () => {
   });
 
   test("preserves portable Markdown image widths in LaTeX", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc("![plot](plot.png){width=50%}");
+    const result = await noemaMarkdownToLatexPandoc("![plot](plot.png){width=50%}");
 
     expect(result.body).toContain("\\includegraphics[width=0.5\\linewidth");
     expect(result.body).toContain("{plot.png}");
   });
 
   test("balances Noema privacy, semantic blocks, math, and visible anchors", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc([
+    const result = await noemaMarkdownToLatexPandoc([
       "#+begin meta", "title: Projector", "#+end meta", "",
       "@@project(active) [Private plan] {", "  area: study", "}", "",
       "#+begin theorem Case \\(x>0\\)",
@@ -110,7 +110,7 @@ describe("LaTeX export", () => {
   });
 
   test("exports a todo title as an annotation but never its attributes", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc([
+    const result = await noemaMarkdownToLatexPandoc([
       "Visible before @@todo [secret] {",
       "  credentials: {",
       "    password: hunter2",
@@ -129,7 +129,7 @@ describe("LaTeX export", () => {
   });
 
   test("honors CommonMark fence character and minimum closing length", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc([
+    const result = await noemaMarkdownToLatexPandoc([
       "````text",
       "literal",
       "```",
@@ -142,7 +142,7 @@ describe("LaTeX export", () => {
   });
 
   test("protects Noema literals inside blockquote fences and balanced link destinations", async () => {
-    const quoted = await aaronnoteMarkdownToLatexPandoc([
+    const quoted = await noemaMarkdownToLatexPandoc([
       "> ```text",
       "> @@todo [literal command]",
       "> @@latexmk(typo)",
@@ -150,9 +150,9 @@ describe("LaTeX export", () => {
     ].join("\n"));
     expect(quoted.body).toContain("@@todo [literal command]");
     expect(quoted.body).toContain("@@latexmk(typo)");
-    const linked = preprocessAaronnoteForPandoc("[x](https://example.com/(a)/@@latexmk(typo))");
+    const linked = preprocessNoemaForPandoc("[x](https://example.com/(a)/@@latexmk(typo))");
     expect(linked.markdown).toContain("@@latexmk(typo)");
-    const otherContainers = preprocessAaronnoteForPandoc([
+    const otherContainers = preprocessNoemaForPandoc([
       ">     @@latexmk(typo)",
       "> $$",
       "> @@latexmk(typo)",
@@ -161,7 +161,7 @@ describe("LaTeX export", () => {
       "[ref]: https://example.com/@@latexmk(typo)",
     ].join("\n"));
     expect(otherContainers.markdown.match(/@@latexmk\(typo\)/g)).toHaveLength(3);
-    const implicitClose = await aaronnoteMarkdownToLatexPandoc([
+    const implicitClose = await noemaMarkdownToLatexPandoc([
       "> ```text",
       "> code",
       "outside",
@@ -171,7 +171,7 @@ describe("LaTeX export", () => {
   });
 
   test("hides private commands in visible link labels and image alt text", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc([
+    const result = await noemaMarkdownToLatexPandoc([
       "[Visible @@comment [secret] label](https://example.com)",
       "",
       "![Visible @@todo [hidden] alt](image.png)",
@@ -186,7 +186,7 @@ describe("LaTeX export", () => {
   });
 
   test("maps semantic outline commands at Noema's canonical levels", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc([
+    const result = await noemaMarkdownToLatexPandoc([
       "@@part [Foundations]",
       "@@section [Linear algebra]",
       "@@section(sec) [Operators]",
@@ -206,7 +206,7 @@ describe("LaTeX export", () => {
   });
 
   test("does not let hidden semantic commands affect public Markdown headings", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc([
+    const result = await noemaMarkdownToLatexPandoc([
       "#+begin lean4",
       "@@section [private]",
       "#+end lean4",
@@ -223,7 +223,7 @@ describe("LaTeX export", () => {
   });
 
   test("reads and consumes standard Markdown title/date front matter", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc([
+    const result = await noemaMarkdownToLatexPandoc([
       "---",
       "title: \"Exact Projector Note\"",
       "date: 2026-07-12",
@@ -237,36 +237,36 @@ describe("LaTeX export", () => {
   });
 
   test("formats callout titles without inventing visible punctuation or labels", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc("> [!NOTE] Exact title\n> Body.");
+    const result = await noemaMarkdownToLatexPandoc("> [!NOTE] Exact title\n> Body.");
     expect(result.body).toContain("\\textbf{Exact title}");
     expect(result.body).not.toContain("NOTE ---");
     expect(result.body).not.toContain("Exact title.");
   });
 
   test("validates typed LaTeX marks instead of silently swallowing mistakes", () => {
-    expect(() => preprocessAaronnoteForPandoc("Text @@latexmk(typo) here."))
+    expect(() => preprocessNoemaForPandoc("Text @@latexmk(typo) here."))
       .toThrow(/Unknown @@latexmk mark/);
-    expect(() => preprocessAaronnoteForPandoc("@@latexmk(newline) tail"))
+    expect(() => preprocessNoemaForPandoc("@@latexmk(newline) tail"))
       .toThrow(/between visible inline content/);
-    expect(() => preprocessAaronnoteForPandoc("prefix @@latexmk(newpage) tail"))
+    expect(() => preprocessNoemaForPandoc("prefix @@latexmk(newpage) tail"))
       .toThrow(/alone on its line/);
-    expect(() => preprocessAaronnoteForPandoc("left @@latexmk(newline) @@latexmk(newline) right"))
+    expect(() => preprocessNoemaForPandoc("left @@latexmk(newline) @@latexmk(newline) right"))
       .toThrow(/between visible inline content/);
-    expect(() => preprocessAaronnoteForPandoc("tail @@latexmk(newline)"))
+    expect(() => preprocessNoemaForPandoc("tail @@latexmk(newline)"))
       .toThrow(/between visible inline content/);
-    expect(() => preprocessAaronnoteForPandoc("First soft line\n@@latexmk(noindent) continuation"))
+    expect(() => preprocessNoemaForPandoc("First soft line\n@@latexmk(noindent) continuation"))
       .toThrow(/start of a paragraph/);
-    expect(preprocessAaronnoteForPandoc("`@@latexmk(typo)`").markdown).toContain("@@latexmk(typo)");
-    expect(preprocessAaronnoteForPandoc("    @@latexmk(typo)").markdown).toContain("@@latexmk(typo)");
+    expect(preprocessNoemaForPandoc("`@@latexmk(typo)`").markdown).toContain("@@latexmk(typo)");
+    expect(preprocessNoemaForPandoc("    @@latexmk(typo)").markdown).toContain("@@latexmk(typo)");
   });
 
   test("emits a non-stretching LaTeX row break for the newline mark", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc(
+    const result = await noemaMarkdownToLatexPandoc(
       "First clause @@latexmk(newline) second clause.",
     );
     expect(result.body).toContain("First clause \\\\ second clause.");
     expect(result.body).not.toContain("\\linebreak");
-    const trailing = await aaronnoteMarkdownToLatexPandoc([
+    const trailing = await noemaMarkdownToLatexPandoc([
       "Question text. @@latexmk(newline)",
       "(a) First part. @@latexmk(newline)",
       "(b) Second part.",
@@ -275,7 +275,7 @@ describe("LaTeX export", () => {
   });
 
   test("preserves canonical inline math even when it has boundary spaces", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc(
+    const result = await noemaMarkdownToLatexPandoc(
       "where \\( \\mathrm{id} \\in \\mathcal{L}(V)\\) is the identity",
     );
     expect(result.body).toContain("\\( \\mathrm{id} \\in \\mathcal{L}(V)\\)");
@@ -283,13 +283,13 @@ describe("LaTeX export", () => {
   });
 
   test("keeps unresolved citations visible and reports a warning", async () => {
-    const result = await aaronnoteMarkdownToLatexPandoc("See @@cite [Str87].");
+    const result = await noemaMarkdownToLatexPandoc("See @@cite [Str87].");
     expect(result.body).toContain("\\textnormal{[Str87]}");
     expect(result.warnings).toContain("Unresolved Noema citation kept visibly: Str87");
   });
 
   test("converts Noema theorem and proof blocks", () => {
-    const result = aaronnoteMarkdownToLatex([
+    const result = noemaMarkdownToLatex([
       "#+begin meta",
       "title: Graph Tensor",
       "#+end meta",
@@ -317,7 +317,7 @@ describe("LaTeX export", () => {
   });
 
   test("converts inline Markdown to valid LaTeX commands", () => {
-    const result = aaronnoteMarkdownToLatex(
+    const result = noemaMarkdownToLatex(
       "Text **bold_x**, *emphasis*, `a_b`, [paper](https://example.com/a_b), and \\(x_1\\).",
     );
 
@@ -331,7 +331,7 @@ describe("LaTeX export", () => {
   });
 
   test("maps explicit and Markdown line breaks without conflating paragraphs", () => {
-    const result = aaronnoteMarkdownToLatex([
+    const result = noemaMarkdownToLatex([
       "First line",
       "continues here @@latexmk(newline) next visual line.",
       "",
@@ -343,7 +343,7 @@ describe("LaTeX export", () => {
   });
 
   test("folds prose lines with CJK-aware spacing and Markdown hard breaks", () => {
-    const result = aaronnoteMarkdownToLatex([
+    const result = noemaMarkdownToLatex([
       "中文第一行",
       "继续第二行",
       "English first line",
@@ -356,7 +356,7 @@ describe("LaTeX export", () => {
   });
 
   test("preserves nested unordered and ordered list hierarchy", () => {
-    const result = aaronnoteMarkdownToLatex([
+    const result = noemaMarkdownToLatex([
       "- Parent",
       "    1. First child",
       "    2. Second child",
@@ -375,7 +375,7 @@ describe("LaTeX export", () => {
   });
 
   test("preserves inline math in document titles, headings, and block labels", () => {
-    const result = aaronnoteMarkdownToLatex([
+    const result = noemaMarkdownToLatex([
       "# \\(\\lambda\\) and \\(\\kappa\\)",
       "",
       "#+begin theorem Case \\(d < \\lambda(G)\\)",
@@ -395,7 +395,7 @@ describe("LaTeX export", () => {
   });
 
   test("keeps the Proof label visible when a proof has a direction or title", () => {
-    const result = aaronnoteMarkdownToLatex([
+    const result = noemaMarkdownToLatex([
       "#+begin proof <=",
       "Left direction.",
       "#+end proof",
@@ -409,13 +409,13 @@ describe("LaTeX export", () => {
   });
 
   test("rejects structurally incomplete source instead of emitting broken LaTeX", () => {
-    expect(() => aaronnoteMarkdownToLatex("\\[\nx + y\n")).toThrow(/Unclosed display math.*line 1/);
-    expect(() => aaronnoteMarkdownToLatex("```ts\nconst x = 1;\n")).toThrow(/Unclosed Markdown code fence.*line 1/);
-    expect(() => aaronnoteMarkdownToLatex("#+begin theorem\nBody\n#+end proof\n")).toThrow(/Mismatched Noema block/);
+    expect(() => noemaMarkdownToLatex("\\[\nx + y\n")).toThrow(/Unclosed display math.*line 1/);
+    expect(() => noemaMarkdownToLatex("```ts\nconst x = 1;\n")).toThrow(/Unclosed Markdown code fence.*line 1/);
+    expect(() => noemaMarkdownToLatex("#+begin theorem\nBody\n#+end proof\n")).toThrow(/Mismatched Noema block/);
   });
 
   test("writes atomically and never writes LaTeX into a non-tex extension", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-latex-write-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-latex-write-"));
     roots.push(root);
     const file = await writeLatexExport(join(root, "paper.pdf"), "\\documentclass{article}\n");
     expect(file).toBe(join(root, "paper.pdf.tex"));
@@ -434,7 +434,7 @@ describe("LaTeX export", () => {
       "\\ip": "\\left\\langle#1,#2\\right\\rangle",
     });
 
-    expect(macros).toContain("\\ProvidesPackage{aaronnote-macros}");
+    expect(macros).toContain("\\ProvidesPackage{noema-macros}");
     expect(macros).toContain("\\providecommand{\\rank}{}");
     expect(macros).toContain("\\renewcommand{\\rank}{\\operatorname{rank}}");
     expect(macros).toContain("\\providecommand{\\ip}[2]{}");
@@ -473,7 +473,7 @@ describe("LaTeX export", () => {
   });
 
   test("exports Noema todo titles as annotations and omits their planning attributes", () => {
-    const result = aaronnoteMarkdownToLatex([
+    const result = noemaMarkdownToLatex([
       "# Main",
       "",
       "@@todo(doing) [draft private reminder] {ddl: 2026-07-03}",
@@ -498,7 +498,7 @@ describe("LaTeX export", () => {
   });
 
   test("omits @@cell commands and Lean4 source blocks from exported body", () => {
-    const result = aaronnoteMarkdownToLatex([
+    const result = noemaMarkdownToLatex([
       "# Main",
       "",
       "@@cell(lean4, lean4) [ceil-f7whsr]",
@@ -522,7 +522,7 @@ describe("LaTeX export", () => {
   });
 
   test("exports inline @@comment annotations without leaking command syntax", () => {
-    const result = aaronnoteMarkdownToLatex([
+    const result = noemaMarkdownToLatex([
       "# Main",
       "",
       "@@comment [a private annotation line]",
@@ -542,8 +542,8 @@ describe("LaTeX export", () => {
 
   test("exports @@comment(true) as a prominent COMMENT annotation", () => {
     const source = String.raw`Visible @@comment(true) [Check **non-degenerate** \(u,v,w\).] text.`;
-    const mechanical = aaronnoteMarkdownToLatex(source);
-    const prepared = preprocessAaronnoteForPandoc(source);
+    const mechanical = noemaMarkdownToLatex(source);
+    const prepared = preprocessNoemaForPandoc(source);
 
     expect(mechanical.body).toContain(String.raw`\aaroncomment{Check \textbf{non-degenerate} \(u,v,w\).}`);
     expect(prepared.markdown).toContain(String.raw`\aaroncomment{Check \textbf{non-degenerate} \(u,v,w\).}`);
@@ -553,8 +553,8 @@ describe("LaTeX export", () => {
 
   test("keeps unresolved revisions visible in mechanical and Pandoc exports", () => {
     const source = '@@revision(green) [old **claim**] {advice: "new claim"; reason: "clearer"}';
-    const mechanical = aaronnoteMarkdownToLatex(source);
-    const prepared = preprocessAaronnoteForPandoc(source);
+    const mechanical = noemaMarkdownToLatex(source);
+    const prepared = preprocessNoemaForPandoc(source);
     // `green` is the legacy spelling of the `ok` review kind.
     expect(mechanical.body).toContain(String.raw`\aaronrevision[ok]{old \textbf{claim}}{new claim}{clearer}`);
     expect(prepared.markdown).toContain(String.raw`\aaronrevision[ok]{old \textbf{claim}}{new claim}{clearer}`);
@@ -562,7 +562,7 @@ describe("LaTeX export", () => {
   });
 
   test("converts @@scomment and reports the required LaTeX feature", () => {
-    const result = aaronnoteMarkdownToLatex([
+    const result = noemaMarkdownToLatex([
       "# Main",
       "",
       String.raw`Visible @@scomment [Check **non-degenerate** \(u,v,w\).] text.`,
@@ -584,7 +584,7 @@ describe("LaTeX export", () => {
     expect(enabled).not.toContain("fancyline");
     expect(latexSideCommentPreamble(false)).toBe("");
 
-    const plain = aaronnoteMarkdownToLatex("Plain body.");
+    const plain = noemaMarkdownToLatex("Plain body.");
     expect(plain.features).toEqual({ usesSideComment: false });
     expect(latexMacrosPackage({})).toContain("todonotes");
   });
@@ -604,8 +604,8 @@ describe("LaTeX export", () => {
     const tex = await readFile(out, "utf8");
     expect(tex).toContain("\\title{ A }");
     expect(tex).not.toContain("\\providecommand{\\sidecomment}");
-    expect(tex).toContain("\\usepackage{aaronnote-macros}");
-    expect(await readFile(join(notes, "out", "aaronnote-macros.sty"), "utf8")).toContain("\\providecommand{\\sidecomment}");
+    expect(tex).toContain("\\usepackage{noema-macros}");
+    expect(await readFile(join(notes, "out", "noema-macros.sty"), "utf8")).toContain("\\providecommand{\\sidecomment}");
     expect(tex).toContain("\\sidecomment{Review \\(x\\).}");
 
     const defaults = await latexExportDefaults({ file: note }) as { outputPath?: string };
@@ -618,8 +618,8 @@ describe("LaTeX export", () => {
     const out = join(notes, "kernel-transform.tex");
     await writeFile(note, "#+begin meta\ntitle: Kernel transform\n#+end meta\n\n# Heading\n\nBody.\n", "utf8");
     const provider = {
-      prepare: vi.fn(async (markdown: string, options: Record<string, unknown>) => preprocessAaronnoteForPandoc(markdown, options)),
-      metadata: vi.fn(async (markdown: string) => extractAaronnoteMetadata(markdown)),
+      prepare: vi.fn(async (markdown: string, options: Record<string, unknown>) => preprocessNoemaForPandoc(markdown, options)),
+      metadata: vi.fn(async (markdown: string) => extractNoemaMetadata(markdown)),
       postprocess: vi.fn(async (latex: string) => academicLatexPostprocess(latex)),
       planTemplate: vi.fn(async (template: string) => ({ template })),
       renderTemplate: vi.fn((plan: { template: string }, vars: Record<string, string>) => applyLatexTemplate(plan.template, vars)),
@@ -640,7 +640,7 @@ describe("LaTeX export", () => {
     const { root } = await setupRoot();
     const latexDir = join(root, "templates", "latex");
     await writeFile(join(latexDir, "noema-assignment.tex"), [
-      '% aaronnote-template: {"name":"Assignment","engine":"xelatex","vars":[{"id":"coursecode","label":"Course code","default":"COMP"}]}',
+      '% noema-template: {"name":"Assignment","engine":"xelatex","vars":[{"id":"coursecode","label":"Course code","default":"COMP"}]}',
       "\\documentclass{article}",
       "\\newcommand{\\coursecodevalue}{ {{coursecode}} }",
       "\\begin{document}{{body}}\\end{document}",
@@ -662,7 +662,7 @@ describe("LaTeX export", () => {
     const { root, notes } = await setupRoot();
     const templatePath = join(root, "templates", "latex", "noema-assignment.tex");
     await writeFile(templatePath, [
-      '% aaronnote-template: {"name":"Assignment","engine":"pdflatex","vars":[{"id":"coursecode","label":"Course code","default":"COMP"}]}',
+      '% noema-template: {"name":"Assignment","engine":"pdflatex","vars":[{"id":"coursecode","label":"Course code","default":"COMP"}]}',
       "\\documentclass{article}",
       "\\newcommand{\\course}{ {{coursecode}} }",
       "\\begin{document}",
@@ -698,7 +698,7 @@ describe("LaTeX export", () => {
     const { root, notes } = await setupRoot();
     const templatePath = join(root, "templates", "latex", "invalid.tex");
     await writeFile(templatePath, [
-      '% aaronnote-template: {"name":"Invalid","engine":"word","vars":[]}',
+      '% noema-template: {"name":"Invalid","engine":"word","vars":[]}',
       "\\documentclass{article}", "\\begin{document}", "{{body}}", "\\end{document}", "",
     ].join("\n"), "utf8");
     const note = join(notes, "invalid.md");
@@ -714,7 +714,7 @@ describe("LaTeX export", () => {
     const classPath = join(templateDir, "shared.cls");
     await writeFile(classPath, "\\NeedsTeXFormat{LaTeX2e}\n\\ProvidesClass{shared}\n\\LoadClass{article}\n", "utf8");
     await writeFile(templatePath, [
-      '% aaronnote-template: {"name":"Shared","engine":"pdflatex","sharedFiles":["shared.cls"]}',
+      '% noema-template: {"name":"Shared","engine":"pdflatex","sharedFiles":["shared.cls"]}',
       "\\documentclass{shared}",
       "\\begin{document}",
       "{{body}}",
@@ -736,7 +736,7 @@ describe("LaTeX export", () => {
     const { root, notes } = await setupRoot();
     const templatePath = join(root, "templates", "latex", "body-only.tex");
     await writeFile(templatePath, [
-      '% aaronnote-template: {"name":"Body only","engine":"pdflatex"}',
+      '% noema-template: {"name":"Body only","engine":"pdflatex"}',
       "\\documentclass{article}",
       "\\begin{document}",
       "{{body}}",
@@ -1079,7 +1079,7 @@ describe("LaTeX export", () => {
       "\\documentclass{article}",
       "\\begin{document}",
       "{{body}}",
-      "\\DefinitelyUndefinedAaronnoteCommand",
+      "\\DefinitelyUndefinedNoemaCommand",
       "\\end{document}",
       "",
     ].join("\n"), "utf8");
@@ -1093,7 +1093,7 @@ describe("LaTeX export", () => {
 
 describe("LaTeX export regressions", () => {
   test("keeps every link on a line whose label carries a private command", () => {
-    const result = preprocessAaronnoteForPandoc(
+    const result = preprocessNoemaForPandoc(
       "See [a @@todo one](http://x.com) and [b](http://y.com) end.",
     );
     // A greedy label match used to span both links and delete the first
@@ -1102,7 +1102,7 @@ describe("LaTeX export regressions", () => {
   });
 
   test("scopes label stripping to the outer link when a label contains a link", () => {
-    const result = preprocessAaronnoteForPandoc(
+    const result = preprocessNoemaForPandoc(
       "Nested [see [1](http://inner) more @@todo x](http://outer) tail.",
     );
     expect(result.markdown).toBe("Nested [see [1](http://inner) more ](http://outer) tail.");
@@ -1119,7 +1119,7 @@ describe("LaTeX export regressions", () => {
     // Writing into the closed pipe emits EPIPE on child.stdin. With no listener
     // there, the unhandled `error` event is an uncaught exception that takes the
     // whole web host down rather than failing this one export.
-    await expect(aaronnoteMarkdownToLatexPandoc("x".repeat(2 * 1024 * 1024), {
+    await expect(noemaMarkdownToLatexPandoc("x".repeat(2 * 1024 * 1024), {
       pandocBin: "/usr/bin/false",
     })).rejects.toThrow(/Pandoc Markdown/);
   });

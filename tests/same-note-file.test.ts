@@ -1,6 +1,6 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { sameNoteFile } from "../aaronnote/same-note-file.ts";
+import { sameNoteFile } from "../pages/same-note-file.ts";
 
 describe("same note file", () => {
   test("accepts the spellings one file is reported under", () => {

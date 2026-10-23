@@ -38,7 +38,7 @@ function stopEditorEvent(event: Event): void {
 }
 
 function dispatchOpen(element: HTMLElement, item: EmbedQueryItem): void {
-  element.dispatchEvent(new CustomEvent<EmbedQueryOpenDetail>("aaronnote:embed-query-open", {
+  element.dispatchEvent(new CustomEvent<EmbedQueryOpenDetail>("noema:embed-query-open", {
     bubbles: true,
     cancelable: true,
     composed: true,
@@ -176,7 +176,7 @@ export class EmbedQueryWidget extends MeasuredWidget {
           renderModel(root, model);
         },
       };
-      const event = new CustomEvent<EmbedQueryRequestDetail>("aaronnote:embed-query-request", {
+      const event = new CustomEvent<EmbedQueryRequestDetail>("noema:embed-query-request", {
         bubbles: true,
         cancelable: true,
         composed: true,

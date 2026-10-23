@@ -48,7 +48,7 @@
   /* 116% of the previous 20px prose measure.  This remains the body-text
    * scale; heading, code and KaTeX faces keep their dedicated rules below. */
   --aaron-prose-size: 23.2px;
-  --aaron-structural-size: calc(20px * var(--aaronnote-layout-zoom, 1));
+  --aaron-structural-size: calc(20px * var(--noema-block-layout-zoom, 1));
   --aaron-prose-leading: 1.5;
   --aaron-prose-paragraph-gap: 0.55em;
   --aaron-prose-list-item-gap: 0.22em;
@@ -61,17 +61,17 @@
   --aaron-prose-page-bottom: clamp(72px, 10vh, 120px);
 }
 
-.cm-editor.aaronnote-visual-typography,
+.cm-editor.noema-visual-typography,
 .published-note-page .cm-editor {
   font-family: var(--aaron-font-prose);
-  font-size: calc(var(--aaron-prose-size) * var(--aaronnote-layout-zoom, 1));
+  font-size: calc(var(--aaron-prose-size) * var(--noema-block-layout-zoom, 1));
   line-height: var(--aaron-prose-leading);
   font-kerning: normal;
   font-variant-ligatures: common-ligatures contextual;
   font-feature-settings: "kern" 1, "liga" 1;
 }
 
-.cm-editor.aaronnote-visual-typography .cm-content {
+.cm-editor.noema-visual-typography .cm-content {
   font-family: var(--aaron-font-prose);
   line-height: var(--aaron-prose-leading);
 }
@@ -79,18 +79,18 @@
 /* Optimal paragraph layout inserts zero-source CM6 widgets at selected
  * breakpoints. Native wrapping is disabled only on paragraphs with a complete
  * measured plan; unsupported or dirty paragraphs retain CM6's pre-wrap path. */
-.cm-editor.aaronnote-visual-typography .cm-line.cm-kp-paragraph {
+.cm-editor.noema-visual-typography .cm-line.cm-kp-paragraph {
   /* `pre` disables native wrapping while preserving source space runs. */
   white-space: pre;
   text-autospace: no-autospace;
   text-spacing-trim: space-all;
 }
 
-.cm-editor.aaronnote-visual-typography .cm-kp-break {
+.cm-editor.noema-visual-typography .cm-kp-break {
   display: inline;
 }
 
-.cm-editor.aaronnote-visual-typography .cm-kp-spacer {
+.cm-editor.noema-visual-typography .cm-kp-spacer {
   display: inline-block;
   height: 0;
   padding: 0;
@@ -101,77 +101,77 @@
 
 /* Rails retain their original overlay implementation.  Visual typography
  * translates the overlay to the prose edge and owns the text-to-rail gap. */
-.cm-editor.aaronnote-visual-typography .cm-org-env-rail {
+.cm-editor.noema-visual-typography .cm-org-env-rail {
   transform: translateX(var(--visual-inline-gutter));
 }
 
-.cm-editor.aaronnote-visual-typography :where(.cm-org-env-heading-widget, .cm-org-env-line, .cm-math-block[data-org-env-kind], .cm-org-env-end-widget) {
+.cm-editor.noema-visual-typography :where(.cm-org-env-heading-widget, .cm-org-env-line, .cm-math-block[data-org-env-kind], .cm-org-env-end-widget) {
   padding-left: calc(var(--org-env-depth, 0) * 1.1rem + var(--aaron-org-env-rail-gap) + 3px);
 }
 
-.cm-editor.aaronnote-visual-typography :where(.cm-line, .org-env-content, .cm-org-env-content),
+.cm-editor.noema-visual-typography :where(.cm-line, .org-env-content, .cm-org-env-content),
 .published-note-page .cm-editor :where(p, li, blockquote, .org-env-content, .cm-org-env-content),
-.aaronnote-reveal-view .reveal .slides :where(p, li, blockquote) {
+.noema-reveal-view .reveal .slides :where(p, li, blockquote) {
   font-family: var(--aaron-font-prose);
 }
 
 /* Headings, code and mathematics keep their existing dedicated faces. */
-.cm-editor.aaronnote-visual-typography :where(h1, h2, h3, h4, h5, h6, .cm-md-h1, .cm-md-h2, .cm-md-h3, .cm-md-h4, .cm-md-h5, .cm-md-h6, .aaronnote-section-heading, .aaronnote-section-heading-inner, .org-env-heading, .org-env-heading-title, .cm-org-env-heading-widget),
-.published-note-page .cm-editor :where(h1, h2, h3, h4, h5, h6, .aaronnote-section-heading, .aaronnote-section-heading-inner, .org-env-heading, .org-env-heading-title) {
+.cm-editor.noema-visual-typography :where(h1, h2, h3, h4, h5, h6, .cm-md-h1, .cm-md-h2, .cm-md-h3, .cm-md-h4, .cm-md-h5, .cm-md-h6, .noema-section-heading, .noema-section-heading-inner, .org-env-heading, .org-env-heading-title, .cm-org-env-heading-widget),
+.published-note-page .cm-editor :where(h1, h2, h3, h4, h5, h6, .noema-section-heading, .noema-section-heading-inner, .org-env-heading, .org-env-heading-title) {
   font-family: var(--aaron-font-heading);
 }
 
-.cm-editor.aaronnote-visual-typography :where(code, pre, .cm-inline-code, .cm-monospace, .cm-md-code-block, .math-block-source, .math-block-fence),
+.cm-editor.noema-visual-typography :where(code, pre, .cm-inline-code, .cm-monospace, .cm-md-code-block, .math-block-source, .math-block-fence),
 .published-note-page .cm-editor :where(code, pre, .cm-inline-code, .cm-monospace) {
   font-family: var(--aaron-font-mono);
 }
 
 /* The 116% change is prose-only.  These roots establish the old 20px scale
  * before their existing relative title/code/math rules run. */
-.cm-editor.aaronnote-visual-typography :where(.aaronnote-section-heading, .cm-org-env-heading-widget),
-.published-note-page .cm-editor .aaronnote-section-heading {
+.cm-editor.noema-visual-typography :where(.noema-section-heading, .cm-org-env-heading-widget),
+.published-note-page .cm-editor .noema-section-heading {
   font-size: var(--aaron-structural-size);
 }
 
-.cm-editor.aaronnote-visual-typography .cm-md-h1 { font-size: calc(var(--aaron-structural-size) * 1.75); }
-.cm-editor.aaronnote-visual-typography .cm-md-h2 { font-size: calc(var(--aaron-structural-size) * 1.45); }
-.cm-editor.aaronnote-visual-typography .cm-md-h3 { font-size: calc(var(--aaron-structural-size) * 1.2); }
-.cm-editor.aaronnote-visual-typography .cm-md-h4 { font-size: calc(var(--aaron-structural-size) * 1.05); }
-.cm-editor.aaronnote-visual-typography .cm-md-h5 { font-size: calc(var(--aaron-structural-size) * 0.95); }
-.cm-editor.aaronnote-visual-typography .cm-md-h6 { font-size: calc(var(--aaron-structural-size) * 0.9); }
+.cm-editor.noema-visual-typography .cm-md-h1 { font-size: calc(var(--aaron-structural-size) * 1.75); }
+.cm-editor.noema-visual-typography .cm-md-h2 { font-size: calc(var(--aaron-structural-size) * 1.45); }
+.cm-editor.noema-visual-typography .cm-md-h3 { font-size: calc(var(--aaron-structural-size) * 1.2); }
+.cm-editor.noema-visual-typography .cm-md-h4 { font-size: calc(var(--aaron-structural-size) * 1.05); }
+.cm-editor.noema-visual-typography .cm-md-h5 { font-size: calc(var(--aaron-structural-size) * 0.95); }
+.cm-editor.noema-visual-typography .cm-md-h6 { font-size: calc(var(--aaron-structural-size) * 0.9); }
 
-.cm-editor.aaronnote-visual-typography :where(.cm-inline-code, .cm-monospace, .cm-md-code-block, .math-block-source, .math-block-fence, .cm-math-source-line, .cm-math-inline, .aaronnote-math-inline, .cm-math-block, .cm-math-block-preview, .aaronnote-math-block, math-block),
-.published-note-page .cm-editor :where(code, pre, .cm-inline-code, .cm-monospace, .cm-math-inline, .aaronnote-math-inline, .cm-math-block, .cm-math-block-preview, .aaronnote-math-block, math-block) {
+.cm-editor.noema-visual-typography :where(.cm-inline-code, .cm-monospace, .cm-md-code-block, .math-block-source, .math-block-fence, .cm-math-source-line, .cm-math-inline, .noema-math-inline, .cm-math-block, .cm-math-block-preview, .noema-math-block, math-block),
+.published-note-page .cm-editor :where(code, pre, .cm-inline-code, .cm-monospace, .cm-math-inline, .noema-math-inline, .cm-math-block, .cm-math-block-preview, .noema-math-block, math-block) {
   font-size: var(--aaron-structural-size);
 }
 
-.cm-editor.aaronnote-visual-typography p,
+.cm-editor.noema-visual-typography p,
 .published-note-page .cm-editor p,
-.aaronnote-reveal-view .reveal .slides p {
+.noema-reveal-view .reveal .slides p {
   margin-block: 0 var(--aaron-prose-paragraph-gap);
   text-indent: 0;
 }
 
-.cm-editor.aaronnote-visual-typography p:last-child,
+.cm-editor.noema-visual-typography p:last-child,
 .published-note-page .cm-editor p:last-child,
-.aaronnote-reveal-view .reveal .slides p:last-child {
+.noema-reveal-view .reveal .slides p:last-child {
   margin-bottom: 0;
 }
 
-.cm-editor.aaronnote-visual-typography :where(ol, ul),
+.cm-editor.noema-visual-typography :where(ol, ul),
 .published-note-page .cm-editor :where(ol, ul),
-.aaronnote-reveal-view .reveal .slides :where(ol, ul) {
+.noema-reveal-view .reveal .slides :where(ol, ul) {
   margin-block: 0.35em 0.65em;
 }
 
-.cm-editor.aaronnote-visual-typography li + li,
+.cm-editor.noema-visual-typography li + li,
 .published-note-page .cm-editor li + li,
-.aaronnote-reveal-view .reveal .slides li + li {
+.noema-reveal-view .reveal .slides li + li {
   margin-top: var(--aaron-prose-list-item-gap);
 }
 
 /* Visual Markdown has bare CM lines rather than paragraph elements. */
-.cm-editor.aaronnote-visual-typography .cm-line.cm-prose-blank-line {
+.cm-editor.noema-visual-typography .cm-line.cm-prose-blank-line {
   /* A first blank line marks a paragraph break, as in TeX. Keep a stable
    * editable line box; never expand it merely because the caret entered. */
   line-height: 1.1;
@@ -179,13 +179,13 @@
   padding-block: 0;
 }
 
-.cm-editor.aaronnote-visual-typography .cm-line.cm-prose-blank-line-continued {
+.cm-editor.noema-visual-typography .cm-line.cm-prose-blank-line-continued {
   /* Extra source blanks remain navigable but add less vertical rhythm. */
   line-height: 0.8;
 }
 
 /* Semantic blocks own their external rhythm; measured roots never use margin. */
-.cm-editor.aaronnote-visual-typography :where(.cm-org-env-block, org-env-block) {
+.cm-editor.noema-visual-typography :where(.cm-org-env-block, org-env-block) {
   margin-block: 0;
   padding-top: var(--aaron-prose-block-gap);
   padding-bottom: var(--aaron-prose-block-gap);
@@ -203,22 +203,22 @@
   line-height: inherit;
 }
 
-.cm-editor.aaronnote-visual-typography :where(.cm-org-env-content, .org-env-content) p,
+.cm-editor.noema-visual-typography :where(.cm-org-env-content, .org-env-content) p,
 .published-note-page .cm-editor :where(.cm-org-env-content, .org-env-content) p {
   margin-block: 0 var(--aaron-prose-paragraph-gap);
 }
 
 /* Inline math participates in the prose baseline without changing KaTeX. */
-.cm-editor.aaronnote-visual-typography :where(.cm-math-inline, .cm-math-inline-active-placeholder, .cm-math-inline-editor, .aaronnote-math-inline),
-.published-note-page .cm-editor :where(.cm-math-inline, .cm-math-inline-active-placeholder, .cm-math-inline-editor, .aaronnote-math-inline) {
+.cm-editor.noema-visual-typography :where(.cm-math-inline, .cm-math-inline-active-placeholder, .cm-math-inline-editor, .noema-math-inline),
+.published-note-page .cm-editor :where(.cm-math-inline, .cm-math-inline-active-placeholder, .cm-math-inline-editor, .noema-math-inline) {
   display: inline-block;
   margin: 0;
   line-height: 1;
   vertical-align: -0.08em;
 }
 
-.cm-editor.aaronnote-visual-typography :where(math-block, .cm-math-block, .cm-math-block-preview, .cm-math-block-editor, .aaronnote-math-block),
-.published-note-page .cm-editor :where(math-block, .cm-math-block, .cm-math-block-preview, .cm-math-block-editor, .aaronnote-math-block) {
+.cm-editor.noema-visual-typography :where(math-block, .cm-math-block, .cm-math-block-preview, .cm-math-block-editor, .noema-math-block),
+.published-note-page .cm-editor :where(math-block, .cm-math-block, .cm-math-block-preview, .cm-math-block-editor, .noema-math-block) {
   box-sizing: border-box;
   display: block;
   width: 100%;
@@ -230,13 +230,13 @@
   text-align: center;
 }
 
-.cm-editor.aaronnote-visual-typography :where(.cm-math-block, .aaronnote-math-block) + :where(.cm-math-block, .aaronnote-math-block),
-.published-note-page .cm-editor :where(.cm-math-block, .aaronnote-math-block) + :where(.cm-math-block, .aaronnote-math-block) {
+.cm-editor.noema-visual-typography :where(.cm-math-block, .noema-math-block) + :where(.cm-math-block, .noema-math-block),
+.published-note-page .cm-editor :where(.cm-math-block, .noema-math-block) + :where(.cm-math-block, .noema-math-block) {
   padding-top: 0.35em;
 }
 
-.cm-editor.aaronnote-visual-typography :where(.cm-math-block, .aaronnote-math-block, math-block) > .katex-display,
-.published-note-page .cm-editor :where(.cm-math-block, .aaronnote-math-block, math-block) > .katex-display {
+.cm-editor.noema-visual-typography :where(.cm-math-block, .noema-math-block, math-block) > .katex-display,
+.published-note-page .cm-editor :where(.cm-math-block, .noema-math-block, math-block) > .katex-display {
   display: block;
   width: 100%;
   max-width: 100%;

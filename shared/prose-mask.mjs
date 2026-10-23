@@ -29,10 +29,9 @@ const PROSE_INLINE_COMMANDS = new Set([
   "subsubsection",
 ]);
 
-export const AARONNOTE_ACCEPTED_WORDS = [
+export const NOEMA_ACCEPTED_WORDS = [
   "noema",
-  "aaronnote",
-  "aaronnotes",
+  "noemas",
   "codemirror",
   "katex",
   "latex",
@@ -63,7 +62,7 @@ export const AARONNOTE_ACCEPTED_WORDS = [
   "qubo",
 ];
 
-const ACCEPTED_WORDS = new Set(AARONNOTE_ACCEPTED_WORDS.map((word) => word.toLowerCase()));
+const ACCEPTED_WORDS = new Set(NOEMA_ACCEPTED_WORDS.map((word) => word.toLowerCase()));
 
 function maskRange(chars, from, to) {
   const start = Math.max(0, from);
@@ -231,7 +230,7 @@ function maskInlineCommands(text, chars) {
   }
 }
 
-export function maskAaronnoteProse(text) {
+export function maskNoemaProse(text) {
   const source = String(text || "");
   const chars = source.split("");
 

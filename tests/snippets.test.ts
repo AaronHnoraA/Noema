@@ -13,7 +13,7 @@ import {
   snippetBrowserCompatibility,
   snippetPopupKeyAction,
   snippetScore,
-} from "../aaronnote/snippets.ts";
+} from "../pages/snippets.ts";
 
 class TextEditor {
   text = "";
@@ -59,7 +59,7 @@ class TextEditor {
   }
 }
 
-describe("aaronnote snippets", () => {
+describe("noema snippets", () => {
   test("exposes immutable pending tabstops for LiveTeX preview", () => {
     const text = new TextEditor();
     const session = new SnippetSession(text.asEditor());

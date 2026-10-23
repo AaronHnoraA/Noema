@@ -171,7 +171,7 @@
 - 重新进入后允许对未变化的计时段重基于新的文档版本，保留无关内容编辑。
   起始时间、任务引用、身份冲突或源解析失败不会被覆盖。未保存的 Emacs
   source buffer 会阻止写回；Web 发起的计时写回也经现有 gateway 的
-  `aaronnote.agenda.protected-sources` 查询内存中的缓冲区状态。
+  `noema.agenda.protected-sources` 查询内存中的缓冲区状态。
 - `v k` 显示来源文件、已记录的开始/停止时间和待处理原因；`R` 重试 active
   project 的停止写回，`K` 明确放弃待处理请求并采用已保存的源状态。
   Web Clock 提供相同行为；inactive project 不提供重试/采用源状态按钮。
@@ -230,7 +230,7 @@
 
 ### Remote 接续约束
 
-现有 `aaronnote.file.read/write` gateway 只接受 Markdown，读取还会建立
+现有 `noema.file.read/write` gateway 只接受 Markdown，读取还会建立
 host 生命周期的逐文件 watch；不能直接用来扫描项目，否则会越过项目 lease
 的释放边界。`readNote` 已支持该 external provider，但 Agenda 的 Markdown
 mutation 和 `.noema` notebook service 仍有直接 Node 文件 IO。后续需覆盖
@@ -281,7 +281,7 @@ remote read 或剥离 `/fs:` 前缀不能满足验收。
   hidden / dependency / 自定义 glob 在遍历之前剪枝，拒绝越界和符号链接，
   限制单文件 16 MiB。写入用相邻临时文件、再次核对版本和原子替换；不声称
   对任意外部程序持有跨进程锁。无轮询。
-- `aaronnote.agenda.source` 网关方法将 client lease 绑定到来源资源；关闭 scope
+- `noema.agenda.source` 网关方法将 client lease 绑定到来源资源；关闭 scope
   或网关断开会释放 helper 和监听。workspace recovery 替换进程，拒绝未完成
   请求并忽略旧 generation 回执。内存中的 Emacs 脏 buffer 检查支持 canonical
   与原生本机文件名的等价匹配。

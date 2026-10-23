@@ -3,8 +3,8 @@
  * `((<UUIDv7>))`. The timestamp-shaped IDs produced during the SiYuan-kernel
  * spike remain readable, but new identities follow Noema's UUIDv7 contract.
  * Renders as a link-styled chip; clicking
- * dispatches `aaronnote:open-block-ref` (bubbles, cancelable) on the widget
- * element the same way `editor-cm6.ts` dispatches `aaronnote:open-url` —
+ * dispatches `noema:open-block-ref` (bubbles, cancelable) on the widget
+ * element the same way `editor-cm6.ts` dispatches `noema:open-url` —
  * this module stays host-agnostic. The production and lab host adapters
  * resolve that event through the shared kernel block index.
  *
@@ -51,7 +51,7 @@ class BlockRefWidget extends WidgetType {
     link.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      link.dispatchEvent(new CustomEvent("aaronnote:open-block-ref", {
+      link.dispatchEvent(new CustomEvent("noema:open-block-ref", {
         bubbles: true,
         cancelable: true,
         detail: { id: this.id, text: this.label },

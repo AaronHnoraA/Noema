@@ -14,9 +14,9 @@
 (require 'subr-x)
 (require 'noema-research)
 
-(declare-function my/noema-api-call "init-aaronnote"
+(declare-function my/noema-api-call "init-noema"
                   (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
+(declare-function my/noema--ensure-server "init-noema" (&optional callback))
 (declare-function noema-research--cell-at-point "noema-research-mode" ())
 (declare-function noema-research-op-create "noema-research-mode"
                   (kind title parents after-id))
@@ -321,8 +321,8 @@ for channels that do network work, such as upstream Skill fetches."
   (unless (functionp callback) (user-error "Noema async API requires a callback"))
   ;; Dedicated global channels fail closed on an older host which would
   ;; otherwise ignore scope and fall back to its default project for writes.
-  (when (and (string-prefix-p "aaronnote:api:research:capability:" channel)
-             (not (string-prefix-p "aaronnote:api:research:capability:global:" channel))
+  (when (and (string-prefix-p "noema:api:research:capability:" channel)
+             (not (string-prefix-p "noema:api:research:capability:global:" channel))
              (equal (alist-get 'scope body) "global"))
     (setq channel (replace-regexp-in-string ":capability:" ":capability:global:" channel t t)))
   (if (and (fboundp 'my/noema--ensure-server)
@@ -366,7 +366,7 @@ resolution object and an error object.  SCOPE `global' excludes projects."
            (run-hook-with-args 'noema-capability-changed-hook root))
          (funcall callback resolution error-object)))))
       (condition-case err
-          (noema--host-call "aaronnote:api:research:capability:list"
+          (noema--host-call "noema:api:research:capability:list"
                            (noema-capability--body root `((requestedSkills . ,(vconcat requested-skills)))) finish)
         (error (funcall finish nil `((message . ,(error-message-string err)))))))))
 
@@ -397,7 +397,7 @@ The callback receives the configuration record and an error object.  This is
 a query; an absent project file is represented by the default empty model."
   (let ((root (noema-capability--target project scope)))
     (noema--host-call
-     "aaronnote:api:research:capability:config" (noema-capability--body root)
+     "noema:api:research:capability:config" (noema-capability--body root)
      (lambda (result error-object)
        (funcall callback (and result (noema--value result "capabilityConfig"))
                 error-object)))))
@@ -437,7 +437,7 @@ This mutates `noema-capabilities.json' through the semantic host API and calls
 CALLBACK with the host result and error object."
   (let ((root (noema-capability--target project scope)))
     (noema--host-call
-     "aaronnote:api:research:capability:mutate"
+     "noema:api:research:capability:mutate"
      (noema-capability--body root `((type . ,(noema--capability-type type)) (id . ,id)
                                    (enabled . ,(if enabled t :false))))
      (apply-partially #'noema-capability--after-write root callback))))
@@ -448,7 +448,7 @@ CALLBACK with the host result and error object."
 PATCH is a JSON-like merge-patch object; nil removes the patch from PROJECT."
   (let ((root (noema-capability--target project scope)))
     (noema--host-call
-     "aaronnote:api:research:capability:mutate"
+     "noema:api:research:capability:mutate"
      (noema-capability--body root `((type . ,(noema--capability-type type)) (id . ,id)
                                    (patch . ,(or patch :null))))
      (apply-partially #'noema-capability--after-write root callback))))
@@ -460,7 +460,7 @@ When ENABLED is non-nil, also select it.  CALLBACK receives the host result and
 error object.  This is a persistent mutation."
   (let ((root (noema-capability--target project scope)))
     (noema--host-call
-     "aaronnote:api:research:capability:mutate"
+     "noema:api:research:capability:mutate"
      (noema-capability--body root `((type . "mcp") (id . ,id) (definition . ,definition)
                                    ,@(when enabled '((enabled . t)))))
      (apply-partially #'noema-capability--after-write root callback))))
@@ -469,7 +469,7 @@ error object.  This is a persistent mutation."
   "Create or import a Skill in SCOPE, preserving existing directories."
   (let ((root (noema-capability--target project scope)))
     (noema--host-call
-     "aaronnote:api:research:capability:skill:install"
+     "noema:api:research:capability:skill:install"
      (noema-capability--body root `((id . ,(or id "")) (description . ,(or description ""))
                                    (sourceDirectory . ,(or source-directory ""))))
      (apply-partially #'noema-capability--after-write root callback))))
@@ -479,7 +479,7 @@ error object.  This is a persistent mutation."
 OPERATION is `patch' or `copy'.  Never writes the global source."
   (let ((root (noema-capability--target project 'project)))
     (unless (member operation '("patch" "copy")) (user-error "Use patch or copy"))
-    (noema--host-call "aaronnote:api:research:capability:skill:prepare"
+    (noema--host-call "noema:api:research:capability:skill:prepare"
                      `((cwd . ,root) (id . ,id) (operation . ,operation))
                      (apply-partially #'noema-capability--after-write root callback))))
 
@@ -490,7 +490,7 @@ DEFINITION is an alist with `members' (a vector of Skill ids) and optional
 `description', `title' and `preamble'.  A pack only links Skills by id."
   (let ((root (noema-capability--target project scope)))
     (noema--host-call
-     "aaronnote:api:research:capability:mutate"
+     "noema:api:research:capability:mutate"
      (noema-capability--body root `((type . "pack") (id . ,id) (definition . ,(or definition :null))))
      (apply-partially #'noema-capability--after-write root callback))))
 
@@ -502,7 +502,7 @@ DEFINITION is an alist with `members' (a vector of Skill ids) and optional
   "Report locked global Skills; with CHECK, also query their upstreams.
 CALLBACK receives the status object and an error object."
   (noema--host-call
-   "aaronnote:api:research:capability:global:skill:upstream:status"
+   "noema:api:research:capability:global:skill:upstream:status"
    `((scope . "global") (check . ,(if check t :false)))
    (lambda (result error-object)
      (funcall callback (and result (noema--value result "upstream")) error-object))
@@ -512,7 +512,7 @@ CALLBACK receives the status object and an error object."
 (cl-defun noema-skill-upstream-install (repository &key path ref license callback)
   "Install a global Skill from REPOSITORY at PATH and REF, and lock it."
   (noema--host-call
-   "aaronnote:api:research:capability:global:skill:upstream:install"
+   "noema:api:research:capability:global:skill:upstream:install"
    `((scope . "global") (repository . ,repository) (path . ,(or path "."))
      (ref . ,(or ref "HEAD")) (license . ,(or license "")))
    (apply-partially #'noema-capability--after-write :global callback)
@@ -523,7 +523,7 @@ CALLBACK receives the status object and an error object."
   "Move locked global Skill ID to its upstream head, or to COMMIT.
 With DRY-RUN, only report the diff.  FORCE discards local edits."
   (noema--host-call
-   "aaronnote:api:research:capability:global:skill:upstream:update"
+   "noema:api:research:capability:global:skill:upstream:update"
    `((scope . "global") (id . ,id) ,@(when commit `((commit . ,commit)))
      (force . ,(if force t :false)) (dryRun . ,(if dry-run t :false)))
    (if dry-run callback
@@ -539,7 +539,7 @@ With DRY-RUN, only report the diff.  FORCE discards local edits."
 (cl-defun noema-mcp-probe (id &key project scope callback)
   "Test PROJECT's resolved MCP ID and list its tools in a temporary session."
   (let ((root (noema-capability--target project scope)))
-    (noema--host-call "aaronnote:api:research:capability:probe"
+    (noema--host-call "noema:api:research:capability:probe"
                      (noema-capability--body root `((id . ,id))) callback)))
 
 (provide 'noema-api)

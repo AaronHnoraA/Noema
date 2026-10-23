@@ -61,6 +61,6 @@ export function imageLayoutStyle(layout: ImageLayoutAttrs): string {
 
 export function applyImageLayout(el: HTMLElement, layout: ImageLayoutAttrs): void {
   applyLayoutAttrs(el, "image", layout);
-  el.dataset.aaronnoteImageAlign = layout.align;
-  el.dataset.aaronnoteImageWrap = layout.wrap ? "true" : "false";
+  el.dataset.noemaImageAlign = layout.align;
+  el.dataset.noemaImageWrap = layout.wrap ? "true" : "false";
 }

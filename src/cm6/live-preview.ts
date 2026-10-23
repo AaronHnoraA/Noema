@@ -119,20 +119,20 @@ import {
 // ---------------------------------------------------------------------------
 // Asset URL helpers for raw HTML embedded in the live preview.
 // Markdown images go through renderMarkdownHTML → md.renderer.rules.image →
-// AaronnoteResolveAssetUrl automatically.  Raw <img> tags inside HTML
+// NoemaResolveAssetUrl automatically.  Raw <img> tags inside HTML
 // inline/block widgets bypass that path, so we patch their src attributes
 // explicitly after DOMPurify runs.
 // ---------------------------------------------------------------------------
 
 declare global {
   interface Window {
-    AaronnoteResolveAssetUrl?: (src: string) => string;
+    NoemaResolveAssetUrl?: (src: string) => string;
   }
 }
 
-/** Apply AaronnoteResolveAssetUrl to every <img src> inside ROOT that looks like a local path. */
+/** Apply NoemaResolveAssetUrl to every <img src> inside ROOT that looks like a local path. */
 function resolveHtmlImgSrcs(root: HTMLElement): void {
-  const resolver = window.AaronnoteResolveAssetUrl;
+  const resolver = window.NoemaResolveAssetUrl;
   if (!resolver) return;
   for (const img of root.querySelectorAll<HTMLImageElement>("img[src]")) {
     const src = img.getAttribute("src");
@@ -2085,9 +2085,9 @@ function renderEditableTable(
       setActiveCell(row, col);
       if (rectAnchor || (event.target instanceof Element && event.target.closest("button"))) return;
       const formula = event.target instanceof Element
-        ? event.target.closest<HTMLElement>(".aaronnote-math-inline") : null;
+        ? event.target.closest<HTMLElement>(".noema-math-inline") : null;
       const formulaIndex = formula && cell.contains(formula)
-        ? Array.from(cell.querySelectorAll(".aaronnote-math-inline")).indexOf(formula) : -1;
+        ? Array.from(cell.querySelectorAll(".noema-math-inline")).indexOf(formula) : -1;
       openSource(row, col, false, formulaIndex, formula ? renderedFormulaClickRatio(formula, event) : 0);
     });
     cell.addEventListener("keydown", (event) => {
@@ -2221,9 +2221,9 @@ class TableSourceCellWidget extends WidgetType {
       event.preventDefault();
       event.stopPropagation();
       const formula = event.target instanceof Element
-        ? event.target.closest<HTMLElement>(".aaronnote-math-inline") : null;
+        ? event.target.closest<HTMLElement>(".noema-math-inline") : null;
       const formulaIndex = formula && cell.contains(formula)
-        ? Array.from(cell.querySelectorAll(".aaronnote-math-inline")).indexOf(formula) : -1;
+        ? Array.from(cell.querySelectorAll(".noema-math-inline")).indexOf(formula) : -1;
       const formulaClickRatio = formula ? renderedFormulaClickRatio(formula, event) : 0;
       // A widget press can arrive while CM6 is reconciling decorations.
       // Enter the neighbouring cell after that DOM update has finished.

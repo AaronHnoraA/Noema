@@ -56,11 +56,11 @@ describe("inline math is the atomic unit while it is rendered", () => {
   });
 
   test("Source mode drops math atomicity entirely", async () => {
-    const { toggleAaronnoteMarkdownSource } = await import("../../src/cm6/editor-cm6.ts");
+    const { toggleNoemaMarkdownSource } = await import("../../src/cm6/editor-cm6.ts");
     const { editor, cleanup } = await mount("before \\(x^2\\) after");
     editor.setSelection(0, 0);
     expect(atomicSpans(editor.view).length).toBeGreaterThan(0);
-    expect(toggleAaronnoteMarkdownSource(editor.view)).toBe(true);
+    expect(toggleNoemaMarkdownSource(editor.view)).toBe(true);
     expect(atomicSpans(editor.view)).toEqual([]);
     cleanup();
   });

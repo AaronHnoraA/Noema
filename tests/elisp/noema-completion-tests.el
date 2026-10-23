@@ -268,10 +268,10 @@
   (let ((my/noema--ready t) request)
     (cl-letf (((symbol-function 'noema--host-call-now)
                (lambda (channel body _callback) (setq request (cons channel body)))))
-      (noema--host-call "aaronnote:api:research:capability:mutate" '((scope . "global")) #'ignore)
-      (should (equal (car request) "aaronnote:api:research:capability:global:mutate"))
-      (noema--host-call "aaronnote:api:research:capability:mutate" '((cwd . "/project/")) #'ignore)
-      (should (equal (car request) "aaronnote:api:research:capability:mutate")))))
+      (noema--host-call "noema:api:research:capability:mutate" '((scope . "global")) #'ignore)
+      (should (equal (car request) "noema:api:research:capability:global:mutate"))
+      (noema--host-call "noema:api:research:capability:mutate" '((cwd . "/project/")) #'ignore)
+      (should (equal (car request) "noema:api:research:capability:mutate")))))
 
 (ert-deftest noema-capability-library-buttons-retain-their-own-targets ()
   (save-window-excursion

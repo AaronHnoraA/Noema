@@ -17,7 +17,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import { createEditor } from "../src/editor-api.ts";
-import { createVimLite } from "../aaronnote/vim-lite.ts";
+import { createVimLite } from "../pages/vim-lite.ts";
 
 // "Thus \(A_e\) is alternating." — the formula occupies [5, 12).
 const TEXT = "Thus \\(A_e\\) is alternating. Equivalently, it corresponds.\n";

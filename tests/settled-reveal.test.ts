@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 
-import { revealWhileLayoutSettles } from "../aaronnote/settled-reveal.ts";
+import { revealWhileLayoutSettles } from "../pages/settled-reveal.ts";
 
 describe("revealing the cursor while a note settles", () => {
   beforeEach(() => {

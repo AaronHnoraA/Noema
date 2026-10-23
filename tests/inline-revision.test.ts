@@ -14,10 +14,10 @@ describe("native @@revision workflow", () => {
     const { editor, cleanup } = mount(source);
     try {
       editor.setMarkdownSelection(source.length);
-      const widget = document.querySelector<HTMLElement>(".aaronnote-revision")!;
+      const widget = document.querySelector<HTMLElement>(".noema-revision")!;
       // `red` is the legacy spelling of the `error` review kind.
       expect(widget.dataset.revisionStyle).toBe("error");
-      expect(widget.querySelector(".aaronnote-revision-advice")?.textContent).toBe("new claim");
+      expect(widget.querySelector(".noema-revision-advice")?.textContent).toBe("new claim");
       const accept = Array.from(widget.querySelectorAll("button")).find((button) => button.textContent === "Accept")!;
       accept.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
       expect(editor.getMarkdown()).toBe("new claim\nTail");
@@ -32,8 +32,8 @@ describe("native @@revision workflow", () => {
     const { editor, cleanup } = mount(source);
     try {
       editor.setMarkdownSelection(source.length);
-      expect(document.querySelectorAll(".aaronnote-revision")).toHaveLength(1);
-      const keep = Array.from(document.querySelectorAll<HTMLButtonElement>(".aaronnote-revision button"))
+      expect(document.querySelectorAll(".noema-revision")).toHaveLength(1);
+      const keep = Array.from(document.querySelectorAll<HTMLButtonElement>(".noema-revision button"))
         .find((button) => button.textContent === "Keep")!;
       keep.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
       expect(editor.getMarkdown()).toContain(`old\n\\(${command}\\)`);

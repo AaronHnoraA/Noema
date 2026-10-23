@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { expandSnippetBody, snippetBrowserCompatibility } from "../aaronnote/snippets.ts";
+import { expandSnippetBody, snippetBrowserCompatibility } from "../pages/snippets.ts";
 
 const pairs: Record<string, string> = {
   algorithm: "algoo", assumption: "assumee", attention: "attt", axiom: "axiomm",

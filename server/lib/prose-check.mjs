@@ -7,8 +7,8 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 
 import {
-  AARONNOTE_ACCEPTED_WORDS,
-  maskAaronnoteProse,
+  NOEMA_ACCEPTED_WORDS,
+  maskNoemaProse,
   rangeHasCheckedText,
 } from "../../shared/prose-mask.mjs";
 import {
@@ -22,12 +22,12 @@ const MAX_DIAGNOSTICS_PER_TOOL = 240;
 const MAX_CHECK_CHARS = 180_000;
 const CHUNK_TARGET_CHARS = 45_000;
 const MAX_CHUNKS_PER_TOOL = 6;
-const WORKSPACE_ROOT = process.env.AARONNOTE_WORKSPACE_ROOT || join(homedir(), ".config", "emacs");
-const USER_WORDS_FILE = process.env.AARONNOTE_PROSE_WORDS
+const WORKSPACE_ROOT = process.env.NOEMA_WORKSPACE_ROOT || join(homedir(), ".config", "emacs");
+const USER_WORDS_FILE = process.env.NOEMA_PROSE_WORDS
   || join(WORKSPACE_ROOT, "etc", "prose-accepted-words.txt");
 // Rules the user turned off from a diagnostic card.  The file sits beside the
 // accepted-word list so Emacs' Flymake backend reads the same two files.
-const DISABLED_RULES_FILE = process.env.AARONNOTE_PROSE_DISABLED_RULES
+const DISABLED_RULES_FILE = process.env.NOEMA_PROSE_DISABLED_RULES
   || join(dirname(USER_WORDS_FILE), "prose-disabled-rules.txt");
 // Paragraph results keyed by language, level and exact paragraph text.  An
 // edit therefore re-sends only the paragraph it touched, as the official
@@ -290,7 +290,7 @@ function createCheckChunksFromSegments(segments, totalChars) {
       break;
     }
     const remaining = MAX_CHECK_CHARS - checkedChars;
-    const masked = maskAaronnoteProse(segment.text);
+    const masked = maskNoemaProse(segment.text);
     const info = createCheckChunks(masked, [{ from: 0, to: Math.min(masked.length, remaining) }]);
     for (const chunk of info.chunks) {
       if (chunks.length >= MAX_CHUNKS_PER_TOOL || checkedChars >= MAX_CHECK_CHARS) {
@@ -663,7 +663,7 @@ async function runLanguageToolRemote(combined, sourceLength, settings, signal, p
 }
 
 async function runLanguageToolCli(combined, sourceLength, settings, signal) {
-  const bin = await resolveTool("languagetool", "AARONNOTE_LANGUAGETOOL_BIN");
+  const bin = await resolveTool("languagetool", "NOEMA_LANGUAGETOOL_BIN");
   const args = [
     "--encoding", "utf8",
     "--json",
@@ -881,7 +881,7 @@ export async function runExternalProseChecks({
     if (segmentList.length > 0) {
       chunkInfo = createCheckChunksFromSegments(segmentList, totalChars);
     } else {
-      const masked = maskAaronnoteProse(source);
+      const masked = maskNoemaProse(source);
       chunkInfo = createCheckChunks(masked, ranges);
       for (const chunk of chunkInfo.chunks) chunk.sourceText = source.slice(chunk.from, chunk.to);
     }
@@ -899,7 +899,7 @@ export async function runExternalProseChecks({
     ]);
     throwIfAborted(controller.signal);
     const acceptedWords = new Set([
-      ...AARONNOTE_ACCEPTED_WORDS.map(normalizedAcceptedWord),
+      ...NOEMA_ACCEPTED_WORDS.map(normalizedAcceptedWord),
       ...userWords,
     ]);
     const diagnostics = (result.diagnostics ?? [])

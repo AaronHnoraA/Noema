@@ -43,8 +43,8 @@ function args() {
   return {
     write: values.includes("--write"),
     check: values.includes("--check") || !values.includes("--write"),
-    latexGit: take("--latex-workshop-git") || process.env.AARONNOTE_LATEX_WORKSHOP_GIT || "",
-    overleafGit: take("--overleaf-git") || process.env.AARONNOTE_OVERLEAF_GIT || "",
+    latexGit: take("--latex-workshop-git") || process.env.NOEMA_LATEX_WORKSHOP_GIT || "",
+    overleafGit: take("--overleaf-git") || process.env.NOEMA_OVERLEAF_GIT || "",
   };
 }
 

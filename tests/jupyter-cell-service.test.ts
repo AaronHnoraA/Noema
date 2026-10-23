@@ -14,7 +14,7 @@ async function withService(run: (ctx: {
   service: ReturnType<typeof createJupyterCellService>;
   note: string;
 }) => Promise<void>): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), "aaronnote-jcell-"));
+  const root = await mkdtemp(join(tmpdir(), "noema-jcell-"));
   const service = createJupyterCellService({ runtimeRoot: root, noteRoot: root, workspaceRoot: root });
   const note = join(root, "note.md");
   await writeFile(note, "# note\n", "utf8");
@@ -150,10 +150,10 @@ describe("jupyter cell service (no kernel)", () => {
       language: "python",
     }));
     await writeFile(join(bundled, "kernel.json"), JSON.stringify({
-      argv: ["@AARONNOTE_JUPYTER_ROOT@/bin/python-jupyter-kernel", "-f", "{connection_file}"],
+      argv: ["@NOEMA_JUPYTER_ROOT@/bin/python-jupyter-kernel", "-f", "{connection_file}"],
       display_name: "Noema Python",
       language: "python",
-      env: { JUPYTER_RUNTIME_DIR: "@AARONNOTE_JUPYTER_STATE_ROOT@/runtime" },
+      env: { JUPYTER_RUNTIME_DIR: "@NOEMA_JUPYTER_STATE_ROOT@/runtime" },
     }));
     const note = join(root, "note.md");
     await writeFile(note, "# note\n", "utf8");
@@ -193,7 +193,7 @@ describe("jupyter cell service (no kernel)", () => {
   test("openScript delegates opening to the configured host", async () => {
     const opened: Array<{ file: string; line: number; col: number }> = [];
     let kernelspecCalls = 0;
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-jcell-open-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-jcell-open-"));
     const note = join(root, "note.md");
     await writeFile(note, "# note\n", "utf8");
     const service = createJupyterCellService({
@@ -318,7 +318,7 @@ describe("jupyter cell service (no kernel)", () => {
   });
 
   test("durationFromEnv uses defaults only when unset or invalid", () => {
-    const name = "AARONNOTE_TEST_DURATION_FROM_ENV";
+    const name = "NOEMA_TEST_DURATION_FROM_ENV";
     const previous = process.env[name];
     try {
       delete process.env[name];

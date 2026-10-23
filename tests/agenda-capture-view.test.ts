@@ -1,5 +1,5 @@
 import {describe,expect,test} from '@voidzero-dev/vite-plus-test';
-import {promptAgendaCapture,type CaptureCatalog} from '../aaronnote/agenda-capture-view.ts';
+import {promptAgendaCapture,type CaptureCatalog} from '../pages/agenda-capture-view.ts';
 // @ts-ignore Headless ESM catalogue used by both clients.
 import {createAgendaCaptureTemplates} from '../server/lib/agenda-capture-templates.mjs';
 const scopes=[{id:'knowledge',kind:'knowledge',root:'/vault'},{id:'project:x',kind:'project',root:'/project'}];
@@ -12,7 +12,7 @@ describe('shared Web capture form',()=>{
     const reply=promptAgendaCapture(createAgendaCaptureTemplates().catalog(),scopes,'project:x',new AbortController().signal,async body=>{
       attempts.push(body);if(attempts.length===1)await firstWrite;
     });
-    const dialog=document.querySelector<HTMLDialogElement>('.aaronnote-agenda-capture')!;
+    const dialog=document.querySelector<HTMLDialogElement>('.noema-agenda-capture')!;
     const text=dialog.querySelector<HTMLInputElement>('[name=text]')!;text.value='Keep my draft';
     const file=dialog.querySelector<HTMLInputElement>('[name=file]')!;file.value='archive/inbox.md';
     const form=dialog.querySelector('form')!;
@@ -32,7 +32,7 @@ describe('shared Web capture form',()=>{
     const controller=new AbortController();let rejectWrite!:(error:Error)=>void;
     const write=new Promise<void>((_resolve,reject)=>{rejectWrite=reject;});
     const reply=promptAgendaCapture(createAgendaCaptureTemplates().catalog(),scopes,'knowledge',controller.signal,()=>write);
-    const dialog=document.querySelector<HTMLDialogElement>('.aaronnote-agenda-capture')!;
+    const dialog=document.querySelector<HTMLDialogElement>('.noema-agenda-capture')!;
     dialog.querySelector<HTMLInputElement>('[name=text]')!.value='Pending';
     dialog.querySelector('form')!.dispatchEvent(new Event('submit',{cancelable:true}));
     controller.abort();expect(await reply).toBeNull();
@@ -42,7 +42,7 @@ describe('shared Web capture form',()=>{
   test('selects template/scope, preserves title and submits reviewed fields',async()=>{
     const controller=new AbortController(),catalog=createAgendaCaptureTemplates().catalog() as CaptureCatalog;
     const reply=promptAgendaCapture(catalog,scopes,'project:x',controller.signal);
-    const dialog=document.querySelector<HTMLDialogElement>('.aaronnote-agenda-capture')!;
+    const dialog=document.querySelector<HTMLDialogElement>('.noema-agenda-capture')!;
     (dialog.querySelector('[name=text]') as HTMLInputElement).value='Review';
     const template=dialog.querySelector<HTMLSelectElement>('[name=template]')!;template.value='deadline';template.dispatchEvent(new Event('change'));
     expect((dialog.querySelector('[name=text]') as HTMLInputElement).value).toBe('Review');
@@ -56,6 +56,6 @@ describe('shared Web capture form',()=>{
     const controller=new AbortController();
     const reply=promptAgendaCapture(createAgendaCaptureTemplates().catalog(),scopes,'knowledge',controller.signal);
     controller.abort();expect(await reply).toBeNull();
-    expect(document.querySelector('.aaronnote-agenda-capture')).toBeNull();
+    expect(document.querySelector('.noema-agenda-capture')).toBeNull();
   });
 });

@@ -51,7 +51,7 @@
                 (file . ,(alist-get 'file item))
                 (notebookId . ,(alist-get 'notebookId item))
                 (workNodeId . ,(alist-get 'id item)))
-            `((operation . "aaronnote:api:notes:patch-todo")
+            `((operation . "noema:api:notes:patch-todo")
               (body . ((file . ,(alist-get 'file item))
                        (selectorId . ,(if (alist-get 'stable item) (alist-get 'id item) ""))
                        (index . ,(alist-get 'index item))

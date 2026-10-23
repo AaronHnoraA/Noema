@@ -608,12 +608,12 @@ describe("research notebook files", () => {
       expect((await readResearchNotebookFile(file)).notebook.metadata.noema_research.title).toBe("N");
 
       const router = new ApiRouter().register(createResearchApiHandlers(service), "research");
-      const snapshot = await router.call("aaronnote:api:research:notebook:snapshot", [{ file }]);
+      const snapshot = await router.call("noema:api:research:notebook:snapshot", [{ file }]);
       expect(snapshot).toMatchObject({ type: "research", ok: true, revision: created.revision });
 
       const readOnly = new ApiRouter().register(createResearchApiHandlers(createResearchNotebookService({ allowWrite: false })));
-      await expect(readOnly.call("aaronnote:api:research:cell:create", [{ file, kind: "work" }])).rejects.toMatchObject({ statusCode: 403 });
-      await expect(router.call("aaronnote:api:research:notebook:snapshot", [{ file: "relative.noema" }])).rejects.toMatchObject({ statusCode: 400 });
+      await expect(readOnly.call("noema:api:research:cell:create", [{ file, kind: "work" }])).rejects.toMatchObject({ statusCode: 403 });
+      await expect(router.call("noema:api:research:notebook:snapshot", [{ file: "relative.noema" }])).rejects.toMatchObject({ statusCode: 400 });
       expect(await findResearchRepositoryRoot(file)).toBeNull();
     });
   });

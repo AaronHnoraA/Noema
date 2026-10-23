@@ -28,7 +28,7 @@ const MINIMAL_TEMPLATE = `\\documentclass[11pt]{article}
 \\usepackage{graphicx}
 \\usepackage{hyperref}
 
-\\usepackage{aaronnote-macros}
+\\usepackage{noema-macros}
 
 \\title{ {{title}} }
 \\date{ {{date}} }
@@ -382,7 +382,7 @@ function flushParagraph(out, paragraph, options = {}) {
   paragraph.length = 0;
 }
 
-export function aaronnoteMarkdownToLatex(markdown, options = {}) {
+export function noemaMarkdownToLatex(markdown, options = {}) {
   const lines = String(markdown ?? "").replace(/\r\n?/g, "\n").split("\n");
   const meta = parseMeta(lines);
   const bodyLines = stripMeta(lines);
@@ -563,9 +563,9 @@ export function aaronnoteMarkdownToLatex(markdown, options = {}) {
   };
 }
 
-// Canonical name for the deterministic base conversion. `aaronnoteMarkdownToLatex`
+// Canonical name for the deterministic base conversion. `noemaMarkdownToLatex`
 // is kept as an alias for callers and tests that predate the mechanical/codex split.
-export const mechanicalConvert = aaronnoteMarkdownToLatex;
+export const mechanicalConvert = noemaMarkdownToLatex;
 
 export function bibliographyReferencesToLatex(references = [], citationKeyById = {}) {
   const refs = Array.isArray(references) ? references : [];
@@ -686,7 +686,7 @@ export function latexAnnotationPreamble() {
 export function latexMacrosPackage(macros, features = {}) {
   return [
     "\\NeedsTeXFormat{LaTeX2e}",
-    "\\ProvidesPackage{aaronnote-macros}[2026/07/12 Noema shared macros]",
+    "\\ProvidesPackage{noema-macros}[2026/07/12 Noema shared macros]",
     "\\RequirePackage{graphicx}",
     "\\RequirePackage{booktabs,longtable,array,calc,etoolbox}",
     "\\RequirePackage{footnote}",
@@ -757,9 +757,6 @@ export async function readLatexTemplate(templatesRoot, templatePath = "") {
   if (templatesRoot) {
     candidates.push(join(resolve(templatesRoot), "latex", "noema-article.tex"));
     candidates.push(join(resolve(templatesRoot), "tex", "noema-article.tex"));
-    // Compatibility with exports configured before the Noema rename.
-    candidates.push(join(resolve(templatesRoot), "latex", "aaronnote-article.tex"));
-    candidates.push(join(resolve(templatesRoot), "tex", "aaronnote-article.tex"));
   }
   for (const candidate of candidates) {
     try {
@@ -770,10 +767,10 @@ export async function readLatexTemplate(templatesRoot, templatePath = "") {
 }
 
 export function defaultLatexOutputPath(sourceFile, title = "") {
-  const file = resolve(String(sourceFile || "aaronnote-export.md"));
+  const file = resolve(String(sourceFile || "noema-export.md"));
   const ext = extname(file);
   if (ext) return file.slice(0, -ext.length) + ".tex";
-  const clean = String(title || "aaronnote-export").trim().replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "") || "aaronnote-export";
+  const clean = String(title || "noema-export").trim().replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^-+|-+$/g, "") || "noema-export";
   return resolve(dirname(file), `${clean}.tex`);
 }
 

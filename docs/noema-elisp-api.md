@@ -96,5 +96,5 @@ The API currently delegates structural changes to the mature
 `noema-research-op-*` transaction backend and Run effects to
 `noema-agent-worker`. Those functions are implementation details: new UI,
 scripts and agent instructions should call `noema-*` public functions instead.
-The `aaronnote:api:*` names remain wire compatibility contracts, not the Elisp
+The `noema:api:*` names remain wire compatibility contracts, not the Elisp
 domain interface.

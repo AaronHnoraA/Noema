@@ -20,7 +20,7 @@ export function renderTocInlineMath(target: HTMLElement, source: string, fallbac
     if (range.from > cursor) fragment.append(document.createTextNode(text.slice(cursor, range.from)));
 
     const math = document.createElement("span");
-    math.className = "aaronnote-toc-math";
+    math.className = "noema-toc-math";
     const rendered = renderMathHTML(range.tex, { displayMode: false });
     if (rendered.error) {
       math.classList.add("is-error");

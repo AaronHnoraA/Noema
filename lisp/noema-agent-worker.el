@@ -18,11 +18,11 @@
 (require 'magent-ledger)
 (require 'magent-runtime-queue)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
-(declare-function my/noema--host-file "init-aaronnote" (file))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
+(declare-function my/noema--ensure-server "init-noema" (&optional callback))
+(declare-function my/noema--host-file "init-noema" (file))
 (declare-function my/noema-jupyter-output-open-document
-                  "init-aaronnote" (payload &optional focus))
+                  "init-noema" (payload &optional focus))
 (declare-function noema-agent-promote--session-spec "noema-agent-promote" (&optional buffer title goal))
 (declare-function noema-sessions-open-reference "noema-sessions" (root &optional name session-id))
 (declare-function noema-research-graph-refresh-runs "noema-research-graph" ())
@@ -320,7 +320,7 @@ D-035: the Pi manager uses it to stop an agent that outlived its project.")
 (defun noema-agent-worker--reconcile-bootstrap-failure (worker reason)
   "Resolve an ambiguous cleanup response for WORKER without replaying it."
   (noema-agent-worker--api
-   "aaronnote:api:research:run:get"
+   "noema:api:research:run:get"
    `((root . ,(noema-agent-worker-root worker))
      (runId . ,(noema-agent-worker-run-id worker)))
    (lambda (result error-object)
@@ -351,7 +351,7 @@ D-035: the Pi manager uses it to stop an agent that outlived its project.")
               (noema-agent-worker-bootstrap-failing worker))
     (setf (noema-agent-worker-bootstrap-failing worker) t)
     (noema-agent-worker--api
-     "aaronnote:api:research:run:fail-preparing"
+     "noema:api:research:run:fail-preparing"
      ;; The worker body carries notebookFile, so Node persists the failure as
      ;; this Run's cell output instead of leaving OutputArea waiting for it.
      (noema-agent-worker--worker-body worker `(failureReason . ,reason))
@@ -679,7 +679,7 @@ Emacs made long-running sessions consume memory twice."
                    (noema-agent-worker--drain-reports worker))))))
         (condition-case error-object
             (noema-agent-worker--api
-             "aaronnote:api:research:worker:events"
+             "noema:api:research:worker:events"
              (noema-agent-worker--worker-body worker (cons 'events (vconcat events)))
              finish)
           (error (funcall finish nil (error-message-string error-object))))))))
@@ -849,7 +849,7 @@ file."
            (noema-agent-worker-terminal-events worker))
       (unless (noema-agent-worker-terminal-reporting worker)
         (noema-agent-worker--api
-         "aaronnote:api:research:run:get"
+         "noema:api:research:run:get"
          `((root . ,(noema-agent-worker-root worker)) (runId . ,(noema-agent-worker-run-id worker)))
          (lambda (result error-object)
            (let ((status (noema-agent-worker--string (noema-agent-worker--value result "run") "status")))
@@ -927,7 +927,7 @@ file."
   (when (and (not (noema-agent-worker-terminal worker))
              (noema-agent-worker-epoch worker))
     (noema-agent-worker--api
-     "aaronnote:api:research:worker:lease"
+     "noema:api:research:worker:lease"
      (append (noema-agent-worker--worker-body worker)
              `((ttlMillis
                 . ,(* 1000
@@ -955,7 +955,7 @@ Only a still-live leased WORKER may pass the stored answer to its ACP callback;
 `noema-agent-worker-apply-command' checks the exact epoch again."
   (dolist (permission-id (copy-sequence (noema-agent-worker-pending-permissions worker)))
     (noema-agent-worker--api
-     "aaronnote:api:research:permission:get"
+     "noema:api:research:permission:get"
      `((root . ,(noema-agent-worker-root worker)) (id . ,permission-id))
      (lambda (result error-object)
        (unless (or error-object (noema-agent-worker-terminal worker))
@@ -969,7 +969,7 @@ Only a still-live leased WORKER may pass the stored answer to its ACP callback;
                 (epoch . ,(noema-agent-worker--value permission "epoch"))))))))))
   (dolist (request-id (copy-sequence (noema-agent-worker-pending-inputs worker)))
     (noema-agent-worker--api
-     "aaronnote:api:research:input:get"
+     "noema:api:research:input:get"
      `((root . ,(noema-agent-worker-root worker)) (id . ,request-id))
      (lambda (result error-object)
        (unless (or error-object (noema-agent-worker-terminal worker))
@@ -1058,7 +1058,7 @@ this point goes beyond the project, so Attention opens to decide it."
       t)
      (t
         (noema-agent-worker--api
-         "aaronnote:api:research:worker:permission"
+         "noema:api:research:worker:permission"
          (append (noema-agent-worker--worker-body worker)
                  `((nativeRequestId . ,(format "%s" request-id))
                    (action . ,(noema-agent-worker--action tool-call))
@@ -1194,7 +1194,7 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
 		  (string-empty-p (format "%s" prompt)))
       nil
     (noema-agent-worker--api
-     "aaronnote:api:research:worker:input"
+     "noema:api:research:worker:input"
      (append (noema-agent-worker--worker-body worker)
 		     `((nativeRequestId . ,(format "%s" native-request-id))
 		       (prompt . ,(format "%s" prompt))
@@ -1242,7 +1242,7 @@ RESPOND receives the eventual JSON answer. Return non-nil when accepted."
     (unless entry (user-error "No pending Noema permission %s" permission-id))
     (let ((worker (car entry)))
       (noema-agent-worker--api
-       "aaronnote:api:research:permission:decide"
+       "noema:api:research:permission:decide"
        `((root . ,(noema-agent-worker-root worker))
          (permissionId . ,permission-id) (optionId . ,option-id)
          (expectedVersion . 1) (decidedBy . "emacs"))
@@ -1456,7 +1456,7 @@ The kernel already recorded the cancellation, so this is not a failure."
 (defun noema-agent-worker--start-run (worker)
   "Tell the kernel physical execution is starting, then prompt the ACP agent."
   (noema-agent-worker--api
-   "aaronnote:api:research:worker:start"
+   "noema:api:research:worker:start"
    (noema-agent-worker--worker-body worker)
    (lambda (_result error-object)
      (if error-object
@@ -1483,7 +1483,7 @@ The kernel already recorded the cancellation, so this is not a failure."
   "Attach a pre-dispatch fresh Run to WORKER's new logical Session if needed."
   (if (string-empty-p (or (noema-agent-worker--string (noema-agent-worker-routing worker) "sessionId") ""))
       (noema-agent-worker--api
-       "aaronnote:api:research:worker:attach"
+       "noema:api:research:worker:attach"
        (noema-agent-worker--worker-body worker)
        (lambda (_result error-object)
          (if error-object
@@ -1502,7 +1502,7 @@ The kernel already recorded the cancellation, so this is not a failure."
 (defun noema-agent-worker--acquire-lease (worker)
   "Acquire a fresh lease before changing any Run state."
   (noema-agent-worker--api
-   "aaronnote:api:research:worker:lease"
+   "noema:api:research:worker:lease"
    (append (noema-agent-worker--worker-body worker) '((ttlMillis . 30000)))
    (lambda (result error-object)
      (if error-object
@@ -1520,7 +1520,7 @@ The kernel already recorded the cancellation, so this is not a failure."
     (unless (and (stringp native) (not (string-empty-p native)))
       (user-error "ACP session initialization produced no native session id"))
     (noema-agent-worker--api
-     "aaronnote:api:research:session:promote"
+     "noema:api:research:session:promote"
      `((root . ,(noema-agent-worker-root worker))
        (cwd . ,(noema-agent-worker-root worker))
        (executionTarget . ,(noema-agent-worker-target worker))
@@ -1805,7 +1805,7 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
                     (noema-agent-worker--wait-for-slot worker)
                 (setf (noema-agent-worker-queue-state worker) 'preparing)
                 (noema-agent-worker--api
-                 "aaronnote:api:research:run:prepare"
+                 "noema:api:research:run:prepare"
                  (noema-agent-worker-prepare-body worker)
                  (lambda (result error-object)
                    (if (eq (noema-agent-worker-queue-state worker) 'cancelling)
@@ -1932,7 +1932,7 @@ work DAG.  No ACP prompt is sent until its frozen RunSpec is stored."
 When RESULT froze a Run, record its cancellation so the document shows it."
   (when-let* ((run-id (noema-agent-worker--string (noema-agent-worker--value result "run") "id")))
     (noema-agent-worker--api
-     "aaronnote:api:research:run:cancel"
+     "noema:api:research:run:cancel"
      `((root . ,(or (noema-agent-worker--string result "root") (noema-agent-worker-root worker)))
        (runId . ,run-id) (requestedBy . "emacs"))
      (lambda (_result error-object)
@@ -2100,7 +2100,7 @@ latest durable handoff as explicit context."
     (let ((root (buffer-local-value 'noema-agent-acp-session-root buffer))
 	  (session-id (buffer-local-value 'noema-agent-promote--session-id buffer)))
       (noema-agent-worker--api
-	"aaronnote:api:research:session:compact"
+	"noema:api:research:session:compact"
 	`((cwd . ,root) (sessionId . ,session-id))
 	(lambda (result error-object)
 	  (if error-object
@@ -2123,7 +2123,7 @@ Registered artifacts and durable session state are never deleted."
 		  (noema-project-root default-directory)
 		  (user-error "No containing Noema project"))))
     (noema-agent-worker--api
-     "aaronnote:api:research:cache:maintain"
+     "noema:api:research:cache:maintain"
      `((cwd . ,root))
      (lambda (result error-object)
        (if error-object
@@ -2182,7 +2182,7 @@ below.  A document nobody has open is visited and saved."
 (defun noema-agent-worker--ack-coordinator-request (root request state &optional reason)
   "Acknowledge coordinator REQUEST in ROOT with terminal STATE and REASON."
   (noema-agent-worker--api
-   "aaronnote:api:research:coordinator:complete"
+   "noema:api:research:coordinator:complete"
    `((cwd . ,root)
      (id . ,(noema-agent-worker--string request "id"))
      (owner . ,(format "emacs:%s" (emacs-pid)))
@@ -2205,7 +2205,7 @@ queued Run through the frozen RunSpec, lease and permission path;
 an idle session's agent process and keeps its name and history."
   (interactive (list (expand-file-name default-directory)))
   (noema-agent-worker--api
-   "aaronnote:api:research:coordinator:claim"
+   "noema:api:research:coordinator:claim"
    `((cwd . ,root) (owner . ,(format "emacs:%s" (emacs-pid))))
    (lambda (result error-object)
      (if error-object

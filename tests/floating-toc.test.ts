@@ -3,7 +3,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { createFloatingTocPanel, inlineTagAnchorsFromText, markdownHeadingsFromText, orgEnvAnchorsFromText } from "../aaronnote/floating-toc.ts";
+import { createFloatingTocPanel, inlineTagAnchorsFromText, markdownHeadingsFromText, orgEnvAnchorsFromText } from "../pages/floating-toc.ts";
 import { createEditor } from "../src/lib.ts";
 import { tocIndexExtension, tocIndexFromState } from "../src/cm6/toc-index.ts";
 
@@ -148,22 +148,22 @@ describe("floating toc heading scan", () => {
 
       panel.toggle();
       panel.update();
-      expect(toc.querySelector(".aaronnote-toc-org-env")).toBeNull();
-      expect(toc.querySelector(".aaronnote-toc-org-filter")).toBeNull();
-      expect(toc.querySelector(".aaronnote-toc-resize-handle")).toBeTruthy();
+      expect(toc.querySelector(".noema-toc-org-env")).toBeNull();
+      expect(toc.querySelector(".noema-toc-org-filter")).toBeNull();
+      expect(toc.querySelector(".noema-toc-resize-handle")).toBeTruthy();
       expect(toc.textContent).toContain("#tensor");
 
-      toc.querySelector<HTMLButtonElement>(".aaronnote-toc-org-toggle")!.click();
-      const orgRow = toc.querySelector<HTMLElement>(".aaronnote-toc-org-row")!;
-      expect(orgRow.querySelector(".aaronnote-toc-org-env")?.textContent).toBe("tensor minimal subspaces");
-      expect(orgRow.querySelector(".aaronnote-toc-org-marker")?.textContent).toBe("C");
+      toc.querySelector<HTMLButtonElement>(".noema-toc-org-toggle")!.click();
+      const orgRow = toc.querySelector<HTMLElement>(".noema-toc-org-row")!;
+      expect(orgRow.querySelector(".noema-toc-org-env")?.textContent).toBe("tensor minimal subspaces");
+      expect(orgRow.querySelector(".noema-toc-org-marker")?.textContent).toBe("C");
       expect(orgRow.style.getPropertyValue("--toc-org-color")).toContain("--c-convention");
-      const outlineItems = Array.from(list.querySelectorAll<HTMLElement>(".aaronnote-toc-item"));
+      const outlineItems = Array.from(list.querySelectorAll<HTMLElement>(".noema-toc-item"));
       expect(outlineItems.findIndex((item) => item.textContent === "Heading"))
         .toBeLessThan(outlineItems.findIndex((item) => item.textContent === "tensor minimal subspaces"));
       expect(toc.textContent).toContain("#tensor");
 
-      const search = toc.querySelector<HTMLInputElement>(".aaronnote-toc-search")!;
+      const search = toc.querySelector<HTMLInputElement>(".noema-toc-search")!;
       search.value = "no heading matches";
       search.dispatchEvent(new Event("input"));
       expect(toc.textContent).toContain("#tensor");
@@ -201,11 +201,11 @@ body
 
       panel.toggle();
       panel.update();
-      expect(toc.querySelector(".aaronnote-toc-item .aaronnote-toc-math .katex")).toBeTruthy();
-      expect(toc.querySelector(".aaronnote-toc-item")?.textContent).not.toContain(String.raw`\(E=mc^2\)`);
+      expect(toc.querySelector(".noema-toc-item .noema-toc-math .katex")).toBeTruthy();
+      expect(toc.querySelector(".noema-toc-item")?.textContent).not.toContain(String.raw`\(E=mc^2\)`);
 
-      toc.querySelector<HTMLButtonElement>(".aaronnote-toc-org-toggle")!.click();
-      expect(toc.querySelector(".aaronnote-toc-org-env .aaronnote-toc-math .katex")).toBeTruthy();
+      toc.querySelector<HTMLButtonElement>(".noema-toc-org-toggle")!.click();
+      expect(toc.querySelector(".noema-toc-org-env .noema-toc-math .katex")).toBeTruthy();
     } finally {
       editor.destroy();
       mount.remove();
@@ -214,10 +214,10 @@ body
   });
 
   test("keeps B3-adopted TOC controls left aligned", () => {
-    const css = readFileSync(resolve(process.cwd(), "aaronnote/style.css"), "utf8");
-    expect(css).toMatch(/\.aaronnote-toc-org-toggle\s*\{[^}]*justify-content:\s*flex-start/s);
-    expect(css).toMatch(/\.aaronnote-toc-item\s*\{[^}]*justify-content:\s*flex-start/s);
-    expect(css).toMatch(/\.aaronnote-toc-label\s*\{[^}]*text-align:\s*left/s);
+    const css = readFileSync(resolve(process.cwd(), "pages/style.css"), "utf8");
+    expect(css).toMatch(/\.noema-toc-org-toggle\s*\{[^}]*justify-content:\s*flex-start/s);
+    expect(css).toMatch(/\.noema-toc-item\s*\{[^}]*justify-content:\s*flex-start/s);
+    expect(css).toMatch(/\.noema-toc-label\s*\{[^}]*text-align:\s*left/s);
   });
 
   test("opening the TOC reveals and scrolls to the current heading without moving the editor cursor", () => {
@@ -251,7 +251,7 @@ body
       });
 
       panel.toggle();
-      const active = toc.querySelector<HTMLElement>(".aaronnote-toc-item.is-active");
+      const active = toc.querySelector<HTMLElement>(".noema-toc-item.is-active");
       expect(active?.textContent).toBe("Current");
       expect(scrollTargets).toEqual([active]);
       expect(editor.getMarkdownSelection().from).toBe(currentPos);
@@ -289,18 +289,18 @@ body
       });
 
       panel.toggle();
-      toc.querySelectorAll<HTMLButtonElement>(".aaronnote-toc-chevron")[0]!.click();
-      toc.querySelectorAll<HTMLButtonElement>(".aaronnote-toc-chevron")[1]!.click();
+      toc.querySelectorAll<HTMLButtonElement>(".noema-toc-chevron")[0]!.click();
+      toc.querySelectorAll<HTMLButtonElement>(".noema-toc-chevron")[1]!.click();
       panel.toggle();
       editor.setMarkdownSelection(md.indexOf("Current"));
       panel.toggle();
 
-      expect(toc.querySelector<HTMLElement>(".aaronnote-toc-item.is-active")?.textContent).toBe("Current");
-      const other = Array.from(toc.querySelectorAll<HTMLElement>(".aaronnote-toc-item"))
+      expect(toc.querySelector<HTMLElement>(".noema-toc-item.is-active")?.textContent).toBe("Current");
+      const other = Array.from(toc.querySelectorAll<HTMLElement>(".noema-toc-item"))
         .find((item) => item.textContent === "Other");
-      expect(other?.previousElementSibling?.classList.contains("aaronnote-toc-chevron")).toBe(true);
+      expect(other?.previousElementSibling?.classList.contains("noema-toc-chevron")).toBe(true);
       expect(other?.previousElementSibling?.textContent).toBe("▶");
-      expect(Array.from(toc.querySelectorAll<HTMLElement>(".aaronnote-toc-item"))
+      expect(Array.from(toc.querySelectorAll<HTMLElement>(".noema-toc-item"))
         .some((item) => item.textContent === "Other child")).toBe(false);
     } finally {
       editor.destroy();

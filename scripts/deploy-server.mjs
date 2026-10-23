@@ -77,10 +77,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=${currentDir}
-Environment=AARONNOTE_HOST_MODE=server
+Environment=NOEMA_HOST_MODE=server
 Environment=NOEMA_SERVER_CONFIG=${remoteRuntime}
-Environment=AARONNOTE_RUNTIME_ROOT=${currentDir}
-Environment=AARONNOTE_WEB_DIR=${join(currentDir, "dist", "aaronnote")}
+Environment=NOEMA_RUNTIME_ROOT=${currentDir}
+Environment=NOEMA_WEB_DIR=${join(currentDir, "dist", "pages")}
 ExecStart=${deploy.nodeBin} ${join(currentDir, "web-host.mjs")}
 Restart=on-failure
 RestartSec=5

@@ -55,8 +55,8 @@ describe("Jupyter kernelspec discovery", () => {
   });
 
   test("stable project Sage hides versioned duplicates but keeps remote Sage", async () => {
-    const project = await mkdtemp(join(tmpdir(), "aaronnote-kernels-project-"));
-    const system = await mkdtemp(join(tmpdir(), "aaronnote-kernels-system-"));
+    const project = await mkdtemp(join(tmpdir(), "noema-kernels-project-"));
+    const system = await mkdtemp(join(tmpdir(), "noema-kernels-system-"));
     await writeKernel(project, "sagemath", "SageMath current");
     await writeKernel(system, "SageMath-10.9", "SageMath 10.9");
     await writeKernel(system, "rik_ssh_remote_sage", "Remote Sage");
@@ -68,8 +68,8 @@ describe("Jupyter kernelspec discovery", () => {
   });
 
   test("an explicit allowlist can still select a versioned Sage spec", async () => {
-    const project = await mkdtemp(join(tmpdir(), "aaronnote-kernels-project-"));
-    const system = await mkdtemp(join(tmpdir(), "aaronnote-kernels-system-"));
+    const project = await mkdtemp(join(tmpdir(), "noema-kernels-project-"));
+    const system = await mkdtemp(join(tmpdir(), "noema-kernels-system-"));
     await writeKernel(project, "sagemath", "SageMath current");
     await writeKernel(system, "SageMath-10.9", "SageMath 10.9");
     const kernels = await findKernelSpecs({
@@ -85,12 +85,12 @@ describe("Jupyter kernelspec discovery", () => {
     const python = join(templates, "python3");
     await mkdir(python, { recursive: true });
     await writeFile(join(python, "kernel.json"), JSON.stringify({
-      argv: ["@AARONNOTE_JUPYTER_ROOT@/bin/python-jupyter-kernel", "-f", "{connection_file}"],
+      argv: ["@NOEMA_JUPYTER_ROOT@/bin/python-jupyter-kernel", "-f", "{connection_file}"],
       display_name: "Noema Python",
       language: "python",
       env: {
         HOME: "@NOEMA_USER_HOME@",
-        IPYTHONDIR: "@AARONNOTE_JUPYTER_STATE_ROOT@/ipython",
+        IPYTHONDIR: "@NOEMA_JUPYTER_STATE_ROOT@/ipython",
       },
     }));
 
@@ -98,8 +98,8 @@ describe("Jupyter kernelspec discovery", () => {
       searchDirs: [data],
       fallbackKernelDirs: [templates],
       templateVariables: {
-        AARONNOTE_JUPYTER_ROOT: "/workspace/Noema/jupyter",
-        AARONNOTE_JUPYTER_STATE_ROOT: "/Users/me/.local/state/noema/jupyter",
+        NOEMA_JUPYTER_ROOT: "/workspace/Noema/jupyter",
+        NOEMA_JUPYTER_STATE_ROOT: "/Users/me/.local/state/noema/jupyter",
         NOEMA_USER_HOME: "/Users/me",
       },
     });
@@ -118,7 +118,7 @@ describe("Jupyter kernelspec discovery", () => {
     const python = join(templates, "python3");
     await mkdir(python, { recursive: true });
     await writeFile(join(python, "kernel.json"), JSON.stringify({
-      argv: ["@AARONNOTE_JUPYTER_ROOT@/bin/python-jupyter-kernel", "-f", "{connection_file}"],
+      argv: ["@NOEMA_JUPYTER_ROOT@/bin/python-jupyter-kernel", "-f", "{connection_file}"],
       display_name: "Noema Python",
       language: "python",
     }));
@@ -126,7 +126,7 @@ describe("Jupyter kernelspec discovery", () => {
     const normal = await findKernelSpecs({
       searchDirs: [generated],
       fallbackKernelDirs: [templates],
-      templateVariables: { AARONNOTE_JUPYTER_ROOT: "/canonical/Noema/jupyter" },
+      templateVariables: { NOEMA_JUPYTER_ROOT: "/canonical/Noema/jupyter" },
     });
     expect(normal[0]?.spec.display_name).toBe("Historical Emacs Python");
 
@@ -134,7 +134,7 @@ describe("Jupyter kernelspec discovery", () => {
       searchDirs: [generated],
       fallbackKernelDirs: [templates],
       preferFallbackKernelDirs: true,
-      templateVariables: { AARONNOTE_JUPYTER_ROOT: "/canonical/Noema/jupyter" },
+      templateVariables: { NOEMA_JUPYTER_ROOT: "/canonical/Noema/jupyter" },
     });
     expect(stable[0]?.spec.display_name).toBe("Noema Python");
     expect(stable[0]?.spec.argv[0]).toBe("/canonical/Noema/jupyter/bin/python-jupyter-kernel");
@@ -152,7 +152,7 @@ describe("Jupyter kernelspec discovery", () => {
     for (const file of files) {
       const source = await readFile(join(root, file), "utf8");
       expect(source, file).not.toContain("EMACS_ROOT");
-      expect(source, file).not.toContain("scripts/aaronnote-runtime");
+      expect(source, file).not.toContain("scripts/noema-runtime");
       expect(source, file).not.toContain("../../../..");
     }
   });

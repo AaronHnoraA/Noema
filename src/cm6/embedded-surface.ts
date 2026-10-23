@@ -12,7 +12,7 @@
  */
 
 /** The attribute that marks an embedded surface, and its value. */
-export const EMBEDDED_SURFACE_ATTRIBUTE = "data-aaronnote-vim";
+export const EMBEDDED_SURFACE_ATTRIBUTE = "data-noema-vim";
 export const EMBEDDED_SURFACE_VALUE = "native";
 
 /** Matches an element marked as an embedded surface. */

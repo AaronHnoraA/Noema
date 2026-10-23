@@ -468,7 +468,7 @@ class OptimalLinebreakPlugin {
     // reports the full editor width, so canvas breaks computed from that box
     // disagree with WebKit's actual wrapping and destabilize CM6 coordinates.
     // Let native line wrapping own this layout until the float is removed.
-    if (view.contentDOM.querySelector(".aaronnote-layout-wrap")) {
+    if (view.contentDOM.querySelector(".noema-block-layout-wrap")) {
       this.cache.clear();
       this.cacheBytes = 0;
       this.combinedDecorations = Decoration.none;

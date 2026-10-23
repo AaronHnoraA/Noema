@@ -59,6 +59,6 @@ test("a wrapped diagram keeps its zero-height anchor while loading", async () =>
   open("before\n\n```mermaid\n" + source + "\n```\n{align:left; wrap:on}\n\nafter");
   await vi.waitFor(() => expect(renders.length).toBeGreaterThan(0));
   const figure = renders[0]!.element.parentElement!;
-  expect(figure.classList.contains("aaronnote-diagram-wrap")).toBe(true);
+  expect(figure.classList.contains("noema-diagram-wrap")).toBe(true);
   expect(figure.style.minHeight).toBe("");
 });

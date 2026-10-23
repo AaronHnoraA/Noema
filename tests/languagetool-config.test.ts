@@ -17,7 +17,7 @@ import {
 const roots: string[] = [];
 
 async function tempRoot(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "aaronnote-languagetool-config-"));
+  const root = await mkdtemp(join(tmpdir(), "noema-languagetool-config-"));
   roots.push(root);
   return root;
 }
@@ -29,17 +29,17 @@ afterEach(async () => {
 
 describe("LanguageTool settings", () => {
   test("uses environment variables as normalized defaults", () => {
-    const workspaceRoot = join(tmpdir(), "aaronnote-workspace-defaults");
+    const workspaceRoot = join(tmpdir(), "noema-workspace-defaults");
     const env = {
-      AARONNOTE_WORKSPACE_ROOT: workspaceRoot,
-      AARONNOTE_LANGUAGETOOL_AUTOMATIC_ENABLED: "off",
-      AARONNOTE_LANGUAGETOOL_URL: "https://lt.example.test/base///",
-      AARONNOTE_LANGUAGETOOL_LANGUAGE: "en-gb",
-      AARONNOTE_LANGUAGETOOL_LEVEL: "DEFAULT",
-      AARONNOTE_LANGUAGETOOL_PERFORMANCE_PROFILE: "QUIET",
-      AARONNOTE_LANGUAGETOOL_MANUAL_LOCAL_FALLBACK: "0",
-      AARONNOTE_LANGUAGETOOL_REMOTE_TIMEOUT_MS: "8200",
-      AARONNOTE_LANGUAGETOOL_RETRY_COOLDOWN_MS: "45000",
+      NOEMA_WORKSPACE_ROOT: workspaceRoot,
+      NOEMA_LANGUAGETOOL_AUTOMATIC_ENABLED: "off",
+      NOEMA_LANGUAGETOOL_URL: "https://lt.example.test/base///",
+      NOEMA_LANGUAGETOOL_LANGUAGE: "en-gb",
+      NOEMA_LANGUAGETOOL_LEVEL: "DEFAULT",
+      NOEMA_LANGUAGETOOL_PERFORMANCE_PROFILE: "QUIET",
+      NOEMA_LANGUAGETOOL_MANUAL_LOCAL_FALLBACK: "0",
+      NOEMA_LANGUAGETOOL_REMOTE_TIMEOUT_MS: "8200",
+      NOEMA_LANGUAGETOOL_RETRY_COOLDOWN_MS: "45000",
     };
 
     expect(languageToolSettingsDefaults({ env })).toEqual({
@@ -52,7 +52,7 @@ describe("LanguageTool settings", () => {
       remoteTimeoutMs: 8_200,
       retryCooldownMs: 45_000,
     });
-    expect(languageToolSettingsStateFile({ env })).toBe(join(workspaceRoot, "var", "aaronnote", "languagetool.json"));
+    expect(languageToolSettingsStateFile({ env })).toBe(join(workspaceRoot, "var", "noema", "languagetool.json"));
   });
 
   test("normalizes enums and clamps performance limits", () => {
@@ -126,9 +126,9 @@ describe("LanguageTool settings", () => {
   test("falls back from corrupt state and reset restores current environment defaults", async () => {
     const stateRoot = await tempRoot();
     const env = {
-      AARONNOTE_LANGUAGETOOL_URL: "https://default.example.test",
-      AARONNOTE_LANGUAGETOOL_LANGUAGE: "en-GB",
-      AARONNOTE_LANGUAGETOOL_AUTOMATIC_ENABLED: "false",
+      NOEMA_LANGUAGETOOL_URL: "https://default.example.test",
+      NOEMA_LANGUAGETOOL_LANGUAGE: "en-GB",
+      NOEMA_LANGUAGETOOL_AUTOMATIC_ENABLED: "false",
     };
     const options = { stateRoot, env };
     const stateFile = languageToolSettingsStateFile(options);

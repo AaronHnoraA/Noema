@@ -374,7 +374,7 @@ class MermaidWidget extends MeasuredWidget {
     const wrap = document.createElement("figure");
     wrap.className = "cm-mermaid-widget";
     if (this.layout.wrap) {
-      wrap.classList.add("aaronnote-layout-wrap", `aaronnote-layout-align-${this.layout.align}`, "aaronnote-diagram-wrap", `aaronnote-diagram-align-${this.layout.align}`);
+      wrap.classList.add("noema-block-layout-wrap", `noema-block-layout-align-${this.layout.align}`, "noema-diagram-wrap", `noema-diagram-align-${this.layout.align}`);
     }
     setSourceRange(wrap, this.from, this.to, this.sourceFrom, true);
 
@@ -433,7 +433,7 @@ class MermaidPreviewWidget extends MeasuredWidget {
     const wrap = document.createElement("figure");
     wrap.className = "cm-mermaid-widget cm-mermaid-widget-preview";
     if (this.layout.wrap) {
-      wrap.classList.add("aaronnote-layout-wrap", `aaronnote-layout-align-${this.layout.align}`, "aaronnote-diagram-wrap", `aaronnote-diagram-align-${this.layout.align}`);
+      wrap.classList.add("noema-block-layout-wrap", `noema-block-layout-align-${this.layout.align}`, "noema-diagram-wrap", `noema-diagram-align-${this.layout.align}`);
     }
 
     const div = document.createElement("div");
@@ -458,7 +458,7 @@ function renderMermaidWidget(
 ): () => void {
   let disposed = false;
   let disposeInteraction = () => {};
-  const floating = wrap.classList.contains("aaronnote-diagram-wrap");
+  const floating = wrap.classList.contains("noema-diagram-wrap");
   // The outer float anchor has no height. Observe the actual floated content
   // so later SVG/font changes still invalidate the surrounding text layout.
   if (floating) observeWidget(div, view);
@@ -468,7 +468,7 @@ function renderMermaidWidget(
   // again. Keep its measured space until then, rather than briefly measuring
   // the much shorter loading label and moving the surrounding text twice.
   wrap.setAttribute("aria-busy", "true");
-  if (estimatedHeight > 0 && !wrap.classList.contains("aaronnote-diagram-wrap")) {
+  if (estimatedHeight > 0 && !wrap.classList.contains("noema-diagram-wrap")) {
     wrap.style.minHeight = `${estimatedHeight}px`;
   }
   const finish = () => {

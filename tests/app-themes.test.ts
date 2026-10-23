@@ -27,8 +27,8 @@ describe("Noema renderer themes", () => {
       const css = effectiveThemeCss(resolve(themeRoot, theme.file));
       expect(css).toContain(`data-noema-theme="${theme.id}"`);
       for (const token of [
-        "--aaronnote-bg",
-        "--aaronnote-chrome",
+        "--noema-bg",
+        "--noema-chrome",
         "--aaron-ink",
         "--aaron-accent",
         "--aaron-code-bg",

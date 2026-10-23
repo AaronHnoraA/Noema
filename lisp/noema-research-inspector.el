@@ -18,7 +18,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
 
 (defvar-local noema-research-attention--origin nil
   "Directory used to resolve the current Noema project.")
@@ -63,7 +63,7 @@
         (origin noema-research-attention--origin)
         (buffer (current-buffer)))
     (my/noema-api-call
-     "aaronnote:api:research:permission:decide"
+     "noema:api:research:permission:decide"
      (vector `((cwd . ,origin) (permissionId . ,permission-id)
                (optionId . ,option-id) (expectedVersion . ,version)
                (decidedBy . "emacs-attention")))
@@ -182,7 +182,7 @@ kernel's normalized action."
         (buffer (current-buffer))
         (answer (noema-research-attention--read-answer request)))
     (my/noema-api-call
-     "aaronnote:api:research:input:respond"
+     "noema:api:research:input:respond"
      (vector `((cwd . ,origin) (runId . ,run-id) (requestId . ,request-id)
                (answer . ,answer) (answeredBy . "emacs-attention")))
      (lambda (_result error-object)
@@ -252,7 +252,7 @@ kernel's normalized action."
     (unless (and root (not (string-empty-p artifact-id)))
       (user-error "Run memory Proposal has no Handoff evidence"))
     (my/noema-api-call
-     "aaronnote:api:research:artifact:read"
+     "noema:api:research:artifact:read"
      (vector `((root . ,root) (id . ,artifact-id)))
      (lambda (result error-object)
        (if error-object
@@ -298,7 +298,7 @@ Without this, the next JuText save would overwrite the Cell Node wrote."
     (when (and (equal decision "reject") (string-empty-p reason))
       (user-error "A rejection reason is required"))
     (my/noema-api-call
-     "aaronnote:api:research:proposal:review"
+     "noema:api:research:proposal:review"
      (vector `((cwd . ,origin) (proposalId . ,proposal-id)
                (decision . ,decision) (expectedVersion . ,version)
                (reviewedBy . "human:emacs") (reason . ,reason)
@@ -389,7 +389,7 @@ Without this, the next JuText save would overwrite the Cell Node wrote."
   (let ((buffer (current-buffer))
         (origin (or noema-research-attention--origin default-directory)))
     (my/noema-api-call
-     "aaronnote:api:research:attention:list"
+     "noema:api:research:attention:list"
      (vector `((cwd . ,origin)))
      (lambda (result error-object)
        (when (buffer-live-p buffer)

@@ -111,7 +111,7 @@ async function ensureHubServer(client, hubBaseUrl, user, { timeoutMs = 120_000, 
       if (spawn.status >= 400 && spawn.status !== 400) {
         throw new Error(`JupyterHub refused to start a server: ${spawn.status} ${spawn.statusText}`);
       }
-      stderr?.write?.(`[aaronnote-jupyter] waiting for JupyterHub to spawn a server for ${user}\n`);
+      stderr?.write?.(`[noema-jupyter] waiting for JupyterHub to spawn a server for ${user}\n`);
     }
     if (Date.now() > deadline) throw new Error(`Timed out waiting for JupyterHub to start a server for ${user}`);
     await new Promise((resolve) => setTimeout(resolve, 1000));

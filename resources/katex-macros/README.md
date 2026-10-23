@@ -56,4 +56,4 @@ $\R^n,\quad \ket{\psi},\quad \NP \subseteq \AM,\quad \tens{A}\in \cV$
 - 完整重载:先执行 `M-x my/noema-stop`,再重新打开笔记。
 - 渲染缓存以“宏集合的哈希版本”为 key,换宏不会读到旧渲染。
 
-底层接线见 `lisp/roam/aaronnote/src/katex-macros.ts` 与 `shared/katex-macros.mjs`。
+底层接线见 `lisp/roam/noema/src/katex-macros.ts` 与 `shared/katex-macros.mjs`。

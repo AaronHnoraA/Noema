@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@voidzero-dev/vite-plus-test";
-import { managedFormulaStyle, wrapManagedFormulaStyle } from "../aaronnote/formula-style.ts";
+import { managedFormulaStyle, wrapManagedFormulaStyle } from "../pages/formula-style.ts";
 
 const R = String.raw;
 

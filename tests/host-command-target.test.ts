@@ -1,12 +1,12 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { hostCommandTargetsClient } from "../aaronnote/host-command-target.ts";
-import { provesHostInputFocus } from "../aaronnote/host-input-focus.ts";
+import { hostCommandTargetsClient } from "../pages/host-command-target.ts";
+import { provesHostInputFocus } from "../pages/host-input-focus.ts";
 // @ts-ignore Headless host protocol module.
 import { rendererCommandDetail } from "../server/lib/host-command.mjs";
 
-const mainSource = readFileSync(join(process.cwd(), "aaronnote", "main.ts"), "utf8");
+const mainSource = readFileSync(join(process.cwd(), "pages", "main.ts"), "utf8");
 
 describe("host command client targeting", () => {
   test("keeps untargeted host commands as broadcasts", () => {
@@ -40,7 +40,7 @@ describe("host command client targeting", () => {
     // `currentClient`, which stays empty until openInitialFile() runs — so a
     // sibling pane's pause was accepted during startup.
     expect(mainSource.match(/hostCommandTargetsClient\(/gu)?.length).toBe(1);
-    const listenerStart = mainSource.indexOf('window.addEventListener("aaronnote:command"');
+    const listenerStart = mainSource.indexOf('window.addEventListener("noema:command"');
     const listener = mainSource.slice(listenerStart, mainSource.indexOf("});", listenerStart));
     expect(listener).not.toContain("currentClient");
     // `currentClient` must carry the page identity from module load, not from

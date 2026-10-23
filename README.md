@@ -278,7 +278,7 @@ Versions and licenses are recorded in [UPSTREAMS.md](UPSTREAMS.md).
 
 The Node host owns transport, Jupyter processes/events, document services and renderer assets. The Go kernel owns project-local research/runtime indexes, append-only events, CAS and MCP data access. External agents remain independent processes, normally integrated through ACP/agent-shell.
 
-Existing `AARONNOTE_*`, `aaronnote:api:*` and `init-aaronnote.el` names are retained only as wire/file compatibility contracts. New Emacs product commands use `noema-*` or `my/noema-*` names.
+Aaronnote was the product's earlier name. Paths, channels (`noema:api:*`), environment variables (`NOEMA_*`) and Emacs modules (`init-noema.el`) all use `noema` now; old `@aaronnote` code markers and the `aaronnote` theme id are still read. Emacs product commands use `noema-*` or `my/noema-*` names.
 
 ## Build and install
 
@@ -320,8 +320,8 @@ The repository still contains a read-only server renderer for publishing Markdow
 - `server/lib/research-runtime.mjs`: directive parsing, deterministic agent/session routing, RunSpec freezing and terminal output write-back.
 - `server/lib/noema-capabilities.mjs`: Skill/MCP discovery, scope resolution, patches, validation and provenance.
 - `server/lib/jupyter-cell.mjs`: ordinary Jupyter document/session service plus a kernel-free read-only `.noema` output snapshot.
-- `aaronnote/main.ts`, `wiki-main.ts`, `agenda-main.ts`, `config-main.ts`: Emacs-hosted Markdown and knowledge/work surfaces.
-- `aaronnote/jupyter-main.ts`: Emacs-hosted output-only renderer.
+- `pages/main.ts`, `wiki-main.ts`, `agenda-main.ts`, `config-main.ts`: Emacs-hosted Markdown and knowledge/work surfaces.
+- `pages/jupyter-main.ts`: Emacs-hosted output-only renderer.
 - `src/jupyter-rendermime.ts`: JupyterLab OutputArea/rendermime integration.
 - `kernel/noema/research/`: Go research/runtime store, indexes, events and CAS.
 - `lisp/noema-research*.el`: JuText, WorkNode model, graph, inspector and synthesis.

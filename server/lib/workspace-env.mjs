@@ -5,8 +5,8 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const RESERVED_KEYS = new Set([
-  "AARONNOTE_ROOT", "AARONNOTE_WORKSPACE_ROOT", "NOEMA_ROOT", "NOEMA_WORKSPACE_ROOT",
-  "NOEMA_WORKSPACE_LAYOUT", "AARONNOTE_HOST_MODE", "AARONNOTE_WEB_HOST", "AARONNOTE_WEB_PORT",
+  "NOEMA_ROOT", "NOEMA_WORKSPACE_ROOT",
+  "NOEMA_WORKSPACE_LAYOUT", "NOEMA_HOST_MODE", "NOEMA_WEB_HOST", "NOEMA_WEB_PORT",
 ]);
 
 export async function authorizedWorkspaceEnvironment(rootValue, base = process.env) {

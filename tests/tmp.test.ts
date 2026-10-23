@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "@voidzero-dev/vite-plus-test";
 import { mkdtemp, mkdir, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { aaronnoteTmpRoot, configureTmpRoot, runtimeMkdtemp } from "../server/lib/tmp.mjs";
+import { noemaTmpRoot, configureTmpRoot, runtimeMkdtemp } from "../server/lib/tmp.mjs";
 
 describe("Noema runtime temporary root", () => {
-  const originalRoot = aaronnoteTmpRoot();
+  const originalRoot = noemaTmpRoot();
   afterEach(() => configureTmpRoot(originalRoot));
 
   it("passes a real workdir to agents when Emacs is reached through a symlink", async () => {
@@ -16,11 +16,11 @@ describe("Noema runtime temporary root", () => {
       const emacsLink = join(fixture, ".emacs.d");
       await symlink(realConfig, emacsLink);
       const canonicalConfig = await realpath(realConfig);
-      const root = configureTmpRoot(join(emacsLink, "var", "aaronnote", "tmp"));
-      expect(root).toBe(join(canonicalConfig, "var", "aaronnote", "tmp"));
+      const root = configureTmpRoot(join(emacsLink, "var", "noema", "tmp"));
+      expect(root).toBe(join(canonicalConfig, "var", "noema", "tmp"));
 
       const workdir = await runtimeMkdtemp("latex-export", "note.md");
-      expect(workdir.startsWith(join(canonicalConfig, "var", "aaronnote", "tmp", "latex-export"))).toBe(true);
+      expect(workdir.startsWith(join(canonicalConfig, "var", "noema", "tmp", "latex-export"))).toBe(true);
       expect(workdir).toBe(await realpath(workdir));
     } finally {
       await rm(fixture, { recursive: true, force: true });

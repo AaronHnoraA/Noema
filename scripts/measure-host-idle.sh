@@ -32,18 +32,18 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$PROJECT_ROOT" || exit 1
-AARONNOTE_HOST_MODE=emacs \
+NOEMA_HOST_MODE=emacs \
 NOEMA_ROOT="$NOTE_ROOT" \
-AARONNOTE_STATE_DIR="$RUN_DIR/state" \
+NOEMA_STATE_DIR="$RUN_DIR/state" \
 NOEMA_KERNEL_WORKSPACE="$RUN_DIR/kernel-workspace" \
 NOEMA_KERNEL_CONFIG_DIR="$RUN_DIR/kernel-config" \
-AARONNOTE_WEB_PORT=0 \
+NOEMA_WEB_PORT=0 \
 node web-host.mjs >"$HOST_LOG" 2>&1 &
 HOST_PID=$!
 
 ORIGIN=""
 for _ in $(seq 1 120); do
-  ORIGIN="$(sed -n 's/^\[aaronnote-web\] \(http:\/\/127\.0\.0\.1:[0-9][0-9]*\)$/\1/p' "$HOST_LOG" | tail -1)"
+  ORIGIN="$(sed -n 's/^\[noema-web\] \(http:\/\/127\.0\.0\.1:[0-9][0-9]*\)$/\1/p' "$HOST_LOG" | tail -1)"
   [ -n "$ORIGIN" ] && break
   kill -0 "$HOST_PID" 2>/dev/null || break
   sleep 0.25

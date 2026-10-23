@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 
-import { openLanguageToolSettingsTool } from "../aaronnote/languagetool-tool.ts";
-import type { LanguageToolSettings } from "../aaronnote/api-client.ts";
+import { openLanguageToolSettingsTool } from "../pages/languagetool-tool.ts";
+import type { LanguageToolSettings } from "../pages/api-client.ts";
 
 const defaults: LanguageToolSettings = {
   automaticEnabled: true,
@@ -51,7 +51,7 @@ describe("LanguageTool settings tool", () => {
     });
 
     const server = modal.querySelector<HTMLInputElement>('input[type="url"]')!;
-    const language = modal.querySelector<HTMLInputElement>('input[list="aaronnote-languagetool-languages"]')!;
+    const language = modal.querySelector<HTMLInputElement>('input[list="noema-languagetool-languages"]')!;
     server.value = "https://lt.example.test";
     language.value = "en-AU";
     modal.querySelector<HTMLButtonElement>("button")!.click();
@@ -61,7 +61,7 @@ describe("LanguageTool settings tool", () => {
       serverUrl: "https://lt.example.test",
       language: "en-AU",
     }));
-    expect(modal.querySelector(".aaronnote-languagetool-health")?.textContent)
+    expect(modal.querySelector(".noema-languagetool-health")?.textContent)
       .toContain("Online · 24 ms · 6.8");
 
     modal.querySelector<HTMLInputElement>('input[name="languagetool-profile"][value="quiet"]')!.checked = true;

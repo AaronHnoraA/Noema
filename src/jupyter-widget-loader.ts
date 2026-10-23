@@ -8,7 +8,7 @@ export function evaluateAmdLoaderSource(source: string): AmdLoaderBindings {
   // AMD loaders traditionally declare their API with top-level `var`.
   // Return those function-local bindings explicitly instead of depending on
   // a browser to reflect evaluated vars onto `window` (xwidget-webkit does not).
-  const initialize = new Function(`${source}\nreturn { requirejs: typeof requirejs === "function" ? requirejs : undefined, require: typeof require === "function" ? require : undefined, define: typeof define === "function" ? define : undefined };\n//# sourceURL=aaronnote-amd-loader.js`);
+  const initialize = new Function(`${source}\nreturn { requirejs: typeof requirejs === "function" ? requirejs : undefined, require: typeof require === "function" ? require : undefined, define: typeof define === "function" ? define : undefined };\n//# sourceURL=noema-amd-loader.js`);
   return initialize.call(window) as AmdLoaderBindings;
 }
 

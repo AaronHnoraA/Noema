@@ -81,7 +81,7 @@ describe("bibliography", () => {
   });
 
   test("indexes the note-local bib directory by default and resolves citations", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-bib-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-bib-"));
     roots.push(root);
     const noteDir = join(root, "project", "iso");
     await mkdir(join(noteDir, "bib"), { recursive: true });
@@ -128,7 +128,7 @@ describe("bibliography", () => {
   });
 
   test("adds declared bibliography paths to the default note-local directory", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-bib-additive-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-bib-additive-"));
     roots.push(root);
     const noteDir = join(root, "project");
     await mkdir(join(noteDir, "bib"), { recursive: true });
@@ -154,7 +154,7 @@ describe("bibliography", () => {
   });
 
   test("resolves citations in a meta summary while keeping metadata fields private", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-bib-abstract-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-bib-abstract-"));
     roots.push(root);
     await mkdir(join(root, "bib"), { recursive: true });
     await writeFile(join(root, "bib", "refs.bib"),
@@ -179,7 +179,7 @@ describe("bibliography", () => {
   });
 
   test("resolves a real note path when the configured Noema root is a symlink", async () => {
-    const container = await mkdtemp(join(tmpdir(), "aaronnote-bib-symlink-"));
+    const container = await mkdtemp(join(tmpdir(), "noema-bib-symlink-"));
     roots.push(container);
     const realRoot = join(container, "Noema");
     const linkedRoot = join(container, ".roam");
@@ -207,7 +207,7 @@ describe("bibliography", () => {
   });
 
   test("accepts a concrete .bib file in meta instead of requiring a directory", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-bib-file-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-bib-file-"));
     roots.push(root);
     const noteDir = join(root, "project");
     await mkdir(noteDir, { recursive: true });
@@ -232,7 +232,7 @@ describe("bibliography", () => {
   });
 
   test("accepts YAML bibliography metadata and quoted paths containing commas", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-bib-yaml-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-bib-yaml-"));
     roots.push(root);
     const bib = join(root, "refs,2026.bib");
     await writeFile(bib, "@book{YAML, author={Parser, Y}, title={YAML Reference}, year={2026}}", "utf8");
@@ -252,8 +252,8 @@ describe("bibliography", () => {
   });
 
   test("resolves a bibliography beside an explicitly opened standalone note", async () => {
-    const library = await mkdtemp(join(tmpdir(), "aaronnote-bib-library-"));
-    const standalone = await mkdtemp(join(tmpdir(), "aaronnote-bib-standalone-"));
+    const library = await mkdtemp(join(tmpdir(), "noema-bib-library-"));
+    const standalone = await mkdtemp(join(tmpdir(), "noema-bib-standalone-"));
     roots.push(library, standalone);
     await mkdir(join(standalone, "bib"), { recursive: true });
     await writeFile(join(standalone, "bib", "local.bib"),
@@ -275,7 +275,7 @@ describe("bibliography", () => {
   });
 
   test("resolves scoped citations from separate metadata with inherited path provenance", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-bib-meta-context-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-bib-meta-context-"));
     roots.push(root);
     const project = join(root, "project");
     const child = join(project, "chapters");
@@ -310,7 +310,7 @@ describe("bibliography", () => {
   });
 
   test("ignores literal and private citation contexts when numbering references", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-bib-contexts-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-bib-contexts-"));
     roots.push(root);
     await writeFile(join(root, "refs.bib"), [
       "@book{Literal, author={Hidden, H}, title={Hidden}, year={2000}}",
@@ -342,7 +342,7 @@ describe("bibliography", () => {
   });
 
   test("returns per-item resolution, de-duplicates repeated keys, and diagnoses empty keys", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-bib-items-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-bib-items-"));
     roots.push(root);
     await writeFile(join(root, "refs.bib"),
       "@book{A, author={Author, A}, title={Alpha}, year={2000}}", "utf8");
@@ -368,7 +368,7 @@ describe("bibliography", () => {
   });
 
   test("diagnoses malformed visible citation syntax but ignores literal occurrences", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-bib-malformed-cite-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-bib-malformed-cite-"));
     roots.push(root);
     configureBibliography({ root });
     const content = [
@@ -388,7 +388,7 @@ describe("bibliography", () => {
   });
 
   test("surfaces inherited metadata and BibTeX parse diagnostics", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-bib-diagnostics-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-bib-diagnostics-"));
     roots.push(root);
     await writeFile(join(root, "broken.bib"), "@book{Broken, title={never closed}", "utf8");
     const file = join(root, "note.md");
@@ -406,7 +406,7 @@ describe("bibliography", () => {
   });
 
   test("offers only full namespaces when short namespaces are ambiguous", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-bib-namespace-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-bib-namespace-"));
     roots.push(root);
     await mkdir(join(root, "one"), { recursive: true });
     await mkdir(join(root, "two"), { recursive: true });

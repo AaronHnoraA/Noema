@@ -1,8 +1,8 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { installHostKeyboardBridge, pageClientFromLocation } from "../aaronnote/host-keyboard.ts";
-import { hostInputFocusReleased, reclaimHostInputFocus } from "../aaronnote/host-input-focus.ts";
+import { installHostKeyboardBridge, pageClientFromLocation } from "../pages/host-keyboard.ts";
+import { hostInputFocusReleased, reclaimHostInputFocus } from "../pages/host-input-focus.ts";
 
 function trusted<T extends Event>(event: T): T {
   Object.defineProperty(event, "isTrusted", { value: true });
@@ -10,29 +10,29 @@ function trusted<T extends Event>(event: T): T {
 }
 
 function withBridge(client: string, run: (forwarded: unknown[]) => void): void {
-  const win = window as Window & { aaronnoteApi?: unknown };
-  const previous = win.aaronnoteApi;
+  const win = window as Window & { noemaApi?: unknown };
+  const previous = win.noemaApi;
   const forwarded: unknown[] = [];
-  win.aaronnoteApi = { emacs: { key: async (payload: unknown) => { forwarded.push(payload); } } };
+  win.noemaApi = { emacs: { key: async (payload: unknown) => { forwarded.push(payload); } } };
   const uninstall = installHostKeyboardBridge({ client: () => client });
   try {
     run(forwarded);
   } finally {
     uninstall();
-    win.aaronnoteApi = previous;
+    win.noemaApi = previous;
     reclaimHostInputFocus();
   }
 }
 
 function hostCommand(command: string, targetClient?: string): void {
-  window.dispatchEvent(new CustomEvent("aaronnote:command", {
+  window.dispatchEvent(new CustomEvent("noema:command", {
     detail: { command, ...(targetClient ? { targetClient } : {}) },
   }));
 }
 
 describe("shared Noema host keyboard bridge", () => {
   test("every page entry except the CM6 editor installs the bridge", () => {
-    const directory = join(import.meta.dirname, "..", "aaronnote");
+    const directory = join(import.meta.dirname, "..", "pages");
     const entries = readdirSync(directory).filter((name) => name.endsWith(".html"))
       .map((name) => /src="\.\/([^"]+\.ts)"/.exec(readFileSync(join(directory, name), "utf8"))?.[1])
       .filter((entry): entry is string => Boolean(entry));
@@ -58,7 +58,7 @@ describe("shared Noema host keyboard bridge", () => {
     const hasFocus = document.hasFocus;
     document.hasFocus = () => false;
     try {
-      withBridge("aaronnote", (forwarded) => {
+      withBridge("noema", (forwarded) => {
         let pageSaw = 0;
         const pageHandler = () => { pageSaw += 1; };
         window.addEventListener("keydown", pageHandler);
@@ -84,7 +84,7 @@ describe("shared Noema host keyboard bridge", () => {
       document.hasFocus = hasFocus;
     }
     // No C-x was left pending: with focus back, a plain 3 is just a 3.
-    withBridge("aaronnote", (forwarded) => {
+    withBridge("noema", (forwarded) => {
       document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "3", code: "Digit3", bubbles: true, cancelable: true }));
       expect(forwarded).toEqual([]);
     });
@@ -95,8 +95,8 @@ describe("shared Noema host keyboard bridge", () => {
     const messages: string[] = [];
     win.webkit = { messageHandlers: { keyDown: { postMessage: (message: string) => messages.push(message) } } };
     try {
-      withBridge("aaronnote", () => {
-        hostCommand("host-owns-keyboard", "aaronnote");
+      withBridge("noema", () => {
+        hostCommand("host-owns-keyboard", "noema");
         expect(messages).toEqual(["C-g"]);
       });
     } finally {
@@ -108,16 +108,16 @@ describe("shared Noema host keyboard bridge", () => {
     const hasFocus = document.hasFocus;
     document.hasFocus = () => false;
     try {
-      withBridge("aaronnote-jupyter", () => {
+      withBridge("noema-jupyter", () => {
         const seen: string[] = [];
         const pageHandler = (event: KeyboardEvent) => { seen.push(event.key); };
         window.addEventListener("keydown", pageHandler);
         try {
-          window.dispatchEvent(new CustomEvent("aaronnote:command", {
-            detail: { command: "key", key: "ArrowDown", code: "ArrowDown", targetClient: "aaronnote-jupyter" },
+          window.dispatchEvent(new CustomEvent("noema:command", {
+            detail: { command: "key", key: "ArrowDown", code: "ArrowDown", targetClient: "noema-jupyter" },
           }));
-          window.dispatchEvent(new CustomEvent("aaronnote:command", {
-            detail: { command: "key", key: " ", code: "Space", targetClient: "aaronnote-jupyter" },
+          window.dispatchEvent(new CustomEvent("noema:command", {
+            detail: { command: "key", key: " ", code: "Space", targetClient: "noema-jupyter" },
           }));
         } finally {
           window.removeEventListener("keydown", pageHandler);
@@ -130,12 +130,12 @@ describe("shared Noema host keyboard bridge", () => {
   });
 
   test("reads the client Emacs addresses from the page URL", () => {
-    expect(pageClientFromLocation({ search: "?view=today&client=aaronnote" })).toBe("aaronnote");
+    expect(pageClientFromLocation({ search: "?view=today&client=noema" })).toBe("noema");
     expect(pageClientFromLocation({ search: "" })).toBe("");
   });
 
   test("forwards Emacs chords, including Cmd+Arrow, before page shortcuts", () => {
-    withBridge("aaronnote-jupyter", (forwarded) => {
+    withBridge("noema-jupyter", (forwarded) => {
       let pageSaw = false;
       const pageHandler = () => { pageSaw = true; };
       window.addEventListener("keydown", pageHandler);
@@ -147,15 +147,15 @@ describe("shared Noema host keyboard bridge", () => {
         window.removeEventListener("keydown", pageHandler);
       }
       expect(pageSaw).toBe(false);
-      expect(forwarded).toEqual([{ key: "M-<down>", client: "aaronnote-jupyter" }]);
+      expect(forwarded).toEqual([{ key: "M-<down>", client: "noema-jupyter" }]);
     });
   });
 
   test("after host-owns-keyboard, arrows and text run in Emacs until a press reclaims", () => {
-    withBridge("aaronnote", (forwarded) => {
+    withBridge("noema", (forwarded) => {
       hostCommand("host-owns-keyboard", "sibling");
       expect(hostInputFocusReleased()).toBe(false);
-      hostCommand("host-owns-keyboard", "aaronnote");
+      hostCommand("host-owns-keyboard", "noema");
       expect(hostInputFocusReleased()).toBe(true);
       const arrow = trusted(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }));
       document.body.dispatchEvent(arrow);
@@ -163,13 +163,13 @@ describe("shared Noema host keyboard bridge", () => {
       document.body.dispatchEvent(letter);
       expect(arrow.defaultPrevented && letter.defaultPrevented).toBe(true);
       expect(forwarded).toEqual([
-        { key: "<up>", client: "aaronnote", hostOwned: true },
-        { text: "y", key: "", client: "aaronnote", hostOwned: true },
+        { key: "<up>", client: "noema", hostOwned: true },
+        { text: "y", key: "", client: "noema", hostOwned: true },
       ]);
       document.body.dispatchEvent(trusted(new PointerEvent("pointerdown", { bubbles: true })));
       expect(hostInputFocusReleased()).toBe(false);
       hostCommand("host-owns-keyboard");
-      hostCommand("focus", "aaronnote");
+      hostCommand("focus", "noema");
       expect(hostInputFocusReleased()).toBe(false);
     });
   });

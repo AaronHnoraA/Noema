@@ -15,7 +15,7 @@ function renderMathElement(
     trust: false,
     output: "html",
   }, (error) => {
-    el.classList.add("aaronnote-math-error");
+    el.classList.add("noema-math-error");
     el.textContent = error;
   });
 }
@@ -25,7 +25,7 @@ function nodeText(node: ChildNode | null): string {
 }
 
 function isRenderedInlineMath(node: ChildNode | null): node is HTMLElement {
-  return node instanceof HTMLElement && node.classList.contains("aaronnote-math-inline");
+  return node instanceof HTMLElement && node.classList.contains("noema-math-inline");
 }
 
 function trimDelimiterBefore(mark: HTMLElement, delimiter: string): void {
@@ -54,7 +54,7 @@ function trimDelimiterAfter(mark: HTMLElement, delimiter: string): void {
 }
 
 function renderInlineMathSources(root: HTMLElement): void {
-  root.querySelectorAll<HTMLElement>("span[data-aaronnote-math-mark]").forEach((mark) => {
+  root.querySelectorAll<HTMLElement>("span[data-noema-math-mark]").forEach((mark) => {
     const tex = mark.getAttribute("data-tex") || mark.textContent || "";
     const display = mark.getAttribute("data-display") === "1";
     // Bracket delimiters are asymmetric. An explicit data-delimiter (legacy
@@ -63,7 +63,7 @@ function renderInlineMathSources(root: HTMLElement): void {
     const openDelimiter = explicit || (display ? "\\[" : "\\(");
     const closeDelimiter = explicit || (display ? "\\]" : "\\)");
     const rendered = document.createElement("span");
-    rendered.className = display ? "aaronnote-math-block" : "aaronnote-math-inline";
+    rendered.className = display ? "noema-math-block" : "noema-math-inline";
     rendered.setAttribute("data-tex", tex);
     renderMathElement(tex, rendered, { displayMode: display });
 
@@ -74,7 +74,7 @@ function renderInlineMathSources(root: HTMLElement): void {
 }
 
 function renderDisplayMathBlocks(root: HTMLElement): void {
-  root.querySelectorAll<HTMLElement>("math-block[data-aaronnote-math-block], math-block").forEach((block) => {
+  root.querySelectorAll<HTMLElement>("math-block[data-noema-math-block], math-block").forEach((block) => {
     const source = block.querySelector<HTMLElement>(".math-block-source");
     if (!source) return;
     const tex = source.textContent?.trim() ?? "";
@@ -83,7 +83,7 @@ function renderDisplayMathBlocks(root: HTMLElement): void {
       rendered = document.createElement("div");
       block.appendChild(rendered);
     }
-    rendered.className = "aaronnote-math-block math-block-render";
+    rendered.className = "noema-math-block math-block-render";
     rendered.setAttribute("contenteditable", "false");
     renderMathElement(tex, rendered, { displayMode: true });
     block.classList.add("math-block-rendered");
@@ -121,21 +121,21 @@ function protectMathML(html: string): { html: string; math: string[] } {
         USE_PROFILES: { mathMl: true },
         ADD_ATTR: ["xmlns", "display"],
       }));
-      return `\\uE000AARONNOTE_MATHML_${index}\\uE000`;
+      return `\\uE000NOEMA_MATHML_${index}\\uE000`;
     }),
     math,
   };
 }
 
 function restoreMathML(html: string, math: readonly string[]): string {
-  return html.replace(/\\uE000AARONNOTE_MATHML_(\d+)\\uE000/g, (_match, rawIndex: string) => {
+  return html.replace(/\\uE000NOEMA_MATHML_(\d+)\\uE000/g, (_match, rawIndex: string) => {
     const index = Number(rawIndex);
     return math[index] ?? "";
   });
 }
 
 function restoreVisualSrcdoc(html: string, srcdocs: readonly string[]): string {
-  return html.replace(/\sdata-aaronnote-protected-srcdoc="(\d+)"/g, (_match, rawIndex: string) => {
+  return html.replace(/\sdata-noema-protected-srcdoc="(\d+)"/g, (_match, rawIndex: string) => {
     const index = Number(rawIndex);
     const value = srcdocs[index];
     return value === undefined ? "" : ` srcdoc="${value}"`;
@@ -144,12 +144,12 @@ function restoreVisualSrcdoc(html: string, srcdocs: readonly string[]): string {
 
 function protectVisualSrcdocAttrs(root: HTMLElement): string[] {
   const srcdocs: string[] = [];
-  root.querySelectorAll<HTMLIFrameElement>("iframe.aaronnote-visual-embed[srcdoc]").forEach((frame) => {
+  root.querySelectorAll<HTMLIFrameElement>("iframe.noema-visual-embed[srcdoc]").forEach((frame) => {
     const value = frame.getAttribute("srcdoc");
     if (value == null) return;
     const index = srcdocs.push(escapeAttrForProtectedSrcdoc(value)) - 1;
     frame.removeAttribute("srcdoc");
-    frame.setAttribute("data-aaronnote-protected-srcdoc", String(index));
+    frame.setAttribute("data-noema-protected-srcdoc", String(index));
   });
   return srcdocs;
 }
@@ -165,7 +165,7 @@ function escapeAttrForProtectedSrcdoc(value: string): string {
 function protectVisualIframeAttrs(html: string): { html: string; attrs: string[] } {
   const attrs: string[] = [];
   return {
-    html: html.replace(/<iframe\b(?=[^>]*\baaronnote-visual-embed\b)([^>]*)>/g, (_match, rawAttrs: string) => {
+    html: html.replace(/<iframe\b(?=[^>]*\bnoema-visual-embed\b)([^>]*)>/g, (_match, rawAttrs: string) => {
       const protectedAttrs: string[] = [];
       const remaining = rawAttrs.replace(/\s(allow|loading|referrerpolicy|sandbox)="([^"]*)"/g, (_attr, name: string, value: string) => {
         protectedAttrs.push(`${name}="${value}"`);
@@ -173,14 +173,14 @@ function protectVisualIframeAttrs(html: string): { html: string; attrs: string[]
       });
       if (protectedAttrs.length === 0) return `<iframe${rawAttrs}>`;
       const index = attrs.push(protectedAttrs.join(" ")) - 1;
-      return `<iframe${remaining} data-aaronnote-protected-frame-attrs="${index}">`;
+      return `<iframe${remaining} data-noema-protected-frame-attrs="${index}">`;
     }),
     attrs,
   };
 }
 
 function restoreVisualIframeAttrs(html: string, attrs: readonly string[]): string {
-  return html.replace(/\sdata-aaronnote-protected-frame-attrs="(\d+)"/g, (_match, rawIndex: string) => {
+  return html.replace(/\sdata-noema-protected-frame-attrs="(\d+)"/g, (_match, rawIndex: string) => {
     const index = Number(rawIndex);
     const value = attrs[index];
     return value === undefined ? "" : ` ${value}`;
@@ -230,7 +230,7 @@ export function cleanEditorHTML(root: HTMLElement): string {
   const protectedFrameAttrs = protectVisualIframeAttrs(protectedHtml.html);
   const sanitized = DOMPurify.sanitize(protectedFrameAttrs.html, {
     USE_PROFILES: { html: true, svg: true, mathMl: true },
-    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|file|zotero|roam|aaronnote-asset):|[#/]|\.{0,2}\/|[A-Za-z0-9._~!$&'()*+,;=@%-]+(?:[/?#]|$))/i,
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|file|zotero|roam|noema-asset):|[#/]|\.{0,2}\/|[A-Za-z0-9._~!$&'()*+,;=@%-]+(?:[/?#]|$))/i,
     ADD_TAGS: [
       "math",
       "mrow",
@@ -291,15 +291,15 @@ export function cleanEditorHTML(root: HTMLElement): string {
       "data-lean-region",
       "data-tex",
       "data-math-render-key",
-      "data-aaronnote-math-block",
-      "data-aaronnote-image-align",
-      "data-aaronnote-image-wrap",
-      "data-aaronnote-visual-kind",
-      "data-aaronnote-dom-src-index",
-      "data-aaronnote-dom-srcdoc-index",
-      "data-aaronnote-protected-srcdoc",
-      "data-aaronnote-protected-frame-attrs",
-      "data-aaronnote-cell-command",
+      "data-noema-math-block",
+      "data-noema-image-align",
+      "data-noema-image-wrap",
+      "data-noema-visual-kind",
+      "data-noema-dom-src-index",
+      "data-noema-dom-srcdoc-index",
+      "data-noema-protected-srcdoc",
+      "data-noema-protected-frame-attrs",
+      "data-noema-cell-command",
       "href",
       "src",
       "srcdoc",

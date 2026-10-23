@@ -82,13 +82,13 @@ describe("Server configuration and read-only policy", () => {
   });
 
   test("allows reader APIs, supplies compatibility no-ops, and rejects mutation", () => {
-    expect(serverApiChannelAllowed("aaronnote:api:wiki:search")).toBe(true);
-    expect(serverApiChannelAllowed("aaronnote:api:knowledge:search")).toBe(true);
-    expect(serverApiChannelAllowed("aaronnote:api:jupyter-cell:read-script-cell")).toBe(true);
-    expect(serverApiChannelAllowed("aaronnote:api:jupyter-cell:execute-script-cell")).toBe(false);
-    expect(serverApiCompatibilityResult("aaronnote:api:session:save-position"))
+    expect(serverApiChannelAllowed("noema:api:wiki:search")).toBe(true);
+    expect(serverApiChannelAllowed("noema:api:knowledge:search")).toBe(true);
+    expect(serverApiChannelAllowed("noema:api:jupyter-cell:read-script-cell")).toBe(true);
+    expect(serverApiChannelAllowed("noema:api:jupyter-cell:execute-script-cell")).toBe(false);
+    expect(serverApiCompatibilityResult("noema:api:session:save-position"))
       .toEqual({ ok: true, stored: false });
-    expect(() => assertServerApiChannel("aaronnote:api:wiki:create-page"))
+    expect(() => assertServerApiChannel("noema:api:wiki:create-page"))
       .toThrow(/unavailable/);
   });
 });

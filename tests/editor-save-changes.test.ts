@@ -4,7 +4,7 @@ import { ChangeSet } from "@codemirror/state";
 import {
   EditorSaveChangeTracker,
   markdownChangeSetPayload,
-} from "../aaronnote/editor-save-changes.ts";
+} from "../pages/editor-save-changes.ts";
 
 describe("incremental editor save changes", () => {
   test("composes sequential CM6 edits against the saved base", () => {

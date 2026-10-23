@@ -97,7 +97,7 @@
         (should resolution)
         (should (equal (noema-capability-active resolution)
                        '(:skills ("noema-elisp-api") :mcps ("noema"))))
-        (should (equal (car call) "aaronnote:api:research:capability:list"))
+        (should (equal (car call) "noema:api:research:capability:list"))
         (should (equal (append (cdr (assoc 'requestedSkills (cadr call))) nil)
                        '("noema-elisp-api")))))))
 
@@ -406,12 +406,12 @@
     (cl-letf (((symbol-function 'noema-agent-worker--api)
                (lambda (channel _body callback &optional _timeout)
                  (pcase channel
-                   ("aaronnote:api:research:permission:get"
+                   ("noema:api:research:permission:get"
                     (funcall callback
                              `((permission . ((state . "resolved") (optionId . "allow_once")
                                                (runId . "run_1") (sessionId . "ses_1")
                                                (epoch . ,stored-epoch)))) nil))
-                   ("aaronnote:api:research:input:get"
+                   ("noema:api:research:input:get"
                     (funcall callback
                              `((request . ((state . "resolved") (answer . "approved")
                                             (runId . "run_1") (sessionId . "ses_1")
@@ -466,7 +466,7 @@
                   ((symbol-function 'magent-runtime-queue-arbiter-finish) #'ignore))
           (noema-agent-worker--abandon-cancelled-preparation
            preparing `((root . ,root) (run . ((id . "run_frozen"))))))
-        (should (equal (alist-get 'runId (cdr (assoc "aaronnote:api:research:run:cancel" calls))) "run_frozen"))
+        (should (equal (alist-get 'runId (cdr (assoc "noema:api:research:run:cancel" calls))) "run_frozen"))
         (should (eq (noema-agent-worker-queue-state preparing) 'cancelled))
         (should-not (gethash "run_frozen" noema-agent-worker--runs))))))
 
@@ -506,9 +506,9 @@
                        (lambda (channel body _callback) (push (cons channel body) calls))))
               (noema-sessions-agent-rename buffer "main-2")
               (noema-sessions-agent-fork buffer "main/probe"))
-            (should (equal (alist-get 'newName (cdr (assoc "aaronnote:api:research:session:name:rename" calls)))
+            (should (equal (alist-get 'newName (cdr (assoc "noema:api:research:session:name:rename" calls)))
                            "main-2"))
-            (let ((declared (cdr (assoc "aaronnote:api:research:session:name:declare" calls))))
+            (let ((declared (cdr (assoc "noema:api:research:session:name:declare" calls))))
               (should (equal (alist-get 'parentName declared) "main"))
               (should (equal (alist-get 'agent declared) "opencode")))
             ;; A retired buffer no longer owns a name to manage.

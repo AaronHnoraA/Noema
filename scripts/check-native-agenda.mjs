@@ -45,12 +45,12 @@ try {
     diagnostics = "";
     host = spawn(process.execPath, [join(repository, "web-host.mjs")], {
     cwd: repository, stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, NOEMA_ROOT: knowledge, AARONNOTE_ROOT: knowledge,
-      AARONNOTE_HOST_MODE: "emacs", AARONNOTE_STATE_DIR: join(temporary, "state"),
-      AARONNOTE_TMP_DIR: join(temporary, "tmp"), AARONNOTE_RUNTIME_ROOT: repository,
-      AARONNOTE_WEB_PORT: "0",
-      AARONNOTE_EMACS_GATEWAY_URL: process.env.NOEMA_AGENDA_GATEWAY_TEST_URL || "",
-      AARONNOTE_EMACS_GATEWAY_BINDING: process.env.NOEMA_AGENDA_GATEWAY_TEST_BINDING || "",
+    env: { ...process.env, NOEMA_ROOT: knowledge,
+      NOEMA_HOST_MODE: "emacs", NOEMA_STATE_DIR: join(temporary, "state"),
+      NOEMA_TMP_DIR: join(temporary, "tmp"), NOEMA_RUNTIME_ROOT: repository,
+      NOEMA_WEB_PORT: "0",
+      NOEMA_EMACS_GATEWAY_URL: process.env.NOEMA_AGENDA_GATEWAY_TEST_URL || "",
+      NOEMA_EMACS_GATEWAY_BINDING: process.env.NOEMA_AGENDA_GATEWAY_TEST_BINDING || "",
       NOEMA_KERNEL_BASE: "", NOEMA_KERNEL_DISABLED: "0",
       NOEMA_KERNEL_WORKSPACE: join(temporary, "kernel-workspace"), NOEMA_KERNEL_CONFIG_DIR: join(temporary, "kernel-config") },
   });
@@ -58,7 +58,7 @@ try {
     const timeout = setTimeout(() => reject(new Error("Host startup timed out")), 60_000);
     const listen = (data) => {
       diagnostics = (diagnostics + data.toString()).slice(-12000);
-      const match = diagnostics.match(/\[aaronnote-web\] (http:\/\/127\.0\.0\.1:\d+)/);
+      const match = diagnostics.match(/\[noema-web\] (http:\/\/127\.0\.0\.1:\d+)/);
       if (match) { clearTimeout(timeout); ready(match[1]); }
     };
     host.stdout.on("data", listen); host.stderr.on("data", listen);
@@ -70,7 +70,7 @@ try {
   async function api(operation, body = {}, group = "agenda") {
     const response = await fetch(`${url}/api`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ channel: `aaronnote:api:${group}:${operation}`, args: [body] }),
+      body: JSON.stringify({ channel: `noema:api:${group}:${operation}`, args: [body] }),
       signal: AbortSignal.timeout(30_000),
     });
     const value = await response.json();
@@ -96,7 +96,7 @@ try {
   for (const [scopeId, root] of [["knowledge", knowledge], [scope.id, project]]) {
     const rejected = await fetch(`${url}/api`, {
       method: "POST", headers: {"content-type":"application/json"},
-      body: JSON.stringify({channel:"aaronnote:api:agenda:capture",args:[{scopeId,file:"unclosed.md",text:"Must remain visible"}]}),
+      body: JSON.stringify({channel:"noema:api:agenda:capture",args:[{scopeId,file:"unclosed.md",text:"Must remain visible"}]}),
       signal: AbortSignal.timeout(30_000),
     });
     const detail = await rejected.text();

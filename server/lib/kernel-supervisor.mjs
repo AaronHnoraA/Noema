@@ -240,12 +240,12 @@ export function createKernelSupervisor({
         removeMcpDescriptor(stateRoot, supervisorPid);
       }
     } catch (error) {
-      stderr.write(`[aaronnote-web] MCP descriptor update failed: ${error?.message || error}\n`);
+      stderr.write(`[noema-web] MCP descriptor update failed: ${error?.message || error}\n`);
     }
     try {
       onState(state);
     } catch (error) {
-      stderr.write(`[aaronnote-web] kernel state callback failed: ${error?.message || error}\n`);
+      stderr.write(`[noema-web] kernel state callback failed: ${error?.message || error}\n`);
     }
     return state;
   };
@@ -487,13 +487,13 @@ export function createKernelSupervisor({
         }
         const box = await attach(baseUrl, exitPromise);
         publish("listening", { baseUrl, box });
-        stderr.write(`[aaronnote-web] kernel ${baseUrl} box=${box.id} owner=web-host\n`);
+        stderr.write(`[noema-web] kernel ${baseUrl} box=${box.id} owner=web-host\n`);
         backoff = restartDelayMs;
         await monitor(baseUrl, exitPromise);
       } catch (error) {
         if (!closing) {
           publish("degraded", { baseUrl, reason: error?.message || String(error) });
-          stderr.write(`[aaronnote-web] kernel degraded: ${error?.message || error}\n`);
+          stderr.write(`[noema-web] kernel degraded: ${error?.message || error}\n`);
         }
       } finally {
         if (config.owned) await stopChild();

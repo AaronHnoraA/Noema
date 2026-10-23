@@ -38,7 +38,7 @@ describe("standalone VS Code adapter", () => {
   test("resolves note-code tags before launching", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-editor-"));
     const file = join(root, "source.lean");
-    await writeFile(file, "# prelude\n-- @aaronnote group-cancel\n#check Nat\n");
+    await writeFile(file, "# prelude\n-- @noema group-cancel\n#check Nat\n");
     expect(await taggedSourceLocation(file, "group-cancel")).toEqual({ line: 2, col: 0 });
 
     const calls: unknown[][] = [];

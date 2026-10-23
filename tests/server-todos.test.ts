@@ -236,7 +236,7 @@ describe("server todo scan", () => {
 
 describe("server todo agenda", () => {
   test("getTodos scans markdown without a separate todo db", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-todos-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-todos-"));
     try {
       await mkdir(join(root, "state"), { recursive: true });
       configure({ root, workspaceRoot: root, stateRoot: join(root, "state"), tmpRoot: join(root, "tmp") });
@@ -281,7 +281,7 @@ describe("server todo agenda", () => {
   });
 
   test("todo status update rewrites markdown without refreshing a todo db", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-todo-update-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-todo-update-"));
     try {
       await mkdir(join(root, "state"), { recursive: true });
       configure({ root, workspaceRoot: root, stateRoot: join(root, "state"), tmpRoot: join(root, "tmp") });
@@ -310,7 +310,7 @@ describe("server todo agenda", () => {
   });
 
   test("todo metadata update rewrites args without changing status", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-todo-meta-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-todo-meta-"));
     try {
       await mkdir(join(root, "state"), { recursive: true });
       configure({ root, workspaceRoot: root, stateRoot: join(root, "state"), tmpRoot: join(root, "tmp") });
@@ -352,7 +352,7 @@ describe("server todo agenda", () => {
   });
 
   test("a stale index locator does not patch a different todo on that line", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-todo-stale-index-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-todo-stale-index-"));
     try {
       await mkdir(join(root, "state"), { recursive: true });
       configure({ root, workspaceRoot: root, stateRoot: join(root, "state"), tmpRoot: join(root, "tmp") });

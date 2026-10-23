@@ -14,7 +14,7 @@
 (require 'subr-x)
 (require 'noema-research)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
 (declare-function magent-llm-request-create "magent-llm" (&rest args))
 (declare-function magent-llm-event-type "magent-llm" (event))
 (declare-function magent-llm-event-text "magent-llm" (event))
@@ -46,7 +46,7 @@ DISCLOSURE is local_only or project. The result stays pending in Attention."
          (completing-read "Disclosure: " '("local_only" "project") nil t nil nil "local_only")))
   (let ((root (or (noema-current-project) (user-error "No Noema project here"))))
     (my/noema-api-call
-     "aaronnote:api:research:memory:propose-from-run"
+     "noema:api:research:memory:propose-from-run"
      (vector `((root . ,root) (runId . ,run-id) (kind . ,kind)
                (statement . ,statement) (disclosure . ,disclosure)))
      (lambda (result error-object)
@@ -267,7 +267,7 @@ writes a notebook cell."
                           (body (noema-research-synthesis--build-request
                                  kind model document file revision client-request-id parent-id)))
                      (my/noema-api-call
-                      "aaronnote:api:research:proposal:create"
+                      "noema:api:research:proposal:create"
                       (vector body)
                       (lambda (result error-response)
                         (if error-response

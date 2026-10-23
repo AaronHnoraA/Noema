@@ -280,8 +280,8 @@
       (noema-skill-upstream-status :check t :callback #'ignore)
       (noema-skill-upstream-update "qiskit" :dry-run t :callback #'ignore))
     (should (equal (mapcar #'car calls)
-                   '("aaronnote:api:research:capability:global:skill:upstream:update"
-                     "aaronnote:api:research:capability:global:skill:upstream:status")))
+                   '("noema:api:research:capability:global:skill:upstream:update"
+                     "noema:api:research:capability:global:skill:upstream:status")))
     (should (equal (mapcar #'caddr calls) (list noema-skill-upstream-timeout noema-skill-upstream-timeout)))))
 
 (ert-deftest noema-capability-gateway-json-false-renders-disabled ()

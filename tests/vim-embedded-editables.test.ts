@@ -11,7 +11,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import { createEditor } from "../src/editor-api.ts";
-import { createVimLite, type VimLiteMode } from "../aaronnote/vim-lite.ts";
+import { createVimLite, type VimLiteMode } from "../pages/vim-lite.ts";
 
 function mount(mode: VimLiteMode = "normal") {
   const host = document.createElement("div");
@@ -142,7 +142,7 @@ describe("the guards around the editor itself", () => {
   test("an element marked native opts out entirely, Escape included", () => {
     const s = mount();
     const wrapper = document.createElement("div");
-    wrapper.setAttribute("data-aaronnote-vim", "native");
+    wrapper.setAttribute("data-noema-vim", "native");
     const input = document.createElement("input");
     wrapper.append(input);
     s.host.append(wrapper);

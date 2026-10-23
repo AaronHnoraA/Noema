@@ -158,7 +158,7 @@ if [ -z "$EMACS_PID" ] || ! client '(emacs-version)' | grep -q GNU; then
   exit 1
 fi
 
-open_result="$(client '(let ((file (getenv "NOEMA_MEASURE_NOTE"))) (require '\''init-aaronnote) (setq my/noema-web-port 0) (find-file file) (my/noema-open-file file) "opened")')"
+open_result="$(client '(let ((file (getenv "NOEMA_MEASURE_NOTE"))) (require '\''init-noema) (setq my/noema-web-port 0) (find-file file) (my/noema-open-file file) "opened")')"
 case "$open_result" in
   *'"opened"'*) ;;
   *) echo "Noema open request failed: $open_result" >&2; exit 1 ;;
@@ -286,13 +286,13 @@ JSON.stringify((() => {
     : [];
   return {
     hidden: document.hidden,
-    paused: document.documentElement.classList.contains('aaronnote-paused'),
-    quiescent: document.documentElement.classList.contains('aaronnote-quiescent'),
+    paused: document.documentElement.classList.contains('noema-paused'),
+    quiescent: document.documentElement.classList.contains('noema-quiescent'),
     editorFocused: document.activeElement === content,
     caretColor: content ? getComputedStyle(content).caretColor : '',
     cmCursorCount: document.querySelectorAll('[data-editor] .cm-cursor').length,
-    mathPreviewVisible: visible('.aaronnote-math-preview'),
-    snippetVisible: visible('.aaronnote-snippet-popup'),
+    mathPreviewVisible: visible('.noema-math-preview'),
+    snippetVisible: visible('.noema-snippet-popup'),
     animations,
     imageCount: document.images.length,
     images: Array.from(document.images).filter((image) => image.currentSrc || image.src).map((image) => ({

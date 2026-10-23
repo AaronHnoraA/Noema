@@ -32,13 +32,13 @@
 
 (declare-function my/noema--xwidget-buffer-p "noema-xwidget-keys" (&optional buffer))
 (declare-function my/noema--jupyter-xwidget-buffer-p "noema-xwidget-keys" (&optional buffer))
-(declare-function my/noema--buffer-for-client "init-aaronnote" (client))
-(declare-function my/noema--host-file "init-aaronnote" (file))
+(declare-function my/noema--buffer-for-client "init-noema" (client))
+(declare-function my/noema--host-file "init-noema" (file))
 (declare-function my/noema--select-emacs-window "noema-xwidget-keys" (&optional window))
 (declare-function my/noema--release-xwidget-input-buffer "noema-xwidget-keys" (&optional buffer))
 (declare-function my/noema--focus-minibuffer-if-active "noema-xwidget-keys" ())
-(declare-function my/noema-command "init-aaronnote" (command &optional detail))
-(declare-function my/noema-open-file "init-aaronnote" (file))
+(declare-function my/noema-command "init-noema" (command &optional detail))
+(declare-function my/noema-open-file "init-noema" (file))
 (declare-function gptel-context--add-region "gptel-context"
                   (buffer region-beginning region-end &optional advance))
 (declare-function gptel-rewrite "gptel-rewrite" ())

@@ -162,7 +162,7 @@ describe("diagram render helpers", () => {
 
     expect(overlay.classList.contains("cm-diagram-lightbox")).toBe(true);
     expect(overlay.parentElement).toBe(document.body);
-    expect(overlay.dataset.aaronnoteVim).toBe("native");
+    expect(overlay.dataset.noemaVim).toBe("native");
     expect(overlay.dataset.noemaGestureScope).toBe("diagram");
     expect(document.body.classList.contains("has-diagram-fullscreen")).toBe(true);
     expect(stage.querySelector(".cm-diagram-toolbar")).toBeTruthy();
@@ -373,7 +373,7 @@ describe("diagram render helpers", () => {
     ].join("");
     let opened = "";
     let newWindow = false;
-    div.addEventListener("aaronnote:open-url", (event) => {
+    div.addEventListener("noema:open-url", (event) => {
       event.preventDefault();
       const detail = (event as CustomEvent<{ href: string; newWindow: boolean }>).detail;
       opened = detail.href;

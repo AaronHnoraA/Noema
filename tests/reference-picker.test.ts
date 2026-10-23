@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
-import { createReferencePicker, drillQuery, renderMatchedLabel, type ReferenceAnswer, type ReferenceItem } from "../aaronnote/reference-picker.ts";
+import { createReferencePicker, drillQuery, renderMatchedLabel, type ReferenceAnswer, type ReferenceItem } from "../pages/reference-picker.ts";
 
 const heading: ReferenceItem = {
   kind: "heading", label: "Lease expiry", group: "This page", level: 2, detail: "##",

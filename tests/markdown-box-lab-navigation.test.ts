@@ -3,7 +3,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import {
   markdownBlockSourceOffset,
   markdownLineStartOffset,
-} from "../aaronnote/markdown-box-lab-navigation.ts";
+} from "../pages/markdown-box-lab-navigation.ts";
 
 describe("Markdown box block navigation", () => {
   test("converts kernel 1-based lines to CM6 source offsets", () => {

@@ -2,7 +2,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import { createEditor } from "../src/editor-api.ts";
-import { createVimLite } from "../aaronnote/vim-lite.ts";
+import { createVimLite } from "../pages/vim-lite.ts";
 import { fixedWidthRowLayout, setVimRowLayoutForTesting } from "../src/cm6/screen-rows.ts";
 
 function mount(text: string, at: number, width = 4) {

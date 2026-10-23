@@ -23,7 +23,7 @@ import (
 // read-then-parse, and markdownSnapshots is a sync.Map whose projections are
 // each guarded by a sync.Once, so they fan out safely.
 //
-// 16 matches the Node default (AARONNOTE_SCAN_CONCURRENCY): enough to keep the
+// 16 matches the Node default (NOEMA_SCAN_CONCURRENCY): enough to keep the
 // parse busy behind the reads without turning a cold start into a thundering
 // herd of open files on a small machine.
 const markdownCatalogScanConcurrency = 16

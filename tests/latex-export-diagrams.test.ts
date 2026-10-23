@@ -2,7 +2,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 // @ts-expect-error -- plain .mjs server module, as the other server tests import it
 import { diagramKey, prepareLatexDiagrams, scanDiagramFences } from "../server/lib/latex-export-diagrams.mjs";
-import { exportDiagramFences, exportDiagramKey } from "../aaronnote/export-diagrams.ts";
+import { exportDiagramFences, exportDiagramKey } from "../pages/export-diagrams.ts";
 import { diagramFenceKey, renderMarkdownHTML } from "../src/render-html.ts";
 
 const NOTE = [
@@ -79,7 +79,7 @@ describe("diagrams in exported HTML", () => {
       diagrams: { [diagramFenceKey("marmind", "Root\n  Branch\n")]: SVG },
     });
     expect(withPicture).toContain("<svg");
-    expect(withPicture).toContain("aaronnote-diagram-figure");
+    expect(withPicture).toContain("noema-diagram-figure");
     expect(withPicture).not.toContain("<code");
 
     const without = renderMarkdownHTML(markdown);
@@ -103,7 +103,7 @@ describe("diagrams in exported HTML", () => {
     const html = renderMarkdownHTML("![Map](attachments/map.drawio#page=2)");
     // The export URL only resolves against a live host; the path is what lets
     // the publish step put the SVG into a standalone file.
-    expect(html).toContain('data-aaronnote-drawio-src="attachments/map.drawio"');
-    expect(html).toContain('data-aaronnote-drawio-page="1"');
+    expect(html).toContain('data-noema-drawio-src="attachments/map.drawio"');
+    expect(html).toContain('data-noema-drawio-page="1"');
   });
 });

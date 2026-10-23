@@ -55,7 +55,7 @@ export abstract class MeasuredWidget extends WidgetType {
 
   protected registerMeasured(dom: HTMLElement, view: EditorView): HTMLElement {
     if (this.measuredBlock && !this.floatedBlock) {
-      dom.classList.add("cm-aaronnote-measured-widget");
+      dom.classList.add("cm-noema-measured-widget");
       dom.dataset.cmMeasureKey = this.measureKey();
       const groupKey = this.measureGroupKey();
       if (groupKey) dom.dataset.cmMeasureGroupKey = groupKey;

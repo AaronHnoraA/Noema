@@ -12,16 +12,16 @@
 (require 'button)
 (require 'noema-api)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
+(declare-function my/noema--ensure-server "init-noema" (&optional callback))
 (declare-function noema-sessions "noema-sessions" (&optional scope))
 (declare-function noema-agent-inbox "noema-agent-inbox" ())
 (declare-function noema-sessions-open-reference "noema-sessions" (root &optional name session-id))
 (declare-function noema-orchestration "noema-orchestration" (&optional directory))
 (declare-function noema-capability-manager "noema-capability-ui" (&optional project type))
 (declare-function noema-research-attention "noema-research-inspector" (&optional origin))
-(declare-function my/noema-agenda "init-aaronnote" (&optional query))
-(declare-function my/noema-workspace-graph "init-aaronnote" ())
+(declare-function my/noema-agenda "init-noema" (&optional query))
+(declare-function my/noema-workspace-graph "init-noema" ())
 (declare-function noema-research-goto-cell "noema-research-mode" (id))
 (declare-function noema-research-workflow-preview "noema-research-workflow" (kind file title))
 (declare-function noema-history-search "noema-history-search" (&optional directory query))
@@ -67,7 +67,7 @@
     (unless (and notebook-id cell-id)
       (user-error "This Run has no source work block"))
     (my/noema-api-call
-     "aaronnote:api:research:cell:resolve"
+     "noema:api:research:cell:resolve"
      (vector `((cwd . ,root) (notebookId . ,notebook-id) (cellId . ,cell-id)))
      (lambda (result error-object)
        (if error-object
@@ -239,7 +239,7 @@
       (let ((name (car query))
             (channel (cdr query)))
         (my/noema-api-call
-         (format "aaronnote:api:research:%s" channel)
+         (format "noema:api:research:%s" channel)
          (vector `((cwd . ,root) (limit . 50)))
          (lambda (result error-object)
            (when (and (buffer-live-p buffer)

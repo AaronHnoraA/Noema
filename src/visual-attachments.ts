@@ -19,7 +19,7 @@ function comparableAssetPath(value: string): string {
   const raw = String(value || "").trim();
   if (!raw) return "";
   try {
-    const url = new URL(raw, "https://aaronnote.local/");
+    const url = new URL(raw, "https://noema.local/");
     return url.searchParams.get("file") || url.pathname || raw;
   } catch {
     return raw;
@@ -34,7 +34,7 @@ function safeVisualSourceP(src: string): boolean {
   const raw = String(src || "").trim();
   if (!raw) return false;
   try {
-    const url = new URL(raw, "https://aaronnote.local/");
+    const url = new URL(raw, "https://noema.local/");
     return !["javascript:", "data:", "vbscript:"].includes(url.protocol.toLowerCase());
   } catch {
     return false;
@@ -98,38 +98,38 @@ export function visualAttachmentSandbox(kind: VisualAttachmentKind): string {
   return kind === "html" ? HTML_ATTACHMENT_IFRAME_SANDBOX : VISUAL_ATTACHMENT_IFRAME_SANDBOX;
 }
 
-function aaronnoteMediaUrlP(src: string): boolean {
+function noemaMediaUrlP(src: string): boolean {
   try {
     const url = new URL(String(src || ""));
-    return url.protocol === "aaronnote-asset:" && url.hostname === "media";
+    return url.protocol === "noema-asset:" && url.hostname === "media";
   } catch {
     return false;
   }
 }
 
-function aaronnoteAssetProxyUrlP(url: URL): boolean {
-  return /(?:^|\/)aaronnote-asset$/.test(url.pathname) && Boolean(url.searchParams.get("url"));
+function noemaAssetProxyUrlP(url: URL): boolean {
+  return /(?:^|\/)noema-asset$/.test(url.pathname) && Boolean(url.searchParams.get("url"));
 }
 
-function aaronnoteMediaSource(src: string): { mediaUrl: string; proxyUrl: string } | null {
+function noemaMediaSource(src: string): { mediaUrl: string; proxyUrl: string } | null {
   const raw = String(src || "").trim();
   if (!raw) return null;
-  if (aaronnoteMediaUrlP(raw)) return { mediaUrl: raw, proxyUrl: "" };
+  if (noemaMediaUrlP(raw)) return { mediaUrl: raw, proxyUrl: "" };
 
   try {
-    const url = new URL(raw, "https://aaronnote.local");
-    if (!aaronnoteAssetProxyUrlP(url)) return null;
+    const url = new URL(raw, "https://noema.local");
+    if (!noemaAssetProxyUrlP(url)) return null;
     const proxied = url.searchParams.get("url") || "";
-    if (!aaronnoteMediaUrlP(proxied)) return null;
+    if (!noemaMediaUrlP(proxied)) return null;
     return { mediaUrl: proxied, proxyUrl: raw };
   } catch {
     return null;
   }
 }
 
-function proxiedAaronnoteAssetUrl(proxyUrl: string, assetUrl: string): string {
+function proxiedNoemaAssetUrl(proxyUrl: string, assetUrl: string): string {
   const absolute = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(proxyUrl);
-  const url = new URL(proxyUrl, "https://aaronnote.local");
+  const url = new URL(proxyUrl, "https://noema.local");
   url.search = "";
   url.hash = "";
   url.searchParams.set("url", assetUrl);
@@ -155,13 +155,13 @@ export function splitDrawioSource(src: string): { path: string; page: number } {
  * else (an `http:` diagram, say) has no exporter and falls back to a card.
  */
 export function drawioImageSrc(resolvedSrc: string, page = 0): string | null {
-  const media = aaronnoteMediaSource(resolvedSrc);
+  const media = noemaMediaSource(resolvedSrc);
   if (!media) return null;
-  const url = new URL("aaronnote-asset://drawio-svg/");
+  const url = new URL("noema-asset://drawio-svg/");
   url.searchParams.set("src", media.mediaUrl);
   if (page > 0) url.searchParams.set("page", String(page));
   const exportUrl = url.toString();
-  return media.proxyUrl ? proxiedAaronnoteAssetUrl(media.proxyUrl, exportUrl) : exportUrl;
+  return media.proxyUrl ? proxiedNoemaAssetUrl(media.proxyUrl, exportUrl) : exportUrl;
 }
 
 export function visualAttachmentFrame(kind: VisualAttachmentKind, resolvedSrc: string): VisualAttachmentFrame {

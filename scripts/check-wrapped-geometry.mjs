@@ -35,7 +35,7 @@ try {
       await page.route("**/geometry", (r) =>
         r.fulfill({
           contentType: "text/html",
-          body: `<!doctype html><html><head><link rel="stylesheet" href="${root}src/styles/widgets.css"><link rel="stylesheet" href="${root}aaronnote/style.css"></head><body><div id="host" class="aaronnote-focused-editor" style="height:900px;width:1300px;--aaronnote-visual-zoom:1"></div></body></html>`,
+          body: `<!doctype html><html><head><link rel="stylesheet" href="${root}src/styles/widgets.css"><link rel="stylesheet" href="${root}pages/style.css"></head><body><div id="host" class="noema-focused-editor" style="height:900px;width:1300px;--noema-visual-zoom:1"></div></body></html>`,
         }),
       );
       await page.route("**/fixture.svg", (r) =>
@@ -240,7 +240,7 @@ try {
               ({ width, zoom }) => {
                 const h = document.querySelector("#host");
                 h.style.width = width + "px";
-                h.style.setProperty("--aaronnote-visual-zoom", String(zoom));
+                h.style.setProperty("--noema-visual-zoom", String(zoom));
               },
               { width, zoom },
             );
@@ -265,7 +265,7 @@ try {
           await page.evaluate(() => {
             const h = document.querySelector("#host");
             h.style.width = "1300px";
-            h.style.setProperty("--aaronnote-visual-zoom", "1");
+            h.style.setProperty("--noema-visual-zoom", "1");
           });
         }
       assert.deepEqual(errors, []);

@@ -181,6 +181,17 @@ describe("Noema app config", () => {
     expect(payload.activeTheme.id).toBe(NOEMA_DEFAULT_THEME_ID);
     expect(payload.diagnostics.map((diagnostic) => diagnostic.code)).toContain("unknown-theme");
   });
+  test("reads the theme id saved before the Noema rename as the Noema theme", async () => {
+    const configDir = await tempConfigDir();
+    await writeFile(join(configDir, "config.json"), JSON.stringify({
+      schemaVersion: 5,
+      appearance: { theme: "aaronnote" },
+    }), "utf8");
+    const payload = await getNoemaAppConfig({ configDir });
+    expect(payload.config.appearance.theme).toBe("noema");
+    expect(payload.activeTheme.id).toBe("noema");
+    expect(payload.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain("unknown-theme");
+  });
   test("stores the Git synchronization policy, clamps a stored value, and rejects a bad patch", async () => {
     const configDir = await tempConfigDir();
     const initial = await ensureNoemaAppConfig({ configDir });

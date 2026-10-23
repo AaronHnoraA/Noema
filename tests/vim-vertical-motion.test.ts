@@ -8,7 +8,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import { createEditor } from "../src/editor-api.ts";
-import { createVimLite } from "../aaronnote/vim-lite.ts";
+import { createVimLite } from "../pages/vim-lite.ts";
 import { getBlockMathRanges } from "../src/cm6/math-ranges.ts";
 
 function mount(text: string, at = 0) {
@@ -100,7 +100,7 @@ describe("a blank line a block absorbed is still a stop", () => {
 
   test("Source mode keeps ordinary source lines", () => {
     const e = mount("aaa\n\nbbb", 1);
-    e.editor.view.dom.classList.remove("aaronnote-visual-typography");
+    e.editor.view.dom.classList.remove("noema-visual-typography");
     e.keys("j");
     expect(e.head()).toBe(4);
     e.done();

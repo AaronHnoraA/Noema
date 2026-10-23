@@ -57,7 +57,7 @@ describe("optimal Visual-mode line breaking", () => {
     editor.setMarkdownSelection(source.length);
 
     await settleLayout();
-    expect(host.querySelector(".aaronnote-image-wrap")).not.toBeNull();
+    expect(host.querySelector(".noema-image-wrap")).not.toBeNull();
     expect(host.querySelector(".cm-kp-break")).toBeNull();
     expect(editor.getMarkdown()).toBe(source);
     editor.destroy();

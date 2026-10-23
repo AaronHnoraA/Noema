@@ -11,8 +11,8 @@
 (require 'tabulated-list)
 (require 'noema-api)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
+(declare-function my/noema--ensure-server "init-noema" (&optional callback))
 
 (defvar-local noema-findings--root nil)
 (defvar-local noema-findings--query "")
@@ -56,7 +56,7 @@
         (root noema-findings--root)
         (query noema-findings--query))
     (my/noema-api-call
-     "aaronnote:api:research:finding:list"
+     "noema:api:research:finding:list"
      (vector `((cwd . ,root) (query . ,query) (includeLocal . t) (limit . 200)))
      (lambda (result error-object)
        (when (and (buffer-live-p buffer)
@@ -116,7 +116,7 @@
         (root noema-findings--root))
     (unless id (user-error "No Finding on this line"))
     (my/noema-api-call
-     "aaronnote:api:research:finding:get"
+     "noema:api:research:finding:get"
      (vector `((cwd . ,root) (id . ,id)))
      (lambda (result error-object)
        (if error-object
@@ -147,7 +147,7 @@ here brings it back: a retired claim returns through a new evidence review."
     (unless (yes-or-no-p (format "Retire this Finding as %s? " status))
       (user-error "Finding left unchanged"))
     (my/noema-api-call
-     "aaronnote:api:research:finding:retire"
+     "noema:api:research:finding:retire"
      (vector `((cwd . ,root) (id . ,id) (status . ,status)
                (reason . ,(string-trim reason)) (expectedVersion . ,version)))
      (lambda (_result error-object)

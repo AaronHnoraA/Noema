@@ -11,8 +11,8 @@
 (require 'tabulated-list)
 (require 'noema-api)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
+(declare-function my/noema--ensure-server "init-noema" (&optional callback))
 (declare-function noema-research-history-index "noema-agent-promote" (&optional directory))
 
 (defvar-local noema-history-search--root nil)
@@ -69,7 +69,7 @@
         (query noema-history-search--query)
         (source noema-history-search--source))
     (my/noema-api-call
-     "aaronnote:api:research:history:search"
+     "noema:api:research:history:search"
      (vector `((cwd . ,root) (projectRoot . ,root) (query . ,query)
                (source . ,source) (limit . 100)))
      (lambda (result error-object)
@@ -123,8 +123,8 @@
         (root noema-history-search--root))
     (unless id (user-error "No history hit on this line"))
     (my/noema-api-call
-     (if complete "aaronnote:api:research:history:read"
-       "aaronnote:api:research:history:peek")
+     (if complete "noema:api:research:history:read"
+       "noema:api:research:history:peek")
      (vector `((cwd . ,root) (id . ,id) (maxRunes . 1200)))
      (lambda (result error-object)
        (if error-object

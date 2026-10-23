@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 describe("note open view", () => {
   test("ordinary opens ignore remembered Source mode while explicit navigation may restore it", () => {
-    const source = readFileSync(join(process.cwd(), "aaronnote/main.ts"), "utf8");
+    const source = readFileSync(join(process.cwd(), "pages/main.ts"), "utf8");
     const applyStart = source.indexOf("function applyOpenedNote(");
     const applyEnd = source.indexOf("async function openFile(", applyStart);
     const applyOpenedNote = source.slice(applyStart, applyEnd);

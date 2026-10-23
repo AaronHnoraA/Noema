@@ -65,14 +65,14 @@ for (const [key, value] of Object.entries({
 // fall back to the repo's etc/katex-macros relative to this script.
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const macrosDir = resolve(
-  process.env.AARONNOTE_KATEX_MACROS_DIR
-    || (process.env.AARONNOTE_WORKSPACE_ROOT
-      ? join(process.env.AARONNOTE_WORKSPACE_ROOT, "etc", "katex-macros")
+  process.env.NOEMA_KATEX_MACROS_DIR
+    || (process.env.NOEMA_WORKSPACE_ROOT
+      ? join(process.env.NOEMA_WORKSPACE_ROOT, "etc", "katex-macros")
       : join(scriptDir, "..", "..", "..", "..", "etc", "katex-macros")),
 );
 const drawioCacheDir = resolve(
   process.env.NOEMA_DRAWIO_CACHE_DIR
-    || join(process.env.AARONNOTE_STATE_DIR
+    || join(process.env.NOEMA_STATE_DIR
       || join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "noema"), "drawio-svg"),
 );
 const { setKatexMacros } = await import("../src/katex-macros.ts");
@@ -99,7 +99,7 @@ function renderOne(input) {
  * the same treatment TikZ gets below.
  */
 async function inlineDrawio(html, noteFile) {
-  if (!html.includes("data-aaronnote-drawio-src")) return html;
+  if (!html.includes("data-noema-drawio-src")) return html;
   const { drawioExportSVG } = await import("../server/lib/drawio-export.mjs");
   const { sanitizeDiagramSvg } = await import("../src/diagram-sanitize.ts");
   const fullDocument = /^\s*<!doctype|^\s*<html\b/i.test(html);
@@ -108,9 +108,9 @@ async function inlineDrawio(html, noteFile) {
     : window.document.createElement("div");
   if (!fullDocument) root.innerHTML = html;
   const baseDir = noteFile ? dirname(resolve(String(noteFile))) : process.cwd();
-  for (const image of root.querySelectorAll("[data-aaronnote-drawio-src]")) {
-    const source = image.getAttribute("data-aaronnote-drawio-src") || "";
-    const page = Number(image.getAttribute("data-aaronnote-drawio-page") || 0) || 0;
+  for (const image of root.querySelectorAll("[data-noema-drawio-src]")) {
+    const source = image.getAttribute("data-noema-drawio-src") || "";
+    const page = Number(image.getAttribute("data-noema-drawio-page") || 0) || 0;
     const file = isAbsolute(source) ? source : resolve(baseDir, source);
     const result = await drawioExportSVG(file, { page, cacheDir: drawioCacheDir });
     const figure = window.document.createElement("span");
@@ -146,7 +146,7 @@ async function inlineTikz(html) {
       }
       const svg = await render;
       element.innerHTML = sanitizedTikzSvg(svg);
-      element.querySelector("svg")?.classList.add("aaronnote-tikz-image");
+      element.querySelector("svg")?.classList.add("noema-tikz-image");
       element.removeAttribute("data-source");
     } catch (error) {
       // One unsupported diagram must not abort the rest of an export batch.

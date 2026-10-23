@@ -11,7 +11,7 @@ import { createRawKernelConnection, waitForConnected, warmupKernelInfo } from ".
 // Exercises the raw ZMQ kernel stack (wire protocol + RawSocket + the
 // kernel_info/first-iopub handshake) against the managed Conda ipykernel.
 // Gated: needs a real kernel process, so it's opt-in.
-const RUN = process.env.AARONNOTE_TEST_KERNEL === "1";
+const RUN = process.env.NOEMA_TEST_KERNEL === "1";
 const describeIfKernel = RUN ? describe : describe.skip;
 
 const pythonBin = join(import.meta.dirname, "..", "jupyter", "bin", "python-jupyter-kernel");
@@ -37,7 +37,7 @@ describeIfKernel("raw ZMQ kernel stack (real ipykernel)", () => {
   test(
     "handshake + execute against a real kernel process",
     async () => {
-      const root = await mkdtemp(join(tmpdir(), "aaronnote-rawkernel-"));
+      const root = await mkdtemp(join(tmpdir(), "noema-rawkernel-"));
       const ports = await findFreePorts(5);
       const connectionInfo = {
         key: crypto.randomUUID(),

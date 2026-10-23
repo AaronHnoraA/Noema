@@ -14,21 +14,21 @@ export function createAssetsApiHandlers({
   readSystemClipboard,
 }) {
   return {
-    "aaronnote:api:assets:upload": (body) => storeAsset(body || {}),
-    "aaronnote:api:assets:store-from-path": (body) => storeAssetFromPath(body || {}),
-    "aaronnote:api:assets:scan-orphans": async () => ({
+    "noema:api:assets:upload": (body) => storeAsset(body || {}),
+    "noema:api:assets:store-from-path": (body) => storeAssetFromPath(body || {}),
+    "noema:api:assets:scan-orphans": async () => ({
       type: "unused-assets",
       assets: await scanUnusedAssets(),
       root: noteRoot,
     }),
-    "aaronnote:api:assets:trash-orphans": (files) => trashUnusedAssets({ files }),
-    "aaronnote:api:assets:inspect": () => inspectAssets(),
-    "aaronnote:api:assets:rename": (body) => renameAsset(body || {}),
-    "aaronnote:api:assets:search-content": (body) => searchAssetContent(body || {}),
-    "aaronnote:api:imports:obsidian-analyze": (body) => startObsidianAnalysis(body || {}),
-    "aaronnote:api:imports:obsidian-task": (body) => readObsidianTask(body || {}),
-    "aaronnote:api:imports:obsidian-start": (body) => startObsidianImport(body || {}),
-    "aaronnote:api:imports:obsidian-cancel": (body) => cancelObsidianTask(body || {}),
-    "aaronnote:api:clipboard:read": (body) => readSystemClipboard(body || {}),
+    "noema:api:assets:trash-orphans": (files) => trashUnusedAssets({ files }),
+    "noema:api:assets:inspect": () => inspectAssets(),
+    "noema:api:assets:rename": (body) => renameAsset(body || {}),
+    "noema:api:assets:search-content": (body) => searchAssetContent(body || {}),
+    "noema:api:imports:obsidian-analyze": (body) => startObsidianAnalysis(body || {}),
+    "noema:api:imports:obsidian-task": (body) => readObsidianTask(body || {}),
+    "noema:api:imports:obsidian-start": (body) => startObsidianImport(body || {}),
+    "noema:api:imports:obsidian-cancel": (body) => cancelObsidianTask(body || {}),
+    "noema:api:clipboard:read": (body) => readSystemClipboard(body || {}),
   };
 }

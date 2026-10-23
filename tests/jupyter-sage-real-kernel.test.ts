@@ -7,14 +7,14 @@ import { createKernelRegistry } from "../server/jupyter/kernel-registry.mjs";
 import { defaultKernelSearchDirs, findKernelSpecs } from "../server/jupyter/kernel-finder.mjs";
 import { executeOnKernel } from "../server/jupyter/execution-message-handler.mjs";
 
-const RUN = process.env.AARONNOTE_TEST_KERNEL === "1";
+const RUN = process.env.NOEMA_TEST_KERNEL === "1";
 const describeIfKernel = RUN ? describe : describe.skip;
-const aaronnoteRoot = join(import.meta.dirname, "..");
-const jupyterDataDir = join(aaronnoteRoot, "jupyter", ".jupyter", "data");
+const noemaRoot = join(import.meta.dirname, "..");
+const jupyterDataDir = join(noemaRoot, "jupyter", ".jupyter", "data");
 
 describeIfKernel("SageMath project kernel", () => {
   test("loads Sage and keeps the versioned user site enabled", async () => {
-    const runtimeDir = await mkdtemp(join(tmpdir(), "aaronnote-sage-real-"));
+    const runtimeDir = await mkdtemp(join(tmpdir(), "noema-sage-real-"));
     const registry = createKernelRegistry({ runtimeDir, zmq, launchTimeoutMs: 30_000 });
     const specs = await findKernelSpecs({
       searchDirs: defaultKernelSearchDirs({ dataDir: jupyterDataDir, useHomeKernels: false }),

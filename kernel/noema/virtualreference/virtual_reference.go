@@ -205,7 +205,7 @@ func wordRune(r rune) bool {
 
 // Han and kana are written without spaces, so a neighbouring character is no
 // evidence that the pattern is part of a longer word. The editor's link review
-// (aaronnote/wiki-link-review.ts) applies the same rule.
+// (pages/wiki-link-review.ts) applies the same rule.
 func unspacedRune(r rune) bool {
 	return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana)
 }

@@ -23,7 +23,7 @@ describe("Markdown table formula editing", () => {
     const source = "| A | B |\n| --- | --- |\n| `\\(literal\\)` and \\(x+1\\) | 2 |";
     const { host, editor, cleanup } = mount(source);
     try {
-      const formula = host.querySelector<HTMLElement>("tbody td .aaronnote-math-inline")!;
+      const formula = host.querySelector<HTMLElement>("tbody td .noema-math-inline")!;
       formula.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
       document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
       formula.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -40,7 +40,7 @@ describe("Markdown table formula editing", () => {
     const source = "| A | B |\n| --- | --- |\n| \\(x\\) and \\(y\\) | 2 |";
     const { host, editor, cleanup } = mount(source);
     try {
-      const formula = host.querySelectorAll<HTMLElement>("tbody td .aaronnote-math-inline")[1]!;
+      const formula = host.querySelectorAll<HTMLElement>("tbody td .noema-math-inline")[1]!;
       formula.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
       document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
       formula.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -61,7 +61,7 @@ describe("Markdown table formula editing", () => {
       pointAtThreeQuarters(host.querySelector<HTMLElement>(".cm-math-inline")!);
       expect(editor.getMarkdownSelection().from).toBe(source.indexOf("abcd") + 3);
 
-      const tableFormula = host.querySelector<HTMLElement>("tbody td .aaronnote-math-inline")!;
+      const tableFormula = host.querySelector<HTMLElement>("tbody td .noema-math-inline")!;
       tableFormula.getBoundingClientRect = () => ({ left: 0, width: 100 }) as DOMRect;
       tableFormula.dispatchEvent(new MouseEvent("mousedown", {
         bubbles: true, cancelable: true, button: 0, clientX: 75,
@@ -78,7 +78,7 @@ describe("Markdown table formula editing", () => {
     const { host, cleanup } = mount("| A | B |\n| --- | --- |\n| **one** | \\(x\\) |", true);
     try {
       expect(host.querySelector("tbody td strong")?.textContent).toBe("one");
-      expect(host.querySelector("tbody td .aaronnote-math-inline")).toBeTruthy();
+      expect(host.querySelector("tbody td .noema-math-inline")).toBeTruthy();
       expect(host.querySelector(".cm-table-toolbar")).toBeNull();
     } finally { cleanup(); }
   });

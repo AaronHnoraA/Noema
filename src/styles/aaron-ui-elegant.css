@@ -30,13 +30,13 @@ button {
   box-shadow: none;
 }
 
-.aaronnote-status-hud {
+.noema-status-hud {
   right: var(--aaron-space-4);
   left: var(--aaron-space-4);
   gap: var(--aaron-space-3);
 }
 
-.aaronnote-status-pill {
+.noema-status-pill {
   gap: var(--aaron-space-2);
   padding: var(--aaron-space-1) var(--aaron-space-2);
   border-radius: var(--aaron-radius-2);
@@ -45,14 +45,14 @@ button {
 }
 
 :where(
-  .aaronnote-tools-panel,
-  .aaronnote-jupyter-panel,
-  .aaronnote-floating-toc,
-  .aaronnote-local-graph-panel,
-  .aaronnote-agenda-full-help-panel,
-  .aaronnote-snippet-popup,
-  .aaronnote-math-preview,
-  .aaronnote-graph-search-results
+  .noema-tools-panel,
+  .noema-jupyter-panel,
+  .noema-floating-toc,
+  .noema-local-graph-panel,
+  .noema-agenda-full-help-panel,
+  .noema-snippet-popup,
+  .noema-math-preview,
+  .noema-graph-search-results
 ) {
   border-radius: var(--aaron-radius-2);
 }

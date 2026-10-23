@@ -40,7 +40,7 @@ describe("wrapped figure geometry", () => {
     const source = "![diagram](missing.png){align:left; wrap:on}\n\nText beside the figure.";
     const editor = createEditor(host, { initialContent: source });
     editor.setMarkdownSelection(source.length);
-    const figure = host.querySelector<HTMLElement>(".aaronnote-image-wrap");
+    const figure = host.querySelector<HTMLElement>(".noema-image-wrap");
     expect(figure).not.toBeNull();
     const figureObserver = TestResizeObserver.instances.find((observer) => observer.observed.has(figure!));
     const hostObserver = TestResizeObserver.instances.find((observer) => observer.observed.has(host));

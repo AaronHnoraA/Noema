@@ -7,11 +7,11 @@
 export { createEditor } from "./editor-api.ts";
 export { measureTextBlock, suggestTextColumns, balanceTextColumns, measureVariableWidthText } from "./text-layout-measure.ts";
 export {
-  createAaronnoteMarkdownExtensions,
-  isAaronnoteMarkdownSource,
-  toggleAaronnoteMarkdownSource,
+  createNoemaMarkdownExtensions,
+  isNoemaMarkdownSource,
+  toggleNoemaMarkdownSource,
 } from "./cm6/editor-cm6.ts";
-export type { AaronnoteMarkdownExtensionMode } from "./cm6/editor-cm6.ts";
+export type { NoemaMarkdownExtensionMode } from "./cm6/editor-cm6.ts";
 export type {
   Editor,
   EditorBlockContext,

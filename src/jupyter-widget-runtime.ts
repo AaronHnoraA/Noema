@@ -164,7 +164,7 @@ async function loadCustomWidgetModule(
     requireJs.undef(moduleName);
   }
   for (const cdnPath of widgetModuleCdnUrls(moduleName, moduleVersion)) {
-    console.info(`[aaronnote-jupyter] loading widget module ${moduleName}@${moduleVersion} from ${new URL(cdnPath).hostname}`);
+    console.info(`[noema-jupyter] loading widget module ${moduleName}@${moduleVersion} from ${new URL(cdnPath).hostname}`);
     requireJs.config({ paths: { [moduleName]: cdnPath } });
     try {
       return await requireModule(requireJs, moduleName);
@@ -175,7 +175,7 @@ async function loadCustomWidgetModule(
   throw new Error(`Unable to load widget module ${moduleName}@${moduleVersion} from local nbextensions or CDN`);
 }
 
-class AaronnoteWidgetManager extends KernelWidgetManager {
+class NoemaWidgetManager extends KernelWidgetManager {
   readonly renderMime: RenderMimeRegistry;
   private readonly runtimeId: string;
   // KernelWidgetManager starts restoreWidgets() from its base constructor.
@@ -424,7 +424,7 @@ class AaronnoteWidgetManager extends KernelWidgetManager {
     let restoreError: unknown = null;
     if (viaReplay) {
       void this.restoreFromKernel().catch((error) => {
-        console.warn(`[aaronnote-jupyter] background widget-state reconciliation failed: ${errorText(error)}`);
+        console.warn(`[noema-jupyter] background widget-state reconciliation failed: ${errorText(error)}`);
       });
     } else {
       try {
@@ -462,11 +462,11 @@ class AaronnoteWidgetManager extends KernelWidgetManager {
         `kernel ${this.kernel.connectionStatus}/${this.kernel.status}`,
       ];
       const detail = parts.join("; ");
-      console.error(`[aaronnote-jupyter] widget model ${modelId} not found — ${detail}`);
+      console.error(`[noema-jupyter] widget model ${modelId} not found — ${detail}`);
       throw new Error(`widget model not found (${detail})`);
     }
     console.info(
-      `[aaronnote-jupyter] mounted widget ${modelId.slice(0, 8)} via ${viaRestore ? "kernel-restore" : "captured-state replay"} (LIVE)`
+      `[noema-jupyter] mounted widget ${modelId.slice(0, 8)} via ${viaRestore ? "kernel-restore" : "captured-state replay"} (LIVE)`
       + ` — ${this.loadedModelCount()} models, kernel ${this.kernel.connectionStatus}/${this.kernel.status}`,
     );
     await this.seedOutputWidgets(widgetOutputs);
@@ -482,7 +482,7 @@ class AaronnoteWidgetManager extends KernelWidgetManager {
 
 type RuntimeEntry = {
   kernel: KernelConnection;
-  manager: AaronnoteWidgetManager;
+  manager: NoemaWidgetManager;
 };
 
 let runtimeEntries: Map<string, Promise<RuntimeEntry>> | undefined;
@@ -497,7 +497,7 @@ function runtimeChannelsUrl(runtime: JupyterWidgetRuntime, sessionId: string): s
 }
 
 function runtimeWebSocketCtor(runtime: JupyterWidgetRuntime): typeof WebSocket {
-  return class AaronnoteRuntimeWebSocket {
+  return class NoemaRuntimeWebSocket {
     onopen: WebSocketHandler = null;
     onclose: WebSocketHandler = null;
     onerror: WebSocketHandler = null;
@@ -624,14 +624,14 @@ async function createRuntimeEntry(runtime: JupyterWidgetRuntime): Promise<Runtim
   const baseUrl = new URL("/jupyter/", window.location.origin).toString();
   const serverSettings = ServerConnection.makeSettings({
     baseUrl,
-    wsUrl: "ws://aaronnote-widget-runtime/",
+    wsUrl: "ws://noema-widget-runtime/",
     token: "",
     WebSocket: runtimeWebSocketCtor(runtime),
   });
   const kernel = new KernelConnection({
     model: { id: runtime.id, name: runtime.name },
     serverSettings,
-    username: "aaronnote-widget",
+    username: "noema-widget",
     handleComms: true,
     // Keep widget callbacks on the kernel's normal shell, as classic
     // Notebook and VS Code do.  Recent @jupyterlab/services defaults to one
@@ -646,7 +646,7 @@ async function createRuntimeEntry(runtime: JupyterWidgetRuntime): Promise<Runtim
   });
   try {
     await waitForRuntimeConnection(kernel);
-    return { kernel, manager: new AaronnoteWidgetManager(kernel, runtime.id) };
+    return { kernel, manager: new NoemaWidgetManager(kernel, runtime.id) };
   } catch (error) {
     kernel.dispose();
     throw error;

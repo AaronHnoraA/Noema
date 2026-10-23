@@ -8,15 +8,15 @@
   (add-to-list 'load-path (expand-file-name directory user-emacs-directory)))
 (require 'remote-framework)
 (require 'remote-gateway)
-(require 'init-aaronnote-agenda-source)
+(require 'init-noema-agenda-source)
 (setq remote-gateway-discovery-directory (getenv "NOEMA_AGENDA_GATEWAY_TEST_STATE"))
 
 ;; This isolated process owns no editing buffers. Actual dirty-buffer
-;; protection is covered by init-aaronnote-agenda-source-tests.el.
+;; protection is covered by init-noema-agenda-source-tests.el.
 (defun my/noema--agenda-protected-sources (_params _client) '((files . [])))
-(remote-gateway-register-method "aaronnote.agenda.protected-sources" #'my/noema--agenda-protected-sources)
-(remote-gateway-register-method "aaronnote.agenda.source" #'my/noema--agenda-source-request)
-(remote-gateway-register-method "aaronnote.event" (lambda (&rest _) '((ok . t))))
+(remote-gateway-register-method "noema.agenda.protected-sources" #'my/noema--agenda-protected-sources)
+(remote-gateway-register-method "noema.agenda.source" #'my/noema--agenda-source-request)
+(remote-gateway-register-method "noema.event" (lambda (&rest _) '((ok . t))))
 ;; Disposable EventKit protocol peer for host integration. This process never
 ;; loads the production Apple bridge or requests personal-data permissions.
 (defvar agenda-smoke-apple-items (make-hash-table :test #'equal))
@@ -29,11 +29,11 @@
     (setf (alist-get 'fields item) fields
           (alist-get 'revision item) (number-to-string (cl-incf agenda-smoke-apple-revision)))
     (puthash token item agenda-smoke-apple-items)
-    (when-let* ((client (remote-gateway-find-client "aaronnote")))
-      (remote-gateway-notify client "aaronnote.agenda.apple-event" '((event . "changed"))))
+    (when-let* ((client (remote-gateway-find-client "noema")))
+      (remote-gateway-notify client "noema.agenda.apple-event" '((event . "changed"))))
     t))
 (remote-gateway-register-method
- "aaronnote.agenda.apple"
+ "noema.agenda.apple"
  (lambda (body _client)
    (let* ((op (alist-get 'op body)) (token (alist-get 'token body))
           (item (gethash token agenda-smoke-apple-items)))
@@ -55,8 +55,8 @@
             (puthash token value agenda-smoke-apple-items) value))))
        ("remove" (remhash token agenda-smoke-apple-items) '((removed . t)))
        (_ (error "Unknown disposable Apple operation"))))))
-(let ((binding (remote-gateway-prepare-client "aaronnote" default-directory :placement 'client
-                                               :provides '("aaronnote.command" "aaronnote.api"))))
+(let ((binding (remote-gateway-prepare-client "noema" default-directory :placement 'client
+                                               :provides '("noema.command" "noema.api"))))
   (message "AGENDA_GATEWAY_READY %s"
            (json-encode `((url . ,(plist-get binding :websocket-url))
                           (binding . ,(plist-get binding :binding-id))))))

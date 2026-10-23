@@ -3,10 +3,10 @@
 > **状态：A1、A3、B1–B5、C1–C5、C7、D1、E1–E5、F1–F5 已在同日修复**（见文末「已修复」）。
 > A2、C6、G1–G3 仍然成立，未做。
 
-范围：Wiki 页面的 Git 管理面（`aaronnote/wiki-main.ts` 中约 250 行）、其后端
+范围：Wiki 页面的 Git 管理面（`pages/wiki-main.ts` 中约 250 行）、其后端
 （`server/lib/wiki-sync.mjs`、`server/lib/wiki-workspace.mjs`、
 `server/lib/wiki-git-ui.mjs`）与二者之间的 API 边界
-（`web-host.mjs` 的 `aaronnote:api:wiki:*` 通道、`aaronnote/api-client.ts`）。
+（`web-host.mjs` 的 `noema:api:wiki:*` 通道、`pages/api-client.ts`）。
 
 结论：**后端的能力明显强于 UI 能表达的**。合并/上传/同步的模型（8 个阶段、
 错误分类、租约、隔离 worktree、恢复归档）在 `wiki-sync.mjs` 里是完整的；UI 把
@@ -43,7 +43,7 @@
 
 ## C. 后端有、UI 没有的操作
 
-- **C1 `aaronnote:api:wiki:git` 是一条死通道。** 它支持 `pull`、`push`、以及带
+- **C1 `noema:api:wiki:git` 是一条死通道。** 它支持 `pull`、`push`、以及带
   显式 `paths` 数组的 `commit`（`wiki-workspace.mjs:1485-1534`），
   但在 `api-client.ts` 里**没有任何绑定**，全仓库零调用者。
   也就是说：**按文件选择性提交、单独 pull、单独 push，后端全实现了，UI 完全够不到。**
@@ -129,7 +129,7 @@
 
 ## 已修复（2026-08-30）
 
-新增 `aaronnote/wiki-version-control.ts`：仓库视图自己持有 DOM，按 `repositoryId`
+新增 `pages/wiki-version-control.ts`：仓库视图自己持有 DOM，按 `repositoryId`
 增量更新，不再走 `render()` 整屏重建。
 
 | 审计项 | 处理 |
@@ -143,7 +143,7 @@
 | B4 | 不再倒 JSON；成功/失败走一行消息区，原始 porcelain 收进折叠的「Raw git status」 |
 | B5 | `errorKind` 映射为消息前缀（Authentication / Network / Configuration / Workspace / Busy / Remote moved），错误态单独配色 |
 | C1 | 暂存列表：每个变更文件一行、复选框、状态码、逐文件 diff；提交信息内联输入；`Commit N files` 只提交所选。Pull / Push 各自独立成键，无 origin 时禁用并给出 title |
-| C2 | 新增 `aaronnote:api:wiki:repository-diff` 通道与 `wikiRepositoryDiff`：已跟踪文件对 HEAD 出 diff，未跟踪文件对空树出 diff |
+| C2 | 新增 `noema:api:wiki:repository-diff` 通道与 `wikiRepositoryDiff`：已跟踪文件对 HEAD 出 diff，未跟踪文件对空树出 diff |
 | D1 | `wiki-sync.mjs` 新增 `onWikiSyncStateChange`，`writeSyncState` 每次落盘都通知；`web-host.mjs` 转成 `live: true` 广播。卡片实时显示 `Committing local changes / Fetching origin / Merging remote work / Publishing to origin / Applying the published result` 与 `step N of 5` |
 | E1 | 初始状态并行拉取，不再串行 await |
 | E2/E3/E4 | 同步广播改为 `applySyncState(repositoryId, …)` 局部更新；`live` 事件不触发状态回查。整屏拆建、竞态丢卡片、按钮脱离文档三个问题一并消失 |

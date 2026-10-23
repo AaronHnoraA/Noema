@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { createdWikiLinkChange, wikiCreationSource } from "../aaronnote/wiki-create-intent.ts";
+import { createdWikiLinkChange, wikiCreationSource } from "../pages/wiki-create-intent.ts";
 
 const pageId = "019a1234-5678-7abc-8123-abcdefabcdef";
 

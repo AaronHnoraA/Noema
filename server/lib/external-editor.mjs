@@ -38,7 +38,7 @@ function pathExecutable(name, pathValue = process.env.PATH || "", extensions = [
 }
 
 export function findVSCodeCli(env = process.env, platform = process.platform) {
-  const explicit = String(env.NOEMA_VSCODE || env.AARONNOTE_VSCODE || "").trim();
+  const explicit = String(env.NOEMA_VSCODE || "").trim();
   if (explicit && executable(explicit)) return explicit;
   if (platform === "win32") {
     const extensions = String(env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
@@ -82,7 +82,7 @@ export async function taggedSourceLocation(file, tag, fallbackLine = 1, fallback
   const cleanTag = String(tag || "").trim();
   if (!cleanTag) return { line: fallbackLine, col: fallbackCol };
   const marker = new RegExp(
-    `^[ \\t]*(?:--|#|//|;)[ \\t]*@(?:aaronnote|note-code)[ \\t]+${cleanTag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*$`,
+    `^[ \\t]*(?:--|#|//|;)[ \\t]*@(?:noema|note-code|aaronnote)[ \\t]+${cleanTag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*$`,
   );
   try {
     const lines = String(await readFile(file, "utf8")).split(/\r?\n/);

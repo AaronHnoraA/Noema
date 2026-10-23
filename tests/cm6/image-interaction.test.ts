@@ -17,7 +17,7 @@ afterEach(() => {
   editors.splice(0).forEach((editor) => editor.destroy());
   document.body.replaceChildren();
   measuredHeightCache.clear();
-  delete window.AaronnoteResolveAssetUrl;
+  delete window.NoemaResolveAssetUrl;
 });
 
 test.each(["![](plot.png)", "![](plot.html)"])("editing before %s preserves the media DOM after decorations settle", (source) => {
@@ -61,11 +61,11 @@ test("editing the image source refreshes its content during a typing burst", () 
 });
 
 test("changing the note base resolves the same relative image again", () => {
-  window.AaronnoteResolveAssetUrl = (src) => "/note-one/" + src;
+  window.NoemaResolveAssetUrl = (src) => "/note-one/" + src;
   const { host, editor } = open("before\n\n![](plot.png)");
   const old = host.querySelector("img.cm-image-render")!;
   const key = old.parentElement!.dataset.cmMeasureKey;
-  window.AaronnoteResolveAssetUrl = (src) => "/note-two/" + src;
+  window.NoemaResolveAssetUrl = (src) => "/note-two/" + src;
   editor.view.dispatch({ effects: refreshViewportDecorations.of(editor.view.visibleRanges) });
   const next = host.querySelector("img.cm-image-render")!;
   expect(next.getAttribute("src")).toBe("/note-two/plot.png");

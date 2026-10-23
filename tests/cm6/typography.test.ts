@@ -1,6 +1,6 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { createEditor } from "../../src/editor-api.ts";
-import { toggleAaronnoteMarkdownSource } from "../../src/cm6/editor-cm6.ts";
+import { toggleNoemaMarkdownSource } from "../../src/cm6/editor-cm6.ts";
 import {
   VISUAL_TYPOGRAPHY_INLINE_GUTTER,
   visualTypographyGutterPx,
@@ -52,11 +52,11 @@ describe("Visual typography kernel", () => {
 
   test("is installed as a Visual-only core extension", () => {
     const { editor, cleanup } = mount("Alpha\n\nBeta");
-    expect(editor.view.dom.classList.contains("aaronnote-visual-typography")).toBe(true);
+    expect(editor.view.dom.classList.contains("noema-visual-typography")).toBe(true);
     expect(editor.view.dom.getAttribute("style")).toContain("--content-width: 100%");
 
-    expect(toggleAaronnoteMarkdownSource(editor.view)).toBe(true);
-    expect(editor.view.dom.classList.contains("aaronnote-visual-typography")).toBe(false);
+    expect(toggleNoemaMarkdownSource(editor.view)).toBe(true);
+    expect(editor.view.dom.classList.contains("noema-visual-typography")).toBe(false);
     expect(blankLines()).toHaveLength(0);
     cleanup();
   });

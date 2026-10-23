@@ -108,9 +108,9 @@ turndown.addRule("tableCellLineBreak", {
   replacement: () => "<br>",
 });
 
-turndown.addRule("aaronnoteInlineMath", {
+turndown.addRule("noemaInlineMath", {
   filter: (node) => node instanceof HTMLElement
-    && node.classList.contains("aaronnote-math-inline")
+    && node.classList.contains("noema-math-inline")
     && Boolean(node.getAttribute("data-tex")),
   replacement: (_content, node) => {
     const tex = node instanceof HTMLElement ? node.getAttribute("data-tex") || "" : "";
@@ -118,10 +118,10 @@ turndown.addRule("aaronnoteInlineMath", {
   },
 });
 
-turndown.addRule("aaronnoteDisplayMath", {
+turndown.addRule("noemaDisplayMath", {
   filter: (node) => node instanceof HTMLElement
     && node.tagName === "MATH-BLOCK"
-    && (node.hasAttribute("data-aaronnote-math-block") || node.classList.contains("math-block-rendered")),
+    && (node.hasAttribute("data-noema-math-block") || node.classList.contains("math-block-rendered")),
   replacement: (_content, node) => {
     if (!(node instanceof HTMLElement)) return "";
     const render = node.querySelector<HTMLElement>(".math-block-render");
@@ -266,7 +266,7 @@ export function htmlToMarkdown(html: string): string {
   const clean = DOMPurify.sanitize(officeHtml, {
     ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|file|zotero|roam):|[^:]*?(?:[/?#]|$))/i,
     ADD_TAGS: ["math-block"],
-    ADD_ATTR: ["data-aaronnote-math-block", "data-display", "data-delimiter", "data-math-render-key", "data-tex"],
+    ADD_ATTR: ["data-noema-math-block", "data-display", "data-delimiter", "data-math-render-key", "data-tex"],
     FORBID_TAGS: ["script", "style", "iframe", "object", "embed"],
   });
   const template = document.createElement("template");

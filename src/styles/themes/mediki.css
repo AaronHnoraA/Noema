@@ -6,14 +6,14 @@
 :root[data-noema-theme="mediki"] {
   color-scheme: light;
   --noema-window-background: #f5f9f8;
-  --aaronnote-bg: #f5f9f8;
-  --aaronnote-chrome: #e8f0ef;
-  --aaronnote-border: #aebfbd;
-  --aaronnote-muted: #5e7175;
-  --aaronnote-vim-accent: #087f78;
-  --aaronnote-vim-visual: #4969a2;
-  --aaronnote-panel-bg: rgb(247 252 251 / 97%);
-  --aaronnote-surface: rgb(255 255 255 / 96%);
+  --noema-bg: #f5f9f8;
+  --noema-chrome: #e8f0ef;
+  --noema-border: #aebfbd;
+  --noema-muted: #5e7175;
+  --noema-vim-accent: #087f78;
+  --noema-vim-visual: #4969a2;
+  --noema-panel-bg: rgb(247 252 251 / 97%);
+  --noema-surface: rgb(255 255 255 / 96%);
   --aaron-ink: #17313b;
   --aaron-muted: #5e7175;
   --aaron-faint: #829398;
@@ -188,6 +188,6 @@
   margin-left: 0;
 }
 
-:root[data-noema-theme="mediki"] .aaronnote-section-heading-inner {
+:root[data-noema-theme="mediki"] .noema-section-heading-inner {
   border-radius: 0;
 }

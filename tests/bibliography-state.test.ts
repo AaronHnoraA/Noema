@@ -7,7 +7,7 @@ import {
   mapBibliographyRangesThroughChanges,
   mapBibliographyRangesThroughTextChange,
   mapBibliographyWatchRangesThroughChanges,
-} from "../aaronnote/bibliography-state.ts";
+} from "../pages/bibliography-state.ts";
 
 describe("bibliography editor state", () => {
   test("ordinary typing does not invalidate citation resolution", () => {

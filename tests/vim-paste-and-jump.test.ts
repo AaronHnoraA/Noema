@@ -14,7 +14,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import { createEditor } from "../src/editor-api.ts";
-import { createVimLite } from "../aaronnote/vim-lite.ts";
+import { createVimLite } from "../pages/vim-lite.ts";
 
 const settle = (ms = 25) => new Promise((resolve) => setTimeout(resolve, ms));
 

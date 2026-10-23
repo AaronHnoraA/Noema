@@ -304,7 +304,7 @@ function editRevision(view: EditorView, value: string): boolean {
 }
 
 function focusMetaProperties(view: EditorView): boolean {
-  const existing = view.dom.querySelector<HTMLDetailsElement>(".aaronnote-meta-properties");
+  const existing = view.dom.querySelector<HTMLDetailsElement>(".noema-meta-properties");
   if (!existing) return false;
   existing.open = true;
   existing.querySelector<HTMLElement>("input, textarea, summary")?.focus({ preventScroll: true });

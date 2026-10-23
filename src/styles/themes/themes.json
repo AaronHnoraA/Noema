@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "defaultTheme": "aaronnote",
+  "defaultTheme": "noema",
   "themes": [
     {
-      "id": "aaronnote",
-      "name": "Aaronnote",
-      "file": "aaronnote.css",
+      "id": "noema",
+      "name": "Noema",
+      "file": "noema.css",
       "colorScheme": "dark",
       "backgroundColor": "#141a27",
       "description": "Noema's original dark Wave theme"

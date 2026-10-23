@@ -5,7 +5,7 @@ import {
   type ProseCheckContext,
   type ProseCheckOutcome,
   type ProseCheckState,
-} from "../aaronnote/prose-check-lifecycle.ts";
+} from "../pages/prose-check-lifecycle.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

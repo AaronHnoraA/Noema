@@ -68,7 +68,7 @@ async function measureScrollFPS(editor: Editor, durationMs = 2000): Promise<numb
   });
 }
 
-async function measureAaronnoteEditor(content: string): Promise<MetricSet> {
+async function measureNoemaEditor(content: string): Promise<MetricSet> {
   if (editor) {
     editor.destroy();
     editor = null;
@@ -111,5 +111,5 @@ document.getElementById("btn-load")!.addEventListener("click", async () => {
   metricsEl.textContent = "Loading...";
   const resp = await fetch("../../roam/project/UNSW/ISO(202603)/meeting.md");
   const content = await resp.text();
-  renderMetrics(await measureAaronnoteEditor(content));
+  renderMetrics(await measureNoemaEditor(content));
 });

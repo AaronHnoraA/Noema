@@ -204,15 +204,15 @@ function visibleContentSignature(text) {
   let mathIndex = 0;
   let citeIndex = 0;
   source = source.replace(/\\href\{(?:\\.|[^{}])*\}\{|\\includegraphics(?:\[[^\]]*\])?\{[^}]*\}/g,
-    (match) => ` AARONNOTERESOURCE${resourceIndex++} ${match.startsWith("\\href") ? "{" : ""}`);
+    (match) => ` NOEMARESOURCE${resourceIndex++} ${match.startsWith("\\href") ? "{" : ""}`);
   source = source.replace(/\\label\{[^}]*\}|\\hypertarget\{[^}]*\}\{/g,
-    (match) => ` AARONNOTEANCHOR${anchorIndex++} ${match.startsWith("\\hypertarget") ? "{" : ""}`);
+    (match) => ` NOEMAANCHOR${anchorIndex++} ${match.startsWith("\\hypertarget") ? "{" : ""}`);
   source = source.replace(/\\begin\{(verbatim\*?|Verbatim|BVerbatim|LVerbatim|SaveVerbatim|lstlisting|minted|Highlighting)\}[\s\S]*?\\end\{\1\}|\\texttt\{(?:\\.|[^{}])*\}|\\verb\*?(.).*?\2/g,
-    () => ` AARONNOTECODE${codeIndex++} `);
+    () => ` NOEMACODE${codeIndex++} `);
   source = source.replace(/\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g,
-    () => ` AARONNOTEMATH${mathIndex++} `);
+    () => ` NOEMAMATH${mathIndex++} `);
   source = source.replace(/\\cite(?:\[[^\]]*\])?\{[^}]+\}/g,
-    () => ` AARONNOTECITE${citeIndex++} `);
+    () => ` NOEMACITE${citeIndex++} `);
   source = source
     .replace(/(?<!\\)%[^\n]*/g, " ")
     .replace(/^\s*\\def\\LTcaptype\{none\}\s*$/gm, " ")
@@ -233,7 +233,7 @@ function visibleContentSignature(text) {
       "footnote", "caption", "noindent", "newpage", "clearpage", "pagebreak", "nopagebreak", "allowbreak", "linebreak", "newline",
       "Needspace", "raggedright", "centering", "small", "footnotesize", "scriptsize", "sloppy", "fussy", "qedhere", "hfill", "vfill",
       "smallskip", "medskip", "bigskip", "quad", "qquad", "par", "pandocbounded",
-    ]).has(name) ? "" : ` AARONNOTECOMMAND:${name} `)
+    ]).has(name) ? "" : ` NOEMACOMMAND:${name} `)
     .replace(/[{}]/g, "")
     .replace(/&/g, " ")
     .replace(/~/g, " ")
@@ -254,11 +254,11 @@ function visibleContentSignature(text) {
 
 function maskedFidelitySource(text) {
   return String(text || "")
-    .replace(/\\begin\{(verbatim\*?|Verbatim|BVerbatim|LVerbatim|SaveVerbatim|lstlisting|minted|Highlighting)\}[\s\S]*?\\end\{\1\}/g, " AARONNOTECODEBLOCK ")
-    .replace(/\\texttt\{(?:\\.|[^{}])*\}|\\verb\*?(.).*?\1/g, " AARONNOTEINLINECODE ")
-    .replace(/\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g, " AARONNOTEMATH ")
+    .replace(/\\begin\{(verbatim\*?|Verbatim|BVerbatim|LVerbatim|SaveVerbatim|lstlisting|minted|Highlighting)\}[\s\S]*?\\end\{\1\}/g, " NOEMACODEBLOCK ")
+    .replace(/\\texttt\{(?:\\.|[^{}])*\}|\\verb\*?(.).*?\1/g, " NOEMAINLINECODE ")
+    .replace(/\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g, " NOEMAMATH ")
     .replace(/\\href\{(?:\\.|[^{}])*\}/g, "\\href{}")
-    .replace(/\\includegraphics(?:\[[^\]]*\])?\{[^}]*\}/g, " AARONNOTERESOURCE ")
+    .replace(/\\includegraphics(?:\[[^\]]*\])?\{[^}]*\}/g, " NOEMARESOURCE ")
     .replace(/(?<!\\)%[^\n]*/g, " ");
 }
 
@@ -738,6 +738,8 @@ async function stageOptionalFile(source, destination, fallback = "") {
   if (content) await writeFile(destination, content, "utf8");
 }
 
+const EXPORT_SKILLS = ["noema-latex-polish", "academic-typesetting"];
+
 async function stageAgentContext({ workdir, styleDoc, syntaxDoc, skillsDir, backend }) {
   const writes = [
     stageOptionalFile(styleDoc, join(workdir, "style.md"), "# LaTeX export style\nPreserve source text and improve only LaTeX markup.\n"),
@@ -749,13 +751,15 @@ async function stageAgentContext({ workdir, styleDoc, syntaxDoc, skillsDir, back
       scope: "global", builtinSkillDirectory: skillsDir,
       globalConfigPath: join(skillsDir, ".noema-export-global-config.json"),
       globalSkillDirectory: join(skillsDir, ".noema-export-global-skills"),
-      requestedSkills: ["aaronnote-latex-polish", "academic-typesetting"],
+      requestedSkills: EXPORT_SKILLS,
       includeContent: true,
     });
-    const missing = ["aaronnote-latex-polish", "academic-typesetting"]
+    const missing = EXPORT_SKILLS
       .filter((id) => !resolution.skills.some((skill) => skill.id === id && skill.enabled && skill.validation?.valid));
     if (missing.length) throw new Error(`Noema export Skill unavailable: ${missing.join(", ")}`);
-    contextItems = resolvedSkillsForRun(resolution).items;
+    // The resolver sorts by id; the agent reads the export Skills in the order asked for.
+    const rank = (item) => EXPORT_SKILLS.indexOf(String(item.ref || "").replace(/^skill:/, ""));
+    contextItems = resolvedSkillsForRun(resolution).items.sort((a, b) => rank(a) - rank(b));
   }
   if (backend === "opencode") {
     writes.push(writeFile(join(workdir, "opencode.json"), `${JSON.stringify({

@@ -35,9 +35,9 @@ describe("HTML paste conversion", () => {
 
   test("keeps Noema rendered math as TeX source", () => {
     const md = htmlToMarkdown(`
-      <p>Inline <span class="aaronnote-math-inline" data-tex="x+1"><span>x + 1</span></span>.</p>
-      <math-block data-aaronnote-math-block="" class="math-block-rendered" data-tex="y^2">
-        <div class="aaronnote-math-block math-block-render" data-tex="y^2"><span>y2</span></div>
+      <p>Inline <span class="noema-math-inline" data-tex="x+1"><span>x + 1</span></span>.</p>
+      <math-block data-noema-math-block="" class="math-block-rendered" data-tex="y^2">
+        <div class="noema-math-block math-block-render" data-tex="y^2"><span>y2</span></div>
       </math-block>
     `);
     expect(md).toContain("Inline \\(x+1\\).");

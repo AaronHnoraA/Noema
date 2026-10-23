@@ -78,7 +78,7 @@ Overleaf Source Editor 的主要优势不是某个 widget，而是清晰的依�
 
 - 浏览器入口只装配 EditorSession 和 feature controllers；每个 controller 明确返回
   `destroy()`，不在 `main.ts` 遗留匿名全局 listener/timer。
-- `window.aaronnoteApi` 保持兼容，但实现按 feature client 拆分。
+- `window.noemaApi` 保持兼容，但实现按 feature client 拆分。
 - Node host 只负责 HTTP/SSE、静态资源和 router 装配；API handlers 由各 Feature
   注册。`runtime.mjs` 最终只保留兼容 re-export。
 - Node Feature 采用 Controller → Handler → Manager；共享文件系统、安全路径、
@@ -101,7 +101,7 @@ Overleaf Source Editor 的主要优势不是某个 widget，而是清晰的依�
 
 ## 5. 当前 Noema 差距
 
-- `aaronnote/main.ts` 约 8,300 行：编辑会话、保存、bibliography、Jupyter、导航、
+- `pages/main.ts` 约 8,300 行：编辑会话、保存、bibliography、Jupyter、导航、
   zoom、context menu 和宿主事件互相穿插。
 - `src/cm6/extensions/visual/widgets/block-extras.ts` 约 3,800 行：语法扫描、StateField、widgets、
   Jupyter/TikZ runtime 和 DOM 生命周期混合。
@@ -109,7 +109,7 @@ Overleaf Source Editor 的主要优势不是某个 widget，而是清晰的依�
   HTML blocks 和增量算法在同一文件。
 - `server/lib/runtime.mjs` 约 8,000 行，`web-host.mjs` 约 1,700 行：领域逻辑、
   缓存、文件系统与 transport 边界不清。
-- `init-aaronnote.el` 约 2,100 行：进程、buffer、输入桥、UI 和公开命令集中。
+- `init-noema.el` 约 2,100 行：进程、buffer、输入桥、UI 和公开命令集中。
 - 多个 viewport ViewPlugin 重复调用 `syntaxTree.iterate`；多个 StateField 各自实现
   相似的 change-window/map/fallback 算法。
 

@@ -8,8 +8,8 @@ import {
   roamHrefForNote,
   roamNoteInputRef,
   roamNoteSearchValue,
-} from "../aaronnote/roam-idlink.ts";
-import type { NoteSummary } from "../aaronnote/types.ts";
+} from "../pages/roam-idlink.ts";
+import type { NoteSummary } from "../pages/types.ts";
 
 const density: NoteSummary = {
   id: "20260520T120000-density-operator",

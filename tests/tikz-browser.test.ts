@@ -134,7 +134,7 @@ describe("browser TikZ rendering", () => {
     try {
       const html = await inlineTikzFigures('<!DOCTYPE html><html><body><noema-tikz data-source="\\draw (0,0) -- (1,1);"></noema-tikz></body></html>');
       expect(html).toContain('<svg');
-      expect(html).toContain('class="aaronnote-tikz-image"');
+      expect(html).toContain('class="noema-tikz-image"');
       expect(html).not.toContain('data-source=');
       expect(html).not.toContain('tikz-*.svg');
     } finally {

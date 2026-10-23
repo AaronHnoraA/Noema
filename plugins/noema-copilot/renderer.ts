@@ -127,8 +127,8 @@ const graphemeSegmenter = typeof Intl.Segmenter === "function"
 
 function nativeCopilotApi(): NativeCopilotApi | undefined {
   return (globalThis as typeof globalThis & {
-    window?: { aaronnoteApi?: { copilot?: NativeCopilotApi } };
-  }).window?.aaronnoteApi?.copilot;
+    window?: { noemaApi?: { copilot?: NativeCopilotApi } };
+  }).window?.noemaApi?.copilot;
 }
 
 function requireNativeCopilotRequest(): (action: string, body?: unknown) => Promise<unknown> {
@@ -485,7 +485,7 @@ function completionRequestDocumentForRange(
 
 function completionRequestFile(file: string, texContext: boolean): string {
   if (!texContext) return file;
-  return file ? `${file}.noema-copilot.tex` : "aaronnote-copilot.noema-copilot.tex";
+  return file ? `${file}.noema-copilot.tex` : "noema-copilot.noema-copilot.tex";
 }
 
 function trimmedCompletionInsertText(
@@ -528,17 +528,17 @@ function trimmedCompletionInsertText(
 
 export function setupCopilot(context: Context): () => void {
   const ghost = document.createElement("div");
-  ghost.className = "aaronnote-copilot-ghost";
+  ghost.className = "noema-copilot-ghost";
   ghost.hidden = true;
   document.body.appendChild(ghost);
   const jumpHint = document.createElement("div");
-  jumpHint.className = "aaronnote-copilot-jump-hint";
+  jumpHint.className = "noema-copilot-jump-hint";
   jumpHint.hidden = true;
   document.body.appendChild(jumpHint);
 
   const style = document.createElement("style");
   style.textContent = `
-.aaronnote-copilot-ghost {
+.noema-copilot-ghost {
   position: fixed;
   z-index: 80;
   pointer-events: none;
@@ -551,42 +551,42 @@ export function setupCopilot(context: Context): () => void {
   font: inherit;
   line-height: inherit;
 }
-.aaronnote-copilot-ghost-line {
+.noema-copilot-ghost-line {
   min-height: 1em;
   white-space: pre-wrap;
 }
-.aaronnote-copilot-ghost[data-truncated="true"]::after {
+.noema-copilot-ghost[data-truncated="true"]::after {
   content: "…";
   position: absolute;
   right: 0;
   bottom: 0;
   padding-left: 0.4em;
-  background: linear-gradient(90deg, transparent, var(--aaronnote-bg, Canvas) 38%);
+  background: linear-gradient(90deg, transparent, var(--noema-bg, Canvas) 38%);
 }
-.aaronnote-copilot-ghost--lean {
+.noema-copilot-ghost--lean {
   color: rgb(156 199 255 / 68%);
   text-shadow: 0 1px 2px rgb(0 0 0 / 46%);
 }
-.aaronnote-copilot-jump-hint {
+.noema-copilot-jump-hint {
   position: fixed;
   z-index: 81;
   pointer-events: none;
   padding: 2px 6px;
   border: 1px solid color-mix(in srgb, #f7d774 72%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--aaronnote-bg, Canvas) 88%, transparent);
+  background: color-mix(in srgb, var(--noema-bg, Canvas) 88%, transparent);
   color: #f7d774;
   font: 600 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   box-shadow: 0 2px 8px rgb(0 0 0 / 28%);
   white-space: nowrap;
 }
-.aaronnote-copilot-jump-target {
+.noema-copilot-jump-target {
   position: relative;
 }
-.aaronnote-copilot-jump-newline {
+.noema-copilot-jump-newline {
   opacity: 0.78;
 }
-.aaronnote-copilot-jump-target[data-copilot-jump-label]::after {
+.noema-copilot-jump-target[data-copilot-jump-label]::after {
   content: attr(data-copilot-jump-label);
   position: absolute;
   inset: -0.18em auto auto 0;
@@ -687,7 +687,7 @@ export function setupCopilot(context: Context): () => void {
     const candidateLabels = jumpCandidateMap();
     let lineIndex = 0;
     let line = document.createElement("div");
-    line.className = "aaronnote-copilot-ghost-line";
+    line.className = "noema-copilot-ghost-line";
     ghost.appendChild(line);
     let plainText = "";
     const flushPlainText = () => {
@@ -706,7 +706,7 @@ export function setupCopilot(context: Context): () => void {
         const label = candidateLabels.get(part.to);
         if (label?.startsWith(jumpPrefix)) {
           const marker = document.createElement("span");
-          marker.className = "aaronnote-copilot-jump-target aaronnote-copilot-jump-newline";
+          marker.className = "noema-copilot-jump-target noema-copilot-jump-newline";
           marker.textContent = "↵";
           marker.dataset.copilotJumpLength = String(part.to);
           marker.dataset.copilotJumpLabel = label.slice(jumpPrefix.length) || label;
@@ -716,7 +716,7 @@ export function setupCopilot(context: Context): () => void {
         lineIndex += 1;
         if (lineIndex >= visibleLineCount) break;
         line = document.createElement("div");
-        line.className = "aaronnote-copilot-ghost-line";
+        line.className = "noema-copilot-ghost-line";
         ghost.appendChild(line);
         continue;
       }
@@ -733,7 +733,7 @@ export function setupCopilot(context: Context): () => void {
       }
       flushPlainText();
       const span = document.createElement("span");
-      span.className = "aaronnote-copilot-jump-target";
+      span.className = "noema-copilot-jump-target";
       span.textContent = part.text;
       span.dataset.copilotJumpLength = String(part.to);
       span.dataset.copilotJumpLabel = label.slice(jumpPrefix.length) || label;
@@ -1178,7 +1178,7 @@ export function setupCopilot(context: Context): () => void {
     jumpPrefix = "";
     armJumpTimeout();
     renderCompletion();
-    const elements = [...ghost.querySelectorAll<HTMLElement>(".aaronnote-copilot-jump-target")];
+    const elements = [...ghost.querySelectorAll<HTMLElement>(".noema-copilot-jump-target")];
     const measured = elements.some((element) => {
       const rect = element.getBoundingClientRect();
       return rect.width > 0 || rect.height > 0 || rect.top !== 0 || rect.bottom !== 0;
@@ -1499,8 +1499,8 @@ export function setupCopilot(context: Context): () => void {
   }));
   cleanups.push(context.onChange(handleDocumentChange));
   cleanups.push(context.onDocumentEvent("beforeinput", consumeJumpBeforeInput, { capture: true }));
-  context.host.addEventListener("aaronnote:copilot-host-key", handleHostKeyEvent);
-  cleanups.push(() => context.host.removeEventListener("aaronnote:copilot-host-key", handleHostKeyEvent));
+  context.host.addEventListener("noema:copilot-host-key", handleHostKeyEvent);
+  cleanups.push(() => context.host.removeEventListener("noema:copilot-host-key", handleHostKeyEvent));
   if (context.onSelectionChange) cleanups.push(context.onSelectionChange(handleEditorStateChange));
   else cleanups.push(context.onDocumentEvent("selectionchange", handleEditorStateChange));
   if (context.onVimModeChange) cleanups.push(context.onVimModeChange(handleEditorStateChange));

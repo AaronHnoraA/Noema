@@ -3,14 +3,14 @@
 
 export function noop() {}
 
-/** Matches the `[aaronnote-jupyter] ...` prefix convention used across server/lib. */
+/** Matches the `[noema-jupyter] ...` prefix convention used across server/lib. */
 export function makeLogger(stderr = process.stderr) {
   return {
     error(message, ex) {
-      stderr.write(`[aaronnote-jupyter] ${message}${ex ? `: ${ex?.message || ex}` : ""}\n`);
+      stderr.write(`[noema-jupyter] ${message}${ex ? `: ${ex?.message || ex}` : ""}\n`);
     },
     warn(message) {
-      stderr.write(`[aaronnote-jupyter] ${message}\n`);
+      stderr.write(`[noema-jupyter] ${message}\n`);
     },
   };
 }

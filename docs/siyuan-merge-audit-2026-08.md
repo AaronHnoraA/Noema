@@ -2,7 +2,7 @@
 
 审计日期：2026-08-25
 
-审计对象：迁移期 SiYuan v3.8.1 checkout + Noema fork 历史、主仓库 `kernel/`、Noema `src/` 与 `aaronnote/`
+审计对象：迁移期 SiYuan v3.8.1 checkout + Noema fork 历史、主仓库 `kernel/`、Noema `src/` 与 `pages/`
 
 审计性质：原始报告是**只读研判**。从 2026-08-26 起，Aaron 要求继续沿本报告把值得吃的项目全部推进；实时进度仍只写入权威 `plan.md`，本文只在总排序中标记对应条目的收口状态。
 
@@ -59,7 +59,7 @@ Phase 0 的裁剪**也已经做完了**（fork 历史 `baeb38bfc`..`b3fb59d39`�
 | 思源 `app/src/config/` | 18,343 |
 | 思源 SCSS（b3 设计系统） | 17,526 |
 | 思源 `app/src/util/` + `menus/` | 17,750 |
-| **Noema `src/` + `aaronnote/`** | **77,519** |
+| **Noema `src/` + `pages/`** | **77,519** |
 | Noema 全部 CSS | 11,610 |
 
 `--b3-*` 变量：daylight 定义 **165 个**。Noema 代码里 `b3-` 出现 **0 次** —— plan.md 把 b3 设计系统列为"要吃到的"四件事之一，目前是四件里唯一一件**完全没开工**的。

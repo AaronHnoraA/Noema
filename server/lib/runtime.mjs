@@ -8,10 +8,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { changedRoamFilesSince, fileHistory, restoreFileFromCommit, discardFileChanges, roamRepoStatus, roamRepoChanges, diffRoamFile, diffRoamCommit, pullRoam, pushRoam, repoHistory, headSha } from "./roam-git.mjs";
 import { buildWikiIndex, wikiIndexStatus } from "./wiki-workspace.mjs";
-import { configureTmpRoot, aaronnoteTmpRoot, runtimeMkdtemp, runtimeTmpFile } from "./tmp.mjs";
+import { configureTmpRoot, noemaTmpRoot, runtimeMkdtemp, runtimeTmpFile } from "./tmp.mjs";
 import { prepareLatexDiagrams } from "./latex-export-diagrams.mjs";
 import { applyLatexTemplate, bibliographyReferencesToLatex, defaultLatexOutputPath, escapeLatexText, escapeLatexTitle, escapeLatexUrl, latexLogDiagnostics, latexMacrosPackage, latexNeedsAnotherPass, readLatexTemplate, writeLatexExport } from "./latex-export.mjs";
-import { aaronnoteMarkdownToLatexPandoc, extractAaronnoteMetadata } from "./latex-export-pandoc.mjs";
+import { noemaMarkdownToLatexPandoc, extractNoemaMetadata } from "./latex-export-pandoc.mjs";
 import { agentAvailable, loadAgentRules, normalizeAgentTitle, polishBodyWithAgent } from "./latex-export-codex.mjs";
 import { loadKatexMacros } from "./katex-macros.mjs";
 import { loadMacroSourceFiles, loadUserKatexMacros, MACRO_SOURCE_BYTES_LIMIT, readLocalMacroSource } from "./user-katex-macros.mjs";
@@ -88,32 +88,32 @@ export {
 };
 
 const appDir = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-let workspaceRoot = resolve(process.env.AARONNOTE_WORKSPACE_ROOT || resolve(appDir, ".."));
-let publishJsDir = resolve(process.env.AARONNOTE_PUBLISH_JS_DIR || join(workspaceRoot, "js"));
-let stateRoot = resolve(process.env.AARONNOTE_STATE_DIR || join(workspaceRoot, "var", "aaronnote"));
-let runtimeTmpRoot = configureTmpRoot(process.env.AARONNOTE_TMP_DIR || join(stateRoot, "tmp"));
-let snippetsRoot = resolve(process.env.AARONNOTE_SNIPPETS_ROOT || join(workspaceRoot, "snippets"));
-let templatesRoot = resolve(process.env.AARONNOTE_TEMPLATES_ROOT || join(workspaceRoot, "templates", "noema"));
-let latexTemplatesRoot = resolve(process.env.AARONNOTE_LATEX_TEMPLATES_ROOT || join(workspaceRoot, "templates"));
-let katexMacrosRoot = resolve(process.env.AARONNOTE_KATEX_MACROS_DIR || join(workspaceRoot, "etc", "katex-macros"));
+let workspaceRoot = resolve(process.env.NOEMA_WORKSPACE_ROOT || resolve(appDir, ".."));
+let publishJsDir = resolve(process.env.NOEMA_PUBLISH_JS_DIR || join(workspaceRoot, "js"));
+let stateRoot = resolve(process.env.NOEMA_STATE_DIR || join(workspaceRoot, "var", "noema"));
+let runtimeTmpRoot = configureTmpRoot(process.env.NOEMA_TMP_DIR || join(stateRoot, "tmp"));
+let snippetsRoot = resolve(process.env.NOEMA_SNIPPETS_ROOT || join(workspaceRoot, "snippets"));
+let templatesRoot = resolve(process.env.NOEMA_TEMPLATES_ROOT || join(workspaceRoot, "templates", "noema"));
+let latexTemplatesRoot = resolve(process.env.NOEMA_LATEX_TEMPLATES_ROOT || join(workspaceRoot, "templates"));
+let katexMacrosRoot = resolve(process.env.NOEMA_KATEX_MACROS_DIR || join(workspaceRoot, "etc", "katex-macros"));
 // LaTeX export engine (mechanical base + optional codex polish). See
 // server/lib/latex-export-codex.mjs and docs/latex-export-style.md.
-let latexAgentDir = resolve(process.env.AARONNOTE_LATEX_AGENT_DIR || join(appDir, "agents", "latex-export"));
-let latexExportEngine = String(process.env.AARONNOTE_LATEX_EXPORT_ENGINE || "codex").trim().toLowerCase();
-let latexExportAgent = String(process.env.AARONNOTE_LATEX_EXPORT_AGENT || "codex").trim().toLowerCase();
-let latexCodexBin = String(process.env.AARONNOTE_CODEX_BIN || "codex").trim();
-let latexClaudeBin = String(process.env.AARONNOTE_CLAUDE_BIN || "claude").trim();
-let latexOpencodeBin = String(process.env.AARONNOTE_OPENCODE_BIN || "opencode").trim();
-let latexCodexModel = String(process.env.AARONNOTE_CODEX_MODEL || "").trim();
-let latexExportModel = String(process.env.AARONNOTE_LATEX_EXPORT_MODEL || "").trim();
-let latexExportMaxAttempts = Math.max(1, Number(process.env.AARONNOTE_LATEX_EXPORT_MAX_ATTEMPTS) || 3);
-let latexExportAgentIdleTimeoutMs = Math.max(10_000, Number(process.env.AARONNOTE_LATEX_EXPORT_AGENT_IDLE_TIMEOUT_MS) || 180_000);
-let latexExportAgentHardTimeoutMs = Math.max(latexExportAgentIdleTimeoutMs, Number(process.env.AARONNOTE_LATEX_EXPORT_AGENT_HARD_TIMEOUT_MS) || 900_000);
+let latexAgentDir = resolve(process.env.NOEMA_LATEX_AGENT_DIR || join(appDir, "agents", "latex-export"));
+let latexExportEngine = String(process.env.NOEMA_LATEX_EXPORT_ENGINE || "codex").trim().toLowerCase();
+let latexExportAgent = String(process.env.NOEMA_LATEX_EXPORT_AGENT || "codex").trim().toLowerCase();
+let latexCodexBin = String(process.env.NOEMA_CODEX_BIN || "codex").trim();
+let latexClaudeBin = String(process.env.NOEMA_CLAUDE_BIN || "claude").trim();
+let latexOpencodeBin = String(process.env.NOEMA_OPENCODE_BIN || "opencode").trim();
+let latexCodexModel = String(process.env.NOEMA_CODEX_MODEL || "").trim();
+let latexExportModel = String(process.env.NOEMA_LATEX_EXPORT_MODEL || "").trim();
+let latexExportMaxAttempts = Math.max(1, Number(process.env.NOEMA_LATEX_EXPORT_MAX_ATTEMPTS) || 3);
+let latexExportAgentIdleTimeoutMs = Math.max(10_000, Number(process.env.NOEMA_LATEX_EXPORT_AGENT_IDLE_TIMEOUT_MS) || 180_000);
+let latexExportAgentHardTimeoutMs = Math.max(latexExportAgentIdleTimeoutMs, Number(process.env.NOEMA_LATEX_EXPORT_AGENT_HARD_TIMEOUT_MS) || 900_000);
 const LATEX_EXPORT_AGENTS = ["codex", "claude", "opencode"];
 const LATEX_EXPORT_ENGINES = ["codex", "mechanical"];
 const execFileAsync = promisify(execFile);
 
-let noteRoot = resolveUserPath(process.env.AARONNOTE_ROOT || join(appDir, "..", "roam"));
+let noteRoot = resolveUserPath(process.env.NOEMA_ROOT || join(appDir, "..", "roam"));
 let toolEnvironment = { ...process.env };
 let workspaceLayout = "legacy";
 configureBibliography({ root: noteRoot });
@@ -212,7 +212,7 @@ const AGENDA_CACHE_SCHEMA = 3;
 const AGENDA_PAYLOAD_CACHE_LIMIT = 32;
 const ASSET_CLEANUP_SCHEMA = 2;
 const ROAM_FULL_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const scanConcurrency = Math.max(1, Math.min(64, Number(process.env.AARONNOTE_SCAN_CONCURRENCY) || 16));
+const scanConcurrency = Math.max(1, Math.min(64, Number(process.env.NOEMA_SCAN_CONCURRENCY) || 16));
 const saveRequestVersions = new Map();
 const successfulClientSaves = new Map();
 const saveWriteQueues = new Map();
@@ -826,9 +826,10 @@ function scanCodeRegions(text) {
   const source = String(text || "");
   const regions = [];
   const matches = [];
-  // Matches any line-comment prefix (#, //, --, ;) followed by @aaronnote or @note-code + tag.
-  // Leading whitespace is allowed so indented markers work too.
-  const tagRe = /^[ \t]*(?:--|#|\/\/|;)[ \t]*@(?:aaronnote|note-code)[ \t]+([A-Za-z0-9_.:-]+)[ \t]*$/gm;
+  // Matches any line-comment prefix (#, //, --, ;) followed by @noema or @note-code + tag.
+  // Leading whitespace is allowed so indented markers work too.  @aaronnote is
+  // the marker written before the Noema rename.
+  const tagRe = /^[ \t]*(?:--|#|\/\/|;)[ \t]*@(?:noema|note-code|aaronnote)[ \t]+([A-Za-z0-9_.:-]+)[ \t]*$/gm;
   let match;
   while ((match = tagRe.exec(source)) !== null) {
     const markerFrom = match.index;
@@ -938,7 +939,7 @@ function assetCandidateFile(file) {
   if (relParts.includes(".lean")) return false;
   if (!relParts.includes("images") && !relParts.includes("attachments")) return false;
   const ext = extname(file).toLowerCase();
-  return !leanSourceFile(file) && !noteExts.has(ext) && basename(file) !== ".aaronnote-keep";
+  return !leanSourceFile(file) && !noteExts.has(ext) && basename(file) !== ".noema-keep";
 }
 
 function assetReferenceSourceFile(file) {
@@ -2397,7 +2398,7 @@ async function scanFilesystemEntries(notes = []) {
         await walk(full, childGenerated);
       } else if (entry.isFile()) {
         const ext = extname(entry.name).toLowerCase();
-        if (ext === ".lean" || noteExts.has(ext) || entry.name === ".aaronnote-keep") continue;
+        if (ext === ".lean" || noteExts.has(ext) || entry.name === ".noema-keep") continue;
         try {
           const info = await stat(full);
           const path = displayPathForScanRoot(full, noteScanRoot);
@@ -2559,7 +2560,7 @@ function emptyPlanningGroup() {
 }
 
 function agendaCacheEnabled() {
-  return process.env.AARONNOTE_AGENDA_CACHE !== "0" && noteScanRoot === noteRoot;
+  return process.env.NOEMA_AGENDA_CACHE !== "0" && noteScanRoot === noteRoot;
 }
 
 function agendaCacheFile() {
@@ -5783,10 +5784,10 @@ function existingUniqueDirs(dirs) {
 }
 
 function snippetDirs() {
-  const raw = process.env.AARONNOTE_SNIPPETS;
+  const raw = process.env.NOEMA_SNIPPETS;
   if (raw) return existingUniqueDirs(raw.split(delimiter).filter(Boolean));
   return existingUniqueDirs([
-    process.env.AARONNOTE_EMACS_SNIPPETS_ROOT || join(homedir(), ".config", "emacs", "snippets"),
+    process.env.NOEMA_EMACS_SNIPPETS_ROOT || join(homedir(), ".config", "emacs", "snippets"),
     snippetsRoot,
   ]);
 }
@@ -5848,8 +5849,7 @@ function snippetHeaderList(value) {
 
 function snippetContributorMetadata(headers) {
   const source = String(headers.get("contributor") || "");
-  // "Aaronnote" remains accepted for existing shared YAS catalogs.
-  const match = /^(?:Noema|Aaronnote)\s+(.+)$/.exec(source);
+  const match = /^Noema\s+(.+)$/.exec(source);
   if (!match) return {};
   try {
     return Object.fromEntries(new URLSearchParams(match[1]));
@@ -5884,11 +5884,11 @@ function snippetProvider(headers, metadata, file, rootIndex) {
   const normalized = file.split(sep).join("/");
   if (normalized.includes("/generated/latex-workshop/")) return "latex-workshop";
   if (normalized.includes("/generated/overleaf/")) return "overleaf";
-  return rootIndex === 0 ? "personal" : "aaronnote";
+  return rootIndex === 0 ? "personal" : "noema";
 }
 
 function snippetDefaultPriority(provider) {
-  return ({ personal: 500, document: 440, katex: 400, aaronnote: 300, "latex-workshop": 180, overleaf: 160 })[provider] || 240;
+  return ({ personal: 500, document: 440, katex: 400, noema: 300, "latex-workshop": 180, overleaf: 160 })[provider] || 240;
 }
 
 export async function scanSnippets(options = {}) {
@@ -5973,7 +5973,7 @@ export async function scanSnippets(options = {}) {
 }
 
 function templateDirs() {
-  const raw = process.env.AARONNOTE_TEMPLATES;
+  const raw = process.env.NOEMA_TEMPLATES;
   if (raw) return existingUniqueDirs(raw.split(delimiter).filter(Boolean));
   return existingUniqueDirs([templatesRoot]);
 }
@@ -6311,7 +6311,7 @@ function latexSourceNameTitle(sourceFile, bodyTitle = "") {
 function meaningfulSourceTitle(title) {
   const value = String(title || "").trim();
   if (!value || value.length < 3) return false;
-  return !/^(?:untitled|new note|note|document|export|aaronnote|assg|assign|hw\d*|q\d+|question\s*\d*|draft|tmp|test|\d{8,}|[0-9a-f]{12,})$/i.test(value);
+  return !/^(?:untitled|new note|note|document|export|noema|assg|assign|hw\d*|q\d+|question\s*\d*|draft|tmp|test|\d{8,}|[0-9a-f]{12,})$/i.test(value);
 }
 
 function usefulTitleHeading(title) {
@@ -6443,10 +6443,10 @@ async function compileLatexExportPdf({ latex, outputPath, engine, sourceDir, sup
   }
 }
 
-// Parse the optional leading `% aaronnote-template: {json}` header that declares
+// Parse the optional leading `% noema-template: {json}` header that declares
 // a template's display name, LaTeX engine, and extra `{{var}}` slots.
 function parseLatexTemplateHeader(text, templateFile = "") {
-  const match = String(text || "").match(/^%\s*aaronnote-template:\s*(\{.*\})\s*$/m);
+  const match = String(text || "").match(/^%\s*noema-template:\s*(\{.*\})\s*$/m);
   try {
     // Header metadata is optional for backwards compatibility, but the
     // structural template contract is not: every template, including a legacy
@@ -6493,7 +6493,7 @@ function parseLatexTemplateHeader(text, templateFile = "") {
     const sharedSeen = new Set();
     for (const file of sharedFiles) {
       if (!file || file !== basename(file) || file === "." || file === "..") throw new Error(`unsafe shared file ${JSON.stringify(file)}`);
-      if (file === "aaronnote-macros.sty") throw new Error("sharedFiles may not override generated aaronnote-macros.sty");
+      if (file === "noema-macros.sty") throw new Error("sharedFiles may not override generated noema-macros.sty");
       if (sharedSeen.has(file)) throw new Error(`duplicate shared file ${JSON.stringify(file)}`);
       sharedSeen.add(file);
     }
@@ -6729,8 +6729,8 @@ export async function exportLatex(body = {}) {
   // the title, date, and `annotations` switch.
   const documentMeta = typeof latexProvider?.metadata === "function"
     ? await latexProvider.metadata(documentContent)
-    : extractAaronnoteMetadata(documentContent);
-  const converted = await aaronnoteMarkdownToLatexPandoc(exportContent, {
+    : extractNoemaMetadata(documentContent);
+  const converted = await noemaMarkdownToLatexPandoc(exportContent, {
     sourceFile,
     sourceDir: sourceFile ? dirname(sourceFile) : "",
     pandocBin: executablePath("pandoc"),
@@ -6768,15 +6768,15 @@ export async function exportLatex(body = {}) {
     ...converted.features,
     usesWrapfig: /\\begin\{wrapfigure\}/.test(converted.body),
   };
-  const templateText = macroFeatures.usesTikz && !template.text.includes("\\usepackage{aaronnote-macros}")
+  const templateText = macroFeatures.usesTikz && !template.text.includes("\\usepackage{noema-macros}")
     ? template.text.replace(/\\begin\{document\}/, (begin) => [
       /\\(?:usepackage|RequirePackage)(?:\[[^\]]*\])?\{tikz\}/.test(template.text) ? "" : "\\usepackage{tikz}",
       "\\usetikzlibrary{calc}",
       begin,
     ].filter(Boolean).join("\n"))
     : template.text;
-  const generatedSharedFiles = template.text.includes("\\usepackage{aaronnote-macros}")
-    ? [{ name: "aaronnote-macros.sty", content: Buffer.from(latexMacrosPackage(macroResult.macros, macroFeatures), "utf8") }]
+  const generatedSharedFiles = template.text.includes("\\usepackage{noema-macros}")
+    ? [{ name: "noema-macros.sty", content: Buffer.from(latexMacrosPackage(macroResult.macros, macroFeatures), "utf8") }]
     : [];
   const sharedFiles = [...declaredSharedFiles, ...generatedSharedFiles, ...diagramFiles];
   throwIfAborted(signal);
@@ -7007,7 +7007,7 @@ function copilotUriForFile(file, sourceFile = file) {
       return pathToFileURL(target).href;
     } catch {}
   }
-  return pathToFileURL(join(runtimeTmpRoot || aaronnoteTmpRoot(), "copilot", "aaronnote-copilot.md")).href;
+  return pathToFileURL(join(runtimeTmpRoot || noemaTmpRoot(), "copilot", "noema-copilot.md")).href;
 }
 
 function copilotClientId(body = {}) {
@@ -7038,7 +7038,7 @@ function uniqueExistingCommands(commands) {
 }
 
 function nodeCommand() {
-  if (process.env.AARONNOTE_NODE) return process.env.AARONNOTE_NODE;
+  if (process.env.NOEMA_NODE) return process.env.NOEMA_NODE;
   return process.execPath;
 }
 
@@ -7064,17 +7064,17 @@ function setCopilotLogRecording(enabled, options = {}) {
 
 function rawCopilotServerCommands() {
   if (COPILOT_DISABLE_LOCAL) return [];
-  const configured = process.env.AARONNOTE_COPILOT_LANGUAGE_SERVER;
+  const configured = process.env.NOEMA_COPILOT_LANGUAGE_SERVER;
   if (configured) return [{ command: configured, args: ["--stdio"] }];
-  const configuredModule = process.env.AARONNOTE_COPILOT_LANGUAGE_SERVER_MODULE;
+  const configuredModule = process.env.NOEMA_COPILOT_LANGUAGE_SERVER_MODULE;
   if (configuredModule) {
     const env = {
-      ...(process.env.AARONNOTE_COPILOT_HOME ? { COPILOT_HOME: process.env.AARONNOTE_COPILOT_HOME } : {}),
-      ...(process.env.AARONNOTE_COPILOT_CACHE_HOME ? { COPILOT_CACHE_HOME: process.env.AARONNOTE_COPILOT_CACHE_HOME } : {}),
-      ...(process.env.AARONNOTE_COPILOT_XDG_CONFIG_HOME ? { XDG_CONFIG_HOME: process.env.AARONNOTE_COPILOT_XDG_CONFIG_HOME } : {}),
-      ...(process.env.AARONNOTE_COPILOT_XDG_DATA_HOME ? { XDG_DATA_HOME: process.env.AARONNOTE_COPILOT_XDG_DATA_HOME } : {}),
-      ...(process.env.AARONNOTE_COPILOT_XDG_STATE_HOME ? { XDG_STATE_HOME: process.env.AARONNOTE_COPILOT_XDG_STATE_HOME } : {}),
-      ...(process.env.AARONNOTE_COPILOT_XDG_CACHE_HOME ? { XDG_CACHE_HOME: process.env.AARONNOTE_COPILOT_XDG_CACHE_HOME } : {}),
+      ...(process.env.NOEMA_COPILOT_HOME ? { COPILOT_HOME: process.env.NOEMA_COPILOT_HOME } : {}),
+      ...(process.env.NOEMA_COPILOT_CACHE_HOME ? { COPILOT_CACHE_HOME: process.env.NOEMA_COPILOT_CACHE_HOME } : {}),
+      ...(process.env.NOEMA_COPILOT_XDG_CONFIG_HOME ? { XDG_CONFIG_HOME: process.env.NOEMA_COPILOT_XDG_CONFIG_HOME } : {}),
+      ...(process.env.NOEMA_COPILOT_XDG_DATA_HOME ? { XDG_DATA_HOME: process.env.NOEMA_COPILOT_XDG_DATA_HOME } : {}),
+      ...(process.env.NOEMA_COPILOT_XDG_STATE_HOME ? { XDG_STATE_HOME: process.env.NOEMA_COPILOT_XDG_STATE_HOME } : {}),
+      ...(process.env.NOEMA_COPILOT_XDG_CACHE_HOME ? { XDG_CACHE_HOME: process.env.NOEMA_COPILOT_XDG_CACHE_HOME } : {}),
     };
     return [{ command: nodeCommand(), args: [configuredModule, "--stdio"], env, mustExist: configuredModule }];
   }
@@ -7108,14 +7108,14 @@ function copilotDiagnostics() {
     resourcesPath: process.resourcesPath || "",
     logRecording: copilotLogRecording,
     env: {
-      AARONNOTE_EMACS_GATEWAY: COPILOT_BRIDGE_REQUEST ? "connected" : "",
-      AARONNOTE_COPILOT_DISABLE_LOCAL: process.env.AARONNOTE_COPILOT_DISABLE_LOCAL || "",
-      AARONNOTE_COPILOT_LANGUAGE_SERVER: process.env.AARONNOTE_COPILOT_LANGUAGE_SERVER || "",
-      AARONNOTE_COPILOT_LANGUAGE_SERVER_MODULE: process.env.AARONNOTE_COPILOT_LANGUAGE_SERVER_MODULE || "",
-      AARONNOTE_COPILOT_HOME: process.env.AARONNOTE_COPILOT_HOME || "",
-      AARONNOTE_COPILOT_CACHE_HOME: process.env.AARONNOTE_COPILOT_CACHE_HOME || "",
+      NOEMA_EMACS_GATEWAY: COPILOT_BRIDGE_REQUEST ? "connected" : "",
+      NOEMA_COPILOT_DISABLE_LOCAL: process.env.NOEMA_COPILOT_DISABLE_LOCAL || "",
+      NOEMA_COPILOT_LANGUAGE_SERVER: process.env.NOEMA_COPILOT_LANGUAGE_SERVER || "",
+      NOEMA_COPILOT_LANGUAGE_SERVER_MODULE: process.env.NOEMA_COPILOT_LANGUAGE_SERVER_MODULE || "",
+      NOEMA_COPILOT_HOME: process.env.NOEMA_COPILOT_HOME || "",
+      NOEMA_COPILOT_CACHE_HOME: process.env.NOEMA_COPILOT_CACHE_HOME || "",
       NOEMA_COPILOT_PLUGIN: process.env.NOEMA_COPILOT_PLUGIN || "",
-      AARONNOTE_NODE: process.env.AARONNOTE_NODE || "",
+      NOEMA_NODE: process.env.NOEMA_NODE || "",
       PATH: process.env.PATH || "",
     },
     rawCommands: rawCopilotServerCommands().map((cmd) => ({
@@ -7213,12 +7213,12 @@ function copilotProcessCwd() {
 
 // How long the Copilot LSP may sit unused before `armIdleTimer` stops it.
 // It restarts transparently on the next request via `ensureReady`. 0 disables.
-const COPILOT_IDLE_TTL_MS = durationFromEnv("AARONNOTE_COPILOT_IDLE_TTL_MS", 15 * 60 * 1000);
+const COPILOT_IDLE_TTL_MS = durationFromEnv("NOEMA_COPILOT_IDLE_TTL_MS", 15 * 60 * 1000);
 const COPILOT_IDLE_CHECK_MS = 30_000;
 // When Noema is launched from Emacs, Copilot requests should use Emacs'
 // existing copilot.el JSON-RPC connection instead of starting a second
 // @github/copilot-language-server process in web-host.
-const COPILOT_DISABLE_LOCAL = process.env.AARONNOTE_COPILOT_DISABLE_LOCAL === "1";
+const COPILOT_DISABLE_LOCAL = process.env.NOEMA_COPILOT_DISABLE_LOCAL === "1";
 let COPILOT_BRIDGE_REQUEST = null;
 
 export function configureCopilotBridgeRequest(request) {
@@ -7227,7 +7227,7 @@ export function configureCopilotBridgeRequest(request) {
 
 // Used only by the local fallback LSP. Emacs-launched Noema forwards
 // Copilot requests to copilot.el through the shared gateway.
-const COPILOT_MAX_HEAP_MB = Math.max(0, Number(process.env.AARONNOTE_COPILOT_MAX_HEAP_MB) || 0);
+const COPILOT_MAX_HEAP_MB = Math.max(0, Number(process.env.NOEMA_COPILOT_MAX_HEAP_MB) || 0);
 
 class EmacsCopilotBridgeClient {
   constructor(request) {
@@ -7318,7 +7318,7 @@ class CopilotLspClient {
       pushCopilotLog("missing-server", { rawCommands: copilotDiagnostics().rawCommands });
       throw new Error(COPILOT_DISABLE_LOCAL
         ? "Copilot local language server is disabled; Emacs Copilot bridge is unavailable."
-        : "Copilot language server is unavailable. Set AARONNOTE_COPILOT_LANGUAGE_SERVER to Emacs's copilot-server-executable.");
+        : "Copilot language server is unavailable. Set NOEMA_COPILOT_LANGUAGE_SERVER to Emacs's copilot-server-executable.");
     }
     let lastError = null;
     for (const cmd of commands) {
@@ -8278,7 +8278,7 @@ export function runtimeDebugSnapshot() {
   return {
     paths: {
       stateRoot,
-      tmpRoot: runtimeTmpRoot || aaronnoteTmpRoot(),
+      tmpRoot: runtimeTmpRoot || noemaTmpRoot(),
     },
     saveWrites: { queuedFiles: saveWriteQueues.size },
     copilot: {
@@ -8652,7 +8652,7 @@ export async function duplicateManagedFile(body) {
 async function directoryHasEntries(dir) {
   try {
     const entries = await readdir(dir);
-    return entries.some((entry) => entry !== ".aaronnote-keep");
+    return entries.some((entry) => entry !== ".noema-keep");
   } catch {
     return false;
   }
@@ -9100,7 +9100,7 @@ async function enqueueSaveWrite(file, task) {
 }
 
 export function configure(options = {}) {
-  noteRoot = resolveUserPath(options.root || process.env.AARONNOTE_ROOT || join(appDir, "..", "roam"));
+  noteRoot = resolveUserPath(options.root || process.env.NOEMA_ROOT || join(appDir, "..", "roam"));
   noteScanRoot = noteRoot;
   workspaceLayout = String(options.workspaceLayout || process.env.NOEMA_WORKSPACE_LAYOUT || "").toLowerCase() === "wiki"
     ? "wiki"
@@ -9109,26 +9109,26 @@ export function configure(options = {}) {
   toolEnvironment = options.toolEnvironment && typeof options.toolEnvironment === "object"
     ? { ...process.env, ...options.toolEnvironment }
     : { ...process.env };
-  workspaceRoot = resolve(String(options.workspaceRoot || process.env.AARONNOTE_WORKSPACE_ROOT || resolve(appDir, "..")));
-  publishJsDir = resolve(String(options.publishJsDir || process.env.AARONNOTE_PUBLISH_JS_DIR || join(workspaceRoot, "js")));
-  stateRoot = resolve(String(options.stateRoot || process.env.AARONNOTE_STATE_DIR || join(workspaceRoot, "var", "aaronnote")));
+  workspaceRoot = resolve(String(options.workspaceRoot || process.env.NOEMA_WORKSPACE_ROOT || resolve(appDir, "..")));
+  publishJsDir = resolve(String(options.publishJsDir || process.env.NOEMA_PUBLISH_JS_DIR || join(workspaceRoot, "js")));
+  stateRoot = resolve(String(options.stateRoot || process.env.NOEMA_STATE_DIR || join(workspaceRoot, "var", "noema")));
   sessionManager = null;
-  runtimeTmpRoot = configureTmpRoot(options.tmpRoot || process.env.AARONNOTE_TMP_DIR || join(stateRoot, "tmp"));
-  snippetsRoot = resolve(String(options.snippetsRoot || process.env.AARONNOTE_SNIPPETS_ROOT || join(workspaceRoot, "snippets")));
-  templatesRoot = resolve(String(options.templatesRoot || process.env.AARONNOTE_TEMPLATES_ROOT || join(workspaceRoot, "templates", "noema")));
-  latexTemplatesRoot = resolve(String(options.latexTemplatesRoot || process.env.AARONNOTE_LATEX_TEMPLATES_ROOT || join(workspaceRoot, "templates")));
-  katexMacrosRoot = resolve(String(options.katexMacrosRoot || process.env.AARONNOTE_KATEX_MACROS_DIR || join(workspaceRoot, "etc", "katex-macros")));
-  latexAgentDir = resolve(String(options.latexAgentDir || process.env.AARONNOTE_LATEX_AGENT_DIR || join(appDir, "agents", "latex-export")));
-  latexExportEngine = String(options.latexExportEngine || process.env.AARONNOTE_LATEX_EXPORT_ENGINE || "codex").trim().toLowerCase();
-  latexExportAgent = String(options.latexExportAgent || process.env.AARONNOTE_LATEX_EXPORT_AGENT || "codex").trim().toLowerCase();
-  latexCodexBin = String(options.latexCodexBin || process.env.AARONNOTE_CODEX_BIN || "codex").trim();
-  latexClaudeBin = String(options.latexClaudeBin || process.env.AARONNOTE_CLAUDE_BIN || "claude").trim();
-  latexOpencodeBin = String(options.latexOpencodeBin || process.env.AARONNOTE_OPENCODE_BIN || "opencode").trim();
-  latexCodexModel = String(options.latexCodexModel || process.env.AARONNOTE_CODEX_MODEL || "").trim();
-  latexExportModel = String(options.latexExportModel || process.env.AARONNOTE_LATEX_EXPORT_MODEL || "").trim();
-  latexExportMaxAttempts = Math.max(1, Number(options.latexExportMaxAttempts || process.env.AARONNOTE_LATEX_EXPORT_MAX_ATTEMPTS) || 3);
-  latexExportAgentIdleTimeoutMs = Math.max(10_000, Number(options.latexExportAgentIdleTimeoutMs || process.env.AARONNOTE_LATEX_EXPORT_AGENT_IDLE_TIMEOUT_MS) || 180_000);
-  latexExportAgentHardTimeoutMs = Math.max(latexExportAgentIdleTimeoutMs, Number(options.latexExportAgentHardTimeoutMs || process.env.AARONNOTE_LATEX_EXPORT_AGENT_HARD_TIMEOUT_MS) || 900_000);
+  runtimeTmpRoot = configureTmpRoot(options.tmpRoot || process.env.NOEMA_TMP_DIR || join(stateRoot, "tmp"));
+  snippetsRoot = resolve(String(options.snippetsRoot || process.env.NOEMA_SNIPPETS_ROOT || join(workspaceRoot, "snippets")));
+  templatesRoot = resolve(String(options.templatesRoot || process.env.NOEMA_TEMPLATES_ROOT || join(workspaceRoot, "templates", "noema")));
+  latexTemplatesRoot = resolve(String(options.latexTemplatesRoot || process.env.NOEMA_LATEX_TEMPLATES_ROOT || join(workspaceRoot, "templates")));
+  katexMacrosRoot = resolve(String(options.katexMacrosRoot || process.env.NOEMA_KATEX_MACROS_DIR || join(workspaceRoot, "etc", "katex-macros")));
+  latexAgentDir = resolve(String(options.latexAgentDir || process.env.NOEMA_LATEX_AGENT_DIR || join(appDir, "agents", "latex-export")));
+  latexExportEngine = String(options.latexExportEngine || process.env.NOEMA_LATEX_EXPORT_ENGINE || "codex").trim().toLowerCase();
+  latexExportAgent = String(options.latexExportAgent || process.env.NOEMA_LATEX_EXPORT_AGENT || "codex").trim().toLowerCase();
+  latexCodexBin = String(options.latexCodexBin || process.env.NOEMA_CODEX_BIN || "codex").trim();
+  latexClaudeBin = String(options.latexClaudeBin || process.env.NOEMA_CLAUDE_BIN || "claude").trim();
+  latexOpencodeBin = String(options.latexOpencodeBin || process.env.NOEMA_OPENCODE_BIN || "opencode").trim();
+  latexCodexModel = String(options.latexCodexModel || process.env.NOEMA_CODEX_MODEL || "").trim();
+  latexExportModel = String(options.latexExportModel || process.env.NOEMA_LATEX_EXPORT_MODEL || "").trim();
+  latexExportMaxAttempts = Math.max(1, Number(options.latexExportMaxAttempts || process.env.NOEMA_LATEX_EXPORT_MAX_ATTEMPTS) || 3);
+  latexExportAgentIdleTimeoutMs = Math.max(10_000, Number(options.latexExportAgentIdleTimeoutMs || process.env.NOEMA_LATEX_EXPORT_AGENT_IDLE_TIMEOUT_MS) || 180_000);
+  latexExportAgentHardTimeoutMs = Math.max(latexExportAgentIdleTimeoutMs, Number(options.latexExportAgentHardTimeoutMs || process.env.NOEMA_LATEX_EXPORT_AGENT_HARD_TIMEOUT_MS) || 900_000);
   configureBibliography({ root: noteRoot });
   snippetCache = { key: "", scannedAt: 0, snippets: [] };
   templateCache = { key: "", scannedAt: 0, templates: [] };

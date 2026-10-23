@@ -478,17 +478,17 @@ function canonicalMathForPandoc(line) {
   return out;
 }
 
-export function extractAaronnoteMetadata(markdown) {
+export function extractNoemaMetadata(markdown) {
   const lines = String(markdown || "").replace(/\r\n?/g, "\n").split("\n");
   const frontMatter = parseYamlFrontMatter(lines);
   return parseMeta(lines, frontMatter.meta);
 }
 
-export function preprocessAaronnoteForPandoc(markdown, options = {}) {
+export function preprocessNoemaForPandoc(markdown, options = {}) {
   const source = String(markdown || "").replace(/\r\n?/g, "\n");
   const lines = source.split("\n");
   const frontMatter = parseYamlFrontMatter(lines);
-  const meta = extractAaronnoteMetadata(source);
+  const meta = extractNoemaMetadata(source);
   const hiddenKinds = new Set([...HIDDEN_BLOCKS, ...(Array.isArray(options.rules?.hiddenBlocks) ? options.rules.hiddenBlocks.map((value) => String(value).toLowerCase()) : [])]);
   const hasSemanticOutline = containsSemanticOutline(lines, frontMatter.end, hiddenKinds, {
     exportAnnotations: options.disableAnnotations === true
@@ -697,7 +697,7 @@ export function academicLatexPostprocess(latex) {
   const protectedSource = String(latex || "").replace(
     /\\begin\{(verbatim\*?|Verbatim|BVerbatim|LVerbatim|SaveVerbatim|lstlisting|minted|Highlighting)\}[\s\S]*?\\end\{\1\}/g,
     (block) => {
-      const token = `\uE100AARONNOTECODEBLOCK${codeBlocks.length}\uE101`;
+      const token = `\uE100NOEMACODEBLOCK${codeBlocks.length}\uE101`;
       codeBlocks.push(block);
       return token;
     },
@@ -706,7 +706,7 @@ export function academicLatexPostprocess(latex) {
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+$/gm, "")
     .trim() + "\n";
-  return normalized.replace(/\uE100AARONNOTECODEBLOCK(\d+)\uE101/g,
+  return normalized.replace(/\uE100NOEMACODEBLOCK(\d+)\uE101/g,
     (_match, index) => codeBlocks[Number(index)] || "");
 }
 
@@ -761,7 +761,7 @@ function runPandoc(bin, args, input, options = {}) {
   });
 }
 
-export async function aaronnoteMarkdownToLatexPandoc(markdown, options = {}) {
+export async function noemaMarkdownToLatexPandoc(markdown, options = {}) {
   const transformProvider = options.transformProvider || null;
   if (transformProvider
       && (typeof transformProvider.prepare !== "function" || typeof transformProvider.postprocess !== "function")) {
@@ -775,7 +775,7 @@ export async function aaronnoteMarkdownToLatexPandoc(markdown, options = {}) {
       signal: options.signal,
       timeoutMs: options.timeoutMs,
     })
-    : preprocessAaronnoteForPandoc(markdown, options);
+    : preprocessNoemaForPandoc(markdown, options);
   const pandocBin = String(options.pandocBin || "pandoc").trim();
   const maintainedExtensions = Array.isArray(options.rules?.pandocExtensions)
     ? options.rules.pandocExtensions.map((value) => String(value).trim()).filter((value) => /^[A-Za-z0-9_]+$/.test(value))

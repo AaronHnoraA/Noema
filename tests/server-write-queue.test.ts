@@ -11,7 +11,7 @@ import { saveNote } from "../server/lib/save.mjs";
 import { buildAgenda, clockIn, ensureTodoId, markNotesDirty, patchTodo, readNote, scanNotes, syncRoamDb } from "../server/lib/index.mjs";
 
 async function withVault(fn: (root: string) => Promise<void>) {
-  const root = await mkdtemp(join(tmpdir(), "aaronnote-write-queue-"));
+  const root = await mkdtemp(join(tmpdir(), "noema-write-queue-"));
   try {
     const notes = join(root, "roam");
     await mkdir(notes, { recursive: true });

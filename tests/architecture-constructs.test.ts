@@ -70,7 +70,7 @@ describe("rendered constructs: static rules", () => {
     // themes and the host, and goes stale between transactions.
     const readers = srcFiles.filter((path) => /dataset\.vimMode|data-vim-mode/.test(read(path)));
     expect(readers).toEqual([]);
-    const vim = read("aaronnote/vim-lite.ts");
+    const vim = read("pages/vim-lite.ts");
     const outside = vim.replace(/function publishMode[\s\S]*?\n}\n/, "");
     expect(outside.includes("dataset.vimMode"), "set the mode through publishMode").toBe(false);
   });
@@ -78,9 +78,9 @@ describe("rendered constructs: static rules", () => {
   test("embedded editing surfaces are marked and recognized through one module", () => {
     // A surface that edits text outside CM6 (for example, MathLive) calls
     // `markEmbeddedSurface`; checks use the exported selectors.
-    const spelled = srcFiles.concat(sourceFiles("aaronnote"))
+    const spelled = srcFiles.concat(sourceFiles("pages"))
       .filter((path) => path !== "src/cm6/embedded-surface.ts")
-      .filter((path) => /data-aaronnote-vim|aaronnoteVim/.test(read(path)));
+      .filter((path) => /data-noema-vim|noemaVim/.test(read(path)));
     expect(spelled).toEqual([]);
   });
 
@@ -94,7 +94,7 @@ describe("rendered constructs: static rules", () => {
     expect(click).toMatch(/revealFormulaSource\(view, formula\.from/);
     expect(preview).not.toMatch(/mountVisualTexInlineEditor\(/);
     expect(preview).not.toMatch(/markEmbeddedSurface\(table\);/);
-    expect(preview.includes('dataset.aaronnoteVim = "native"'), "spell the surface through markEmbeddedSurface").toBe(false);
+    expect(preview.includes('dataset.noemaVim = "native"'), "spell the surface through markEmbeddedSurface").toBe(false);
   });
 
   test("a construct writes to the document through dispatchConstructEdit", () => {
@@ -143,7 +143,7 @@ describe("rendered constructs: static rules", () => {
   test("vertical motion has one row model, shared by Vim and the editor caret", () => {
     // ArrowUp/ArrowDown and Vim's j/k step over the same visual rows
     // (src/cm6/screen-rows.ts); CodeMirror's own moveVertically is not used.
-    const callers = srcFiles.concat(sourceFiles("aaronnote"))
+    const callers = srcFiles.concat(sourceFiles("pages"))
       .filter((path) => path !== "src/cm6/screen-rows.ts")
       .filter((path) => /\.moveVertically\(/.test(read(path)));
     expect(callers).toEqual([]);
@@ -195,12 +195,12 @@ describe("rendered constructs: static rules", () => {
   });
 
   test("Vim learns what is drawn from the construct registry, not by scanning", () => {
-    for (const path of ["aaronnote/vim-lite.ts", "src/cm6/screen-rows.ts"]) {
+    for (const path of ["pages/vim-lite.ts", "src/cm6/screen-rows.ts"]) {
       const text = read(path);
       expect(text.includes("EditorView.decorations"), `${path} reads decorations`).toBe(false);
       expect(/scanInlineMathRanges|getBlockMathRanges|@lezer\/markdown/.test(text), `${path} rescans Markdown`).toBe(false);
     }
-    expect(srcFiles.concat(["aaronnote/vim-lite.ts"]).filter((path) => read(path).includes("vimAtomic"))).toEqual([]);
+    expect(srcFiles.concat(["pages/vim-lite.ts"]).filter((path) => read(path).includes("vimAtomic"))).toEqual([]);
   });
 });
 
@@ -347,7 +347,7 @@ describe("the caret is never hidden", () => {
   });
 
   test("Vim motions in Normal mode", async () => {
-    const { createVimLite } = await import("../aaronnote/vim-lite.ts");
+    const { createVimLite } = await import("../pages/vim-lite.ts");
     const host = document.createElement("div");
     document.body.append(host);
     const editor = createEditor(host, { kernel: "cm6", initialContent: SAMPLE_NOTE });

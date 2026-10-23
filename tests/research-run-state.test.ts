@@ -1,5 +1,5 @@
 import { expect, test } from "@voidzero-dev/vite-plus-test";
-import { appendRunEvents, mergeRunRef, runSnapshotMatches } from "../aaronnote/research-run-state.ts";
+import { appendRunEvents, mergeRunRef, runSnapshotMatches } from "../pages/research-run-state.ts";
 
 test("opening source or refreshing metadata preserves the active Run and session", () => {
   const ref = { runId: "run_new", sessionId: "session_new", sessionName: "read", agent: "opencode" };

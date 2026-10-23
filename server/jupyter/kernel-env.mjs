@@ -1,7 +1,7 @@
 // Kernel process environment-variable construction.
 // Ported concept from microsoft/vscode-jupyter (MIT)
 // src/kernels/raw/launcher/kernelEnvVarsService.node.ts, trimmed to what
-// aaronnote needs: unlike vscode-jupyter, kernelspecs here always carry a
+// noema needs: unlike vscode-jupyter, kernelspecs here always carry a
 // fully-resolved interpreter/executable path (see jupyter/kernel-templates/),
 // so there is no separate Python-interpreter-activation step to merge in —
 // just process.env + an optional runtime bin dir on PATH + the kernelspec's

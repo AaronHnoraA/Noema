@@ -2,16 +2,16 @@
 
 import { DEFAULT_REVISION_KIND, revisionKindOf, revisionKinds } from "./revision-kinds.ts";
 
-export type AaronnoteSnippetContext = "prose" | "org-meta" | "markdown";
+export type NoemaSnippetContext = "prose" | "org-meta" | "markdown";
 
-export type AaronnoteBuiltinSnippet = {
+export type NoemaBuiltinSnippet = {
   key: string;
   name: string;
   body: string;
-  context: AaronnoteSnippetContext;
+  context: NoemaSnippetContext;
 };
 
-export const AARONNOTE_AUTHORING_SNIPPETS: readonly AaronnoteBuiltinSnippet[] = [
+export const NOEMA_AUTHORING_SNIPPETS: readonly NoemaBuiltinSnippet[] = [
   {
     key: "meta",
     name: "Noema metadata",

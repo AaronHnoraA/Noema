@@ -26,17 +26,17 @@ import { executeOnKernel } from "../server/jupyter/execution-message-handler.mjs
 // heavy load it usually won. Fixed by setting `handleComms: false` on that
 // connection (see raw-kernel.mjs) — capturing widget traffic only needs
 // `anyMessage`, which fires unconditionally regardless of handleComms.
-const RUN = process.env.AARONNOTE_TEST_KERNEL === "1";
+const RUN = process.env.NOEMA_TEST_KERNEL === "1";
 const describeIfKernel = RUN ? describe : describe.skip;
 
-const aaronnoteRoot = join(import.meta.dirname, "..");
-const jupyterDataDir = join(aaronnoteRoot, "jupyter", ".jupyter", "data");
+const noemaRoot = join(import.meta.dirname, "..");
+const jupyterDataDir = join(noemaRoot, "jupyter", ".jupyter", "data");
 
 describeIfKernel("executeOnKernel (real ipykernel + ipywidgets)", () => {
   test(
     "captures print(), execute_result, and an Output-widget's initial synchronous output",
     async () => {
-      const runtimeDir = await mkdtemp(join(tmpdir(), "aaronnote-exec-real-"));
+      const runtimeDir = await mkdtemp(join(tmpdir(), "noema-exec-real-"));
       const registry = createKernelRegistry({ runtimeDir, zmq, launchTimeoutMs: 15_000 });
       const searchDirs = defaultKernelSearchDirs({ dataDir: jupyterDataDir, useHomeKernels: false });
       const specs = await findKernelSpecs({ searchDirs });

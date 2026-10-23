@@ -5,7 +5,7 @@ import {
   latexExportScopesContent,
   latexHeadingRange,
   toggleLatexExportScopeSelection,
-} from "../aaronnote/latex-export-scope.ts";
+} from "../pages/latex-export-scope.ts";
 
 describe("LaTeX export scopes", () => {
   const markdown = [

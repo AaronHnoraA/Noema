@@ -21,9 +21,9 @@
 (require 'noema-agent-promote)
 (require 'noema-agent-worktree)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
-(declare-function my/noema--api-call-sync "init-aaronnote" (channel args &optional timeout))
-(declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
+(declare-function my/noema--api-call-sync "init-noema" (channel args &optional timeout))
+(declare-function my/noema--ensure-server "init-noema" (&optional callback))
 (declare-function noema-pi-router-open "noema-pi-router" (&optional directory))
 (declare-function noema-research-pin-session "noema-research-mode" (name))
 (declare-function noema-research-rename-session-directives "noema-research-mode" (old new))
@@ -305,7 +305,7 @@ the person first."
   (let ((buffer (current-buffer))
         (root noema-sessions--root))
     (noema-sessions--api
-     "aaronnote:api:research:session:names" `((cwd . ,root) (includeArchived . t))
+     "noema:api:research:session:names" `((cwd . ,root) (includeArchived . t))
      (lambda (result error-object)
        (if error-object
            (message "Noema sessions: %s" (noema-sessions--error error-object))
@@ -313,7 +313,7 @@ the person first."
            (if (and (buffer-live-p buffer)
                     (eq (buffer-local-value 'noema-sessions--scope buffer) 'file))
                (noema-sessions--api
-                "aaronnote:api:research:run:list" `((cwd . ,root) (limit . 1000))
+                "noema:api:research:run:list" `((cwd . ,root) (limit . 1000))
                 (lambda (runs runs-error)
                   (noema-sessions--render
                    buffer names
@@ -363,7 +363,7 @@ the person first."
 (defun noema-sessions--mark-read (root name &optional done)
   "Record that the person has seen session NAME of ROOT, then call DONE."
   (noema-sessions--api
-   "aaronnote:api:research:session:name:read"
+   "noema:api:research:session:name:read"
    `((cwd . ,root) (name . ,name))
    (lambda (_result error-object)
      (when error-object
@@ -423,7 +423,7 @@ and resume the native conversation into the same project Agent workspace."
     (noema-sessions--ensure-host
      (lambda ()
        (noema-sessions--api
-        "aaronnote:api:research:session:names"
+        "noema:api:research:session:names"
         `((cwd . ,root) (includeArchived . t))
         (lambda (result error-object)
           (if error-object
@@ -559,7 +559,7 @@ Resume a recorded conversation first when its agent buffer is closed."
 `@@session' lines in open JuText buffers of the project are rewritten as
 ordinary, undoable edits.  DONE is called with non-nil on success."
   (noema-sessions--api
-   "aaronnote:api:research:session:name:rename"
+   "noema:api:research:session:name:rename"
    `((cwd . ,root) (name . ,name) (newName . ,new-name) (actor . "emacs"))
    (lambda (_result error-object)
      (if error-object
@@ -590,7 +590,7 @@ ordinary, undoable edits."
   "Declare session CHILD of AGENT in ROOT as a hand-over from PARENT.
 DONE is called with non-nil on success."
   (noema-sessions--api
-   "aaronnote:api:research:session:name:declare"
+   "noema:api:research:session:name:declare"
    `((cwd . ,root) (name . ,child) (agent . ,agent) (parentName . ,parent))
    (lambda (_result error-object)
      (if error-object
@@ -612,7 +612,7 @@ Its conversation starts on the first Run that uses it."
 (defun noema-sessions--archive (root name archived &optional done)
   "Set whether session NAME of ROOT is ARCHIVED; DONE gets non-nil on success."
   (noema-sessions--api
-   "aaronnote:api:research:session:name:archive"
+   "noema:api:research:session:name:archive"
    `((cwd . ,root) (name . ,name) (archived . ,(if archived t :false)) (actor . "emacs"))
    (lambda (_result error-object)
      (when error-object
@@ -660,7 +660,7 @@ THEN, when non-nil, is called with point on that work block."
     (unless (and notebook-id cell-id)
       (user-error "The latest Run of “%s” did not come from a work block" name))
     (noema-sessions--api
-     "aaronnote:api:research:cell:resolve"
+     "noema:api:research:cell:resolve"
      `((cwd . ,root) (notebookId . ,notebook-id) (cellId . ,cell-id))
      (lambda (result error-object)
        (if error-object
@@ -783,7 +783,7 @@ most likely fail the same way."
   (interactive)
   (pcase-let ((`(,_buffer ,root ,name) (noema-sessions--agent-target buffer)))
     (noema-sessions--api
-     "aaronnote:api:research:session:names"
+     "noema:api:research:session:names"
      `((cwd . ,root) (includeArchived . t))
      (lambda (result error-object)
        (if error-object
@@ -850,7 +850,7 @@ from the durable Handoff, freeing a context window before it fills up."
     (unless session-id
       (user-error "Session %s has no conversation to compact yet" name))
     (noema-sessions--api
-     "aaronnote:api:research:session:compact"
+     "noema:api:research:session:compact"
      `((cwd . ,noema-sessions--root) (sessionId . ,session-id))
      (lambda (_result error-object)
        (if error-object
@@ -985,7 +985,7 @@ first; a context send must never revive a recorded conversation."
               ((fboundp 'my/noema--api-call-sync))
               (result (ignore-errors
                         (my/noema--api-call-sync
-                         "aaronnote:api:research:session:names"
+                         "noema:api:research:session:names"
                          (vector `((cwd . ,root))) 2)))
               (entry (seq-find
                       (lambda (candidate)
@@ -1057,7 +1057,7 @@ append a clipboard choice after every session and return `clipboard' for it."
                       (bound-and-true-p my/noema--ready)
                       (fboundp 'my/noema--api-call-sync)
                       (ignore-errors
-                        (my/noema--api-call-sync "aaronnote:api:research:session:names"
+                        (my/noema--api-call-sync "noema:api:research:session:names"
                                                  (vector `((cwd . ,root))) 2))))
          (choices (noema-sessions--switch-candidates
                    (noema-sessions--list (noema-sessions--get result "names"))

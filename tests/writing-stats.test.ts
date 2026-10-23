@@ -1,7 +1,7 @@
 import { EditorState, Text } from "@codemirror/state";
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { tocIndexExtension } from "../src/cm6/toc-index.ts";
-import { countWritingStats, headingSubtreeRange, readingMinutes } from "../aaronnote/writing-stats.ts";
+import { countWritingStats, headingSubtreeRange, readingMinutes } from "../pages/writing-stats.ts";
 
 describe("writing stats", () => {
   test("counts CJK characters and non-CJK words without counting whitespace", () => {

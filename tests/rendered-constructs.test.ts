@@ -4,7 +4,7 @@ import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 
 import { createEditor } from "../src/editor-api.ts";
-import { createVimLite } from "../aaronnote/vim-lite.ts";
+import { createVimLite } from "../pages/vim-lite.ts";
 import { runEditorMovement } from "../src/cm6/input-commands.ts";
 import {
   rangeRevealsSource,

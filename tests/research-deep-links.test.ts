@@ -8,7 +8,7 @@ function read(file: string): string {
 
 describe("research deep-link surfaces", () => {
   test("resolves notebook ids through the research authority before focusing a cell", () => {
-    const jupyter = read("aaronnote/jupyter-main.ts");
+    const jupyter = read("pages/jupyter-main.ts");
     const runtime = read("server/lib/research-runtime.mjs");
     expect(jupyter).toContain("api.research.resolveCell({ notebookId, cellId })");
     expect(jupyter).toContain("openDocument({ scriptFile, sourceFile: scriptFile, cellId })");
@@ -20,10 +20,10 @@ describe("research deep-link surfaces", () => {
     const root = process.cwd();
     const runtime = read("server/lib/research-runtime.mjs");
     const host = read("web-host.mjs");
-    const vite = read("vite.aaronnote.config.ts");
+    const vite = read("vite.pages.config.ts");
     expect(runtime).toContain("async readArtifact(body = {})");
-    expect(existsSync(join(root, "aaronnote/artifact.html"))).toBe(false);
-    expect(existsSync(join(root, "aaronnote/research.html"))).toBe(false);
+    expect(existsSync(join(root, "pages/artifact.html"))).toBe(false);
+    expect(existsSync(join(root, "pages/research.html"))).toBe(false);
     expect(host).not.toContain('url.pathname === "/research"');
     expect(vite).not.toMatch(/(?:artifact|research)\.html/);
     expect(host).not.toMatch(/(?:reviewProposal|respondInput|decidePermission): function/);

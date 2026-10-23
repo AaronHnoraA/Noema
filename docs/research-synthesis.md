@@ -33,7 +33,7 @@ cell are idempotent. A concurrent rejection cannot cross the reservation.
 
 ## Pi supervisor hook
 
-`aaronnote:api:research:supervisor:propose` is a narrow JSON ingress. It forces
+`noema:api:research:supervisor:propose` is a narrow JSON ingress. It forces
 `proposedBy=agent:pi:supervisor` and `sourceAdapter=pi-supervisor-hook`, rejects
 review/decision fields, and calls only Proposal creation. It is a transport
 hook, not a claim that a real Pi supervisor RPC exists. The locally installed
@@ -42,7 +42,7 @@ transport is installed and validated.
 
 ## Workstream export
 
-`aaronnote:api:research:export:create` creates a bounded,
+`noema:api:research:export:create` creates a bounded,
 content-addressed `application/vnd.noema.workstream+json` artifact. The package
 contains notebooks, runtime records, Proposals, Findings, immutable Research IR
 and Problem Model versions, Tasks, Jobs, immutable Invocations/results, Worker

@@ -1,5 +1,5 @@
 /**
- * Heading folding for aaronnote.
+ * Heading folding for noema.
  *
  * Reuses the incremental tocIndexField (toc-index.ts) — zero new document scanning.
  * Only headings with source === "markdown" are foldable.

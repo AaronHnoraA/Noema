@@ -1,4 +1,4 @@
-@import "./aaronnote.css";
+@import "./noema.css";
 
 /*
  * Dark paper-flavored minimal theme.
@@ -39,9 +39,9 @@
   --orgenv-head-size: 0.9em;
 }
 
-.cm-editor:not(.aaronnote-visual-typography) {
+.cm-editor:not(.noema-visual-typography) {
   font-family: var(--aaron-font-body, var(--aaron-font-english, serif), var(--aaron-font-chinese, serif), serif);
-  font-size: calc(20px * var(--aaronnote-layout-zoom, 1));
+  font-size: calc(20px * var(--noema-block-layout-zoom, 1));
   line-height: 1.46;
   font-feature-settings: "kern" 1, "liga" 1, "onum" 1;
 }
@@ -103,7 +103,7 @@
   text-transform: uppercase;
 }
 
-.cm-editor .aaronnote-section-heading {
+.cm-editor .noema-section-heading {
   position: relative;
   display: block;
   box-sizing: border-box;
@@ -115,7 +115,7 @@
   color: var(--section-heading-color);
 }
 
-.cm-editor .aaronnote-section-heading-inner {
+.cm-editor .noema-section-heading-inner {
   position: relative;
   display: grid;
   gap: 0.5em;
@@ -128,7 +128,7 @@
   background: color-mix(in srgb, var(--section-heading-color), transparent 94%);
 }
 
-.cm-editor .aaronnote-section-heading-inner::before {
+.cm-editor .noema-section-heading-inner::before {
   content: "";
   position: absolute;
   left: 0;
@@ -138,14 +138,14 @@
   background: var(--section-heading-color);
 }
 
-.cm-editor .aaronnote-section-label {
+.cm-editor .noema-section-label {
   color: var(--section-heading-color);
   font: 900 var(--section-label-size, 0.76em)/1 var(--aaron-font-sans, sans-serif);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
-.cm-editor .aaronnote-section-title {
+.cm-editor .noema-section-title {
   font-family: var(--aaron-font-heading);
   font-weight: 800;
   font-size: var(--section-title-size, 2.05em);
@@ -154,7 +154,7 @@
   color: var(--section-heading-color);
 }
 
-.cm-editor .aaronnote-section-heading[data-outline-level="1"] {
+.cm-editor .noema-section-heading[data-outline-level="1"] {
   --section-heading-color: var(--aaron-heading-1, #ff9bad);
   --section-margin-before: 6.2em;
   --section-margin-after: 4.4em;
@@ -165,13 +165,13 @@
   --section-min-height: 18rem;
 }
 
-.cm-editor .aaronnote-section-heading[data-outline-level="1"] .aaronnote-section-heading-inner {
+.cm-editor .noema-section-heading[data-outline-level="1"] .noema-section-heading-inner {
   place-items: center;
   text-align: center;
   border-bottom-color: color-mix(in srgb, var(--section-heading-color), transparent 54%);
 }
 
-.cm-editor .aaronnote-section-heading[data-outline-level="1"] .aaronnote-section-heading-inner::before {
+.cm-editor .noema-section-heading[data-outline-level="1"] .noema-section-heading-inner::before {
   left: 50%;
   top: auto;
   bottom: 2.6em;
@@ -180,7 +180,7 @@
   transform: translateX(-50%);
 }
 
-.cm-editor .aaronnote-section-heading[data-outline-level="3"] {
+.cm-editor .noema-section-heading[data-outline-level="3"] {
   --section-heading-color: var(--aaron-heading-3, #d2a8ff);
   --section-margin-before: 3.1em;
   --section-margin-after: 1.7em;
@@ -190,7 +190,7 @@
   --section-min-height: 6.4rem;
 }
 
-.cm-editor .aaronnote-section-heading[data-outline-level="4"] {
+.cm-editor .noema-section-heading[data-outline-level="4"] {
   --section-heading-color: var(--aaron-heading-4, #8effa8);
   --section-margin-before: 2.35em;
   --section-margin-after: 1.25em;
@@ -200,7 +200,7 @@
   --section-min-height: 4.8rem;
 }
 
-.cm-editor .aaronnote-section-heading[data-outline-level="5"] {
+.cm-editor .noema-section-heading[data-outline-level="5"] {
   --section-heading-color: var(--aaron-heading-5, #ffd86a);
   --section-margin-before: 1.75em;
   --section-margin-after: 0.95em;
@@ -231,8 +231,8 @@
   border-bottom-color: currentColor;
 }
 
-.cm-editor a.aaronnote-roam-link,
-.aaronnote-roam-link,
+.cm-editor a.noema-roam-link,
+.noema-roam-link,
 .noema-wiki-link,
 .noema-internal-link {
   color: var(--aaron-link, #2368a2);
@@ -241,8 +241,8 @@
   border-radius: 0.18em;
   padding: 0;
 }
-.cm-editor a.aaronnote-roam-link:hover,
-.aaronnote-roam-link:hover,
+.cm-editor a.noema-roam-link:hover,
+.noema-roam-link:hover,
 .noema-wiki-link:hover,
 .noema-internal-link:hover {
   color: color-mix(in srgb, var(--aaron-link, #2368a2), var(--aaron-ink, #25362e) 24%);
@@ -422,8 +422,8 @@
   border-bottom-color: color-mix(in srgb, var(--aaron-green, #bbf7b8), transparent 42%);
 }
 
-.cm-editor a.aaronnote-zotero-link,
-.aaronnote-zotero-link {
+.cm-editor a.noema-zotero-link,
+.noema-zotero-link {
   display: inline-flex;
   align-items: baseline;
   gap: 0.35em;
@@ -438,16 +438,16 @@
   vertical-align: baseline;
 }
 
-.cm-editor a.aaronnote-zotero-link::before,
-.aaronnote-zotero-link::before {
+.cm-editor a.noema-zotero-link::before,
+.noema-zotero-link::before {
   content: "Z";
   flex: 0 0 auto;
   font: 800 0.72em/1 var(--aaron-font-sans, system-ui, sans-serif);
   color: var(--aaron-green, #bbf7b8);
 }
 
-.cm-editor a.aaronnote-zotero-link:hover,
-.aaronnote-zotero-link:hover {
+.cm-editor a.noema-zotero-link:hover,
+.noema-zotero-link:hover {
   border-color: color-mix(in srgb, var(--aaron-green, #bbf7b8), transparent 30%);
   background: color-mix(in srgb, var(--aaron-green, #bbf7b8), transparent 86%);
 }

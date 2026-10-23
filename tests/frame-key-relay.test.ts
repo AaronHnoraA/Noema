@@ -1,17 +1,17 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { FRAME_KEY_RELAY_MESSAGE, FRAME_KEY_RELAY_SOURCE } from "../src/frame-key-relay.ts";
-import { handleXwidgetEmacsKeydown, installFrameKeyRelay } from "../aaronnote/xwidget-key-guard.ts";
+import { handleXwidgetEmacsKeydown, installFrameKeyRelay } from "../pages/xwidget-key-guard.ts";
 
 type Init = KeyboardEventInit & { key: string; code: string };
 
 function withForwarded(run: (forwarded: string[]) => void): void {
-  const win = window as Window & { aaronnoteApi?: unknown };
-  const previous = win.aaronnoteApi;
+  const win = window as Window & { noemaApi?: unknown };
+  const previous = win.noemaApi;
   const forwarded: string[] = [];
-  win.aaronnoteApi = { emacs: { key: async (payload: unknown) => {
+  win.noemaApi = { emacs: { key: async (payload: unknown) => {
     forwarded.push(typeof payload === "string" ? payload : String((payload as { key: string }).key));
   } } };
-  try { run(forwarded); } finally { win.aaronnoteApi = previous; }
+  try { run(forwarded); } finally { win.noemaApi = previous; }
 }
 
 /** Run the relay in a fake frame; return what it posts for each key. */

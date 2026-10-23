@@ -1,8 +1,8 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { createLocalGraphPanel, workspaceGraphWithCurrentMarkdown } from "../aaronnote/local-graph.ts";
-import type { WorkspaceGraphOptions } from "../aaronnote/workspace-graph.ts";
-import type { GraphPayload, NoteSummary } from "../aaronnote/types.ts";
+import { createLocalGraphPanel, workspaceGraphWithCurrentMarkdown } from "../pages/local-graph.ts";
+import type { WorkspaceGraphOptions } from "../pages/workspace-graph.ts";
+import type { GraphPayload, NoteSummary } from "../pages/types.ts";
 
 function note(partial: Partial<NoteSummary> & Pick<NoteSummary, "id" | "title">): NoteSummary {
   return {
@@ -39,7 +39,7 @@ describe("local graph", () => {
    */
   test("typing prose does not rebuild the graph; typing a link does", () => {
     const root = document.createElement("div");
-    root.className = "aaronnote-local-graph-panel is-collapsed";
+    root.className = "noema-local-graph-panel is-collapsed";
     const toggleButton = document.createElement("button");
     const depthInput = input("range", false, "2");
     const depthLabel = document.createElement("span");
@@ -157,7 +157,7 @@ describe("local graph", () => {
 
   test("uses roam meta tags and renders tag-tag plus tag-file edges", () => {
     const root = document.createElement("aside");
-    root.className = "aaronnote-local-graph-panel is-collapsed";
+    root.className = "noema-local-graph-panel is-collapsed";
     const toggleButton = document.createElement("button");
     const depthInput = input("range", false, "2");
     const depthLabel = document.createElement("span");

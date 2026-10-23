@@ -5,14 +5,14 @@
  * opaque origin, so its key events never reach the hosting page.  The frame
  * runs this relay: it applies the host page's Emacs rules (the chord gate
  * `shouldForwardToEmacs` and the C-x/C-c prefix gate in
- * `aaronnote/xwidget-key-guard.ts`; a test keeps them identical), stops such
+ * `pages/xwidget-key-guard.ts`; a test keeps them identical), stops such
  * keys inside the output, and posts them to the page, whose
  * `installFrameKeyRelay` forwards them.  A frame without native focus leaves
  * every key to its host, as the page does.  It is plain ES5 because it runs
  * inside arbitrary output documents.
  */
 
-export const FRAME_KEY_RELAY_MESSAGE = "__aaronnoteFrameKey";
+export const FRAME_KEY_RELAY_MESSAGE = "__noemaFrameKey";
 
 export const FRAME_KEY_RELAY_SOURCE = `(function () {
   var ARROWS = { ArrowLeft: 1, ArrowRight: 1, ArrowUp: 1, ArrowDown: 1 };

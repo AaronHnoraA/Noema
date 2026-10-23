@@ -5,7 +5,7 @@
  * IDs emitted during the SiYuan-kernel spike remain readable compatibility.
  * These tests pin: the
  * widget replaces both forms with a link-styled chip, the click handler
- * dispatches a bubbling `aaronnote:open-block-ref` CustomEvent instead of
+ * dispatches a bubbling `noema:open-block-ref` CustomEvent instead of
  * doing any navigation itself, cursor-touch reveals raw source (same
  * contract as footnotes.ts / kramdown-ial.ts), and a plain non-ID
  * `((...))` parenthetical is left alone.
@@ -47,13 +47,13 @@ describe("block reference live-preview", () => {
     cleanup();
   });
 
-  test("clicking the chip dispatches a bubbling, cancelable aaronnote:open-block-ref event", async () => {
+  test("clicking the chip dispatches a bubbling, cancelable noema:open-block-ref event", async () => {
     const text = `See ((${blockId} "loadDoc bullet")) for details.`;
     const { editor, cleanup } = await mount(text);
     editor.setSelection(text.length, text.length);
     const chip = document.querySelector<HTMLElement>(".cm-block-ref")!;
     let detail: unknown = null;
-    editor.view.dom.addEventListener("aaronnote:open-block-ref", (event) => {
+    editor.view.dom.addEventListener("noema:open-block-ref", (event) => {
       detail = (event as CustomEvent).detail;
     });
     chip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));

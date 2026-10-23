@@ -22,8 +22,8 @@
 (require 'noema-research-mode)
 (require 'noema-research-settings)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
+(declare-function my/noema--ensure-server "init-noema" (&optional callback))
 (declare-function evil-local-set-key "evil-core" (state key def))
 
 (defcustom noema-research-graph-dot-program "dot"
@@ -2068,7 +2068,7 @@ NOCONFIRM."
                            (noema-research-notebook-meta document) "workstream_id" "")))
       (when root
         (my/noema-api-call
-         "aaronnote:api:research:proposal:list"
+         "noema:api:research:proposal:list"
          (vector `((cwd . ,root) (workstreamId . ,workstream-id) (limit . 1000)))
          (lambda (result error-object)
            (when (and (buffer-live-p graph)
@@ -2098,7 +2098,7 @@ NOCONFIRM."
                            "workstream_id" "")))
       (when root
         (my/noema-api-call
-         "aaronnote:api:research:run:list"
+         "noema:api:research:run:list"
          (vector `((cwd . ,root) (workstreamId . ,workstream-id) (limit . 1000)))
          (lambda (result error-object)
            (when (and (not error-object) (buffer-live-p graph)
@@ -2124,7 +2124,7 @@ NOCONFIRM."
            (notebook-id (noema-research-notebook-id document)))
       (when root
         (my/noema-api-call
-         "aaronnote:api:research:events:list"
+         "noema:api:research:events:list"
          (vector `((file . ,(noema-project-host-file file))
                    (cwd . ,root) (notebookId . ,notebook-id)
                    ;; One newest event per WorkNode.  Paging from seq 0 returned
@@ -2157,7 +2157,7 @@ NOCONFIRM."
            (notebook-id (noema-research-notebook-id document)))
       (when root
         (my/noema-api-call
-         "aaronnote:api:research:artifact:links"
+         "noema:api:research:artifact:links"
          (vector `((cwd . ,root) (workstreamId . ,workstream-id)
                    (notebookId . ,notebook-id) (limit . 1000)))
          (lambda (result error-object)

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import { EditorState } from "@codemirror/state";
 
-import { AssistScheduler, type AssistUpdateFlags } from "../aaronnote/assist-scheduler.ts";
-import { ProseCheckLifecycle } from "../aaronnote/prose-check-lifecycle.ts";
-import { createWritingStatsController } from "../aaronnote/features/writing-stats/controller.ts";
+import { AssistScheduler, type AssistUpdateFlags } from "../pages/assist-scheduler.ts";
+import { ProseCheckLifecycle } from "../pages/prose-check-lifecycle.ts";
+import { createWritingStatsController } from "../pages/features/writing-stats/controller.ts";
 import type { Editor } from "../src/editor-api.ts";
 
 /**

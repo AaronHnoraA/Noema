@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { sourceLineEnding, sourceWithLineEnding } from "../aaronnote/editor-save-changes.ts";
+import { sourceLineEnding, sourceWithLineEnding } from "../pages/editor-save-changes.ts";
 
 describe("note line endings", () => {
   test("LF files keep incremental saves", () => {

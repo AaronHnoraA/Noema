@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import {
   installActiveCoreReconnect,
   type CoreConnectionStatus,
-} from "../aaronnote/active-core-reconnect.ts";
+} from "../pages/active-core-reconnect.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -103,7 +103,7 @@ describe("active core reconnect", () => {
       onStatus: (status) => seen.push(status),
     });
 
-    windowTarget.dispatchEvent(new CustomEvent("aaronnote:connection", {
+    windowTarget.dispatchEvent(new CustomEvent("noema:connection", {
       detail: { status: "disconnected", reason: "stream-error" },
     }));
     expect(seen).toEqual(["disconnected"]);

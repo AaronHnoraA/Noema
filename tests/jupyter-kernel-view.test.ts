@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { jupyterKernelLabel } from "../aaronnote/jupyter-kernel-view.ts";
+import { jupyterKernelLabel } from "../pages/jupyter-kernel-view.ts";
 
 describe("Jupyter output page kernel state", () => {
   test("distinguishes an uncertain connection from confirmed kernel death", () => {

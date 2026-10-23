@@ -3,8 +3,8 @@ import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import {
   createKnowledgeDock,
   projectKnowledgeBacklinks,
-} from "../aaronnote/knowledge-dock.ts";
-import type { NoteSummary } from "../aaronnote/types.ts";
+} from "../pages/knowledge-dock.ts";
+import type { NoteSummary } from "../pages/types.ts";
 
 function note(partial: Partial<NoteSummary> & Pick<NoteSummary, "id" | "title">): NoteSummary {
   return {

@@ -127,7 +127,7 @@ describe("idle-triggered assist gating", () => {
   });
 
   test("Copilot's host predicate goes through the shared gate", () => {
-    const mainSource = readFileSync(join(process.cwd(), "aaronnote", "main.ts"), "utf8");
+    const mainSource = readFileSync(join(process.cwd(), "pages", "main.ts"), "utf8");
     const start = mainSource.indexOf("  isActive: () => !serverReaderMode");
     expect(start).toBeGreaterThan(-1);
     const predicate = mainSource.slice(start, mainSource.indexOf("editorSurfaceVisible(),", start));
@@ -137,7 +137,7 @@ describe("idle-triggered assist gating", () => {
 });
 
 describe("renderer activity participant wiring", () => {
-  const mainSource = readFileSync(join(process.cwd(), "aaronnote", "main.ts"), "utf8");
+  const mainSource = readFileSync(join(process.cwd(), "pages", "main.ts"), "utf8");
 
   test("retain-and-flush participants pause only for a hidden surface", () => {
     // The gate's compatibility fallback maps a bare setPaused participant to

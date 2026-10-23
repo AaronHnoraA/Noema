@@ -15,8 +15,8 @@ async function oneShotLayoutCompiler(root: string, name = "fake-latex.sh"): Prom
   const compiler = join(root, name);
   await writeFile(compiler, [
     "#!/bin/sh",
-    "if [ ! -f .aaronnote-draft-checked ]; then",
-    "  touch .aaronnote-draft-checked",
+    "if [ ! -f .noema-draft-checked ]; then",
+    "  touch .noema-draft-checked",
     "  printf '%s\\n' 'Overfull \\hbox (1.0pt too wide)' > out.log",
     "  exit 0",
     "fi",
@@ -41,7 +41,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("accepts an Emacs ACP runner without a CLI and protects TikZ source", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-emacs-acp-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-emacs-acp-"));
     roots.push(root);
     const workdir = join(root, "work");
     await mkdir(workdir);
@@ -108,7 +108,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("successful Agent export does not surface the cross-syntax word-bag heuristic", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-no-wordbag-warning-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-no-wordbag-warning-"));
     roots.push(root);
     const workdir = join(root, "work");
     await mkdir(workdir, { recursive: true });
@@ -206,7 +206,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("does not reuse a title from an Agent attempt that changes a protected payload", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-rejected-title-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-rejected-title-"));
     roots.push(root);
     const workdir = join(root, "work");
     await mkdir(workdir, { recursive: true });
@@ -271,7 +271,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("allows agent structural and math-layout polish when protected payloads remain intact", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-layout-polish-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-layout-polish-"));
     roots.push(root);
     const workdir = join(root, "work");
     await mkdir(workdir, { recursive: true });
@@ -300,7 +300,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("skips the Agent entirely when the mechanical draft compiles cleanly", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-clean-draft-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-clean-draft-"));
     roots.push(root);
     const workdir = join(root, "work");
     await mkdir(workdir, { recursive: true });
@@ -323,7 +323,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("resolves first-pass bibliography warnings before validating the draft", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-citation-passes-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-citation-passes-"));
     roots.push(root);
     const workdir = join(root, "work");
     await mkdir(workdir);
@@ -353,7 +353,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("does not invoke the Agent for a non-fatal layout warning unless polish is enabled", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-layout-warning-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-layout-warning-"));
     roots.push(root);
     const workdir = join(root, "work");
     await mkdir(workdir, { recursive: true });
@@ -377,7 +377,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("limits verified-draft polish to one attempt even when repair allows more", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-one-polish-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-one-polish-"));
     roots.push(root);
     const workdir = join(root, "work");
     await mkdir(workdir, { recursive: true });
@@ -402,7 +402,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("terminates the agent process group on timeout", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-agent-timeout-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-agent-timeout-"));
     roots.push(root);
     const workdir = join(root, "work");
     const marker = join(root, "leaked-child.txt");
@@ -437,7 +437,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("keeps a live agent past the idle check and accepts its eventual polish", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-agent-idle-grace-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-agent-idle-grace-"));
     roots.push(root);
     const workdir = join(root, "work");
     await mkdir(workdir, { recursive: true });
@@ -470,14 +470,14 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("uses frozen Noema Skill context and isolated launch policy for all three backends", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-agent-policy-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-agent-policy-"));
     roots.push(root);
     const style = join(root, "style-source.md");
     const skills = join(root, "skills");
     await writeFile(style, "STYLE_SENTINEL\n", "utf8");
-    await mkdir(join(skills, "aaronnote-latex-polish"), { recursive: true });
+    await mkdir(join(skills, "noema-latex-polish"), { recursive: true });
     await mkdir(join(skills, "academic-typesetting"), { recursive: true });
-    await writeFile(join(skills, "aaronnote-latex-polish", "SKILL.md"), "---\nname: aaronnote-latex-polish\ndescription: First export check\n---\nONE_SENTINEL\n", "utf8");
+    await writeFile(join(skills, "noema-latex-polish", "SKILL.md"), "---\nname: noema-latex-polish\ndescription: First export check\n---\nONE_SENTINEL\n", "utf8");
     await writeFile(join(skills, "academic-typesetting", "SKILL.md"), "---\nname: academic-typesetting\ndescription: Second export check\n---\nTWO_SENTINEL\n", "utf8");
 
     for (const backend of ["codex", "claude", "opencode"]) {
@@ -547,11 +547,11 @@ describe("latex-export-codex helpers", () => {
     roots.push(root);
     const skills = join(root, "skills");
     const workdir = join(root, "work");
-    await mkdir(join(skills, "aaronnote-latex-polish"), { recursive: true });
+    await mkdir(join(skills, "noema-latex-polish"), { recursive: true });
     await mkdir(join(skills, "academic-typesetting"), { recursive: true });
     await mkdir(workdir);
-    await writeFile(join(skills, "aaronnote-latex-polish", "SKILL.md"),
-      "---\nname: aaronnote-latex-polish\ndescription: Polish markup\n---\nONE_SENTINEL\n");
+    await writeFile(join(skills, "noema-latex-polish", "SKILL.md"),
+      "---\nname: noema-latex-polish\ndescription: Polish markup\n---\nONE_SENTINEL\n");
     await writeFile(join(skills, "academic-typesetting", "SKILL.md"),
       "---\nname: academic-typesetting\ndescription: Academic layout\n---\nTWO_SENTINEL\n");
     let observed: any;
@@ -564,7 +564,7 @@ describe("latex-export-codex helpers", () => {
         observed = options;
         expect(options.prompt.startsWith("/")).toBe(false);
         expect(options.contextItems.map((item: any) => item.ref)).toEqual([
-          "skill:aaronnote-latex-polish", "skill:academic-typesetting",
+          "skill:noema-latex-polish", "skill:academic-typesetting",
         ]);
         expect(Buffer.from(options.contextItems[0].contentBase64, "base64").toString("utf8")).toContain("ONE_SENTINEL");
         await expect(access(join(workdir, ".claude", "skills"))).rejects.toThrow();
@@ -576,7 +576,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("invokes the Agent only after a real mechanical compile defect", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-broken-draft-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-broken-draft-"));
     roots.push(root);
     const workdir = join(root, "work");
     await mkdir(workdir, { recursive: true });
@@ -612,7 +612,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("keeps the verified draft when review evidence is incomplete", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-fresh-review-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-fresh-review-"));
     roots.push(root);
     const workdir = join(root, "work");
     await mkdir(workdir, { recursive: true });
@@ -667,7 +667,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("compiles an Agent title together with its candidate body before accepting it", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-title-compile-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-title-compile-"));
     roots.push(root);
     const workdir = join(root, "work");
     await mkdir(workdir, { recursive: true });
@@ -683,8 +683,8 @@ describe("latex-export-codex helpers", () => {
       "#!/bin/sh",
       "for last do :; done",
       "if grep -q 'Candidate Title' \"$last\"; then : > out.log; exit 1; fi",
-      "if [ ! -f .aaronnote-draft-checked ]; then",
-      "  touch .aaronnote-draft-checked",
+      "if [ ! -f .noema-draft-checked ]; then",
+      "  touch .noema-draft-checked",
       "  printf '%s\\n' 'Overfull \\hbox (1.0pt too wide)' > out.log",
       "  exit 0",
       "fi",
@@ -726,7 +726,7 @@ describe("latex-export-codex helpers", () => {
   });
 
   test("loadAgentRules reads envMap/commentBlocks and returns null when empty", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-agent-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-agent-"));
     roots.push(root);
     await mkdir(join(root, "mechanical"), { recursive: true });
     expect(await loadAgentRules(root)).toBe(null); // no file yet

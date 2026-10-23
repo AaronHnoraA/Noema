@@ -5,10 +5,10 @@ import {
   commandMatches,
   commandSearchText,
   filterCommands,
-  type AaronnoteCommand,
-} from "../aaronnote/command-palette.ts";
+  type NoemaCommand,
+} from "../pages/command-palette.ts";
 
-function command(partial: Partial<AaronnoteCommand> & Pick<AaronnoteCommand, "id" | "title">): AaronnoteCommand {
+function command(partial: Partial<NoemaCommand> & Pick<NoemaCommand, "id" | "title">): NoemaCommand {
   return {
     group: "Editor",
     run: () => {},

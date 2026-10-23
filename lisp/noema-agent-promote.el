@@ -15,7 +15,7 @@
 (declare-function noema-project-client-path "noema-research" (path))
 (declare-function noema-project-host-file "noema-research" (file))
 
-(declare-function my/noema-api-call "init-aaronnote"
+(declare-function my/noema-api-call "init-noema"
                   (channel args callback &optional timeout))
 (defvar my/noema--ready)
 
@@ -89,7 +89,7 @@ already been attached.  Repeating the command is idempotent."
   (let ((buffer (current-buffer))
         (payload (noema-agent-promote--session-spec nil title goal)))
     (my/noema-api-call
-     "aaronnote:api:research:session:promote"
+     "noema:api:research:session:promote"
      (vector payload)
      (lambda (result error-object)
        (if error-object
@@ -112,7 +112,7 @@ the host and never changes native history files."
                (bound-and-true-p my/noema--ready))
     (user-error "Noema web-host is not ready"))
   (my/noema-api-call
-   "aaronnote:api:research:history:index"
+   "noema:api:research:history:index"
    (vector `((cwd . ,(let ((directory (or directory default-directory)))
                         (if (fboundp 'noema-project-host-file)
                             (noema-project-host-file directory)
@@ -146,7 +146,7 @@ CALLBACK, when given, receives the Session id or nil."
         (if (not payload)
             (funcall done nil)
           (my/noema-api-call
-           "aaronnote:api:research:session:promote" (vector payload)
+           "noema:api:research:session:promote" (vector payload)
            (lambda (result error-object)
              (let ((id (and (not error-object) (hash-table-p result) (gethash "id" result))))
                (cond
@@ -157,7 +157,7 @@ CALLBACK, when given, receives the Session id or nil."
                    (with-current-buffer buffer
                      (setq noema-agent-promote--session-id id)))
                  (my/noema-api-call
-                  "aaronnote:api:research:session:name:bind"
+                  "noema:api:research:session:name:bind"
                   (vector `((cwd . ,root) (name . ,name) (agent . ,agent) (sessionId . ,id)))
                   (lambda (_bound bind-error)
                     (when bind-error

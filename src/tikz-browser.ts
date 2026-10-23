@@ -194,7 +194,7 @@ export function sanitizedTikzSvg(svg: string): string {
 
 /** Keep authored SVG colours for light themes, with readable equivalents for dark themes. */
 export function prepareTikzSvg(svg: SVGSVGElement): void {
-  const background = [20, 26, 39]; // Aaronnote's dark page.
+  const background = [20, 26, 39]; // Noema's dark page.
   const targetContrast = 5.5;
   const channel = (value: number) => {
     const normalized = value / 255;
@@ -269,11 +269,11 @@ export async function inlineTikzFigures(html: string): Promise<string> {
       const svg = figure.querySelector("svg");
       if (svg) {
         prepareTikzSvg(svg);
-        svg.classList.add("aaronnote-tikz-image");
+        svg.classList.add("noema-tikz-image");
       }
       figure.removeAttribute("data-source");
       if (result.intrinsic) {
-        figure.style.setProperty("--aaronnote-tikz-natural-width", `${result.intrinsic.widthEm}em`);
+        figure.style.setProperty("--noema-tikz-natural-width", `${result.intrinsic.widthEm}em`);
       }
     } else {
       figure.textContent = result.message || "TikZ rendering failed";
@@ -303,12 +303,12 @@ function installTikzElement(): void {
         const svg = figure.querySelector("svg");
         if (svg) {
           prepareTikzSvg(svg);
-          svg.classList.add("aaronnote-tikz-image");
+          svg.classList.add("noema-tikz-image");
         }
         figure.dataset.rendered = "true";
         figure.removeAttribute("data-source");
         if (result.intrinsic) {
-          figure.style.setProperty("--aaronnote-tikz-natural-width", `${result.intrinsic.widthEm}em`);
+          figure.style.setProperty("--noema-tikz-natural-width", `${result.intrinsic.widthEm}em`);
         }
       } else {
         figure.textContent = result.message || "TikZ rendering failed";

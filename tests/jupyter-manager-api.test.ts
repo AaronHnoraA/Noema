@@ -19,11 +19,11 @@ describe("Noema-owned Jupyter manager API", () => {
       kernelControl,
     });
 
-    await handlers["aaronnote:api:jupyter:manager-snapshot"]();
-    await handlers["aaronnote:api:jupyter:script-snapshot"]({ scriptFile: "/tmp/a.ipynb" });
-    await handlers["aaronnote:api:jupyter:script-action"]({ scriptFile: "/tmp/a.ipynb", action: "run-all" });
-    await handlers["aaronnote:api:jupyter:session-select"]({ scriptFile: "/tmp/a.ipynb", kind: "none" });
-    await handlers["aaronnote:api:jupyter:kernel-control"]({ kernelId: "kernel-a", action: "interrupt" });
+    await handlers["noema:api:jupyter:manager-snapshot"]();
+    await handlers["noema:api:jupyter:script-snapshot"]({ scriptFile: "/tmp/a.ipynb" });
+    await handlers["noema:api:jupyter:script-action"]({ scriptFile: "/tmp/a.ipynb", action: "run-all" });
+    await handlers["noema:api:jupyter:session-select"]({ scriptFile: "/tmp/a.ipynb", kind: "none" });
+    await handlers["noema:api:jupyter:kernel-control"]({ kernelId: "kernel-a", action: "interrupt" });
 
     expect(managerSnapshot).toHaveBeenCalledOnce();
     expect(documentSnapshot).toHaveBeenCalledWith({ scriptFile: "/tmp/a.ipynb" });

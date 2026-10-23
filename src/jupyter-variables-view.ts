@@ -1,7 +1,7 @@
 // Shared variables-table renderer for Jupyter kernel introspection results —
 // used by both the per-cell "Vars" popup
 // (src/cm6/extensions/visual/widgets/block-extras.ts)
-// and the app-shell Jupyter panel (aaronnote/main.ts), so both surfaces
+// and the app-shell Jupyter panel (pages/main.ts), so both surfaces
 // present a kernel's variables the same way.
 
 export type JupyterVariableRow = {

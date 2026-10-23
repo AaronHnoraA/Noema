@@ -14,7 +14,7 @@ function fixture(requestOverride?: (body: any) => Promise<any>) {
   const transport = createAgendaSourceTransport({
     excludePatterns: ['archive/**'],
     request: async (method: string, body: any) => {
-      expect(method).toBe('aaronnote.agenda.source');
+      expect(method).toBe('noema.agenda.source');
       calls.push(body);
       return requestOverride ? requestOverride(body) : body.op === 'list' ? {files:['task.md']} : {};
     },

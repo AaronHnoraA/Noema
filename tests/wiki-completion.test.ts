@@ -1,6 +1,6 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { wikiLinkCompletionContext } from "../aaronnote/wiki-completion.ts";
+import { wikiLinkCompletionContext } from "../pages/wiki-completion.ts";
 import { qualifiedWikiTitle, splitQualifiedWikiTarget, splitWantedWikiTarget } from "../shared/wiki-link.mjs";
 
 describe("Wiki editor completion", () => {

@@ -1,4 +1,4 @@
-const PREFIX = "aaronnote:api:research";
+const PREFIX = "noema:api:research";
 
 const METHODS = Object.freeze({
   "notebook:create": "create",

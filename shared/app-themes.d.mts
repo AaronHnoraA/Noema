@@ -11,5 +11,6 @@ export type NoemaAppTheme = {
 
 export const NOEMA_APP_THEMES: readonly NoemaAppTheme[];
 export const NOEMA_DEFAULT_THEME_ID: NoemaAppThemeId;
+export function canonicalNoemaAppThemeId(themeId: unknown): string;
 export function noemaAppTheme(themeId: unknown): NoemaAppTheme;
 export function validNoemaAppThemeId(themeId: unknown): boolean;

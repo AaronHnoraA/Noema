@@ -13,20 +13,20 @@ import { createJupyterCellService } from "../server/lib/jupyter-cell.mjs";
 // Lifecycle-audit fixes: self-heal generation bump, orphan-process sweep on
 // startup, execution-hang timeout+interrupt escalation, and idle-TTL reap.
 // Gated (real kernel processes), like the other server/jupyter tests.
-const RUN = process.env.AARONNOTE_TEST_KERNEL === "1";
+const RUN = process.env.NOEMA_TEST_KERNEL === "1";
 const describeIfKernel = RUN ? describe : describe.skip;
 
-const aaronnoteRoot = join(import.meta.dirname, "..");
-const jupyterDataDir = join(aaronnoteRoot, "jupyter", ".jupyter", "data");
-const pythonKernelRunner = join(aaronnoteRoot, "jupyter", "bin", "python-jupyter-kernel");
+const noemaRoot = join(import.meta.dirname, "..");
+const jupyterDataDir = join(noemaRoot, "jupyter", ".jupyter", "data");
+const pythonKernelRunner = join(noemaRoot, "jupyter", "bin", "python-jupyter-kernel");
 
 describeIfKernel("kernel lifecycle (real ipykernel)", () => {
   test(
     "Noema executes an ordinary ipynb in place without a Markdown sidecar",
     async () => {
-      const noteRoot = await mkdtemp(join(tmpdir(), "aaronnote-ordinary-ipynb-"));
+      const noteRoot = await mkdtemp(join(tmpdir(), "noema-ordinary-ipynb-"));
       const service = createJupyterCellService({
-        runtimeRoot: aaronnoteRoot,
+        runtimeRoot: noemaRoot,
         noteRoot,
         workspaceRoot: noteRoot,
         zmq,
@@ -121,9 +121,9 @@ describeIfKernel("kernel lifecycle (real ipykernel)", () => {
   test(
     "task snapshots expose management metadata and restart accepts runtime id",
     async () => {
-      const noteRoot = await mkdtemp(join(tmpdir(), "aaronnote-management-"));
+      const noteRoot = await mkdtemp(join(tmpdir(), "noema-management-"));
       const service = createJupyterCellService({
-        runtimeRoot: aaronnoteRoot,
+        runtimeRoot: noemaRoot,
         noteRoot,
         workspaceRoot: noteRoot,
         zmq,
@@ -170,7 +170,7 @@ describeIfKernel("kernel lifecycle (real ipykernel)", () => {
   test(
     "ensure() self-heals a dead record and bumps widgetGeneration (not just manual restart)",
     async () => {
-      const runtimeDir = await mkdtemp(join(tmpdir(), "aaronnote-selfheal-"));
+      const runtimeDir = await mkdtemp(join(tmpdir(), "noema-selfheal-"));
       const registry = createKernelRegistry({ runtimeDir, zmq, launchTimeoutMs: 15_000 });
       const searchDirs = defaultKernelSearchDirs({ dataDir: jupyterDataDir, useHomeKernels: false });
       const specs = await findKernelSpecs({ searchDirs });
@@ -205,7 +205,7 @@ describeIfKernel("kernel lifecycle (real ipykernel)", () => {
   test(
     "orphan sweep kills a kernel process left running by a sidecar entry, and ignores dead ones",
     async () => {
-      const runtimeDir = await mkdtemp(join(tmpdir(), "aaronnote-orphan-"));
+      const runtimeDir = await mkdtemp(join(tmpdir(), "noema-orphan-"));
       // Spawn a bare kernel process directly (no registry attached) to model a
       // process left behind by a *crashed, no-longer-running* server instance
       // — nothing in this test process reacts to its death, unlike a live
@@ -244,7 +244,7 @@ describeIfKernel("kernel lifecycle (real ipykernel)", () => {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const pid = proc.pid!;
 
-      const sidecarPath = join(runtimeDir, "aaronnote-owned.json");
+      const sidecarPath = join(runtimeDir, "noema-owned.json");
       const staleFile = join(runtimeDir, "stale-already-gone.json");
       await writeFile(staleFile, "{}");
       await writeFile(
@@ -278,14 +278,14 @@ describeIfKernel("kernel lifecycle (real ipykernel)", () => {
   test(
     "a hung execution times out, escalates to interrupt, and leaves the kernel usable",
     async () => {
-      const originalTimeout = process.env.AARONNOTE_JUPYTER_EXEC_TIMEOUT_MS;
-      const originalGrace = process.env.AARONNOTE_JUPYTER_INTERRUPT_GRACE_MS;
-      process.env.AARONNOTE_JUPYTER_EXEC_TIMEOUT_MS = "1000";
-      process.env.AARONNOTE_JUPYTER_INTERRUPT_GRACE_MS = "500";
-      const noteRoot = await mkdtemp(join(tmpdir(), "aaronnote-hang-"));
-      // runtimeRoot stays the real aaronnote checkout so its project-owned
+      const originalTimeout = process.env.NOEMA_JUPYTER_EXEC_TIMEOUT_MS;
+      const originalGrace = process.env.NOEMA_JUPYTER_INTERRUPT_GRACE_MS;
+      process.env.NOEMA_JUPYTER_EXEC_TIMEOUT_MS = "1000";
+      process.env.NOEMA_JUPYTER_INTERRUPT_GRACE_MS = "500";
+      const noteRoot = await mkdtemp(join(tmpdir(), "noema-hang-"));
+      // runtimeRoot stays the real noema checkout so its project-owned
       // Python kernelspec resolves; only notes live in the scratch dir.
-      const service = createJupyterCellService({ runtimeRoot: aaronnoteRoot, noteRoot, workspaceRoot: noteRoot, zmq });
+      const service = createJupyterCellService({ runtimeRoot: noemaRoot, noteRoot, workspaceRoot: noteRoot, zmq });
       const note = join(noteRoot, "note.md");
       await writeFile(note, "# note\n", "utf8");
 
@@ -300,10 +300,10 @@ describeIfKernel("kernel lifecycle (real ipykernel)", () => {
         expect(followUp.status).toBe("ok");
         expect(followUp.outputs.some((o: any) => o.output_type === "execute_result" && o.data["text/plain"] === "42")).toBe(true);
       } finally {
-        if (originalTimeout == null) delete process.env.AARONNOTE_JUPYTER_EXEC_TIMEOUT_MS;
-        else process.env.AARONNOTE_JUPYTER_EXEC_TIMEOUT_MS = originalTimeout;
-        if (originalGrace == null) delete process.env.AARONNOTE_JUPYTER_INTERRUPT_GRACE_MS;
-        else process.env.AARONNOTE_JUPYTER_INTERRUPT_GRACE_MS = originalGrace;
+        if (originalTimeout == null) delete process.env.NOEMA_JUPYTER_EXEC_TIMEOUT_MS;
+        else process.env.NOEMA_JUPYTER_EXEC_TIMEOUT_MS = originalTimeout;
+        if (originalGrace == null) delete process.env.NOEMA_JUPYTER_INTERRUPT_GRACE_MS;
+        else process.env.NOEMA_JUPYTER_INTERRUPT_GRACE_MS = originalGrace;
         await service.shutdown();
         await rm(noteRoot, { recursive: true, force: true });
       }
@@ -314,7 +314,7 @@ describeIfKernel("kernel lifecycle (real ipykernel)", () => {
   test(
     "idle TTL reaps an unused owned kernel but never an attached one",
     async () => {
-      const runtimeDir = await mkdtemp(join(tmpdir(), "aaronnote-idle-"));
+      const runtimeDir = await mkdtemp(join(tmpdir(), "noema-idle-"));
       const registry = createKernelRegistry({ runtimeDir, zmq, launchTimeoutMs: 15_000 });
       const searchDirs = defaultKernelSearchDirs({ dataDir: jupyterDataDir, useHomeKernels: false });
       const specs = await findKernelSpecs({ searchDirs });

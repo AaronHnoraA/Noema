@@ -56,9 +56,9 @@ import { layoutGroupClasses, layoutGroupFromTitle, layoutGroupStyle, layoutGroup
 import { balanceTextColumns, suggestTextColumns } from "../../../../text-layout-measure.ts";
 import { parseAttrArgs } from "../../../../attrs-syntax.ts";
 import { supportedDiagramLang } from "../../../../diagram-langs.ts";
-import { api } from "../../../../../aaronnote/api-client.ts";
+import { api } from "../../../../../pages/api-client.ts";
 import { writeSystemClipboard } from "../../../../system-clipboard.ts";
-import { hostMode } from "../../../../../aaronnote/host-mode.ts";
+import { hostMode } from "../../../../../pages/host-mode.ts";
 import { renderJupyterVariablesTable } from "../../../../jupyter-variables-view.ts";
 import { tocIndexFromState, type MarkdownHeading } from "../../../toc-index.ts";
 import { scanInlineCommands } from "../../../../command-syntax.ts";
@@ -171,16 +171,16 @@ interface OrgEnvTitlePatch {
 
 declare global {
   interface Window {
-    AaronnoteCurrentFile?: () => string;
-    AaronnoteResolveAssetUrl?: (src: string) => string;
-    AaronnoteCopyBlockTarget?: (blockId: string) => Promise<string>;
-    AaronnoteBlockTarget?: (blockId: string) => string;
+    NoemaCurrentFile?: () => string;
+    NoemaResolveAssetUrl?: (src: string) => string;
+    NoemaCopyBlockTarget?: (blockId: string) => Promise<string>;
+    NoemaBlockTarget?: (blockId: string) => string;
     // Set by the block-extras ViewPlugin so the app shell can force @@cell
     // widgets to re-read their hidden source after an out-of-band edit (e.g.
     // the user saved the script buffer in Emacs). See notifyCeilScriptSaved.
-    AaronnoteReloadCeilCells?: (file?: string) => void;
-    AaronnoteRunCeilCell?: (cellId: string) => Promise<boolean>;
-    AaronnotePublishJupyterCellResult?: (detail: {
+    NoemaReloadCeilCells?: (file?: string) => void;
+    NoemaRunCeilCell?: (cellId: string) => Promise<boolean>;
+    NoemaPublishJupyterCellResult?: (detail: {
       file: string;
       cellId: string;
       kernel: string;
@@ -193,7 +193,7 @@ declare global {
 const ceilRunHandlers = new Map<string, () => Promise<void>>();
 
 function installCeilRunBridge(): void {
-  window.AaronnoteRunCeilCell = async (cellId: string): Promise<boolean> => {
+  window.NoemaRunCeilCell = async (cellId: string): Promise<boolean> => {
     const id = String(cellId || "").trim();
     const run = id ? ceilRunHandlers.get(id) : undefined;
     if (!run) return false;
@@ -209,8 +209,8 @@ function registerCeilRunHandler(cellId: string, run: () => Promise<void>): () =>
   ceilRunHandlers.set(id, run);
   return () => {
     if (ceilRunHandlers.get(id) === run) ceilRunHandlers.delete(id);
-    if (ceilRunHandlers.size === 0 && window.AaronnoteRunCeilCell) {
-      window.AaronnoteRunCeilCell = undefined;
+    if (ceilRunHandlers.size === 0 && window.NoemaRunCeilCell) {
+      window.NoemaRunCeilCell = undefined;
     }
   };
 }
@@ -258,14 +258,14 @@ function registerCeilLiveHandler(cellId: string, handle: (detail: CeilLiveDetail
   const id = String(cellId || "").trim();
   if (!id) return () => {};
   if (!ceilLiveBridgeInstalled) {
-    window.addEventListener("aaronnote:jupyter-cell", handleCeilLiveEvent);
+    window.addEventListener("noema:jupyter-cell", handleCeilLiveEvent);
     ceilLiveBridgeInstalled = true;
   }
   ceilLiveHandlers.set(id, handle);
   return () => {
     if (ceilLiveHandlers.get(id) === handle) ceilLiveHandlers.delete(id);
     if (ceilLiveHandlers.size === 0 && ceilLiveBridgeInstalled) {
-      window.removeEventListener("aaronnote:jupyter-cell", handleCeilLiveEvent);
+      window.removeEventListener("noema:jupyter-cell", handleCeilLiveEvent);
       ceilLiveBridgeInstalled = false;
     }
   };
@@ -809,7 +809,7 @@ function completeTikzTitle(title: string): { id: string; attrsRaw: string; layou
 }
 
 function currentNoteFile(): string {
-  return window.AaronnoteCurrentFile?.() || "";
+  return window.NoemaCurrentFile?.() || "";
 }
 
 function cleanCeilToken(value: string, fallback: string): string {
@@ -1377,7 +1377,7 @@ class SemanticHeadingWidget extends MeasuredWidget {
 
   toDOM(view: EditorView): HTMLElement {
     const div = document.createElement("div");
-    div.className = "cm-semantic-heading aaronnote-section-heading";
+    div.className = "cm-semantic-heading noema-section-heading";
     div.dataset.sectionKind = this.outline.kind;
     div.dataset.sectionLabel = this.outline.label;
     div.dataset.outlineLevel = String(this.outline.level);
@@ -1385,13 +1385,13 @@ class SemanticHeadingWidget extends MeasuredWidget {
     setSourceRange(div, this.from, this.to);
 
     const inner = document.createElement("div");
-    inner.className = "aaronnote-section-heading-inner";
+    inner.className = "noema-section-heading-inner";
 
     const label = document.createElement("span");
-    label.className = "aaronnote-section-label";
+    label.className = "noema-section-label";
     label.textContent = this.outline.label;
     const title = document.createElement("span");
-    title.className = "aaronnote-section-title";
+    title.className = "noema-section-title";
     title.textContent = this.outline.text;
     inner.append(label, title);
     div.append(inner);
@@ -1682,7 +1682,7 @@ class OrgEnvOpenWidget extends MeasuredWidget {
       badge.type = "button";
       badge.className = "org-env-block-id";
       badge.textContent = `#${shortBlockId(this.blockId)}`;
-      badge.title = window.AaronnoteBlockTarget?.(this.blockId) || this.blockId;
+      badge.title = window.NoemaBlockTarget?.(this.blockId) || this.blockId;
       badge.setAttribute("aria-label", `Copy block reference ${this.blockId}`);
       badge.addEventListener("mousedown", (event) => {
         event.preventDefault();
@@ -1691,7 +1691,7 @@ class OrgEnvOpenWidget extends MeasuredWidget {
       badge.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        void window.AaronnoteCopyBlockTarget?.(this.blockId).then((target) => {
+        void window.NoemaCopyBlockTarget?.(this.blockId).then((target) => {
           if (target) badge.title = target;
         });
       });
@@ -1883,7 +1883,7 @@ function boundedCeilOutputs(outputs: Array<Record<string, unknown>>, full: boole
     const hidden = text.length - CEIL_INLINE_STREAM_LIMIT;
     return {
       ...output,
-      text: `${text.slice(0, CEIL_INLINE_STREAM_LIMIT)}\n[aaronnote: ${hidden} more chars — use Popout for full output]`,
+      text: `${text.slice(0, CEIL_INLINE_STREAM_LIMIT)}\n[noema: ${hidden} more chars — use Popout for full output]`,
     };
   });
 }
@@ -2498,7 +2498,7 @@ class CeilCommandWidget extends MeasuredWidget {
       const key = ceilOutputKey(file, entry, `script:${entry.id}`);
       const merged = mergeCeilOutputUi(result, ceilOutputCache.get(key) ?? null) ?? result;
       setBoundedMap(ceilOutputCache, key, merged);
-      window.AaronnotePublishJupyterCellResult?.({
+      window.NoemaPublishJupyterCellResult?.({
         file,
         cellId: entry.id,
         kernel: entry.kernel,
@@ -2847,7 +2847,7 @@ class MetaWidget extends MeasuredWidget {
     this.body = body;
     this.from = from;
     this.to = to;
-    this.bibliographyVersion = window.AaronnoteBibliography?.version?.() ?? 0;
+    this.bibliographyVersion = window.NoemaBibliography?.version?.() ?? 0;
   }
 
   protected measureKey(): string { return "meta:" + shortHash(this.body); }
@@ -3410,7 +3410,7 @@ class TikzWidget extends MeasuredWidget {
 
   toDOM(view: EditorView): HTMLElement {
     const figure = document.createElement("figure");
-    figure.className = "cm-image-widget cm-visual-attachment cm-visual-attachment-html cm-tikz-env-widget aaronnote-tikz";
+    figure.className = "cm-image-widget cm-visual-attachment cm-visual-attachment-html cm-tikz-env-widget noema-tikz";
     setSourceRange(figure, this.from, this.to);
     figure.dataset.cmOpenSource = "true";
 
@@ -3494,7 +3494,7 @@ function tikzSvgElement(
   const width = Number(result.intrinsic?.widthEm);
   const height = Number(result.intrinsic?.heightEm);
   if (Number.isFinite(width) && width > 0) {
-    svg.style.setProperty("--aaronnote-tikz-natural-width", `${width}em`);
+    svg.style.setProperty("--noema-tikz-natural-width", `${width}em`);
     if (Number.isFinite(height) && height > 0) svg.style.aspectRatio = `${width} / ${height}`;
   }
   queueMicrotask(() => { if (figure.isConnected) view.requestMeasure(); });
@@ -3508,12 +3508,12 @@ function renderMetaWidget(
   bodyFrom: number,
 ): void {
   const meta = document.createElement("div");
-  meta.className = "org-env-meta aaronnote-meta-cover";
+  meta.className = "org-env-meta noema-meta-cover";
   const { entries, summary } = parseOrgMetaDocument(body);
   if (summary) meta.dataset.hasAbstract = "true";
   if (!metaRoamIndexed(entries)) {
     const badge = document.createElement("span");
-    badge.className = "aaronnote-meta-roam-badge";
+    badge.className = "noema-meta-roam-badge";
     badge.title = "Not in roam database";
     badge.setAttribute("aria-label", "Not in roam database");
     badge.textContent = "🔕";
@@ -3532,16 +3532,16 @@ function renderMetaWidget(
 
   const byKey = metaEntryMap(entries);
   const masthead = document.createElement("header");
-  masthead.className = "aaronnote-meta-masthead";
+  masthead.className = "noema-meta-masthead";
   const title = document.createElement("h1");
-  title.className = "aaronnote-meta-title";
+  title.className = "noema-meta-title";
   title.textContent = byKey.get("title") || "Untitled";
   masthead.append(title);
 
   const dateValue = byKey.get("date") || "";
   if (dateValue) {
     const date = document.createElement("p");
-    date.className = "aaronnote-meta-date";
+    date.className = "noema-meta-date";
     date.textContent = dateValue;
     masthead.append(date);
   }
@@ -3550,12 +3550,12 @@ function renderMetaWidget(
   const visibleTagValues = tagValues.filter(showMetaTag);
   if (visibleTagValues.length > 0) {
     const tags = document.createElement("nav");
-    tags.className = "aaronnote-meta-tags";
+    tags.className = "noema-meta-tags";
     tags.setAttribute("aria-label", "Tags");
     for (const tagValue of visibleTagValues) {
       const tag = document.createElement("button");
       tag.type = "button";
-      tag.className = "aaronnote-meta-tag";
+      tag.className = "noema-meta-tag";
       tag.textContent = `#${tagValue}`;
       tag.addEventListener("mousedown", stopEditorPropagation);
       tag.addEventListener("click", (event) => {
@@ -3571,15 +3571,15 @@ function renderMetaWidget(
 
   if (summary) {
     const abstract = document.createElement("section");
-    abstract.className = "aaronnote-meta-abstract";
+    abstract.className = "noema-meta-abstract";
     const heading = document.createElement("div");
-    heading.className = "aaronnote-meta-abstract-heading";
+    heading.className = "noema-meta-abstract-heading";
     const abstractTitle = document.createElement("span");
-    abstractTitle.className = "aaronnote-meta-abstract-title";
+    abstractTitle.className = "noema-meta-abstract-title";
     abstractTitle.textContent = summary.title || "Abstract";
     heading.append(abstractTitle);
     const content = document.createElement("div");
-    content.className = "aaronnote-meta-abstract-content";
+    content.className = "noema-meta-abstract-content";
     if (summary.body.trim()) {
       content.innerHTML = renderMarkdownHTML(summary.body);
       hydrateMetaSummaryCitations(content, summary, bodyFrom);
@@ -3602,7 +3602,7 @@ function wireRenderedMarkdownLinks(root: HTMLElement): void {
       if (!isMarkdownLinkOpenEvent(event)) return;
       event.preventDefault();
       event.stopPropagation();
-      anchor.dispatchEvent(new CustomEvent("aaronnote:open-url", {
+      anchor.dispatchEvent(new CustomEvent("noema:open-url", {
         bubbles: true,
         cancelable: true,
         detail: { href, newWindow: markdownLinkOpensNewWindow(href, event) },
@@ -3671,7 +3671,7 @@ function editableMetaValueControl(
 ): HTMLInputElement {
   const lower = key.toLowerCase();
   const input = document.createElement("input");
-  input.className = "aaronnote-meta-property-value";
+  input.className = "noema-meta-property-value";
   input.value = value;
   input.maxLength = META_WIDGET_MAX_VALUE;
   input.spellcheck = !["tags", "aliases", "css", "bib", "extend", "id"].includes(lower);
@@ -3771,7 +3771,7 @@ function renderMetaProperties(
   bodyFrom: number,
 ): void {
   const details = document.createElement("details");
-  details.className = "aaronnote-meta-properties";
+  details.className = "noema-meta-properties";
   const summaryControl = document.createElement("summary");
   const entries = editableMetaEntries(body);
   summaryControl.textContent = `Properties (${entries.length})`;
@@ -3779,7 +3779,7 @@ function renderMetaProperties(
 
   if (body.length > META_WIDGET_MAX_BODY || entries.length > META_WIDGET_MAX_FIELDS) {
     const warning = document.createElement("p");
-    warning.className = "aaronnote-meta-properties-limit";
+    warning.className = "noema-meta-properties-limit";
     warning.textContent = "Metadata is too large for visual editing. Use Source view.";
     details.append(warning);
     meta.append(details);
@@ -3787,12 +3787,12 @@ function renderMetaProperties(
   }
 
   const table = document.createElement("div");
-  table.className = "aaronnote-meta-properties-table";
+  table.className = "noema-meta-properties-table";
   entries.forEach((entry, index) => {
     const row = document.createElement("div");
-    row.className = "aaronnote-meta-property-row";
+    row.className = "noema-meta-property-row";
     const key = document.createElement("input");
-    key.className = "aaronnote-meta-property-key";
+    key.className = "noema-meta-property-key";
     key.value = entry.key;
     key.maxLength = 128;
     key.spellcheck = false;
@@ -3816,7 +3816,7 @@ function renderMetaProperties(
     value.setAttribute("aria-label", `Property ${entry.key} value`);
 
     const tools = document.createElement("span");
-    tools.className = "aaronnote-meta-property-tools";
+    tools.className = "noema-meta-property-tools";
     const up = metaToolButton("↑", `Move ${entry.key} up`, () => {
       if (index <= 0) return;
       const patch = swapMetaEntryLines(body, entries[index - 1]!, entry);
@@ -3839,7 +3839,7 @@ function renderMetaProperties(
   details.append(table);
 
   const actions = document.createElement("div");
-  actions.className = "aaronnote-meta-property-actions";
+  actions.className = "noema-meta-property-actions";
   actions.append(metaToolButton("+ Property", "Add metadata property", () => {
     const used = new Set(entries.map((entry) => entry.key.toLowerCase()));
     let key = "property";
@@ -3853,7 +3853,7 @@ function renderMetaProperties(
 
   if (orgMetaSummarySourceRange(body)) {
     const summaryEditor = document.createElement("div");
-    summaryEditor.className = "aaronnote-meta-summary-editor";
+    summaryEditor.className = "noema-meta-summary-editor";
     markEmbeddedSurface(summaryEditor);
     const parsed = parseOrgMetaDocument(body).summary;
     const title = document.createElement("input");
@@ -4940,14 +4940,14 @@ const blockExtrasDecorations = StateField.define<DecorationSet>({
 
 const orgEnvRailExtension = ViewPlugin.fromClass(OrgEnvRailPlugin);
 
-// Publishes window.AaronnoteReloadCeilCells so the app shell can force @@cell
+// Publishes window.NoemaReloadCeilCells so the app shell can force @@cell
 // widgets to re-read their hidden source after an out-of-band edit (Emacs saved
 // the script buffer). Invalidates caches, bumps the epoch, and dispatches the
 // refresh effect on this view.
 class CeilCellReloadPlugin {
   private readonly view: EditorView;
   private readonly handler: (file?: string) => void;
-  private readonly resultHandler: NonNullable<Window["AaronnotePublishJupyterCellResult"]>;
+  private readonly resultHandler: NonNullable<Window["NoemaPublishJupyterCellResult"]>;
 
   constructor(view: EditorView) {
     this.view = view;
@@ -4967,16 +4967,16 @@ class CeilCellReloadPlugin {
         this.view.dispatch({ effects: ceilRefreshEffect.of(file) });
       });
     };
-    window.AaronnoteReloadCeilCells = this.handler;
-    window.AaronnotePublishJupyterCellResult = this.resultHandler;
+    window.NoemaReloadCeilCells = this.handler;
+    window.NoemaPublishJupyterCellResult = this.resultHandler;
   }
 
   destroy(): void {
-    if (window.AaronnoteReloadCeilCells === this.handler) {
-      window.AaronnoteReloadCeilCells = undefined;
+    if (window.NoemaReloadCeilCells === this.handler) {
+      window.NoemaReloadCeilCells = undefined;
     }
-    if (window.AaronnotePublishJupyterCellResult === this.resultHandler) {
-      window.AaronnotePublishJupyterCellResult = undefined;
+    if (window.NoemaPublishJupyterCellResult === this.resultHandler) {
+      window.NoemaPublishJupyterCellResult = undefined;
     }
   }
 }

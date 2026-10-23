@@ -4,14 +4,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JUPYTER_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-if [[ -n "${AARONNOTE_JUPYTER_STATE_ROOT:-}" ]]; then
-  JUPYTER_STATE_ROOT="${AARONNOTE_JUPYTER_STATE_ROOT}"
-elif [[ -n "${AARONNOTE_STATE_DIR:-}" ]]; then
-  JUPYTER_STATE_ROOT="${AARONNOTE_STATE_DIR}/jupyter"
+if [[ -n "${NOEMA_JUPYTER_STATE_ROOT:-}" ]]; then
+  JUPYTER_STATE_ROOT="${NOEMA_JUPYTER_STATE_ROOT}"
+elif [[ -n "${NOEMA_STATE_DIR:-}" ]]; then
+  JUPYTER_STATE_ROOT="${NOEMA_STATE_DIR}/jupyter"
 else
   JUPYTER_STATE_ROOT="${XDG_STATE_HOME:-${HOME}/.local/state}/noema/jupyter"
 fi
-export AARONNOTE_JUPYTER_STATE_ROOT="$JUPYTER_STATE_ROOT"
+export NOEMA_JUPYTER_STATE_ROOT="$JUPYTER_STATE_ROOT"
 
 mkdir -p \
   "${JUPYTER_STATE_ROOT}/config" \
@@ -25,7 +25,7 @@ mkdir -p \
 "${JUPYTER_ROOT}/bin/python-jupyter-kernel" -c \
   'import ipykernel, zmq; print("Noema Python kernel ready")'
 
-if [[ -n "${AARONNOTE_SAGE:-}" ]] || command -v sage >/dev/null 2>&1; then
+if [[ -n "${NOEMA_SAGE:-}" ]] || command -v sage >/dev/null 2>&1; then
   "${JUPYTER_ROOT}/bin/sage-jupyter-kernel" --runtime-probe -c \
     'from sage.all import ZZ; print("Noema Sage kernel ready")'
 else

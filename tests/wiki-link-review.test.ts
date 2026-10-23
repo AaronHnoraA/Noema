@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { reviewedWikiLinkChange, scanWikiLinkSuggestions, type WikiLinkTarget } from "../aaronnote/wiki-link-review.ts";
+import { reviewedWikiLinkChange, scanWikiLinkSuggestions, type WikiLinkTarget } from "../pages/wiki-link-review.ts";
 
 const id = "019a1234-5678-7abc-8123-abcdefabcdef";
 const pages: WikiLinkTarget[] = [{

@@ -23,15 +23,15 @@ describe("b3 component system", () => {
   test("classifies Noema semantic surfaces without treating ordinary editor DOM as chrome", () => {
     const dialog = document.createElement("dialog");
     const host = document.createElement("div");
-    host.className = "aaronnote-task-manager-backdrop";
+    host.className = "noema-task-manager-backdrop";
     const menu = document.createElement("div");
     menu.setAttribute("role", "menu");
     const dock = document.createElement("aside");
     dock.className = "noema-knowledge-dock";
     const statusHud = document.createElement("aside");
-    statusHud.className = "aaronnote-status-hud";
+    statusHud.className = "noema-status-hud";
     const bibliography = document.createElement("section");
-    bibliography.className = "aaronnote-bib-panel";
+    bibliography.className = "noema-bib-panel";
     const editorBlock = document.createElement("div");
     editorBlock.className = "cm-line";
     const dropOverlay = document.createElement("div");
@@ -53,14 +53,14 @@ describe("b3 component system", () => {
   test("adopts dialog, menu, panel, form and card controls through the b3 contract", () => {
     const root = document.createElement("div");
     root.innerHTML = `
-      <div class="aaronnote-modal">
-        <form class="aaronnote-modal-panel">
+      <div class="noema-modal">
+        <form class="noema-modal-panel">
           <h2>Settings</h2>
           <input type="text">
           <select><option>One</option></select>
           <input type="range">
           <input type="checkbox">
-          <div class="aaronnote-modal-actions">
+          <div class="noema-modal-actions">
             <button type="button">Cancel</button>
             <button type="submit">Save</button>
             <button type="button" data-danger="true">Delete</button>
@@ -72,7 +72,7 @@ describe("b3 component system", () => {
         <header>Knowledge</header>
         <nav role="tablist"><button type="button" role="tab">Backlinks</button></nav>
       </aside>
-      <div class="aaronnote-context-menu" role="menu">
+      <div class="noema-context-menu" role="menu">
         <button type="button">Open</button><hr><button type="button">Close</button>
       </div>
       <section class="noema-config-section"><button class="noema-config-theme">Theme</button></section>
@@ -80,16 +80,16 @@ describe("b3 component system", () => {
     document.body.appendChild(root);
     applyB3ComponentSystem(root);
 
-    expect(root.querySelector(".aaronnote-modal")?.classList.contains("b3-dialog")).toBe(true);
-    expect(root.querySelector(".aaronnote-modal-panel")?.classList.contains("b3-dialog__container")).toBe(true);
+    expect(root.querySelector(".noema-modal")?.classList.contains("b3-dialog")).toBe(true);
+    expect(root.querySelector(".noema-modal-panel")?.classList.contains("b3-dialog__container")).toBe(true);
     expect(root.querySelector("h2")?.classList.contains("b3-dialog__header")).toBe(true);
-    expect(root.querySelector(".aaronnote-modal-actions")?.classList.contains("b3-dialog__action")).toBe(true);
+    expect(root.querySelector(".noema-modal-actions")?.classList.contains("b3-dialog__action")).toBe(true);
     expect(root.querySelector("input[type='text']")?.classList.contains("b3-text-field")).toBe(true);
     expect(root.querySelector("select")?.classList.contains("b3-select")).toBe(true);
     expect(root.querySelector("input[type='range']")?.classList.contains("b3-slider")).toBe(true);
     expect(root.querySelector("input[type='checkbox']")?.classList.contains("b3-switch")).toBe(true);
 
-    const modalButtons = [...root.querySelectorAll<HTMLButtonElement>(".aaronnote-modal-actions button")];
+    const modalButtons = [...root.querySelectorAll<HTMLButtonElement>(".noema-modal-actions button")];
     expect(modalButtons[0]?.classList.contains("b3-button--cancel")).toBe(true);
     expect(modalButtons[1]?.classList.contains("b3-button")).toBe(true);
     expect(modalButtons[1]?.classList.contains("b3-button--text")).toBe(false);
@@ -101,7 +101,7 @@ describe("b3 component system", () => {
     expect(root.querySelector(".noema-knowledge-dock")?.classList.contains("b3-panel")).toBe(true);
     expect(root.querySelector("[role='tablist']")?.classList.contains("b3-list--background")).toBe(true);
     expect(root.querySelector("[role='tab']")?.classList.contains("b3-list-item")).toBe(true);
-    expect(root.querySelector(".aaronnote-context-menu")?.classList.contains("b3-menu")).toBe(true);
+    expect(root.querySelector(".noema-context-menu")?.classList.contains("b3-menu")).toBe(true);
     expect(root.querySelector("hr")?.classList.contains("b3-menu__separator")).toBe(true);
     expect(root.querySelector(".noema-config-section")?.classList.contains("b3-panel")).toBe(true);
     expect(root.querySelector(".noema-config-theme")?.classList.contains("b3-card")).toBe(true);
@@ -122,7 +122,7 @@ describe("b3 component system", () => {
       document.body.appendChild(ordinary);
 
       const panel = document.createElement("aside");
-      panel.className = "aaronnote-jupyter-panel";
+      panel.className = "noema-jupyter-panel";
       document.body.appendChild(panel);
       const dynamic = document.createElement("button");
       dynamic.textContent = "Refresh";
@@ -140,11 +140,11 @@ describe("b3 component system", () => {
 
   test("ships the component adapter on every Emacs-hosted interactive route", () => {
     for (const entry of [
-      "aaronnote/main.ts",
-      "aaronnote/wiki-main.ts",
-      "aaronnote/jupyter-main.ts",
-      "aaronnote/config-main.ts",
-      "aaronnote/agenda-main.ts",
+      "pages/main.ts",
+      "pages/wiki-main.ts",
+      "pages/jupyter-main.ts",
+      "pages/config-main.ts",
+      "pages/agenda-main.ts",
     ]) {
       const source = read(entry);
       expect(source).toContain("installB3ComponentSystem");

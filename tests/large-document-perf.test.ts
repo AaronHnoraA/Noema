@@ -2,7 +2,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createEditor } from "../src/editor-api.ts";
-import { SnippetSession } from "../aaronnote/snippets.ts";
+import { SnippetSession } from "../pages/snippets.ts";
 import {
   blockMathAtomicFullRebuildCount,
   blockMathAtomicRangeVisitCount,

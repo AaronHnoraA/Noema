@@ -39,7 +39,7 @@ jupyter/.venv/
 jupyter/.jupyter/
 jupyter/labextension/lib/
 jupyter/labextension/node_modules/
-jupyter/labextension/style/aaronnote-embedded.css
+jupyter/labextension/style/noema-embedded.css
 .ipynb_checkpoints/
 .virtual_documents/
 .yarn/

@@ -195,27 +195,27 @@ export function layoutFromAttrs(attrs) {
 
 export function layoutClasses(kind, layout) {
   return [
-    "aaronnote-layout",
-    `aaronnote-layout-align-${layout.align}`,
-    layout.wrap ? "aaronnote-layout-wrap" : "",
-    `aaronnote-${kind}`,
-    `aaronnote-${kind}-align-${layout.align}`,
-    layout.wrap ? `aaronnote-${kind}-wrap` : "",
+    "noema-layout",
+    `noema-block-layout-align-${layout.align}`,
+    layout.wrap ? "noema-block-layout-wrap" : "",
+    `noema-${kind}`,
+    `noema-${kind}-align-${layout.align}`,
+    layout.wrap ? `noema-${kind}-wrap` : "",
   ].filter(Boolean).join(" ");
 }
 
 export function layoutStyle(kind, layout) {
   const parts = [];
   if (layout.width) {
-    parts.push(`--aaronnote-layout-width: ${layout.width}`);
-    parts.push(`--aaronnote-${kind}-width: ${layout.width}`);
-    parts.push(`--aaronnote-${kind}-max-width: none`);
-    parts.push(`--aaronnote-${kind}-max-height: none`);
+    parts.push(`--noema-block-layout-width: ${layout.width}`);
+    parts.push(`--noema-${kind}-width: ${layout.width}`);
+    parts.push(`--noema-${kind}-max-width: none`);
+    parts.push(`--noema-${kind}-max-height: none`);
   }
   if (layout.height) {
-    parts.push(`--aaronnote-layout-height: ${layout.height}`);
-    parts.push(`--aaronnote-${kind}-height: ${layout.height}`);
-    parts.push(`--aaronnote-${kind}-max-height: none`);
+    parts.push(`--noema-block-layout-height: ${layout.height}`);
+    parts.push(`--noema-${kind}-height: ${layout.height}`);
+    parts.push(`--noema-${kind}-max-height: none`);
   }
   return parts.length ? `${parts.join("; ")};` : "";
 }

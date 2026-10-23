@@ -1,6 +1,6 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { mathPreviewFitScale } from "../aaronnote/math-preview-fit.ts";
+import { mathPreviewFitScale } from "../pages/math-preview-fit.ts";
 
 describe("math preview fitting", () => {
   test("keeps formulas at natural size when both dimensions fit", () => {

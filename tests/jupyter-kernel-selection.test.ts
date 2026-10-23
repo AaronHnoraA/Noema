@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { selectedKernelOptionValue } from "../aaronnote/jupyter-kernel-selection.ts";
+import { selectedKernelOptionValue } from "../pages/jupyter-kernel-selection.ts";
 
 describe("Jupyter kernel selector state", () => {
   test("not-started never preselects the notebook kernelspec", () => {

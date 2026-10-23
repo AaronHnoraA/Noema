@@ -17,7 +17,7 @@ async function git(root: string, args: string[]): Promise<string> {
 }
 
 async function setupRepo() {
-  const root = await mkdtemp(join(tmpdir(), "aaronnote-git-"));
+  const root = await mkdtemp(join(tmpdir(), "noema-git-"));
   const notes = join(root, "roam");
   await mkdir(notes, { recursive: true });
   roots.push(root);
@@ -55,7 +55,7 @@ describe("roam git tools", () => {
 
   test("detects working changes through a symlinked note root", async () => {
     const { notes } = await setupRepo();
-    const linkedNotes = join(tmpdir(), `aaronnote-git-link-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const linkedNotes = join(tmpdir(), `noema-git-link-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     roots.push(linkedNotes);
     await symlink(notes, linkedNotes, "dir");
     await writeFile(join(notes, "a.md"), "# A\n\nChanged through link\n", "utf8");

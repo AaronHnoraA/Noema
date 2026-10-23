@@ -1,7 +1,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { matchingSnippetsForPrefix } from "../aaronnote/snippets.ts";
-import type { SnippetSummary } from "../aaronnote/types.ts";
+import { matchingSnippetsForPrefix } from "../pages/snippets.ts";
+import type { SnippetSummary } from "../pages/types.ts";
 
 describe("snippet hot-path performance boundary", () => {
   test("keeps context filtering and ranking bounded for a catalog larger than production", () => {

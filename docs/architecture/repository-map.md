@@ -9,7 +9,7 @@
 ```text
 Emacs（唯一 UI）
 ├── lisp/noema-*.el          产品 Elisp：.noema 模型与 JuText、Graph Board、Agent、能力管理
-└── xwidget/Appine 页面 ← dist/aaronnote（由 aaronnote/ + src/ 构建）
+└── xwidget/Appine 页面 ← dist/pages（由 pages/ + src/ 构建）
         │ HTTP/SSE
 Node host  web-host.mjs + server/
         │ 监督、JSON
@@ -23,7 +23,7 @@ Go kernel  kernel/（二进制 noema）
 | 目录 | 规模 | 职责 |
 | --- | --- | --- |
 | `src/` | ~50k 行 TS | 可复用渲染与编辑核心。`src/cm6/` 是 CodeMirror 6 编辑器（composition root 在 `extensions/index.ts`，渲染构件统一在 `extensions/visual/constructs/`）；其余是 Markdown/数学/TikZ/HTML 导出/Jupyter rendermime 等纯模块 |
-| `aaronnote/` | ~43k 行 TS | Emacs 宿主页面：笔记编辑页（`main.ts`）、Wiki、Agenda、Jupyter 输出、Config、Slides；宿主键盘与焦点契约（`host-keyboard.ts`、`xwidget-key-guard.ts`）；Vim 层（`vim-lite.ts`）。`aaronnote` 是旧产品名 |
+| `pages/` | ~43k 行 TS | Emacs 宿主页面：笔记编辑页（`main.ts`）、Wiki、Agenda、Jupyter 输出、Config、Slides；宿主键盘与焦点契约（`host-keyboard.ts`、`xwidget-key-guard.ts`）；Vim 层（`vim-lite.ts`）。构建到 `dist/pages` |
 | `shared/` | ~5k 行 `.mjs` | 浏览器与 Node 共用的语法/身份/宏规则，配 `*-fixtures.json` 契约（Go 侧按同一 fixture 校验） |
 | `server/` | ~44k 行 `.mjs` | Node host。`Features/*/api.mjs` 是功能控制器（Assets、Emacs、Filesystem、Jupyter、Prose、Research、Session、Tasks）；`infrastructure/` 是 transport 无关的 router；`jupyter/` 是 Jupyter 协议客户端；`lib/` 是领域实现与旧 facade（仍在逐步拆入 Features） |
 | `web-host.mjs` | | HTTP/SSE、静态资源、router 装配；写 `host.json` |
@@ -51,7 +51,7 @@ Go kernel  kernel/（二进制 noema）
 | 想改的东西 | 落点 |
 | --- | --- |
 | 编辑器行为、渲染构件 | `src/cm6/`（构件走 `extensions/visual/constructs/`） |
-| 某个宿主页面的 UI | `aaronnote/` 对应入口；新页面必须调用 `installHostKeyboardBridge` |
+| 某个宿主页面的 UI | `pages/` 对应入口；新页面必须调用 `installHostKeyboardBridge` |
 | 浏览器与 Node 共用的语法 | `shared/` + fixture；Go 侧同步 |
 | HTTP/SSE 端点 | `server/Features/<Feature>/api.mjs`，领域逻辑不再加进 `server/lib/runtime.mjs` |
 | 搜索、引用文本、索引、Markdown 保存 | `kernel/noema/` 下的 Go 包 |
@@ -64,5 +64,3 @@ Go kernel  kernel/（二进制 noema）
 
 - `server/lib/` 仍承载大部分领域实现，`Features/` 迁移未完成（见
   [current-architecture.md](current-architecture.md) “Node host”）。
-- `aaronnote` 旧名同时用于页面目录、构建产物 `dist/aaronnote` 与 Emacs 侧状态目录，
-  改名需要跨仓库迁移。

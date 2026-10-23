@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { previewPlacement, type FloatingBox } from "../aaronnote/preview-placement.ts";
+import { previewPlacement, type FloatingBox } from "../pages/preview-placement.ts";
 
 const viewport = { width: 1000, height: 600 };
 const source = { top: 20, bottom: 40 };

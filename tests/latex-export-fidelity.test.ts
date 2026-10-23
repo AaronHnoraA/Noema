@@ -1,7 +1,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 // @ts-ignore Node ESM module outside the TS app graph.
-import { academicLatexPostprocess, aaronnoteMarkdownToLatexPandoc, extractAaronnoteMetadata, preprocessAaronnoteForPandoc } from "../server/lib/latex-export-pandoc.mjs";
+import { academicLatexPostprocess, noemaMarkdownToLatexPandoc, extractNoemaMetadata, preprocessNoemaForPandoc } from "../server/lib/latex-export-pandoc.mjs";
 
 describe("LaTeX export mechanical fidelity", () => {
   test("preserves blank lines and trailing spaces inside code environments", async () => {
@@ -13,7 +13,7 @@ describe("LaTeX export mechanical fidelity", () => {
       "next",
       "```",
     ].join("\n");
-    const converted = await aaronnoteMarkdownToLatexPandoc(source);
+    const converted = await noemaMarkdownToLatexPandoc(source);
     expect(converted.body).toContain([
       "\\begin{verbatim}",
       "line with spaces   ",
@@ -45,7 +45,7 @@ describe("LaTeX export mechanical fidelity", () => {
       "> } AFTER MUST SURVIVE",
       "> Tail.",
     ].join("\n");
-    const prepared = preprocessAaronnoteForPandoc(source);
+    const prepared = preprocessNoemaForPandoc(source);
     expect(prepared.markdown).toContain("Visible before");
     expect(prepared.markdown).toContain("AFTER MUST SURVIVE");
     expect(prepared.markdown).toContain("Tail.");
@@ -54,14 +54,14 @@ describe("LaTeX export mechanical fidelity", () => {
     expect(prepared.markdown).not.toContain("still quoted");
     expect(prepared.markdown).not.toContain("nested:");
 
-    const converted = await aaronnoteMarkdownToLatexPandoc(source);
+    const converted = await noemaMarkdownToLatexPandoc(source);
     expect(converted.body).toContain("Visible before");
     expect(converted.body).toContain("AFTER MUST SURVIVE");
     expect(converted.body).toContain("Tail.");
   });
 
   test("reprocesses a public semantic command after a private closing brace", () => {
-    const prepared = preprocessAaronnoteForPandoc([
+    const prepared = preprocessNoemaForPandoc([
       "@@todo [private] {",
       "  nested: {value}",
       "} @@section [Public]",
@@ -75,7 +75,7 @@ describe("LaTeX export mechanical fidelity", () => {
   });
 
   test("extracts YAML and Noema metadata with preprocessing precedence", () => {
-    expect(extractAaronnoteMetadata([
+    expect(extractNoemaMetadata([
       "---",
       'title: "YAML title"',
       "date: 2026-07-12",
@@ -95,7 +95,7 @@ describe("LaTeX export mechanical fidelity", () => {
   });
 
   test("does not execute citations inside multiline HTML comments", () => {
-    const prepared = preprocessAaronnoteForPandoc([
+    const prepared = preprocessNoemaForPandoc([
       "Visible before.",
       "<!-- hidden starts",
       "@@cite(refs) [Hidden]",
@@ -111,7 +111,7 @@ describe("LaTeX export mechanical fidelity", () => {
   });
 
   test("fails explicitly on an unclosed HTML comment", () => {
-    expect(() => preprocessAaronnoteForPandoc("Visible.\n<!-- hidden forever"))
+    expect(() => preprocessNoemaForPandoc("Visible.\n<!-- hidden forever"))
       .toThrow(/unclosed html comment/i);
   });
 });

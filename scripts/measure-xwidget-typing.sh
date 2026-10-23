@@ -194,7 +194,7 @@ if [ -z "$EMACS_PID" ] || ! client '(emacs-version)' | grep -q GNU; then
   exit 1
 fi
 
-open_result="$(client '(let ((file (getenv "NOEMA_MEASURE_NOTE"))) (require '\''init-aaronnote) (setq my/noema-web-port 0) (find-file file) (my/noema-open-file file) "opened")')"
+open_result="$(client '(let ((file (getenv "NOEMA_MEASURE_NOTE"))) (require '\''init-noema) (setq my/noema-web-port 0) (find-file file) (my/noema-open-file file) "opened")')"
 case "$open_result" in
   *'"opened"'*) ;;
   *) echo "Noema open request failed: $open_result" >&2; exit 1 ;;
@@ -224,7 +224,7 @@ if [ "${ready:-nil}" != "t" ]; then
 fi
 
 if [ "$TYPING_MODE" = source ]; then
-  client '(with-current-buffer my/noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) "window.dispatchEvent(new CustomEvent(\"aaronnote:command\",{detail:{command:\"toggle-source\"}}))"))' >/dev/null
+  client '(with-current-buffer my/noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) "window.dispatchEvent(new CustomEvent(\"noema:command\",{detail:{command:\"toggle-source\"}}))"))' >/dev/null
   sleep 1
 fi
 

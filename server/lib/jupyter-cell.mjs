@@ -240,7 +240,7 @@ async function readOutputMirror(file, fallbackFile = "", files) {
       return {};
     }
     if (err instanceof SyntaxError) {
-      process.stderr.write(`[aaronnote-jupyter] invalid notebook: ${file}\n`);
+      process.stderr.write(`[noema-jupyter] invalid notebook: ${file}\n`);
     }
     throw err;
   }
@@ -359,28 +359,28 @@ export function createJupyterCellService({
   // the source/Emacs tree.
   const dataDir = join(jupyterStateRoot, "data");
   const runtimeDir = join(jupyterStateRoot, "runtime");
-  const kernelIdleTtlMs = durationFromEnv("AARONNOTE_JUPYTER_KERNEL_IDLE_TTL_MS", 10 * 60 * 1000);
-  const cleanupIntervalMs = durationFromEnv("AARONNOTE_JUPYTER_CLEANUP_INTERVAL_MS", 30 * 1000);
-  const execTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_EXEC_TIMEOUT_MS", 0);
-  const interruptGraceMs = durationFromEnv("AARONNOTE_JUPYTER_INTERRUPT_GRACE_MS", 5000);
-  const shutdownGraceMs = durationFromEnv("AARONNOTE_JUPYTER_SHUTDOWN_GRACE_MS", 2000);
+  const kernelIdleTtlMs = durationFromEnv("NOEMA_JUPYTER_KERNEL_IDLE_TTL_MS", 10 * 60 * 1000);
+  const cleanupIntervalMs = durationFromEnv("NOEMA_JUPYTER_CLEANUP_INTERVAL_MS", 30 * 1000);
+  const execTimeoutMs = durationFromEnv("NOEMA_JUPYTER_EXEC_TIMEOUT_MS", 0);
+  const interruptGraceMs = durationFromEnv("NOEMA_JUPYTER_INTERRUPT_GRACE_MS", 5000);
+  const shutdownGraceMs = durationFromEnv("NOEMA_JUPYTER_SHUTDOWN_GRACE_MS", 2000);
   // Remote kernels may need to establish an SSH hop or wait in a scheduler
   // queue before they can answer kernel_info. Fifteen seconds made a healthy
   // remote_ikernel look dead during ordinary connection setup.
-  const kernelLaunchTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_KERNEL_LAUNCH_TIMEOUT_MS", 60_000);
-  const introspectTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_INTROSPECT_TIMEOUT_MS", 3000);
-  const liveFlushMs = durationFromEnv("AARONNOTE_JUPYTER_LIVE_FLUSH_MS", 80);
+  const kernelLaunchTimeoutMs = durationFromEnv("NOEMA_JUPYTER_KERNEL_LAUNCH_TIMEOUT_MS", 60_000);
+  const introspectTimeoutMs = durationFromEnv("NOEMA_JUPYTER_INTROSPECT_TIMEOUT_MS", 3000);
+  const liveFlushMs = durationFromEnv("NOEMA_JUPYTER_LIVE_FLUSH_MS", 80);
   // Jupyter itself waits for stdin indefinitely. We put a ceiling on it
   // because a prompt nobody answers also blocks every other cell sharing the
   // kernel; 0 restores the upstream behaviour.
-  const stdinTimeoutMs = durationFromEnv("AARONNOTE_JUPYTER_STDIN_TIMEOUT_MS", 5 * 60 * 1000);
-  const kernelspecCacheTtlMs = durationFromEnv("AARONNOTE_JUPYTER_KERNELSPEC_CACHE_TTL_MS", 15 * 1000);
-  const useHomeKernels = process.env.AARONNOTE_JUPYTER_USE_HOME_KERNELS !== "0";
-  const allowedKernelsRaw = String(process.env.AARONNOTE_JUPYTER_ALLOWED_KERNELS || "").trim();
+  const stdinTimeoutMs = durationFromEnv("NOEMA_JUPYTER_STDIN_TIMEOUT_MS", 5 * 60 * 1000);
+  const kernelspecCacheTtlMs = durationFromEnv("NOEMA_JUPYTER_KERNELSPEC_CACHE_TTL_MS", 15 * 1000);
+  const useHomeKernels = process.env.NOEMA_JUPYTER_USE_HOME_KERNELS !== "0";
+  const allowedKernelsRaw = String(process.env.NOEMA_JUPYTER_ALLOWED_KERNELS || "").trim();
   const allowedNames = allowedKernelsRaw ? allowedKernelsRaw.split(",").map((v) => v.trim()).filter(Boolean) : undefined;
   const attachDirs = [
     runtimeDir,
-    ...(process.env.AARONNOTE_JUPYTER_ATTACH_DIRS ? process.env.AARONNOTE_JUPYTER_ATTACH_DIRS.split(delimiter).filter(Boolean) : []),
+    ...(process.env.NOEMA_JUPYTER_ATTACH_DIRS ? process.env.NOEMA_JUPYTER_ATTACH_DIRS.split(delimiter).filter(Boolean) : []),
   ];
   function researchDocumentRequest(body = {}) {
     return [body?.scriptFile, body?.sourceFile, body?.file]
@@ -461,7 +461,7 @@ export function createJupyterCellService({
   // notebook keeps its last portable kernelspec.
   const documentSessions = new Map();
   const notebookDebuggers = new Map();
-  const documentSessionLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_DOCUMENT_SESSIONS", 512);
+  const documentSessionLimit = durationFromEnv("NOEMA_JUPYTER_MAX_DOCUMENT_SESSIONS", 512);
 
   /**
    * Record a document's live session, keeping the map bounded.
@@ -510,7 +510,7 @@ export function createJupyterCellService({
         // kernel sidecar are the first Jupyter writes, so the registry cannot
         // assume its runtime directory was created by an earlier bootstrap.
         await nativeMkdir(runtimeDir, { recursive: true });
-        const sidecarPath = join(runtimeDir, "aaronnote-owned.json");
+        const sidecarPath = join(runtimeDir, "noema-owned.json");
         await sweepOrphanKernels({ sidecarPath, stderr }).catch(() => {});
         const zmq = injectedZmq || (await import("zeromq"));
         const registry = createKernelRegistry({
@@ -552,10 +552,10 @@ export function createJupyterCellService({
           // names while preserving the broker/generated-spec ordering.
           preferFallbackKernelDirs: Boolean(stateRoot),
           templateVariables: {
-            AARONNOTE_JUPYTER_ROOT: jupyterRoot,
-            AARONNOTE_JUPYTER_STATE_ROOT: jupyterStateRoot,
+            NOEMA_JUPYTER_ROOT: jupyterRoot,
+            NOEMA_JUPYTER_STATE_ROOT: jupyterStateRoot,
             NOEMA_USER_HOME: homedir(),
-            SAGE_VERSION: String(process.env.AARONNOTE_SAGE_VERSION || "current"),
+            SAGE_VERSION: String(process.env.NOEMA_SAGE_VERSION || "current"),
           },
         });
     kernelspecCache.set(key, { value, expiresAt: Date.now() + kernelspecCacheTtlMs });
@@ -605,7 +605,7 @@ export function createJupyterCellService({
     cleanupTimer = setTimeout(() => {
       cleanupTimer = null;
       void cleanupIdle({ scheduled: true }).catch((err) => {
-        stderr.write(`[aaronnote-jupyter] cleanup failed: ${err?.message || err}\n`);
+        stderr.write(`[noema-jupyter] cleanup failed: ${err?.message || err}\n`);
       });
     }, Math.max(1000, cleanupIntervalMs));
     cleanupTimer.unref?.();
@@ -791,8 +791,8 @@ export function createJupyterCellService({
   // "library global" from "user global" by inspection alone).
   async function captureVariableBaseline(record, kernel) {
     if (record.variableBaseline || !isPythonFamilyKernel(kernel)) return;
-    const marker = `AARONNOTE_BASELINE_${randomUUID().replace(/-/g, "")}`;
-    const code = `import json as _aaronnote_json\nprint('${marker}' + _aaronnote_json.dumps(list(globals().keys())))`;
+    const marker = `NOEMA_BASELINE_${randomUUID().replace(/-/g, "")}`;
+    const code = `import json as _noema_json\nprint('${marker}' + _noema_json.dumps(list(globals().keys())))`;
     try {
       const result = await executeOnKernel(record.kernel, code, { storeHistory: false });
       const text = (result.outputs || [])
@@ -804,7 +804,7 @@ export function createJupyterCellService({
       record.variableBaseline = new Set(Array.isArray(names) ? names : []);
     } catch {
       // Best-effort: if the snapshot fails, variables() just falls back to
-      // its existing `_aaronnote_`/`__`-prefix filtering.
+      // its existing `_noema_`/`__`-prefix filtering.
       record.variableBaseline = new Set();
     }
   }
@@ -975,7 +975,7 @@ export function createJupyterCellService({
     try {
       configured = await serverHost.listServers();
     } catch (err) {
-      stderr.write(`[aaronnote-jupyter] failed to list Jupyter servers: ${err?.message || err}\n`);
+      stderr.write(`[noema-jupyter] failed to list Jupyter servers: ${err?.message || err}\n`);
       return [];
     }
     // A successful list is authoritative. Release cached providers (and their
@@ -1190,10 +1190,10 @@ export function createJupyterCellService({
     const live = createLiveOutputStream(kernelInfo, cellId, runId);
     live.start();
     try {
-      const streamLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_STREAM_BYTES", 1024 * 1024);
-      const outputLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_OUTPUTS", 4096);
-      const widgetMessageLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_WIDGET_MESSAGES", 512);
-      const widgetMessageBytesLimit = durationFromEnv("AARONNOTE_JUPYTER_MAX_WIDGET_MESSAGE_BYTES", 8 * 1024 * 1024);
+      const streamLimit = durationFromEnv("NOEMA_JUPYTER_MAX_STREAM_BYTES", 1024 * 1024);
+      const outputLimit = durationFromEnv("NOEMA_JUPYTER_MAX_OUTPUTS", 4096);
+      const widgetMessageLimit = durationFromEnv("NOEMA_JUPYTER_MAX_WIDGET_MESSAGES", 512);
+      const widgetMessageBytesLimit = durationFromEnv("NOEMA_JUPYTER_MAX_WIDGET_MESSAGE_BYTES", 8 * 1024 * 1024);
       let result;
       try {
         result = await executeOnKernel(record.kernel, code, {
@@ -1866,43 +1866,43 @@ export function createJupyterCellService({
     // still excludes the startup namespace instead of embedding an empty set.
     const kernelInfo = await ensureKernel({ ...(body || {}), kernel });
     const baselineJson = JSON.stringify(Array.from(kernelInfo.record.variableBaseline || [])).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-    const marker = `AARONNOTE_VARIABLES_${randomUUID().replace(/-/g, "")}`;
+    const marker = `NOEMA_VARIABLES_${randomUUID().replace(/-/g, "")}`;
     const code = [
-      "import json as _aaronnote_json",
-      "import re as _aaronnote_re",
-      `_aaronnote_baseline = set(_aaronnote_json.loads('${baselineJson}'))`,
+      "import json as _noema_json",
+      "import re as _noema_re",
+      `_noema_baseline = set(_noema_json.loads('${baselineJson}'))`,
       // IPython's own execution bookkeeping (In/Out history, "_"/"_i" result
       // aliases) only appears *after* code has run, so it survives the
       // startup-namespace baseline exclusion above — filter it separately,
       // the same set real Jupyter/VS Code variable explorers hide.
-      "_aaronnote_ipython_re = _aaronnote_re.compile(r'^_i{1,3}$|^_i\\d+$|^_\\d+$|^(In|Out|get_ipython|exit|quit)$')",
-      "def _aaronnote_repr(value):",
+      "_noema_ipython_re = _noema_re.compile(r'^_i{1,3}$|^_i\\d+$|^_\\d+$|^(In|Out|get_ipython|exit|quit)$')",
+      "def _noema_repr(value):",
       "    try:",
       "        text = repr(value)",
       "    except Exception:",
       "        text = '<unrepresentable>'",
       "    return text if len(text) <= 160 else text[:157] + '...'",
-      "def _aaronnote_shape(value):",
+      "def _noema_shape(value):",
       "    shape = getattr(value, 'shape', None)",
       "    try:",
       "        return list(shape) if shape is not None else None",
       "    except Exception:",
       "        return None",
-      "_aaronnote_vars = []",
-      "for _aaronnote_name, _aaronnote_value in sorted(globals().items()):",
-      "    if _aaronnote_name.startswith('_aaronnote_') or _aaronnote_name.startswith('__'):",
+      "_noema_vars = []",
+      "for _noema_name, _noema_value in sorted(globals().items()):",
+      "    if _noema_name.startswith('_noema_') or _noema_name.startswith('__'):",
       "        continue",
-      "    if _aaronnote_name in _aaronnote_baseline:",
+      "    if _noema_name in _noema_baseline:",
       "        continue",
-      "    if _aaronnote_ipython_re.match(_aaronnote_name):",
+      "    if _noema_ipython_re.match(_noema_name):",
       "        continue",
       "    try:",
-      "        _aaronnote_vars.append({'name': _aaronnote_name, 'type': type(_aaronnote_value).__name__, 'summary': _aaronnote_repr(_aaronnote_value), 'shape': _aaronnote_shape(_aaronnote_value)})",
+      "        _noema_vars.append({'name': _noema_name, 'type': type(_noema_value).__name__, 'summary': _noema_repr(_noema_value), 'shape': _noema_shape(_noema_value)})",
       "    except Exception:",
       "        pass",
-      `print('${marker}' + _aaronnote_json.dumps(_aaronnote_vars, default=str))`,
+      `print('${marker}' + _noema_json.dumps(_noema_vars, default=str))`,
     ].join("\n");
-    const result = await execute({ ...(body || {}), kernel, code, cellId: "__aaronnote_variables__", storeHistory: false });
+    const result = await execute({ ...(body || {}), kernel, code, cellId: "__noema_variables__", storeHistory: false });
     const text = (result.outputs || [])
       .filter((item) => item.output_type === "stream")
       .map((item) => String(item.text || ""))

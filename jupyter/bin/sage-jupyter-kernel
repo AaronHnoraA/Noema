@@ -3,8 +3,8 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JUPYTER_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-JUPYTER_STATE_ROOT="${AARONNOTE_JUPYTER_STATE_ROOT:-${JUPYTER_ROOT}/.jupyter}"
-RUNTIME_ENV="${AARONNOTE_SAGE_RUNTIME_ENV:-${AARONNOTE_RUNTIME_ENV:-}}"
+JUPYTER_STATE_ROOT="${NOEMA_JUPYTER_STATE_ROOT:-${JUPYTER_ROOT}/.jupyter}"
+RUNTIME_ENV="${NOEMA_SAGE_RUNTIME_ENV:-${NOEMA_RUNTIME_ENV:-}}"
 
 if [[ -n "$RUNTIME_ENV" && -r "$RUNTIME_ENV" ]]; then
   # Optional host-provided metadata; the Node host never discovers this through
@@ -42,7 +42,7 @@ export TMPDIR="$JUPYTER_TMP_DIR"
 # treats any non-empty PYTHONNOUSERSITE value (including "0") as disabled.
 unset PYTHONNOUSERSITE
 
-SAGE_BIN="${AARONNOTE_SAGE:-}"
+SAGE_BIN="${NOEMA_SAGE:-}"
 if [ -z "$SAGE_BIN" ] || [ ! -x "$SAGE_BIN" ]; then
   SAGE_BIN="$(command -v sage 2>/dev/null || true)"
   if [ -z "$SAGE_BIN" ]; then

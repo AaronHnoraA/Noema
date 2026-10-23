@@ -18,7 +18,7 @@ describe("Emacs host API", () => {
       apiChooseNotePath: () => undefined,
     });
     const body = { file: "/notes/b.md", client: "pane-a", newWindow: true, hash: "result" };
-    handlers["aaronnote:api:emacs:open"](body);
+    handlers["noema:api:emacs:open"](body);
     expect(calls).toEqual([[body.file, undefined, undefined, undefined, body]]);
   });
 
@@ -38,7 +38,7 @@ describe("Emacs host API", () => {
       apiChooseNotePath: () => undefined,
     });
     const body = { client: "pane-a", file: "/notes/a.md", lineStart: 3, lineEnd: 7 };
-    await expect(handlers["aaronnote:api:emacs:selection"](body)).resolves.toEqual({ ok: true });
+    await expect(handlers["noema:api:emacs:selection"](body)).resolves.toEqual({ ok: true });
     expect(received).toEqual([body]);
   });
 
@@ -58,7 +58,7 @@ describe("Emacs host API", () => {
       apiChooseNotePath: () => undefined,
     });
     const body = { runId: "run_1", sessionId: "ses_1", root: "/project" };
-    await expect(handlers["aaronnote:api:emacs:research-session"](body)).resolves.toEqual({ ok: true });
+    await expect(handlers["noema:api:emacs:research-session"](body)).resolves.toEqual({ ok: true });
     expect(received).toEqual([body]);
   });
 
@@ -81,7 +81,7 @@ describe("Emacs host API", () => {
     });
     const body = { kind: "directory", root: "/notes" };
 
-    await expect(handlers["aaronnote:api:emacs:choose-note-path"](body)).resolves.toEqual({
+    await expect(handlers["noema:api:emacs:choose-note-path"](body)).resolves.toEqual({
       ok: true,
       path: "/notes/project",
       relativePath: "project",
@@ -106,9 +106,9 @@ describe("Emacs host API", () => {
       apiEmacsZotero: () => undefined,
       apiChooseNotePath: () => undefined,
     });
-    const body = { client: "aaronnote:/notes/a.md", file: "/notes/a.md" };
+    const body = { client: "noema:/notes/a.md", file: "/notes/a.md" };
 
-    await expect(handlers["aaronnote:api:emacs:input-focus"](body)).resolves.toEqual({ ok: true });
+    await expect(handlers["noema:api:emacs:input-focus"](body)).resolves.toEqual({ ok: true });
     expect(received).toEqual([body]);
   });
 
@@ -131,7 +131,7 @@ describe("Emacs host API", () => {
     });
     const body = { scriptFile: "/work/research.noema", cellId: "cell-analysis" };
 
-    await expect(handlers["aaronnote:api:emacs:jupyter-cell"](body)).resolves.toEqual({ ok: true });
+    await expect(handlers["noema:api:emacs:jupyter-cell"](body)).resolves.toEqual({ ok: true });
     expect(received).toEqual([body]);
   });
 
@@ -153,7 +153,7 @@ describe("Emacs host API", () => {
       apiChooseNotePath: () => undefined,
     });
 
-    await expect(handlers["aaronnote:api:emacs:surface"]({ path: "/config", client: "pane-a" })).resolves.toEqual({
+    await expect(handlers["noema:api:emacs:surface"]({ path: "/config", client: "pane-a" })).resolves.toEqual({
       ok: true,
       path: "/config",
     });

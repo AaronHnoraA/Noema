@@ -20,7 +20,7 @@ describe("Core task manager", () => {
         ...task, agentSessionAvailable: task.id === started.id,
       },
     });
-    const listed = handlers["aaronnote:api:tasks:list"]({});
+    const listed = handlers["noema:api:tasks:list"]({});
     expect(listed.tasks[0].agentSessionAvailable).toBe(true);
     expect(manager.get(started.id)).not.toHaveProperty("agentSessionAvailable");
     finish();

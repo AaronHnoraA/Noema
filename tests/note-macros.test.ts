@@ -18,8 +18,8 @@ import {
   normalizeUserKatexMacros,
   saveUserKatexMacros,
 } from "../server/lib/user-katex-macros.mjs";
-import { createNoteMacroRuntime } from "../aaronnote/note-macros-runtime.ts";
-import { macroInsertTemplate, macroPaletteItems, validateMacroDraft } from "../aaronnote/live-tex-macro-panel.ts";
+import { createNoteMacroRuntime } from "../pages/note-macros-runtime.ts";
+import { macroInsertTemplate, macroPaletteItems, validateMacroDraft } from "../pages/live-tex-macro-panel.ts";
 
 const NOTE = [
   "#+begin meta",

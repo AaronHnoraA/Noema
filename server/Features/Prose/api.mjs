@@ -11,14 +11,14 @@ export function createProseApiHandlers({
   broadcast,
 }) {
   return {
-    "aaronnote:api:prose-check:run": (body) => runExternalProseChecks(body || {}),
-    "aaronnote:api:prose-check:accept-word": (word) => acceptProseWord(word),
-    "aaronnote:api:prose-check:disable-rule": (body) => setProseRuleDisabled(
+    "noema:api:prose-check:run": (body) => runExternalProseChecks(body || {}),
+    "noema:api:prose-check:accept-word": (word) => acceptProseWord(word),
+    "noema:api:prose-check:disable-rule": (body) => setProseRuleDisabled(
       body?.rule ?? body,
       body?.disabled !== false,
     ),
-    "aaronnote:api:prose-check:cancel": (requestId) => cancelExternalProseCheck(requestId),
-    "aaronnote:api:prose-check:settings": async () => {
+    "noema:api:prose-check:cancel": (requestId) => cancelExternalProseCheck(requestId),
+    "noema:api:prose-check:settings": async () => {
       const settings = await getLanguageToolSettings();
       return {
         ok: true,
@@ -27,7 +27,7 @@ export function createProseApiHandlers({
         defaults: languageToolSettingsDefaults(),
       };
     },
-    "aaronnote:api:prose-check:update-settings": async (body) => {
+    "noema:api:prose-check:update-settings": async (body) => {
       const update = body && typeof body === "object" ? { ...body } : {};
       const expectedRevision = String(update.revision || "");
       delete update.revision;
@@ -36,6 +36,6 @@ export function createProseApiHandlers({
       broadcast("command", { command: "languagetool-settings-changed", settings, settingsRevision: revision });
       return { ok: true, settings, revision, defaults: languageToolSettingsDefaults() };
     },
-    "aaronnote:api:prose-check:probe": (body) => probeLanguageTool(body || {}),
+    "noema:api:prose-check:probe": (body) => probeLanguageTool(body || {}),
   };
 }

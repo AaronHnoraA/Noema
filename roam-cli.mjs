@@ -39,31 +39,31 @@ async function main() {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const args = process.argv.slice(2);
   const action = args[0] || "index";
-  const root = resolve(argValue(args, "--root", process.env.AARONNOTE_ROOT || process.cwd()));
+  const root = resolve(argValue(args, "--root", process.env.NOEMA_ROOT || process.cwd()));
   const workspaceRoot = resolve(argValue(
     args,
     "--workspace",
-    process.env.AARONNOTE_WORKSPACE_ROOT || resolve(scriptDir, "..", "..", ".."),
+    process.env.NOEMA_WORKSPACE_ROOT || resolve(scriptDir, "..", "..", ".."),
   ));
   const runtimeRoot = resolve(argValue(
     args,
     "--runtime",
-    process.env.AARONNOTE_RUNTIME_ROOT || scriptDir,
+    process.env.NOEMA_RUNTIME_ROOT || scriptDir,
   ));
   const stateRoot = resolve(argValue(
     args,
     "--state",
-    process.env.AARONNOTE_STATE_DIR || resolve(workspaceRoot, "var", "aaronnote"),
+    process.env.NOEMA_STATE_DIR || resolve(workspaceRoot, "var", "noema"),
   ));
   const tmpRoot = resolve(argValue(
     args,
     "--tmp",
-    process.env.AARONNOTE_TMP_DIR || resolve(stateRoot, "tmp"),
+    process.env.NOEMA_TMP_DIR || resolve(stateRoot, "tmp"),
   ));
   const templatesRoot = resolve(argValue(
     args,
     "--templates",
-    process.env.AARONNOTE_TEMPLATES_ROOT || resolve(workspaceRoot, "templates", "noema"),
+    process.env.NOEMA_TEMPLATES_ROOT || resolve(workspaceRoot, "templates", "noema"),
   ));
   const runtimeUrl = pathToFileURL(resolve(runtimeRoot, "server/lib/index.mjs")).href;
   const runtime = await import(runtimeUrl);

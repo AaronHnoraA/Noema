@@ -66,7 +66,7 @@ test("a viewport rewrite classifies no editor elements, and still adopts real su
   expect(visited).toBe(0);
 
   const panel = document.createElement("aside");
-  panel.className = "aaronnote-jupyter-panel";
+  panel.className = "noema-jupyter-panel";
   root.append(panel);
   const button = document.createElement("button");
   button.textContent = "Refresh";

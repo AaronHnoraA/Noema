@@ -29,10 +29,10 @@ The rules live in `docs/architecture/rendered-constructs.md`. Read it first; thi
 ## Never
 
 - `sel.empty && sel.from ...` or any hand-written selection-versus-range test in a rendering module.
-- Reading `dataset.vimMode` (use `renderedConstructsPinned(state)`), or setting it outside `publishMode` in `aaronnote/vim-lite.ts`.
+- Reading `dataset.vimMode` (use `renderedConstructsPinned(state)`), or setting it outside `publishMode` in `pages/vim-lite.ts`.
 - Teaching Vim about a widget through decoration flags or a Markdown rescan — register a `ConstructSource`.
 - A family-specific Backspace/Delete rule for an object (the old image-only `selectImageBeforeDelete`): give the construct the `object` role instead.
-- Spelling `data-aaronnote-vim` anywhere but `src/cm6/embedded-surface.ts`.
+- Spelling `data-noema-vim` anywhere but `src/cm6/embedded-surface.ts`.
 
 ## Viewport
 

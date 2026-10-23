@@ -287,30 +287,30 @@ import * as zmq from "zeromq";
 const execFileAsync = promisify(execFile);
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const requestedHostMode = String(process.env.AARONNOTE_HOST_MODE || "emacs").trim().toLowerCase();
+const requestedHostMode = String(process.env.NOEMA_HOST_MODE || "emacs").trim().toLowerCase();
 const hostMode = requestedHostMode === "server" ? "server" : "emacs";
 const serverConfig = hostMode === "server"
   ? await readServerRuntimeConfig(process.env.NOEMA_SERVER_CONFIG)
   : null;
-const webDir = resolve(process.env.AARONNOTE_WEB_DIR || join(scriptDir, "dist", "aaronnote"));
-const runtimeRoot = resolve(process.env.AARONNOTE_RUNTIME_ROOT || scriptDir);
+const webDir = resolve(process.env.NOEMA_WEB_DIR || join(scriptDir, "dist", "pages"));
+const runtimeRoot = resolve(process.env.NOEMA_RUNTIME_ROOT || scriptDir);
 const workspaceRoot = serverConfig?.noteRoot
-  || resolve(process.env.NOEMA_WORKSPACE_ROOT || process.env.AARONNOTE_WORKSPACE_ROOT || resolve(scriptDir, "..", "..", ".."));
+  || resolve(process.env.NOEMA_WORKSPACE_ROOT || resolve(scriptDir, "..", "..", ".."));
 const noteRoot = serverConfig?.noteRoot
-  || resolve(process.env.NOEMA_ROOT || process.env.AARONNOTE_ROOT || join(workspaceRoot, ".roam"));
+  || resolve(process.env.NOEMA_ROOT || join(workspaceRoot, ".roam"));
 const workspaceLayout = serverConfig ? "wiki" : wikiLayout(process.env.NOEMA_WORKSPACE_LAYOUT);
-const publishJsDir = resolve(process.env.AARONNOTE_PUBLISH_JS_DIR || join(runtimeRoot, "js"));
+const publishJsDir = resolve(process.env.NOEMA_PUBLISH_JS_DIR || join(runtimeRoot, "js"));
 const stateRoot = serverConfig
   ? resolve(serverConfig.stateRoot, "runtime")
-  : resolve(process.env.AARONNOTE_STATE_DIR
+  : resolve(process.env.NOEMA_STATE_DIR
     || join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "noema"));
-const tmpRoot = resolve(process.env.AARONNOTE_TMP_DIR || join(stateRoot, "tmp"));
+const tmpRoot = resolve(process.env.NOEMA_TMP_DIR || join(stateRoot, "tmp"));
 const drawioCacheDir = resolve(process.env.NOEMA_DRAWIO_CACHE_DIR || join(stateRoot, "drawio-svg"));
-const snippetsRoot = resolve(process.env.AARONNOTE_SNIPPETS_ROOT || (serverConfig ? join(runtimeRoot, "resources", "snippets") : join(workspaceRoot, "snippets")));
-const templatesRoot = resolve(process.env.AARONNOTE_TEMPLATES_ROOT || (serverConfig ? join(runtimeRoot, "resources", "templates", "noema") : join(workspaceRoot, "templates", "noema")));
-const katexMacrosDir = resolve(process.env.AARONNOTE_KATEX_MACROS_DIR || (serverConfig ? join(runtimeRoot, "resources", "katex-macros") : join(workspaceRoot, "etc", "katex-macros")));
-const bindHost = serverConfig?.listen.host || process.env.AARONNOTE_WEB_HOST || "127.0.0.1";
-const bindPort = serverConfig?.listen.port || Number(process.env.AARONNOTE_WEB_PORT || 0);
+const snippetsRoot = resolve(process.env.NOEMA_SNIPPETS_ROOT || (serverConfig ? join(runtimeRoot, "resources", "snippets") : join(workspaceRoot, "snippets")));
+const templatesRoot = resolve(process.env.NOEMA_TEMPLATES_ROOT || (serverConfig ? join(runtimeRoot, "resources", "templates", "noema") : join(workspaceRoot, "templates", "noema")));
+const katexMacrosDir = resolve(process.env.NOEMA_KATEX_MACROS_DIR || (serverConfig ? join(runtimeRoot, "resources", "katex-macros") : join(workspaceRoot, "etc", "katex-macros")));
+const bindHost = serverConfig?.listen.host || process.env.NOEMA_WEB_HOST || "127.0.0.1";
+const bindPort = serverConfig?.listen.port || Number(process.env.NOEMA_WEB_PORT || 0);
 let noemaKernel = Object.freeze({
   state: "unavailable",
   baseUrl: "",
@@ -319,12 +319,12 @@ let noemaKernel = Object.freeze({
   reason: "not started",
 });
 let kernelSupervisor = null;
-const gatewayUrl = String(process.env.AARONNOTE_EMACS_GATEWAY_URL || "").trim();
-const gatewayBinding = String(process.env.AARONNOTE_EMACS_GATEWAY_BINDING || "").trim();
-const gatewayClientId = String(process.env.AARONNOTE_EMACS_GATEWAY_CLIENT_ID || "aaronnote").trim();
+const gatewayUrl = String(process.env.NOEMA_EMACS_GATEWAY_URL || "").trim();
+const gatewayBinding = String(process.env.NOEMA_EMACS_GATEWAY_BINDING || "").trim();
+const gatewayClientId = String(process.env.NOEMA_EMACS_GATEWAY_CLIENT_ID || "noema").trim();
 const jupyterDefaults = jupyterDefaultsFromEnv(process.env);
 const liuGongQuanFontCandidates = [
-  process.env.AARONNOTE_LIUGONGQUAN_FONT,
+  process.env.NOEMA_LIUGONGQUAN_FONT,
   join(homedir(), "Library", "Fonts", "方正柳公权楷书 简繁.TTF"),
   join(homedir(), "Library", "Fonts", "FZLiuGongQuanKaiShuJF.ttf"),
 ].filter(Boolean);
@@ -515,7 +515,7 @@ const researchRuntime = createResearchRuntimeService({
   getRuntimeDescriptor: () => noemaKernel,
   defaultRoot: noteRoot,
   resolveKnowledgeNote: resolveResearchKnowledgeNote,
-  deliverWorkerCommand: (payload) => gatewayNotify("aaronnote.event", { type: "research-worker", payload }),
+  deliverWorkerCommand: (payload) => gatewayNotify("noema.event", { type: "research-worker", payload }),
 });
 const researchCaptures = createResearchCaptureService({
   getProvider: () => kernelResearchProvider,
@@ -578,7 +578,7 @@ kernelSupervisor = createKernelSupervisor({
 });
 applyKernelState(kernelSupervisor.status());
 void kernelSupervisor.start().catch((error) => {
-  process.stderr.write(`[aaronnote-web] kernel supervisor failed: ${error?.stack || error}\n`);
+  process.stderr.write(`[noema-web] kernel supervisor failed: ${error?.stack || error}\n`);
 });
 
 async function productionWikiIndexPayload(options = {}) {
@@ -662,20 +662,20 @@ const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellSer
   publish: (event, payload) => {
     broadcast(event, payload);
     if (event === "jupyter-session" || event === "jupyter-debug-ended") {
-      gatewayNotify("aaronnote.event", { type: event, payload });
+      gatewayNotify("noema.event", { type: event, payload });
     }
   },
   fileHost: hostMode === "emacs" ? {
     async readFile(file) {
       const result = await gatewayRequest(
-        "aaronnote.jupyter.file.read", { sourceFile: file, file }, 30_000,
+        "noema.jupyter.file.read", { sourceFile: file, file }, 30_000,
       );
       if (!result?.exists) throw Object.assign(new Error(`No such file: ${file}`), { code: "ENOENT" });
       return String(result.content ?? "");
     },
     async writeFile(file, data) {
       return await gatewayRequest(
-        "aaronnote.jupyter.file.write",
+        "noema.jupyter.file.write",
         { sourceFile: file, file, content: String(data ?? "") },
         30_000,
       );
@@ -683,17 +683,17 @@ const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellSer
     async mkdir() {},
     async rename(from, to) {
       return await gatewayRequest(
-        "aaronnote.jupyter.file.rename", { sourceFile: to, from, file: to }, 30_000,
+        "noema.jupyter.file.rename", { sourceFile: to, from, file: to }, 30_000,
       );
     },
     async rm(file) {
       return await gatewayRequest(
-        "aaronnote.jupyter.file.delete", { sourceFile: file, file }, 30_000,
+        "noema.jupyter.file.delete", { sourceFile: file, file }, 30_000,
       );
     },
     async stat(file) {
       const result = await gatewayRequest(
-        "aaronnote.jupyter.file.stat", { sourceFile: file, file }, 30_000,
+        "noema.jupyter.file.stat", { sourceFile: file, file }, 30_000,
       );
       if (!result?.exists) throw Object.assign(new Error(`No such file: ${file}`), { code: "ENOENT" });
       return result;
@@ -705,40 +705,40 @@ const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellSer
   kernelHost: hostMode === "emacs" ? {
     async listKernelSpecs(file) {
       const result = await gatewayRequest(
-        "aaronnote.jupyter.kernels", { file }, 30_000,
+        "noema.jupyter.kernels", { file }, 30_000,
       );
       return Array.isArray(result?.specs) ? result.specs : [];
     },
     async listConnections(file) {
       const result = await gatewayRequest(
-        "aaronnote.jupyter.kernels", { file, includeConnections: true }, 30_000,
+        "noema.jupyter.kernels", { file, includeConnections: true }, 30_000,
       );
       return Array.isArray(result?.connections) ? result.connections : [];
     },
     async attach(body) {
-      return await gatewayRequest("aaronnote.jupyter.attach", body, 60_000);
+      return await gatewayRequest("noema.jupyter.attach", body, 60_000);
     },
     async attachmentStatus(attachmentId) {
       return await gatewayRequest(
-        "aaronnote.jupyter.attachment.status", { attachmentId }, 30_000,
+        "noema.jupyter.attachment.status", { attachmentId }, 30_000,
       );
     },
     async releaseAttachment(attachmentId) {
       return await gatewayRequest(
-        "aaronnote.jupyter.attachment.release", { attachmentId }, 30_000,
+        "noema.jupyter.attachment.release", { attachmentId }, 30_000,
       );
     },
     async launch(body) {
-      return await gatewayRequest("aaronnote.jupyter.launch", body, 60_000);
+      return await gatewayRequest("noema.jupyter.launch", body, 60_000);
     },
     async status(runtimeId) {
       return await gatewayRequest(
-        "aaronnote.jupyter.status", { runtimeId }, 30_000,
+        "noema.jupyter.status", { runtimeId }, 30_000,
       );
     },
     async interrupt(runtimeId) {
       return await gatewayRequest(
-        "aaronnote.jupyter.interrupt", { runtimeId }, 30_000,
+        "noema.jupyter.interrupt", { runtimeId }, 30_000,
       );
     },
     async restart(runtimeId) {
@@ -746,17 +746,17 @@ const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellSer
       // its own forward group; the registry rebinds to it rather than
       // shutting down and launching separately.
       return await gatewayRequest(
-        "aaronnote.jupyter.restart", { runtimeId }, 60_000,
+        "noema.jupyter.restart", { runtimeId }, 60_000,
       );
     },
     async shutdown(runtimeId) {
       return await gatewayRequest(
-        "aaronnote.jupyter.shutdown", { runtimeId }, 30_000,
+        "noema.jupyter.shutdown", { runtimeId }, 30_000,
       );
     },
     async readNbextension(runtimeId, relativePath) {
       return await gatewayRequest(
-        "aaronnote.jupyter.read-nbextension",
+        "noema.jupyter.read-nbextension",
         { runtimeId, relativePath },
         30_000,
       );
@@ -767,16 +767,16 @@ const projectedJupyterCell = hostMode === "server" ? null : createJupyterCellSer
   // server sessions and kernel registry.
   serverHost: {
     async listServers() {
-      const result = await gatewayRequest("aaronnote.jupyter.server.list", {}, 30_000);
+      const result = await gatewayRequest("noema.jupyter.server.list", {}, 30_000);
       return Array.isArray(result?.servers) ? result.servers : [];
     },
     async resolveServer(serverId) {
       // Generous timeout: this may spawn a JupyterHub server or open an SSH
       // forward to the owning target.
-      return await gatewayRequest("aaronnote.jupyter.server.resolve", { serverId }, 180_000);
+      return await gatewayRequest("noema.jupyter.server.resolve", { serverId }, 180_000);
     },
     async releaseServer(serverId) {
-      return await gatewayRequest("aaronnote.jupyter.server.release", { serverId }, 30_000);
+      return await gatewayRequest("noema.jupyter.server.release", { serverId }, 30_000);
     },
   },
 });
@@ -879,7 +879,7 @@ function gatewayRequest(method, params = {}, timeoutMs = 30_000) {
   if (gatewaySocket?.readyState !== WebSocket.OPEN) {
     return Promise.reject(new Error("Emacs gateway is not connected"));
   }
-  const id = `aaronnote-${++gatewayRequestId}`;
+  const id = `noema-${++gatewayRequestId}`;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       gatewayPending.delete(id);
@@ -893,7 +893,7 @@ function gatewayRequest(method, params = {}, timeoutMs = 30_000) {
 async function emacsLatexAgentStatus() {
   const status = await latexExportAgentStatus();
   if (hostMode !== "emacs") return status;
-  const configured = await gatewayRequest("aaronnote.latex.agent-status", {}, 10_000);
+  const configured = await gatewayRequest("noema.latex.agent-status", {}, 10_000);
   const available = new Map((configured.agents || []).map((agent) => [agent.id, agent.available === true]));
   return {
     ...status,
@@ -911,7 +911,7 @@ async function runEmacsLatexAgent({ backend, workdir, prompt, contextItems, mode
   const dnsError = await claudeExportDnsError({ backend });
   if (dnsError) return { ok: false, message: dnsError };
   const requestId = `latex-${process.pid}-${++latexAgentRequestNumber}`;
-  const cancel = () => gatewayNotify("aaronnote.latex.agent-cancel", { requestId, workdir });
+  const cancel = () => gatewayNotify("noema.latex.agent-cancel", { requestId, workdir });
   if (signal?.aborted) return { ok: false, message: "aborted" };
   const startedAt = Date.now();
   let lastAcpProgressAt = startedAt;
@@ -937,7 +937,7 @@ async function runEmacsLatexAgent({ backend, workdir, prompt, contextItems, mode
   if (taskId) latexAgentTaskRequests.set(taskId, requestId);
   signal?.addEventListener("abort", cancel, { once: true });
   try {
-    const result = await gatewayRequest("aaronnote.latex.agent-run", {
+    const result = await gatewayRequest("noema.latex.agent-run", {
       requestId, backend, workdir, prompt, contextItems, model,
     }, hardTimeoutMs + 15_000);
     return { ok: result?.ok === true, summary: String(result?.summary || ""), message: String(result?.message || "") };
@@ -951,7 +951,7 @@ async function runEmacsLatexAgent({ backend, workdir, prompt, contextItems, mode
     signal?.removeEventListener("abort", cancel);
     // A completed export must not leave its private ACP session in Emacs.
     // The Emacs handler is idempotent, including after normal prompt finish.
-    await gatewayRequest("aaronnote.latex.agent-cancel", { requestId, workdir }, 5_000).catch(() => {});
+    await gatewayRequest("noema.latex.agent-cancel", { requestId, workdir }, 5_000).catch(() => {});
   }
 }
 
@@ -962,14 +962,14 @@ configureExternalFileProvider({
   },
   read(file) {
     return gatewayRequest(
-      "aaronnote.file.read",
+      "noema.file.read",
       { file: String(file) },
       30_000,
     );
   },
   write(body) {
     return gatewayRequest(
-      "aaronnote.file.write",
+      "noema.file.write",
       body && typeof body === "object" ? body : {},
       30_000,
     );
@@ -982,14 +982,14 @@ configureCopilotBridgeRequest(hostMode === "emacs"
 
 // One-shot orphan sweep: remove staging/clipboard/db temp files older than 24h.
 void sweepRuntimeTmp().then(({ removed }) => {
-  if (removed > 0) process.stderr.write(`[aaronnote-web] swept ${removed} orphaned tmp file(s)\n`);
+  if (removed > 0) process.stderr.write(`[noema-web] swept ${removed} orphaned tmp file(s)\n`);
 }).catch(() => {});
 
 // One-shot orphan sweep: kernels left by a dead ephemeral harness (e.g. a
 // diagnostics run that used its own throwaway runtimeDir), invisible to the
 // per-runtimeDir sidecar sweep inside createJupyterCellService.
 void sweepGlobalOrphanKernels({ stderr: process.stderr }).then(({ reaped }) => {
-  if (reaped > 0) process.stderr.write(`[aaronnote-web] swept ${reaped} orphaned kernel process(es)\n`);
+  if (reaped > 0) process.stderr.write(`[noema-web] swept ${reaped} orphaned kernel process(es)\n`);
 }).catch(() => {});
 
 // Vault file watcher: marks the note index dirty on external changes (Emacs
@@ -997,7 +997,7 @@ void sweepGlobalOrphanKernels({ stderr: process.stderr }).then(({ reaped }) => {
 // SSE event so connected pages can refresh their notes array without polling.
 // Self-writes (the server's own atomic saves/renames) are suppressed only while
 // the file still matches the saved identity, even inside the 2-second window.
-// Set AARONNOTE_WATCH=0 to disable (useful in test environments).
+// Set NOEMA_WATCH=0 to disable (useful in test environments).
 
 // Invalidate now, rebuild when someone reads.
 //
@@ -1078,7 +1078,7 @@ function applyRoamTagMutationResult(result) {
     // A bulk edit is one user action even if it rewrites many notes.  Tell
     // Emacs once to drop its Roam projections instead of sending one event
     // per file or making the next tag lookup read stale cached records.
-    gatewayNotify("aaronnote.event", {
+    gatewayNotify("noema.event", {
       type: "notes-mutated",
       payload: { count: applied.changedCount },
     });
@@ -1091,7 +1091,7 @@ function publishTrashedNote(result) {
   if ((result?.type === "deleted" || result?.type === "fs-trashed")
       && result?.ok !== false && /\.(?:md|markdown)$/i.test(file)) {
     broadcast("command", { command: "note-trashed", file });
-    gatewayNotify("aaronnote.event", {
+    gatewayNotify("noema.event", {
       type: "note-trashed",
       payload: { file },
     });
@@ -1111,7 +1111,7 @@ function publishMissingOpenNotes(changedFiles = null) {
     if (missingOpenNotified.has(file)) continue;
     missingOpenNotified.add(file);
     broadcast("command", { command: "note-file-removed", file, reason: "missing" });
-    gatewayNotify("aaronnote.event", {
+    gatewayNotify("noema.event", {
       type: "note-file-removed",
       payload: { file, reason: "missing" },
     });
@@ -1130,16 +1130,16 @@ function withWikiMutationHooks(handlers, { full = [], only = null } = {}) {
             await handler(...args),
             { full: fullChannels.has(channel) },
           );
-          if ((channel === "aaronnote:api:fs:move" || channel === "aaronnote:api:fs:rename")
+          if ((channel === "noema:api:fs:move" || channel === "noema:api:fs:rename")
               && (result?.type === "fs-moved" || result?.type === "fs-renamed")
               && /\.(?:md|markdown)$/i.test(String(result.oldFile || ""))) {
             broadcast("command", { command: "note-file-moved", oldFile: result.oldFile, file: result.file });
-            gatewayNotify("aaronnote.event", {
+            gatewayNotify("noema.event", {
               type: "note-moved",
               payload: { oldFile: result.oldFile, file: result.file },
             });
           }
-          if (channel === "aaronnote:api:fs:trash") publishTrashedNote(result);
+          if (channel === "noema:api:fs:trash") publishTrashedNote(result);
           return result;
         },
   ]));
@@ -1348,7 +1348,7 @@ const researchNotebookWatch = createResearchNotebookWatchReconciler({
 const agendaSources = createAgendaSourceTransport({
   request: gatewayRequest,
   excludePatterns: JSON.parse(process.env.NOEMA_AGENDA_EXCLUDE || "[]"),
-  nativeWatch: process.env.AARONNOTE_WATCH === "0" ? null : startNoteWatcher,
+  nativeWatch: process.env.NOEMA_WATCH === "0" ? null : startNoteWatcher,
 });
 const agendaWriters = createAgendaSourceWriter({ transport: agendaSources, native: {
   async mutate(todo, patch) {
@@ -1379,7 +1379,7 @@ const agendaWriters = createAgendaSourceWriter({ transport: agendaSources, nativ
 let agendaAttention = null;
 async function agendaSourceProtected(file) {
   if (!gatewayUrl) return false;
-  const state = await gatewayRequest("aaronnote.agenda.protected-sources", {files:[file]});
+  const state = await gatewayRequest("noema.agenda.protected-sources", {files:[file]});
   return (state?.files || []).includes(file);
 }
 const agendaIndex = createAgendaService({
@@ -1409,22 +1409,22 @@ const agendaIndex = createAgendaService({
     ? applyWikiMutationResult(result, { agenda: false }) : result,
   onChange(payload) {
     agendaAttention?.signal({files:payload.files?.length?payload.files:undefined,fetchApple:false});
-    gatewayNotify("aaronnote.event", { type: "agenda-changed", payload });
+    gatewayNotify("noema.event", { type: "agenda-changed", payload });
     broadcast("command", { command: "agenda-changed", ...payload });
   },
 });
 agendaAttention = createAgendaAttention({
   store: createAgendaAttentionStore(join(stateRoot,"agenda-attention.sqlite")),
   sources: createAgendaAttentionSources({index:agendaIndex,isProtected:agendaSourceProtected}),
-  apple: (body) => gatewayRequest("aaronnote.agenda.apple",body),
+  apple: (body) => gatewayRequest("noema.agenda.apple",body),
   onChange(payload) {
-    gatewayNotify("aaronnote.event",{type:"agenda-attention-changed",payload});
+    gatewayNotify("noema.event",{type:"agenda-attention-changed",payload});
     broadcast("command",{command:"agenda-attention-changed",...payload});
   },
 });
 
 const editorClients = new Map();
-const noteWatcher = hostMode !== "server" && process.env.AARONNOTE_WATCH !== "0"
+const noteWatcher = hostMode !== "server" && process.env.NOEMA_WATCH !== "0"
   ? startNoteWatcher({
       root: noteRoot,
       isRelevant: (file) =>
@@ -1508,8 +1508,8 @@ scheduleWikiMaintenance();
 
 if (!existsSync(webDir)) {
   process.stderr.write(
-    `[aaronnote-web] FATAL: web app directory not found: ${webDir}\n` +
-    `[aaronnote-web] Run "npm run build" in ${runtimeRoot} to build first.\n`
+    `[noema-web] FATAL: web app directory not found: ${webDir}\n` +
+    `[noema-web] Run "npm run build" in ${runtimeRoot} to build first.\n`
   );
   process.exit(1);
 }
@@ -1603,7 +1603,7 @@ function reportServerError(kind, detail, { fatal = true } = {}) {
     // process is unsound. Tearing the server down here would take every
     // running kernel with it (process.on("exit") SIGKILLs the owned process
     // groups), losing in-kernel state over an unrelated failure.
-    process.stderr.write(`[aaronnote-web] ${kind}: ${text}\n`);
+    process.stderr.write(`[noema-web] ${kind}: ${text}\n`);
     if (!rejectionReported) {
       rejectionReported = true;
       try {
@@ -1623,7 +1623,7 @@ function reportServerError(kind, detail, { fatal = true } = {}) {
   }
   if (fatalReported) return;
   fatalReported = true;
-  process.stderr.write(`[aaronnote-web] ${kind}: ${text}\n`);
+  process.stderr.write(`[noema-web] ${kind}: ${text}\n`);
   try {
     broadcast("command", {
       command: "server-error",
@@ -1663,10 +1663,10 @@ function closeHttpServer() {
 async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3000 } = {}) {
   if (shutdownPromise) return shutdownPromise;
   shuttingDown = true;
-  process.stderr.write(`[aaronnote-web] shutting down: ${reason}\n`);
+  process.stderr.write(`[noema-web] shutting down: ${reason}\n`);
   shutdownPromise = (async () => {
     const deadline = setTimeout(() => {
-      process.stderr.write(`[aaronnote-web] shutdown deadline reached: ${reason}\n`);
+      process.stderr.write(`[noema-web] shutdown deadline reached: ${reason}\n`);
       process.exit(exitCode);
     }, deadlineMs);
     deadline.unref();
@@ -1837,17 +1837,17 @@ function errorPayload(err) {
 }
 
 function assetProxyPath(raw) {
-  return `/aaronnote-asset?url=${encodeURIComponent(String(raw || ""))}`;
+  return `/noema-asset?url=${encodeURIComponent(String(raw || ""))}`;
 }
 
 function transformJavaScript(text) {
-  if (!text.includes("aaronnote-asset://")) return text;
+  if (!text.includes("noema-asset://")) return text;
   return text
-    .replaceAll("aaronnote-asset://roam-tools", assetProxyPath("aaronnote-asset://roam-tools"))
-    .replaceAll("aaronnote-asset://kinds/", assetProxyPath("aaronnote-asset://kinds/"))
+    .replaceAll("noema-asset://roam-tools", assetProxyPath("noema-asset://roam-tools"))
+    .replaceAll("noema-asset://kinds/", assetProxyPath("noema-asset://kinds/"))
     .replaceAll(
-      "aaronnote-asset://font/FZLiuGongQuanKaiShuJF.ttf",
-      assetProxyPath("aaronnote-asset://font/FZLiuGongQuanKaiShuJF.ttf"),
+      "noema-asset://font/FZLiuGongQuanKaiShuJF.ttf",
+      assetProxyPath("noema-asset://font/FZLiuGongQuanKaiShuJF.ttf"),
     );
 }
 
@@ -2054,7 +2054,7 @@ async function apiOpenInEmacs(file, line = 1, col = 0, tag = "", options = {}) {
       if (value) payload[key] = value.slice(0, 1024);
     }
   }
-  gatewayNotify("aaronnote.event", { type: "open", payload });
+  gatewayNotify("noema.event", { type: "open", payload });
   return { ok: true, ...payload };
 }
 
@@ -2078,7 +2078,7 @@ async function apiOpenSurface(body) {
   }
   const path = `${url.pathname}${url.search}`;
   const client = typeof body?.client === "string" ? body.client : "";
-  const queued = gatewayNotify("aaronnote.event", {
+  const queued = gatewayNotify("noema.event", {
     type: "surface",
     payload: client ? { path, client } : { path },
   });
@@ -2095,7 +2095,7 @@ async function apiSelectJupyterCell(body) {
     throw new Error("Selecting a Jupyter cell requires scriptFile and cellId");
   }
   const payload = { scriptFile, cellId };
-  if (!gatewayNotify("aaronnote.event", { type: "jupyter-cell-select", payload })) {
+  if (!gatewayNotify("noema.event", { type: "jupyter-cell-select", payload })) {
     throw new Error("Emacs gateway is not connected");
   }
   return { ok: true, ...payload };
@@ -2111,7 +2111,7 @@ async function apiOpenResearchSession(body) {
     throw new Error("Opening an agent buffer requires a Run, Session, or session name");
   }
   const payload = { runId, sessionId, name, root };
-  gatewayNotify("aaronnote.event", { type: "research-agent-buffer", payload });
+  gatewayNotify("noema.event", { type: "research-agent-buffer", payload });
   return { ok: true, ...payload };
 }
 
@@ -2122,7 +2122,7 @@ async function apiCurrentFile(body) {
   const payload = { file: target };
   if (client) payload.client = client;
   if (client) noteEditorClient(target, client, { source: "current-file" });
-  gatewayNotify("aaronnote.event", { type: "current-file", payload });
+  gatewayNotify("noema.event", { type: "current-file", payload });
   return { ok: true, ...payload };
 }
 
@@ -2139,13 +2139,13 @@ async function apiEmacsInputFocus(body) {
   };
   if (!payload.client) return { ok: false, message: "input-focus needs a client" };
   noteEditorClient(payload.file, payload.client, { source: "input-focus" });
-  gatewayNotify("aaronnote.event", { type: "input-focus", payload });
+  gatewayNotify("noema.event", { type: "input-focus", payload });
   return { ok: true, ...payload };
 }
 
 async function apiEmacsUiState(body) {
   const payload = body && typeof body === "object" ? body : {};
-  gatewayNotify("aaronnote.event", { type: "ui-state", payload });
+  gatewayNotify("noema.event", { type: "ui-state", payload });
   return { ok: true };
 }
 
@@ -2162,7 +2162,7 @@ async function apiEmacsKey(body) {
   // A key WebKit received after Emacs took the keyboard: run it where Emacs
   // is, without moving back to the page's pane.
   if (body && typeof body === "object" && body.hostOwned === true) payload.hostOwned = true;
-  gatewayNotify("aaronnote.event", { type: "key", payload });
+  gatewayNotify("noema.event", { type: "key", payload });
   return { ok: true };
 }
 
@@ -2174,7 +2174,7 @@ async function apiEmacsSelection(body) {
   // The page answers an Emacs request even when it has no range to give, so
   // the waiting command can say why instead of staying silent.
   if (client && failure) {
-    gatewayNotify("aaronnote.event", {
+    gatewayNotify("noema.event", {
       type: "selection-to-agent",
       payload: { client, file, requestId, error: failure, action: String(body?.action || "agent") },
     });
@@ -2205,7 +2205,7 @@ async function apiEmacsSelection(body) {
       && fromLine >= 1 && toLine >= fromLine && fromColumn >= 0 && toColumn >= 0) {
     Object.assign(payload, { fromLine, fromColumn, toLine, toColumn });
   }
-  gatewayNotify("aaronnote.event", { type: "selection-to-agent", payload });
+  gatewayNotify("noema.event", { type: "selection-to-agent", payload });
   return { ok: true };
 }
 
@@ -2218,7 +2218,7 @@ async function apiSystemOpen(body) {
     throw err;
   }
   const resolved = resolveSystemOpenTarget(value, base);
-  gatewayNotify("aaronnote.event", {
+  gatewayNotify("noema.event", {
     type: "system-open",
     payload: { target: resolved },
   });
@@ -2232,7 +2232,7 @@ async function apiEmacsZotero(body, eventName = "zotero") {
     const value = String(source[key] || "").trim();
     if (value) payload[key] = value.slice(0, key === "title" || key === "query" ? 2000 : 8192);
   }
-  gatewayNotify("aaronnote.event", { type: eventName, payload });
+  gatewayNotify("noema.event", { type: eventName, payload });
   return { ok: true, queued: true };
 }
 
@@ -2240,7 +2240,7 @@ async function apiChooseNotePath(body = {}) {
   if (hostMode !== "emacs") {
     return { ok: false, canceled: true, path: "", relativePath: "", message: "Emacs path chooser is unavailable" };
   }
-  const result = await gatewayRequest("aaronnote.note.choose-path", {
+  const result = await gatewayRequest("noema.note.choose-path", {
     root: String(body.root || noteRoot),
     defaultPath: String(body.defaultPath || body.root || noteRoot),
     title: String(body.title || "Choose note path"),
@@ -2284,8 +2284,8 @@ async function serverOpenedPayload(file, includeIndex = false) {
 }
 
 const apiRouter = new ApiRouter().register({
-  "aaronnote:api:wiki:bootstrap": () => hostMode === "server" ? currentServerCatalog().index : productionWikiIndexPayload(),
-  "aaronnote:api:wiki:environment": () => ({
+  "noema:api:wiki:bootstrap": () => hostMode === "server" ? currentServerCatalog().index : productionWikiIndexPayload(),
+  "noema:api:wiki:environment": () => ({
     ok: true,
     active: workspaceEnvironment.active,
     authorized: workspaceEnvironment.authorized,
@@ -2293,51 +2293,51 @@ const apiRouter = new ApiRouter().register({
     variables: hostMode === "server" ? [] : workspaceEnvironment.variables,
     message: workspaceEnvironment.message,
   }),
-  "aaronnote:api:wiki:refresh": (body) => hostMode === "server"
+  "noema:api:wiki:refresh": (body) => hostMode === "server"
     ? currentServerCatalog().index
     : productionWikiIndexPayload({ mode: body?.mode || "auto", refresh: true }),
-  "aaronnote:api:wiki:index-status": () => hostMode === "server"
+  "noema:api:wiki:index-status": () => hostMode === "server"
     ? { ok: true, mode: "server", generation: currentServerCatalog().index.generation, inFlight: false, queued: 0 }
     : wikiIndexStatusPayload(),
-  "aaronnote:api:wiki:search": async (body) => hostMode === "server"
+  "noema:api:wiki:search": async (body) => hostMode === "server"
     ? currentServerCatalog().search(body || {})
     : knowledgeSearchPayload(body || {}),
-  "aaronnote:api:knowledge:search": async (body) => hostMode === "server"
+  "noema:api:knowledge:search": async (body) => hostMode === "server"
     ? currentServerCatalog().search(body || {})
     : knowledgeSearchPayload(body || {}),
-  "aaronnote:api:knowledge:virtual-references": (body) => knowledgeVirtualReferencesPayload(body || {}),
-  "aaronnote:api:wiki:resolve-link": async (body) => hostMode === "server"
+  "noema:api:knowledge:virtual-references": (body) => knowledgeVirtualReferencesPayload(body || {}),
+  "noema:api:wiki:resolve-link": async (body) => hostMode === "server"
     ? currentServerCatalog().resolveLink(body?.target ?? body, body?.sourceFile || "")
     : resolveWikiLink(await wikiIndexPayload(), body?.target ?? body, { sourceFile: body?.sourceFile || "" }),
-  "aaronnote:api:wiki:init-workspace": async () => applyWikiMutationResult(
+  "noema:api:wiki:init-workspace": async () => applyWikiMutationResult(
     await initWikiWorkspace(noteRoot), { full: true, markGit: false },
   ),
-  "aaronnote:api:wiki:init-repository": async (body) => applyWikiMutationResult(
+  "noema:api:wiki:init-repository": async (body) => applyWikiMutationResult(
     await initWikiRepository(noteRoot, body?.partition, body?.name), { full: true },
   ),
-  "aaronnote:api:wiki:clone-repository": async (body) => applyWikiMutationResult(
+  "noema:api:wiki:clone-repository": async (body) => applyWikiMutationResult(
     await cloneWikiRepository(noteRoot, body || {}), { full: true },
   ),
-  "aaronnote:api:wiki:adopt-repository": async (body) => applyWikiMutationResult(
+  "noema:api:wiki:adopt-repository": async (body) => applyWikiMutationResult(
     await adoptWikiRepository(noteRoot, body?.repositoryId), { full: true },
   ),
-  "aaronnote:api:wiki:repository-status": (body) => wikiRepositoryStatus(noteRoot, body?.repositoryId ?? body),
-  "aaronnote:api:wiki:repository-diff": (body) => wikiRepositoryDiff(noteRoot, body || {}),
-  "aaronnote:api:wiki:branches": (body) => wikiRepositoryBranches(noteRoot, body || {}),
-  "aaronnote:api:wiki:branch-action": async (body) => {
+  "noema:api:wiki:repository-status": (body) => wikiRepositoryStatus(noteRoot, body?.repositoryId ?? body),
+  "noema:api:wiki:repository-diff": (body) => wikiRepositoryDiff(noteRoot, body || {}),
+  "noema:api:wiki:branches": (body) => wikiRepositoryBranches(noteRoot, body || {}),
+  "noema:api:wiki:branch-action": async (body) => {
     const result = await runWikiBranchAction(noteRoot, body || {});
     // A branch change moves the working tree, so the index projection and the
     // dirty-repository bookkeeping both have to follow it.
     return applyWikiMutationResult(result, { full: true });
   },
-  "aaronnote:api:wiki:remotes": (body) => wikiRepositoryRemotes(noteRoot, body || {}),
-  "aaronnote:api:wiki:remote-action": (body) => runWikiRemoteAction(noteRoot, body || {}),
-  "aaronnote:api:wiki:git": async (body) => {
+  "noema:api:wiki:remotes": (body) => wikiRepositoryRemotes(noteRoot, body || {}),
+  "noema:api:wiki:remote-action": (body) => runWikiRemoteAction(noteRoot, body || {}),
+  "noema:api:wiki:git": async (body) => {
     const repositoryId = String(body?.repositoryId || "");
     const result = await runWikiGitAction(noteRoot, body?.action, body || {});
     return body?.action === "pull" ? applyWikiSyncResult(repositoryId, result) : result;
   },
-  "aaronnote:api:wiki:create-page": async (body) => {
+  "noema:api:wiki:create-page": async (body) => {
     const selected = await wikiCreatePage(body || {});
     const result = selected.existing ? selected : applyWikiMutationResult(selected);
     if (body?.sourceFile && body?.sourceRaw && Number.isSafeInteger(Number(body?.sourceFrom))) {
@@ -2352,56 +2352,56 @@ const apiRouter = new ApiRouter().register({
     }
     return result;
   },
-  "aaronnote:api:wiki:move-page": async (body) => applyWikiMutationResult(await moveWikiPage(noteRoot, body || {})),
-  "aaronnote:api:wiki:delete-page": async (body) => applyWikiMutationResult(await deleteWikiPage(noteRoot, body || {})),
-  "aaronnote:api:wiki:trash-pages": () => listTrashedWikiPages(noteRoot),
-  "aaronnote:api:wiki:restore-trash-page": async (body) => applyWikiMutationResult(await restoreTrashedWikiPage(noteRoot, body || {})),
-  "aaronnote:api:wiki:copy-page": async (body) => applyWikiMutationResult(await copyWikiPage(noteRoot, body || {})),
-  "aaronnote:api:wiki:merge-pages": async (body) => applyWikiMutationResult(await mergeWikiPages(noteRoot, body || {})),
-  "aaronnote:api:wiki:tags": async () => ({
+  "noema:api:wiki:move-page": async (body) => applyWikiMutationResult(await moveWikiPage(noteRoot, body || {})),
+  "noema:api:wiki:delete-page": async (body) => applyWikiMutationResult(await deleteWikiPage(noteRoot, body || {})),
+  "noema:api:wiki:trash-pages": () => listTrashedWikiPages(noteRoot),
+  "noema:api:wiki:restore-trash-page": async (body) => applyWikiMutationResult(await restoreTrashedWikiPage(noteRoot, body || {})),
+  "noema:api:wiki:copy-page": async (body) => applyWikiMutationResult(await copyWikiPage(noteRoot, body || {})),
+  "noema:api:wiki:merge-pages": async (body) => applyWikiMutationResult(await mergeWikiPages(noteRoot, body || {})),
+  "noema:api:wiki:tags": async () => ({
     ok: true,
     type: "wiki-tags",
     tags: wikiTagIndex(hostMode === "server" ? currentServerCatalog().index : await wikiIndexPayload()),
   }),
-  "aaronnote:api:wiki:update-tag": async (body) => applyWikiMutationResult(await updateWikiTag(noteRoot, body || {})),
-  "aaronnote:api:wiki:update-namespace": async (body) => applyWikiMutationResult(await updateWikiNamespace(noteRoot, body || {})),
-  "aaronnote:api:wiki:export": (body) => exportWiki(noteRoot, body || {}),
-  "aaronnote:api:wiki:page-history": (body) => wikiPageHistory(noteRoot, body || {}),
-  "aaronnote:api:wiki:page-diff": (body) => wikiPageDiff(noteRoot, body || {}),
-  "aaronnote:api:wiki:restore-page": async (body) => {
+  "noema:api:wiki:update-tag": async (body) => applyWikiMutationResult(await updateWikiTag(noteRoot, body || {})),
+  "noema:api:wiki:update-namespace": async (body) => applyWikiMutationResult(await updateWikiNamespace(noteRoot, body || {})),
+  "noema:api:wiki:export": (body) => exportWiki(noteRoot, body || {}),
+  "noema:api:wiki:page-history": (body) => wikiPageHistory(noteRoot, body || {}),
+  "noema:api:wiki:page-diff": (body) => wikiPageDiff(noteRoot, body || {}),
+  "noema:api:wiki:restore-page": async (body) => {
     const result = await restoreWikiPageVersion(noteRoot, body || {});
     return applyWikiMutationResult(result);
   },
-  "aaronnote:api:wiki:sync-status": async (body) => ({
+  "noema:api:wiki:sync-status": async (body) => ({
     ...await readWikiSyncState(noteRoot, body?.repositoryId || ""),
     automatic: wikiAutoSyncEnabled,
     automaticIntervalMinutes: wikiSyncPolicy.intervalMinutes,
     automaticForcedOff: wikiAutoSyncForcedOff,
   }),
-  "aaronnote:api:wiki:checkpoint": (body) => checkpointWikiRepositoryFromApi(body || {}),
-  "aaronnote:api:wiki:sync": (body) => syncWikiRepositoryFromApi(body || {}),
-  "aaronnote:api:wiki:conflict": (body) => readWikiConflict(noteRoot, body || {}),
-  "aaronnote:api:wiki:resolve-conflict": async (body) => {
+  "noema:api:wiki:checkpoint": (body) => checkpointWikiRepositoryFromApi(body || {}),
+  "noema:api:wiki:sync": (body) => syncWikiRepositoryFromApi(body || {}),
+  "noema:api:wiki:conflict": (body) => readWikiConflict(noteRoot, body || {}),
+  "noema:api:wiki:resolve-conflict": async (body) => {
     const repositoryId = String(body?.repositoryId || "");
     const result = await resolveWikiConflict(noteRoot, body || {});
     reconcileWikiAutoSyncSchedule(repositoryId, result);
     return applyWikiSyncResult(repositoryId, result);
   },
-  "aaronnote:api:wiki:abort-conflict": async (body) => {
+  "noema:api:wiki:abort-conflict": async (body) => {
     const repositoryId = String(body?.repositoryId || "");
     const result = await abortWikiConflict(noteRoot, repositoryId);
     reconcileWikiAutoSyncSchedule(repositoryId, result);
     broadcast("command", { command: "wiki-sync-state-changed", repositoryId, ...result });
     return result;
   },
-  "aaronnote:api:wiki:git-ui": (body) => openWikiGitUi(noteRoot, body?.repositoryId),
-  "aaronnote:api:notes:bootstrap": (file) => hostMode === "server" ? serverOpenedPayload(file, true) : bootstrapNotePayload(file),
-  "aaronnote:api:notes:open": (file) => hostMode === "server" ? serverOpenedPayload(file, false) : readNote(file),
-  "aaronnote:api:notes:list": (force) => hostMode === "server" ? currentServerCatalog().index : notesListPayload(force === true),
-  "aaronnote:api:notes:save": async (body) => {
+  "noema:api:wiki:git-ui": (body) => openWikiGitUi(noteRoot, body?.repositoryId),
+  "noema:api:notes:bootstrap": (file) => hostMode === "server" ? serverOpenedPayload(file, true) : bootstrapNotePayload(file),
+  "noema:api:notes:open": (file) => hostMode === "server" ? serverOpenedPayload(file, false) : readNote(file),
+  "noema:api:notes:list": (force) => hostMode === "server" ? currentServerCatalog().index : notesListPayload(force === true),
+  "noema:api:notes:save": async (body) => {
     const result = await saveNote(body || {});
     if (result?.ok && !result?.conflict && !result?.stale && result?.file) {
-      gatewayNotify("aaronnote.event", {
+      gatewayNotify("noema.event", {
         type: "saved",
         payload: { file: String(result.file) },
       });
@@ -2417,28 +2417,28 @@ const apiRouter = new ApiRouter().register({
     }
     return result;
   },
-  "aaronnote:api:notes:create-node": async (draft) => applyWikiMutationResult(await createNode(draft || {})),
-  "aaronnote:api:notes:delete": async (file) => publishTrashedNote(
+  "noema:api:notes:create-node": async (draft) => applyWikiMutationResult(await createNode(draft || {})),
+  "noema:api:notes:delete": async (file) => publishTrashedNote(
     applyWikiMutationResult(await deleteNote({ file })),
   ),
-  "aaronnote:api:notes:delete-node": async (file) => publishTrashedNote(
+  "noema:api:notes:delete-node": async (file) => publishTrashedNote(
     applyWikiMutationResult(await deleteNote({ file })),
   ),
-  "aaronnote:api:notes:create-folder": async (path) => applyWikiMutationResult(
+  "noema:api:notes:create-folder": async (path) => applyWikiMutationResult(
     await createFolder({ path }), { full: true },
   ),
-  "aaronnote:api:notes:path-suggestions": async (body) => {
+  "noema:api:notes:path-suggestions": async (body) => {
     const file = typeof body === "string" ? body : body?.file;
     const prefix = typeof body === "string" ? "./" : body?.prefix;
     return { type: "path-suggestions", paths: await pathSuggestionsForFile(file || "", prefix || "./") };
   },
-  "aaronnote:api:completions:tags": async (body) => {
+  "noema:api:completions:tags": async (body) => {
     const prefix = String(body?.prefix || "").toLowerCase();
     const { names, lowerNames } = await getCachedCompletionTags();
     const filtered = prefix ? names.filter((_, index) => lowerNames[index].includes(prefix)) : names;
     return { type: "completion-tags", tags: filtered.slice(0, 50) };
   },
-  "aaronnote:api:completions:roam": async (body) => {
+  "noema:api:completions:roam": async (body) => {
     const prefix = String(body?.prefix || "").toLowerCase();
     const roamNotes = await getCachedCompletionRoamNotes();
     const matches = prefix ? roamNotes.filter((note) => note.search.includes(prefix)) : roamNotes;
@@ -2452,24 +2452,24 @@ const apiRouter = new ApiRouter().register({
       })),
     };
   },
-  "aaronnote:api:completions:todo-refs": async (body) => {
+  "noema:api:completions:todo-refs": async (body) => {
     return await todoRefCompletions(body || {});
   },
-  "aaronnote:api:completions:bibliography": async (body) => {
+  "noema:api:completions:bibliography": async (body) => {
     return await bibliographyCompletions(body || {});
   },
-  "aaronnote:api:bibliography:document": async (body) => {
+  "noema:api:bibliography:document": async (body) => {
     return await bibliographyForDocument(body || {});
   },
-  "aaronnote:api:notes:todos": async (body) => {
+  "noema:api:notes:todos": async (body) => {
     return await getTodos(typeof body === "string" ? body : body || {});
   },
-  "aaronnote:api:notes:update-todo": async (body) => {
+  "noema:api:notes:update-todo": async (body) => {
     const result = await updateTodoStatus(body || {});
     broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
     return result.changed === false ? result : applyWikiMutationResult(result);
   },
-  "aaronnote:api:notes:agenda": async (body) => hostMode === "server"
+  "noema:api:notes:agenda": async (body) => hostMode === "server"
     ? buildAgenda(body || {}) : webAgendaProjection(await agendaIndex.query({
         ...(body || {}),
         // The Web surface must name its source scopes.  A direct/legacy page
@@ -2477,57 +2477,57 @@ const apiRouter = new ApiRouter().register({
         // project left active by other clients.
         scopes: Array.isArray(body?.scopes) && body.scopes.length ? body.scopes : ["knowledge"],
       })),
-  "aaronnote:api:agenda:visit": async (body) => {
+  "noema:api:agenda:visit": async (body) => {
     const todo = await agendaIndex.lookup(body || {}, false);
-    gatewayNotify("aaronnote.event", { type: "agenda-visit", payload: todo });
+    gatewayNotify("noema.event", { type: "agenda-visit", payload: todo });
     return { ok: true };
   },
-  "aaronnote:api:agenda:query": (body) => agendaIndex.query(body || {}),
-  "aaronnote:api:agenda:query-active": (body) => agendaIndex.queryActive(body || {}),
-  "aaronnote:api:agenda:document": (body) => inspectAgendaDocument(body || {}),
-  "aaronnote:api:agenda:attention": () => agendaAttention.list(),
-  "aaronnote:api:agenda:attention-collections": (body) => agendaAttention.collections(body?.kind),
-  "aaronnote:api:agenda:attention-promote": (body) => agendaAttention.promote(body || {}),
-  "aaronnote:api:agenda:attention-sync": (body) => agendaAttention.sync({...body,retrySource:true}),
-  "aaronnote:api:agenda:attention-remove": (body) => agendaAttention.remove(body || {}),
-  "aaronnote:api:agenda:attention-resolve": (body) => agendaAttention.resolve(body || {}),
-  "aaronnote:api:agenda:attention-visit": (body) => {
+  "noema:api:agenda:query": (body) => agendaIndex.query(body || {}),
+  "noema:api:agenda:query-active": (body) => agendaIndex.queryActive(body || {}),
+  "noema:api:agenda:document": (body) => inspectAgendaDocument(body || {}),
+  "noema:api:agenda:attention": () => agendaAttention.list(),
+  "noema:api:agenda:attention-collections": (body) => agendaAttention.collections(body?.kind),
+  "noema:api:agenda:attention-promote": (body) => agendaAttention.promote(body || {}),
+  "noema:api:agenda:attention-sync": (body) => agendaAttention.sync({...body,retrySource:true}),
+  "noema:api:agenda:attention-remove": (body) => agendaAttention.remove(body || {}),
+  "noema:api:agenda:attention-resolve": (body) => agendaAttention.resolve(body || {}),
+  "noema:api:agenda:attention-visit": (body) => {
     const item=agendaAttention.list().items.find(item=>item.id===body?.id);
     if(!item)throw new Error("Attention binding is no longer active");
-    gatewayNotify("aaronnote.event",{type:"agenda-attention-visit",payload:item.ref});
+    gatewayNotify("noema.event",{type:"agenda-attention-visit",payload:item.ref});
     return {ok:true};
   },
-  "aaronnote:api:agenda:enter": (body) => agendaIndex.enter(body || {}),
-  "aaronnote:api:agenda:leave": (body) => agendaIndex.leave(body || {}),
-  "aaronnote:api:agenda:patch": (body) => agendaIndex.patch(body || {}),
-  "aaronnote:api:agenda:batch": (body) => agendaIndex.batch(body || {}),
-  "aaronnote:api:agenda:capture-templates": () => agendaIndex.captureTemplates(),
-  "aaronnote:api:agenda:capture": (body) => agendaIndex.capture(body || {}),
-  "aaronnote:api:agenda:dependency": (body) => agendaIndex.dependency(body || {}),
-  "aaronnote:api:agenda:clock-in": (body) => agendaIndex.clockIn(body || {}),
-  "aaronnote:api:agenda:clock-out": (body) => agendaIndex.clockOut(body || {}),
-  "aaronnote:api:agenda:clock-retry": (body) => agendaIndex.retryClocks(body || {}),
-  "aaronnote:api:agenda:clock-keep-source": (body) => agendaIndex.keepClockSource(body || {}),
-  "aaronnote:api:agenda:invalidate": (body) => {
+  "noema:api:agenda:enter": (body) => agendaIndex.enter(body || {}),
+  "noema:api:agenda:leave": (body) => agendaIndex.leave(body || {}),
+  "noema:api:agenda:patch": (body) => agendaIndex.patch(body || {}),
+  "noema:api:agenda:batch": (body) => agendaIndex.batch(body || {}),
+  "noema:api:agenda:capture-templates": () => agendaIndex.captureTemplates(),
+  "noema:api:agenda:capture": (body) => agendaIndex.capture(body || {}),
+  "noema:api:agenda:dependency": (body) => agendaIndex.dependency(body || {}),
+  "noema:api:agenda:clock-in": (body) => agendaIndex.clockIn(body || {}),
+  "noema:api:agenda:clock-out": (body) => agendaIndex.clockOut(body || {}),
+  "noema:api:agenda:clock-retry": (body) => agendaIndex.retryClocks(body || {}),
+  "noema:api:agenda:clock-keep-source": (body) => agendaIndex.keepClockSource(body || {}),
+  "noema:api:agenda:invalidate": (body) => {
     agendaIndex.invalidate(Array.isArray(body?.files) ? body.files : null);
     return { ok: true };
   },
-  "aaronnote:api:agenda:status": () => agendaIndex.status(),
-  "aaronnote:api:notes:resolve-block": (body) => resolveBlockReference(body || {}),
-  "aaronnote:api:notes:embed-query": (body) => buildEmbedQuery(body || {}),
-  "aaronnote:api:notes:attribute-view": (body) => buildAttributeView(body || {}),
-  "aaronnote:api:notes:attribute-view-cell-patch": async (body) => {
+  "noema:api:agenda:status": () => agendaIndex.status(),
+  "noema:api:notes:resolve-block": (body) => resolveBlockReference(body || {}),
+  "noema:api:notes:embed-query": (body) => buildEmbedQuery(body || {}),
+  "noema:api:notes:attribute-view": (body) => buildAttributeView(body || {}),
+  "noema:api:notes:attribute-view-cell-patch": async (body) => {
     const result = await patchAttributeViewCell(body || {});
     broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
     return result.changed === false ? result : applyWikiMutationResult(result);
   },
-  "aaronnote:api:notes:create-todo": async (body) => {
+  "noema:api:notes:create-todo": async (body) => {
     if (body?.scopeId) return agendaIndex.capture(body);
     const result = await createTodo(body || {});
     broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
     return applyWikiMutationResult(result);
   },
-  "aaronnote:api:notes:patch-todo": async (body) => {
+  "noema:api:notes:patch-todo": async (body) => {
     if (body?.uid) {
       const { file, id, index, source, text, uid, scopeId, revision, sourceKind, ...patch } = body;
       return agendaIndex.patch({ uid, scopeId, revision, patch });
@@ -2536,19 +2536,19 @@ const apiRouter = new ApiRouter().register({
     broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
     return result.changed === false ? result : applyWikiMutationResult(result);
   },
-  "aaronnote:api:notes:clock-in": async (body) => {
+  "noema:api:notes:clock-in": async (body) => {
     if (body?.uid) return agendaIndex.clockIn(body);
     const result = await clockIn(body || {});
     broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
     return applyWikiMutationResult(result);
   },
-  "aaronnote:api:notes:clock-out": async (body) => {
+  "noema:api:notes:clock-out": async (body) => {
     if (body?.uid) return agendaIndex.clockOut(body);
     const result = await clockOut(body || {});
     broadcast("command", { command: "agenda-changed", version: notesIndexVersionValue() });
     return applyWikiMutationResult(result);
   },
-  "aaronnote:api:notes:todo-dep-ref": async (body) => {
+  "noema:api:notes:todo-dep-ref": async (body) => {
     const targetId = String(body?.targetId || "");
     if (!targetId) {
       const err = new Error("targetId is required");
@@ -2576,11 +2576,11 @@ const apiRouter = new ApiRouter().register({
     }
     return { type: "todo-dep-ref", ref: idResult.id };
   },
-  "aaronnote:api:notes:index": async () => {
+  "noema:api:notes:index": async () => {
     if (hostMode === "server") return { type: "notes", ...currentServerCatalog().index, root: "" };
     return notesListPayload(false);
   },
-  "aaronnote:api:notes:graph": async () => {
+  "noema:api:notes:graph": async () => {
     const wikiGraph = hostMode === "server" || workspaceLayout === "wiki";
     const graphIndex = wikiGraph
       ? (hostMode === "server" ? currentServerCatalog().index : await productionWikiIndexPayload())
@@ -2604,40 +2604,40 @@ const apiRouter = new ApiRouter().register({
         || (kernelMarkdownProvider ? "kernel-note-catalog" : "node"),
     };
   },
-  "aaronnote:api:notes:roam-index": async () => {
+  "noema:api:notes:roam-index": async () => {
     if (hostMode === "server") return { type: "notes", ...currentServerCatalog().index, root: "" };
     return primaryNoteIndexPayload(false);
   },
-  "aaronnote:api:runtime:debug": async () => ({ type: "runtime-debug", ...runtimeDebugSnapshot() }),
-  "aaronnote:api:note-code:read-region": (body) => readNoteCodeRegion(body || {}),
-  "aaronnote:api:slides:mirror": async (body) => applyWikiMutationResult(await slidesMirror(body || {})),
+  "noema:api:runtime:debug": async () => ({ type: "runtime-debug", ...runtimeDebugSnapshot() }),
+  "noema:api:note-code:read-region": (body) => readNoteCodeRegion(body || {}),
+  "noema:api:slides:mirror": async (body) => applyWikiMutationResult(await slidesMirror(body || {})),
   ...(jupyterCell ? withWikiMutationHooks(createJupyterApiHandlers(jupyterCell), {
     only: [
-      "aaronnote:api:jupyter-cell:open-script",
-      "aaronnote:api:jupyter-cell:execute-script-cell",
-      "aaronnote:api:jupyter-cell:clear-script-cell-output",
-      "aaronnote:api:jupyter-cell:delete-script-cell",
-      "aaronnote:api:jupyter-cell:save-script-cell-output-ui",
-      "aaronnote:api:jupyter-cell:clear-all-outputs",
+      "noema:api:jupyter-cell:open-script",
+      "noema:api:jupyter-cell:execute-script-cell",
+      "noema:api:jupyter-cell:clear-script-cell-output",
+      "noema:api:jupyter-cell:delete-script-cell",
+      "noema:api:jupyter-cell:save-script-cell-output-ui",
+      "noema:api:jupyter-cell:clear-all-outputs",
     ],
   }) : {}),
-  "aaronnote:api:notes:wanted": async () => {
+  "noema:api:notes:wanted": async () => {
     const notes = await scanRoamNotes();
     return wantedPages(notes);
   },
-  "aaronnote:api:notes:roam-sync": (reload) => roamSyncPayload(reload === true),
-  "aaronnote:api:notes:roam-sync-full": () => roamSyncFullPayload(),
-  "aaronnote:api:notes:templates": (force) => templatesPayload(force === true),
-  "aaronnote:api:notes:snippets": () => snippetsPayload(true),
-  "aaronnote:api:latex:defaults": (body) => latexExportDefaults(body || {}),
-  "aaronnote:api:latex:agent-status": () => emacsLatexAgentStatus(),
-  "aaronnote:api:latex:set-agent": async (body) => {
+  "noema:api:notes:roam-sync": (reload) => roamSyncPayload(reload === true),
+  "noema:api:notes:roam-sync-full": () => roamSyncFullPayload(),
+  "noema:api:notes:templates": (force) => templatesPayload(force === true),
+  "noema:api:notes:snippets": () => snippetsPayload(true),
+  "noema:api:latex:defaults": (body) => latexExportDefaults(body || {}),
+  "noema:api:latex:agent-status": () => emacsLatexAgentStatus(),
+  "noema:api:latex:set-agent": async (body) => {
     await setLatexExportAgent(body || {});
     return emacsLatexAgentStatus();
   },
-  "aaronnote:api:latex:templates": () => listLatexTemplates(),
-  "aaronnote:api:latex:choose-output-path": (body) => chooseLatexOutputPath(body || {}),
-  "aaronnote:api:latex:intervene": async (body) => {
+  "noema:api:latex:templates": () => listLatexTemplates(),
+  "noema:api:latex:choose-output-path": (body) => chooseLatexOutputPath(body || {}),
+  "noema:api:latex:intervene": async (body) => {
     const task = coreTasks.get(body?.id);
     if (!task || task.kind !== "latex-export" || task.status !== "failed") {
       const error = new Error("LaTeX intervention requires a failed export task");
@@ -2650,7 +2650,7 @@ const apiRouter = new ApiRouter().register({
       throw error;
     }
     const status = await latexExportAgentStatus();
-    return gatewayRequest("aaronnote.latex.intervene", {
+    return gatewayRequest("noema.latex.intervene", {
       taskId: task.id,
       file: task.metadata.file,
       outputPath: task.metadata.outputPath,
@@ -2658,7 +2658,7 @@ const apiRouter = new ApiRouter().register({
       backend: status.agent,
     }, 10_000);
   },
-  "aaronnote:api:latex:open-agent": async (body) => {
+  "noema:api:latex:open-agent": async (body) => {
     const task = coreTasks.get(body?.id);
     const requestId = latexAgentTaskRequests.get(task?.id);
     if (hostMode !== "emacs" || task?.kind !== "latex-export"
@@ -2667,9 +2667,9 @@ const apiRouter = new ApiRouter().register({
       error.statusCode = 409;
       throw error;
     }
-    return gatewayRequest("aaronnote.latex.agent-open", { requestId }, 10_000);
+    return gatewayRequest("noema.latex.agent-open", { requestId }, 10_000);
   },
-  "aaronnote:api:latex:export": (body) => {
+  "noema:api:latex:export": (body) => {
     const request = { ...(body || {}) };
     const file = String(request.file || request.sourceFile || "");
     const outputPath = String(request.outputPath || "");
@@ -2713,7 +2713,7 @@ const apiRouter = new ApiRouter().register({
         } catch (error) {
           if (hostMode === "emacs" && !signal.aborted && error?.name !== "AbortError") {
             const agent = await latexExportAgentStatus().catch(() => ({}));
-            gatewayNotify("aaronnote.event", {
+            gatewayNotify("noema.event", {
               type: "latex-export-failed",
               payload: {
                 taskId: id, file, outputPath,
@@ -2728,7 +2728,7 @@ const apiRouter = new ApiRouter().register({
           // session, including one whose prompt callback never arrived.
           if (hostMode === "emacs") {
             for (const workdir of agentWorkdirs) {
-              await gatewayRequest("aaronnote.latex.agent-cancel", {
+              await gatewayRequest("noema.latex.agent-cancel", {
                 requestId: "", workdir,
               }, 5_000).catch(() => {});
             }
@@ -2746,14 +2746,14 @@ const apiRouter = new ApiRouter().register({
       : task,
   }),
   ...createResearchApiHandlers({ ...researchNotebooks, ...researchRuntime }),
-  "aaronnote:api:notes:meta-add": async (body) => applyWikiMutationResult(
+  "noema:api:notes:meta-add": async (body) => applyWikiMutationResult(
     await updateCurrentNoteMeta(body || {}, "add"),
   ),
 
-  "aaronnote:api:roam-tools:rename-tag": async (body) => applyRoamTagMutationResult(await renameRoamTag(body || {})),
-  "aaronnote:api:roam-tools:delete-tag": async (body) => applyRoamTagMutationResult(await deleteRoamTag(body || {})),
-  "aaronnote:api:roam-tools:tag-overlap": () => roamTagOverlapReport(),
-  "aaronnote:api:roam-tools:rewrite-path-refs": async (body) => {
+  "noema:api:roam-tools:rename-tag": async (body) => applyRoamTagMutationResult(await renameRoamTag(body || {})),
+  "noema:api:roam-tools:delete-tag": async (body) => applyRoamTagMutationResult(await deleteRoamTag(body || {})),
+  "noema:api:roam-tools:tag-overlap": () => roamTagOverlapReport(),
+  "noema:api:roam-tools:rewrite-path-refs": async (body) => {
     const result = await rewriteMarkdownPathReferences(body || {});
     return result.dryRun ? result : applyWikiMutationResult(result);
   },
@@ -2772,7 +2772,7 @@ const apiRouter = new ApiRouter().register({
     startObsidianImport,
     cancelObsidianTask,
     readSystemClipboard,
-  }), { full: ["aaronnote:api:assets:trash-orphans"] }),
+  }), { full: ["noema:api:assets:trash-orphans"] }),
   ...createSessionApiHandlers({
     readRecentNotes,
     touchRecentNote,
@@ -2789,13 +2789,13 @@ const apiRouter = new ApiRouter().register({
     updateCurrentNoteMeta,
   }), {
     full: [
-      "aaronnote:api:fs:rename",
-      "aaronnote:api:fs:move",
-      "aaronnote:api:fs:trash",
+      "noema:api:fs:rename",
+      "noema:api:fs:move",
+      "noema:api:fs:trash",
     ],
   }),
 
-  "aaronnote:api:copilot:request": (action, body) => handleCopilotRequest(String(action || ""), body || {}),
+  "noema:api:copilot:request": (action, body) => handleCopilotRequest(String(action || ""), body || {}),
 
   ...createProseApiHandlers({
     runExternalProseChecks,
@@ -2809,12 +2809,12 @@ const apiRouter = new ApiRouter().register({
     probeLanguageTool,
     broadcast,
   }),
-  "aaronnote:api:shell:show-in-folder": (file) => showInFolder(file),
-  "aaronnote:api:shell:open-path": (file) => openPath(file),
-  "aaronnote:api:shell:open-directory": (body) => openDirectory(body),
-  "aaronnote:api:shell:open-directory-in-kitty": () => ({ ok: false, message: "Kitty integration is not available in the Emacs web host yet" }),
-  "aaronnote:api:shell:show-attachment-menu": (file) => openPath(file),
-  "aaronnote:api:shell:show-editor-context-menu": () => ({ ok: true }),
+  "noema:api:shell:show-in-folder": (file) => showInFolder(file),
+  "noema:api:shell:open-path": (file) => openPath(file),
+  "noema:api:shell:open-directory": (body) => openDirectory(body),
+  "noema:api:shell:open-directory-in-kitty": () => ({ ok: false, message: "Kitty integration is not available in the Emacs web host yet" }),
+  "noema:api:shell:show-attachment-menu": (file) => openPath(file),
+  "noema:api:shell:show-editor-context-menu": () => ({ ok: true }),
   ...createEmacsApiHandlers({
     apiOpenInEmacs,
     apiOpenSurface,
@@ -2829,11 +2829,11 @@ const apiRouter = new ApiRouter().register({
     apiEmacsZotero,
     apiChooseNotePath,
   }),
-  "aaronnote:api:config:katex-macros": async () => {
+  "noema:api:config:katex-macros": async () => {
     const payload = await katexMacrosPayload();
     return hostMode === "server" ? { ...payload, dir: "", user: { ...payload.user, file: "" } } : payload;
   },
-  "aaronnote:api:config:update-user-katex-macros": async (body) => {
+  "noema:api:config:update-user-katex-macros": async (body) => {
     if (hostMode === "server") {
       const err = new Error("Macros are read-only in the public reader");
       err.statusCode = 403;
@@ -2844,10 +2844,10 @@ const apiRouter = new ApiRouter().register({
     broadcast("command", { command: "katex-macros-changed" });
     return payload;
   },
-  "aaronnote:api:config:note-katex-macros": (body) =>
+  "noema:api:config:note-katex-macros": (body) =>
     loadNoteKatexMacros(body || {}, { restrict: hostMode === "server" }),
-  "aaronnote:api:config:app": () => currentAppConfigPayload(),
-  "aaronnote:api:config:update-app": async (body) => {
+  "noema:api:config:app": () => currentAppConfigPayload(),
+  "noema:api:config:update-app": async (body) => {
     const payload = await updateNoemaAppConfig(body || {}, {
       env: process.env,
       expectedRevision: String(body?.revision || ""),
@@ -2950,15 +2950,15 @@ async function handleGatewayRequest(message) {
   const hasId = Object.prototype.hasOwnProperty.call(message || {}, "id");
   try {
     let result;
-    if (message.method === "aaronnote.latex.agent-progress") {
+    if (message.method === "noema.latex.agent-progress") {
       const requestId = String(message.params?.requestId || "");
       const progress = latexAgentProgress.get(requestId);
       if (progress) progress(String(message.params?.text || ""));
       result = { ok: Boolean(progress) };
-    } else if (message.method === "aaronnote.agenda.source-event") {
+    } else if (message.method === "noema.agenda.source-event") {
       agendaSources.event(message.params || {});
       result = { ok: true };
-    } else if (message.method === "aaronnote.agenda.apple-event") {
+    } else if (message.method === "noema.agenda.apple-event") {
       if (message.params?.event === "disconnected") {
         agendaAttention.connectionChanged({state:"unavailable",message:message.params.message || "Apple helper disconnected; showing saved receipts"});
       } else {
@@ -2966,14 +2966,14 @@ async function handleGatewayRequest(message) {
         agendaAttention.signal();
       }
       result = {ok:true};
-    } else if (message.method === "aaronnote.command") {
+    } else if (message.method === "noema.command") {
       result = await handleEmacsCommand(message.params || {});
-    } else if (message.method === "aaronnote.api") {
+    } else if (message.method === "noema.api") {
       result = await callApi(
         String(message.params?.channel || ""),
         message.params?.args || [],
       );
-    } else if (message.method === "aaronnote.jupyter.publish") {
+    } else if (message.method === "noema.jupyter.publish") {
       broadcast("jupyter-cell", message.params || {});
       result = { ok: true };
     } else {
@@ -3008,18 +3008,18 @@ function handleGatewayMessage(raw) {
   if (message?.id === "register") {
     if (message.error) {
       process.stderr.write(
-        `[aaronnote-web] gateway registration failed: ${message.error.message}\n`,
+        `[noema-web] gateway registration failed: ${message.error.message}\n`,
       );
     } else {
       agendaSources.reconnect();
       // Subscribe without starting EventKit or requesting access. A later
       // explicit enable emits ready and resumes the persisted binding set.
-      gatewayRequest("aaronnote.agenda.apple",{op:"status"}).then((state)=>{
+      gatewayRequest("noema.agenda.apple",{op:"status"}).then((state)=>{
         agendaAttention.connectionChanged(state?.error
           ?{state:"unavailable",message:state.error.message}:{state:"connected",message:""});
         if(!state?.error)agendaAttention.signal();
       }).catch((error)=>agendaAttention.connectionChanged({state:"unavailable",message:String(error.message||error)}));
-      gatewayNotify("aaronnote.event", {
+      gatewayNotify("noema.event", {
         type: "ready",
         payload: { port: gatewayEndpointPort },
       });
@@ -3041,7 +3041,7 @@ function handleGatewayMessage(raw) {
 
 function connectGateway(port) {
   if (!gatewayUrl || !gatewayBinding) {
-    process.stderr.write("[aaronnote-web] Emacs gateway configuration missing\n");
+    process.stderr.write("[noema-web] Emacs gateway configuration missing\n");
     return;
   }
   clearTimeout(gatewayRetryTimer);
@@ -3055,8 +3055,8 @@ function connectGateway(port) {
       params: {
         bindingId: gatewayBinding,
         clientId: gatewayClientId,
-        instanceId: `aaronnote-${process.pid}`,
-        provides: ["aaronnote.command", "aaronnote.api"],
+        instanceId: `noema-${process.pid}`,
+        provides: ["noema.command", "noema.api"],
         endpoint: {
           host: bindHost,
           port,
@@ -3067,7 +3067,7 @@ function connectGateway(port) {
   });
   gatewaySocket.on("message", handleGatewayMessage);
   gatewaySocket.on("error", (error) => {
-    process.stderr.write(`[aaronnote-web] gateway error: ${error.message}\n`);
+    process.stderr.write(`[noema-web] gateway error: ${error.message}\n`);
   });
   gatewaySocket.on("close", () => {
     gatewaySocket = null;
@@ -3098,10 +3098,10 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
   document.documentElement.dataset.noemaTheme =
     String(APP_CONFIG && APP_CONFIG.config && APP_CONFIG.config.appearance && APP_CONFIG.config.appearance.theme || ${JSON.stringify(fallbackThemeId)});
   var BASE = ${JSON.stringify(hostMode === "server" ? "" : origin)};
-  window.__aaronnoteNotesRoot = ${JSON.stringify(hostMode === "server" ? "" : noteRoot)};
-  window.__aaronnoteJupyterDefaults = ${JSON.stringify(hostMode === "server" ? {} : jupyterDefaults)};
-  window.__aaronnoteHostMode = ${JSON.stringify(hostMode)};
-  window.__aaronnoteHostCapabilities = ${JSON.stringify({ focusQuiescence: hostMode === "emacs" })};
+  window.__noemaNotesRoot = ${JSON.stringify(hostMode === "server" ? "" : noteRoot)};
+  window.__noemaJupyterDefaults = ${JSON.stringify(hostMode === "server" ? {} : jupyterDefaults)};
+  window.__noemaHostMode = ${JSON.stringify(hostMode)};
+  window.__noemaHostCapabilities = ${JSON.stringify({ focusQuiescence: hostMode === "emacs" })};
   window.__noemaRendererBuild = ${JSON.stringify(rendererBuildWatcher.generation)};
   window.__noemaKernelBase = ${JSON.stringify(noemaKernel.baseUrl)};
   window.__noemaKernel = ${JSON.stringify(noemaKernel)};
@@ -3125,7 +3125,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     } catch (_) {}
   }
   function assetProxy(raw) {
-    return BASE + "/aaronnote-asset?url=" + encodeURIComponent(String(raw || ""));
+    return BASE + "/noema-asset?url=" + encodeURIComponent(String(raw || ""));
   }
   function noteAssetProxy(raw) {
     var url = BASE + "/note-asset?src=" + encodeURIComponent(String(raw || ""));
@@ -3136,7 +3136,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
   function proxiedUrl(raw) {
     var value = String(raw || "");
     if (!value) return value;
-    if (value.indexOf("aaronnote-asset:") === 0) return assetProxy(value);
+    if (value.indexOf("noema-asset:") === 0) return assetProxy(value);
     if (value.indexOf("file:") === 0) return noteAssetProxy(value);
     return value;
   }
@@ -3154,7 +3154,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     } catch (_) {}
   }
   function currentFile() {
-    try { return window.AaronnoteCurrentFile && window.AaronnoteCurrentFile() || ""; }
+    try { return window.NoemaCurrentFile && window.NoemaCurrentFile() || ""; }
     catch (_) { return ""; }
   }
   installUrlPropertyProxy(window.HTMLImageElement && HTMLImageElement.prototype, "src");
@@ -3176,7 +3176,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
   function dispatchConnectionStatus(status, reason) {
     eventConnectionState = status;
     try {
-      window.dispatchEvent(new CustomEvent("aaronnote:connection", {
+      window.dispatchEvent(new CustomEvent("noema:connection", {
         detail: {status: status, reason: String(reason || "")}
       }));
     } catch (_) {}
@@ -3200,39 +3200,39 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
   function handleCommandEvent(event) {
     try {
       var detail = JSON.parse(event.data);
-      window.dispatchEvent(new CustomEvent("aaronnote:command", {detail: detail}));
+      window.dispatchEvent(new CustomEvent("noema:command", {detail: detail}));
       if (detail
           && detail.command === "renderer-updated"
           && detail.generation
           && detail.generation !== window.__noemaRendererBuild) {
-        var prepare = window.AaronnotePrepareRendererReload;
+        var prepare = window.NoemaPrepareRendererReload;
         Promise.resolve(typeof prepare === "function" ? prepare(detail) : true)
           .then(function(ready) { if (ready === true) window.location.reload(); })
           .catch(function(err) { console.error("[noema-renderer] reload failed", err); });
       }
     } catch (err) {
-      console.error("[aaronnote-host] command event failed", err);
+      console.error("[noema-host] command event failed", err);
     }
   }
   function handleOpenFileEvent(event) {
     try {
-      window.dispatchEvent(new CustomEvent("aaronnote:open-file", {detail: JSON.parse(event.data)}));
+      window.dispatchEvent(new CustomEvent("noema:open-file", {detail: JSON.parse(event.data)}));
     } catch (err) {
-      console.error("[aaronnote-host] open-file event failed", err);
+      console.error("[noema-host] open-file event failed", err);
     }
   }
   function handleJupyterCellEvent(event) {
     try {
-      window.dispatchEvent(new CustomEvent("aaronnote:jupyter-cell", {detail: JSON.parse(event.data)}));
+      window.dispatchEvent(new CustomEvent("noema:jupyter-cell", {detail: JSON.parse(event.data)}));
     } catch (err) {
-      console.error("[aaronnote-host] jupyter-cell event failed", err);
+      console.error("[noema-host] jupyter-cell event failed", err);
     }
   }
   function handleJupyterSessionEvent(event) {
     try {
-      window.dispatchEvent(new CustomEvent("aaronnote:jupyter-session", {detail: JSON.parse(event.data)}));
+      window.dispatchEvent(new CustomEvent("noema:jupyter-session", {detail: JSON.parse(event.data)}));
     } catch (err) {
-      console.error("[aaronnote-host] jupyter-session event failed", err);
+      console.error("[noema-host] jupyter-session event failed", err);
     }
   }
   function connectEventStream(reason, force) {
@@ -3292,14 +3292,14 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
   var assetResolver = function(source) {
     var raw = String(source || "").trim();
     if (!raw || /^(?:data:|https?:|blob:|#)/i.test(raw)) return raw;
-    if (raw.indexOf("aaronnote-asset:") === 0 || raw.indexOf("file:") === 0) return proxiedUrl(raw);
-    var url = new URL("aaronnote-asset://media");
+    if (raw.indexOf("noema-asset:") === 0 || raw.indexOf("file:") === 0) return proxiedUrl(raw);
+    var url = new URL("noema-asset://media");
     url.searchParams.set("file", raw);
     var base = currentFile();
     if (base) url.searchParams.set("base", base);
     return assetProxy(url.toString());
   };
-  Object.defineProperty(window, "AaronnoteResolveAssetUrl", {
+  Object.defineProperty(window, "NoemaResolveAssetUrl", {
     configurable: true,
     get: function() { return assetResolver; },
     set: function(next) {
@@ -3309,13 +3309,13 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
   });
   var originalFetch = window.fetch.bind(window);
   window.fetch = function(input, init) {
-    if (typeof input === "string" && input.indexOf("aaronnote-asset:") === 0) {
+    if (typeof input === "string" && input.indexOf("noema-asset:") === 0) {
       return originalFetch(proxiedUrl(input), init);
     }
     if (typeof input === "string" && input.indexOf("file:") === 0) {
       return originalFetch(proxiedUrl(input), init);
     }
-    if (input instanceof Request && input.url.indexOf("aaronnote-asset:") === 0) {
+    if (input instanceof Request && input.url.indexOf("noema-asset:") === 0) {
       return originalFetch(proxiedUrl(input.url), init);
     }
     if (input instanceof Request && input.url.indexOf("file:") === 0) {
@@ -3323,7 +3323,7 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     }
     return originalFetch(input, init);
   };
-  window.aaronnoteApi = {
+  window.noemaApi = {
     connection: {
       status: function() { return currentConnectionStatus(); },
       reconnect: function(reason) {
@@ -3331,215 +3331,215 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       }
     },
     notes: {
-      bootstrap: function(file) { return call("aaronnote:api:notes:bootstrap", [String(file || "")]); },
-      open: function(file) { return call("aaronnote:api:notes:open", [String(file || "")]); },
-      list: function(force) { return call("aaronnote:api:notes:list", [force === true]); },
-      save: function(body) { return call("aaronnote:api:notes:save", [body || {}]); },
-      saveKeepalive: function(body) { callKeepalive("aaronnote:api:notes:save", [body || {}]); },
-      createNode: function(draft) { return call("aaronnote:api:notes:create-node", [draft || {}]); },
-      deleteNode: function(file) { return call("aaronnote:api:notes:delete-node", [String(file || "")]); },
-      deleteNote: function(file) { return call("aaronnote:api:notes:delete", [String(file || "")]); },
-      createFolder: function(path) { return call("aaronnote:api:notes:create-folder", [String(path || "")]); },
+      bootstrap: function(file) { return call("noema:api:notes:bootstrap", [String(file || "")]); },
+      open: function(file) { return call("noema:api:notes:open", [String(file || "")]); },
+      list: function(force) { return call("noema:api:notes:list", [force === true]); },
+      save: function(body) { return call("noema:api:notes:save", [body || {}]); },
+      saveKeepalive: function(body) { callKeepalive("noema:api:notes:save", [body || {}]); },
+      createNode: function(draft) { return call("noema:api:notes:create-node", [draft || {}]); },
+      deleteNode: function(file) { return call("noema:api:notes:delete-node", [String(file || "")]); },
+      deleteNote: function(file) { return call("noema:api:notes:delete", [String(file || "")]); },
+      createFolder: function(path) { return call("noema:api:notes:create-folder", [String(path || "")]); },
       pathSuggestions: function(file, prefix) {
-        return call("aaronnote:api:notes:path-suggestions", [{ file: String(file || ""), prefix: String(prefix || "./") }]);
+        return call("noema:api:notes:path-suggestions", [{ file: String(file || ""), prefix: String(prefix || "./") }]);
       },
-      roamSync: function(reload) { return call("aaronnote:api:notes:roam-sync", [reload === true]); },
-      roamSyncFull: function() { return call("aaronnote:api:notes:roam-sync-full", []); },
-      templates: function(force) { return call("aaronnote:api:notes:templates", [force === true]); },
-      snippets: function() { return call("aaronnote:api:notes:snippets", []); },
-      metaAdd: function(body) { return call("aaronnote:api:notes:meta-add", [body || {}]); },
-      notesIndex: function() { return call("aaronnote:api:notes:index", []); },
-      graph: function() { return call("aaronnote:api:notes:graph", []); },
-      todos: function(file) { return call("aaronnote:api:notes:todos", [{ file: String(file || "") }]); },
-      updateTodo: function(body) { return call("aaronnote:api:notes:update-todo", [body || {}]); },
-      agenda: function(body) { return call("aaronnote:api:notes:agenda", [body || {}]); },
-      resolveBlock: function(id) { return call("aaronnote:api:notes:resolve-block", [{ id: String(id || "") }]); },
-      embedQuery: function(body) { return call("aaronnote:api:notes:embed-query", [body || {}]); },
-      attributeView: function(body) { return call("aaronnote:api:notes:attribute-view", [body || {}]); },
-      attributeViewCellPatch: function(body) { return call("aaronnote:api:notes:attribute-view-cell-patch", [body || {}]); },
-      captureTemplates: function() { return call("aaronnote:api:agenda:capture-templates", []); },
-      createTodo: function(body) { return call("aaronnote:api:notes:create-todo", [body || {}]); },
-      patchTodo: function(body) { return call("aaronnote:api:notes:patch-todo", [body || {}]); },
-      clockIn: function(body) { return call("aaronnote:api:notes:clock-in", [body || {}]); },
-      clockOut: function(body) { return call("aaronnote:api:notes:clock-out", [body || {}]); },
-      retryClocks: function(body) { return call("aaronnote:api:agenda:clock-retry", [body || {}]); },
-      attention: function() { return call("aaronnote:api:agenda:attention", []); },
+      roamSync: function(reload) { return call("noema:api:notes:roam-sync", [reload === true]); },
+      roamSyncFull: function() { return call("noema:api:notes:roam-sync-full", []); },
+      templates: function(force) { return call("noema:api:notes:templates", [force === true]); },
+      snippets: function() { return call("noema:api:notes:snippets", []); },
+      metaAdd: function(body) { return call("noema:api:notes:meta-add", [body || {}]); },
+      notesIndex: function() { return call("noema:api:notes:index", []); },
+      graph: function() { return call("noema:api:notes:graph", []); },
+      todos: function(file) { return call("noema:api:notes:todos", [{ file: String(file || "") }]); },
+      updateTodo: function(body) { return call("noema:api:notes:update-todo", [body || {}]); },
+      agenda: function(body) { return call("noema:api:notes:agenda", [body || {}]); },
+      resolveBlock: function(id) { return call("noema:api:notes:resolve-block", [{ id: String(id || "") }]); },
+      embedQuery: function(body) { return call("noema:api:notes:embed-query", [body || {}]); },
+      attributeView: function(body) { return call("noema:api:notes:attribute-view", [body || {}]); },
+      attributeViewCellPatch: function(body) { return call("noema:api:notes:attribute-view-cell-patch", [body || {}]); },
+      captureTemplates: function() { return call("noema:api:agenda:capture-templates", []); },
+      createTodo: function(body) { return call("noema:api:notes:create-todo", [body || {}]); },
+      patchTodo: function(body) { return call("noema:api:notes:patch-todo", [body || {}]); },
+      clockIn: function(body) { return call("noema:api:notes:clock-in", [body || {}]); },
+      clockOut: function(body) { return call("noema:api:notes:clock-out", [body || {}]); },
+      retryClocks: function(body) { return call("noema:api:agenda:clock-retry", [body || {}]); },
+      attention: function() { return call("noema:api:agenda:attention", []); },
       attentionAction: function(operation, body) {
         if (["collections", "promote", "sync", "remove", "resolve", "visit"].indexOf(operation) < 0) throw new Error("Unknown attention operation");
-        return call("aaronnote:api:agenda:attention-" + operation, [body || {}]);
+        return call("noema:api:agenda:attention-" + operation, [body || {}]);
       },
-      keepClockSource: function(body) { return call("aaronnote:api:agenda:clock-keep-source", [body || {}]); },
-      visitAgenda: function(body) { return call("aaronnote:api:agenda:visit", [body || {}]); },
-      batchTodos: function(body) { return call("aaronnote:api:agenda:batch", [body || {}]); },
-      linkTodos: function(body) { return call("aaronnote:api:agenda:dependency", [body || {}]); },
-      todoDepRef: function(body) { return call("aaronnote:api:notes:todo-dep-ref", [body || {}]); }
+      keepClockSource: function(body) { return call("noema:api:agenda:clock-keep-source", [body || {}]); },
+      visitAgenda: function(body) { return call("noema:api:agenda:visit", [body || {}]); },
+      batchTodos: function(body) { return call("noema:api:agenda:batch", [body || {}]); },
+      linkTodos: function(body) { return call("noema:api:agenda:dependency", [body || {}]); },
+      todoDepRef: function(body) { return call("noema:api:notes:todo-dep-ref", [body || {}]); }
     },
     completions: {
-      tags: function(prefix) { return call("aaronnote:api:completions:tags", [{ prefix: String(prefix || "") }]); },
-      roam: function(prefix) { return call("aaronnote:api:completions:roam", [{ prefix: String(prefix || "") }]); },
-      todoRefs: function(body) { return call("aaronnote:api:completions:todo-refs", [body || {}]); },
-      bibliography: function(body) { return call("aaronnote:api:completions:bibliography", [body || {}]); },
+      tags: function(prefix) { return call("noema:api:completions:tags", [{ prefix: String(prefix || "") }]); },
+      roam: function(prefix) { return call("noema:api:completions:roam", [{ prefix: String(prefix || "") }]); },
+      todoRefs: function(body) { return call("noema:api:completions:todo-refs", [body || {}]); },
+      bibliography: function(body) { return call("noema:api:completions:bibliography", [body || {}]); },
     },
     bibliography: {
-      document: function(body) { return call("aaronnote:api:bibliography:document", [body || {}]); },
+      document: function(body) { return call("noema:api:bibliography:document", [body || {}]); },
     },
     noteCode: {
-      readRegion: function(body) { return call("aaronnote:api:note-code:read-region", [body || {}]); }
+      readRegion: function(body) { return call("noema:api:note-code:read-region", [body || {}]); }
     },
     slides: {
-      mirror: function(body) { return call("aaronnote:api:slides:mirror", [body || {}]); }
+      mirror: function(body) { return call("noema:api:slides:mirror", [body || {}]); }
     },
     jupyterCell: {
-      kernels: function(body) { return call("aaronnote:api:jupyter-cell:kernels", [body || {}]); },
-      documentSnapshot: function(body) { return call("aaronnote:api:jupyter:document-snapshot", [body || {}]); },
-      documentMutate: function(body) { return call("aaronnote:api:jupyter:document-mutate", [body || {}]); },
-      documentExecute: function(body) { return call("aaronnote:api:jupyter:document-execute", [body || {}]); },
-      managerSnapshot: function() { return call("aaronnote:api:jupyter:manager-snapshot", []); },
-      scriptSnapshot: function(body) { return call("aaronnote:api:jupyter:script-snapshot", [body || {}]); },
-      scriptAction: function(body) { return call("aaronnote:api:jupyter:script-action", [body || {}]); },
-      sessionSelect: function(body) { return call("aaronnote:api:jupyter:session-select", [body || {}]); },
-      kernelControl: function(body) { return call("aaronnote:api:jupyter:kernel-control", [body || {}]); },
-      openBoard: function() { return call("aaronnote:api:jupyter:board-open", []); },
-      execute: function(body) { return call("aaronnote:api:jupyter-cell:execute", [body || {}]); },
-      openScript: function(body) { return call("aaronnote:api:jupyter-cell:open-script", [body || {}]); },
-      readScriptCell: function(body) { return call("aaronnote:api:jupyter-cell:read-script-cell", [body || {}]); },
-      executeScriptCell: function(body) { return call("aaronnote:api:jupyter-cell:execute-script-cell", [body || {}]); },
-      clearScriptCellOutput: function(body) { return call("aaronnote:api:jupyter-cell:clear-script-cell-output", [body || {}]); },
-      deleteScriptCell: function(body) { return call("aaronnote:api:jupyter-cell:delete-script-cell", [body || {}]); },
-      saveScriptCellOutputUi: function(body) { return call("aaronnote:api:jupyter-cell:save-script-cell-output-ui", [body || {}]); },
-      clearAllOutputs: function(body) { return call("aaronnote:api:jupyter-cell:clear-all-outputs", [body || {}]); },
-      variables: function(body) { return call("aaronnote:api:jupyter-cell:variables", [body || {}]); },
-      inputReply: function(body) { return call("aaronnote:api:jupyter-cell:input-reply", [body || {}]); },
-      complete: function(body) { return call("aaronnote:api:jupyter-cell:complete", [body || {}]); },
-      inspect: function(body) { return call("aaronnote:api:jupyter-cell:inspect", [body || {}]); },
-      isComplete: function(body) { return call("aaronnote:api:jupyter-cell:is-complete", [body || {}]); },
-      history: function(body) { return call("aaronnote:api:jupyter-cell:history", [body || {}]); },
-      commInfo: function(body) { return call("aaronnote:api:jupyter-cell:comm-info", [body || {}]); },
-      kernelStatus: function(body) { return call("aaronnote:api:jupyter-cell:kernel-status", [body || {}]); },
-      restart: function(body) { return call("aaronnote:api:jupyter-cell:restart", [body || {}]); },
-      interrupt: function(body) { return call("aaronnote:api:jupyter-cell:interrupt", [body || {}]); },
-      shutdown: function(body) { return call("aaronnote:api:jupyter-cell:shutdown", [body || {}]); },
-      serverList: function(body) { return call("aaronnote:api:jupyter-cell:server-list", [body || {}]); },
-      serverRead: function(body) { return call("aaronnote:api:jupyter-cell:server-read", [body || {}]); },
-      serverWrite: function(body) { return call("aaronnote:api:jupyter-cell:server-write", [body || {}]); },
-      tasks: function() { return call("aaronnote:api:jupyter-cell:tasks", []); },
-      cleanup: function(body) { return call("aaronnote:api:jupyter-cell:cleanup", [body || {}]); }
+      kernels: function(body) { return call("noema:api:jupyter-cell:kernels", [body || {}]); },
+      documentSnapshot: function(body) { return call("noema:api:jupyter:document-snapshot", [body || {}]); },
+      documentMutate: function(body) { return call("noema:api:jupyter:document-mutate", [body || {}]); },
+      documentExecute: function(body) { return call("noema:api:jupyter:document-execute", [body || {}]); },
+      managerSnapshot: function() { return call("noema:api:jupyter:manager-snapshot", []); },
+      scriptSnapshot: function(body) { return call("noema:api:jupyter:script-snapshot", [body || {}]); },
+      scriptAction: function(body) { return call("noema:api:jupyter:script-action", [body || {}]); },
+      sessionSelect: function(body) { return call("noema:api:jupyter:session-select", [body || {}]); },
+      kernelControl: function(body) { return call("noema:api:jupyter:kernel-control", [body || {}]); },
+      openBoard: function() { return call("noema:api:jupyter:board-open", []); },
+      execute: function(body) { return call("noema:api:jupyter-cell:execute", [body || {}]); },
+      openScript: function(body) { return call("noema:api:jupyter-cell:open-script", [body || {}]); },
+      readScriptCell: function(body) { return call("noema:api:jupyter-cell:read-script-cell", [body || {}]); },
+      executeScriptCell: function(body) { return call("noema:api:jupyter-cell:execute-script-cell", [body || {}]); },
+      clearScriptCellOutput: function(body) { return call("noema:api:jupyter-cell:clear-script-cell-output", [body || {}]); },
+      deleteScriptCell: function(body) { return call("noema:api:jupyter-cell:delete-script-cell", [body || {}]); },
+      saveScriptCellOutputUi: function(body) { return call("noema:api:jupyter-cell:save-script-cell-output-ui", [body || {}]); },
+      clearAllOutputs: function(body) { return call("noema:api:jupyter-cell:clear-all-outputs", [body || {}]); },
+      variables: function(body) { return call("noema:api:jupyter-cell:variables", [body || {}]); },
+      inputReply: function(body) { return call("noema:api:jupyter-cell:input-reply", [body || {}]); },
+      complete: function(body) { return call("noema:api:jupyter-cell:complete", [body || {}]); },
+      inspect: function(body) { return call("noema:api:jupyter-cell:inspect", [body || {}]); },
+      isComplete: function(body) { return call("noema:api:jupyter-cell:is-complete", [body || {}]); },
+      history: function(body) { return call("noema:api:jupyter-cell:history", [body || {}]); },
+      commInfo: function(body) { return call("noema:api:jupyter-cell:comm-info", [body || {}]); },
+      kernelStatus: function(body) { return call("noema:api:jupyter-cell:kernel-status", [body || {}]); },
+      restart: function(body) { return call("noema:api:jupyter-cell:restart", [body || {}]); },
+      interrupt: function(body) { return call("noema:api:jupyter-cell:interrupt", [body || {}]); },
+      shutdown: function(body) { return call("noema:api:jupyter-cell:shutdown", [body || {}]); },
+      serverList: function(body) { return call("noema:api:jupyter-cell:server-list", [body || {}]); },
+      serverRead: function(body) { return call("noema:api:jupyter-cell:server-read", [body || {}]); },
+      serverWrite: function(body) { return call("noema:api:jupyter-cell:server-write", [body || {}]); },
+      tasks: function() { return call("noema:api:jupyter-cell:tasks", []); },
+      cleanup: function(body) { return call("noema:api:jupyter-cell:cleanup", [body || {}]); }
     },
     research: {
-      resolveCell: function(body) { return call("aaronnote:api:research:cell:resolve", [body || {}]); },
-      cancelRun: function(body) { return call("aaronnote:api:research:run:cancel", [body || {}]); },
+      resolveCell: function(body) { return call("noema:api:research:cell:resolve", [body || {}]); },
+      cancelRun: function(body) { return call("noema:api:research:run:cancel", [body || {}]); },
     },
     latex: {
-      defaults: function(body) { return call("aaronnote:api:latex:defaults", [body || {}]); },
-      agentStatus: function() { return call("aaronnote:api:latex:agent-status", []); },
-      setAgent: function(body) { return call("aaronnote:api:latex:set-agent", [body || {}]); },
-      templates: function() { return call("aaronnote:api:latex:templates", []); },
-      chooseOutputPath: function(body) { return call("aaronnote:api:latex:choose-output-path", [body || {}]); },
-      intervene: function(body) { return call("aaronnote:api:latex:intervene", [body || {}]); },
-      openAgent: function(body) { return call("aaronnote:api:latex:open-agent", [body || {}]); },
-      export: function(body) { return call("aaronnote:api:latex:export", [body || {}]); }
+      defaults: function(body) { return call("noema:api:latex:defaults", [body || {}]); },
+      agentStatus: function() { return call("noema:api:latex:agent-status", []); },
+      setAgent: function(body) { return call("noema:api:latex:set-agent", [body || {}]); },
+      templates: function() { return call("noema:api:latex:templates", []); },
+      chooseOutputPath: function(body) { return call("noema:api:latex:choose-output-path", [body || {}]); },
+      intervene: function(body) { return call("noema:api:latex:intervene", [body || {}]); },
+      openAgent: function(body) { return call("noema:api:latex:open-agent", [body || {}]); },
+      export: function(body) { return call("noema:api:latex:export", [body || {}]); }
     },
     tasks: {
-      list: function(body) { return call("aaronnote:api:tasks:list", [body || {}]); },
-      get: function(body) { return call("aaronnote:api:tasks:get", [body || {}]); },
-      cancel: function(body) { return call("aaronnote:api:tasks:cancel", [body || {}]); },
-      retry: function(body) { return call("aaronnote:api:tasks:retry", [body || {}]); },
-      close: function(body) { return call("aaronnote:api:tasks:close", [body || {}]); }
+      list: function(body) { return call("noema:api:tasks:list", [body || {}]); },
+      get: function(body) { return call("noema:api:tasks:get", [body || {}]); },
+      cancel: function(body) { return call("noema:api:tasks:cancel", [body || {}]); },
+      retry: function(body) { return call("noema:api:tasks:retry", [body || {}]); },
+      close: function(body) { return call("noema:api:tasks:close", [body || {}]); }
     },
     roamTools: {
-      renameTag: function(body) { return call("aaronnote:api:roam-tools:rename-tag", [body || {}]); },
-      deleteTag: function(body) { return call("aaronnote:api:roam-tools:delete-tag", [body || {}]); },
-      tagOverlap: function() { return call("aaronnote:api:roam-tools:tag-overlap", []); },
-      rewritePathRefs: function(body) { return call("aaronnote:api:roam-tools:rewrite-path-refs", [body || {}]); }
+      renameTag: function(body) { return call("noema:api:roam-tools:rename-tag", [body || {}]); },
+      deleteTag: function(body) { return call("noema:api:roam-tools:delete-tag", [body || {}]); },
+      tagOverlap: function() { return call("noema:api:roam-tools:tag-overlap", []); },
+      rewritePathRefs: function(body) { return call("noema:api:roam-tools:rewrite-path-refs", [body || {}]); }
     },
     assets: {
-      upload: function(body) { return call("aaronnote:api:assets:upload", [body || {}]); },
-      storeFromPath: function(body) { return call("aaronnote:api:assets:store-from-path", [body || {}]); },
-      scanOrphans: function() { return call("aaronnote:api:assets:scan-orphans", []); },
-      trashOrphans: function(files) { return call("aaronnote:api:assets:trash-orphans", [files || []]); },
-      inspect: function() { return call("aaronnote:api:assets:inspect", []); },
-      rename: function(body) { return call("aaronnote:api:assets:rename", [body || {}]); },
-      searchContent: function(body) { return call("aaronnote:api:assets:search-content", [body || {}]); }
+      upload: function(body) { return call("noema:api:assets:upload", [body || {}]); },
+      storeFromPath: function(body) { return call("noema:api:assets:store-from-path", [body || {}]); },
+      scanOrphans: function() { return call("noema:api:assets:scan-orphans", []); },
+      trashOrphans: function(files) { return call("noema:api:assets:trash-orphans", [files || []]); },
+      inspect: function() { return call("noema:api:assets:inspect", []); },
+      rename: function(body) { return call("noema:api:assets:rename", [body || {}]); },
+      searchContent: function(body) { return call("noema:api:assets:search-content", [body || {}]); }
     },
     imports: {
-      obsidianAnalyze: function(body) { return call("aaronnote:api:imports:obsidian-analyze", [body || {}]); },
-      obsidianTask: function(body) { return call("aaronnote:api:imports:obsidian-task", [body || {}]); },
-      obsidianStart: function(body) { return call("aaronnote:api:imports:obsidian-start", [body || {}]); },
-      obsidianCancel: function(body) { return call("aaronnote:api:imports:obsidian-cancel", [body || {}]); }
+      obsidianAnalyze: function(body) { return call("noema:api:imports:obsidian-analyze", [body || {}]); },
+      obsidianTask: function(body) { return call("noema:api:imports:obsidian-task", [body || {}]); },
+      obsidianStart: function(body) { return call("noema:api:imports:obsidian-start", [body || {}]); },
+      obsidianCancel: function(body) { return call("noema:api:imports:obsidian-cancel", [body || {}]); }
     },
     clipboard: {
-      read: function(body) { return call("aaronnote:api:clipboard:read", [body || {}]); }
+      read: function(body) { return call("noema:api:clipboard:read", [body || {}]); }
     },
     session: {
-      getRecent: function() { return call("aaronnote:api:session:recent", []); },
-      touchRecent: function(file, openedAt) { return call("aaronnote:api:session:touch-recent", [String(file || ""), Number(openedAt) || Date.now()]); },
-      getPositions: function() { return call("aaronnote:api:session:positions", []); },
-      savePosition: function(position) { return call("aaronnote:api:session:save-position", [position || {}]); },
-      savePositionKeepalive: function(position) { callKeepalive("aaronnote:api:session:save-position", [position || {}]); },
-      closeClient: function(body) { return call("aaronnote:api:session:client-close", [body || {}]); },
-      closeClientKeepalive: function(body) { callKeepalive("aaronnote:api:session:client-close", [body || {}]); }
+      getRecent: function() { return call("noema:api:session:recent", []); },
+      touchRecent: function(file, openedAt) { return call("noema:api:session:touch-recent", [String(file || ""), Number(openedAt) || Date.now()]); },
+      getPositions: function() { return call("noema:api:session:positions", []); },
+      savePosition: function(position) { return call("noema:api:session:save-position", [position || {}]); },
+      savePositionKeepalive: function(position) { callKeepalive("noema:api:session:save-position", [position || {}]); },
+      closeClient: function(body) { return call("noema:api:session:client-close", [body || {}]); },
+      closeClientKeepalive: function(body) { callKeepalive("noema:api:session:client-close", [body || {}]); }
     },
     fs: {
-      rename: function(body) { return call("aaronnote:api:fs:rename", [body || {}]); },
-      move: function(body) { return call("aaronnote:api:fs:move", [body || {}]); },
-      duplicate: function(body) { return call("aaronnote:api:fs:duplicate", [body || {}]); },
-      trash: function(body) { return call("aaronnote:api:fs:trash", [body || {}]); }
+      rename: function(body) { return call("noema:api:fs:rename", [body || {}]); },
+      move: function(body) { return call("noema:api:fs:move", [body || {}]); },
+      duplicate: function(body) { return call("noema:api:fs:duplicate", [body || {}]); },
+      trash: function(body) { return call("noema:api:fs:trash", [body || {}]); }
     },
     meta: {
-      add: function(body) { return call("aaronnote:api:meta:add", [body || {}]); },
-      remove: function(body) { return call("aaronnote:api:meta:remove", [body || {}]); },
-      tag: function(body) { return call("aaronnote:api:meta:tag", [body || {}]); },
-      hideRoam: function(body) { return call("aaronnote:api:meta:hide-roam", [body || {}]); },
-      activateRoam: function(body) { return call("aaronnote:api:meta:activate-roam", [body || {}]); }
+      add: function(body) { return call("noema:api:meta:add", [body || {}]); },
+      remove: function(body) { return call("noema:api:meta:remove", [body || {}]); },
+      tag: function(body) { return call("noema:api:meta:tag", [body || {}]); },
+      hideRoam: function(body) { return call("noema:api:meta:hide-roam", [body || {}]); },
+      activateRoam: function(body) { return call("noema:api:meta:activate-roam", [body || {}]); }
     },
     emacs: {
-      open: function(body) { return call("aaronnote:api:emacs:open", [body || {}]); },
-      openSurface: function(body) { return call("aaronnote:api:emacs:surface", [body || {}]); },
+      open: function(body) { return call("noema:api:emacs:open", [body || {}]); },
+      openSurface: function(body) { return call("noema:api:emacs:surface", [body || {}]); },
       selectJupyterCell: function(body) {
-        return call("aaronnote:api:emacs:jupyter-cell", [body || {}]);
+        return call("noema:api:emacs:jupyter-cell", [body || {}]);
       },
       openResearchSession: function(body) {
-        return call("aaronnote:api:emacs:research-session", [body || {}]);
+        return call("noema:api:emacs:research-session", [body || {}]);
       },
       currentFile: function(file) {
-        return call("aaronnote:api:emacs:current-file", [
+        return call("noema:api:emacs:current-file", [
           file && typeof file === "object" ? file : String(file || "")
         ]);
       },
-      inputFocus: function(body) { return call("aaronnote:api:emacs:input-focus", [body || {}]); },
-      uiState: function(body) { return call("aaronnote:api:emacs:ui-state", [body || {}]); },
+      inputFocus: function(body) { return call("noema:api:emacs:input-focus", [body || {}]); },
+      uiState: function(body) { return call("noema:api:emacs:ui-state", [body || {}]); },
       key: function(k) {
-        return call("aaronnote:api:emacs:key", [
+        return call("noema:api:emacs:key", [
           k && typeof k === "object" ? k : String(k || "")
         ]);
       },
-      sendSelection: function(body) { return call("aaronnote:api:emacs:selection", [body || {}]); },
+      sendSelection: function(body) { return call("noema:api:emacs:selection", [body || {}]); },
       systemOpen: function(target, base) {
-        return call("aaronnote:api:emacs:system-open", [
+        return call("noema:api:emacs:system-open", [
           base ? {target: String(target || ""), base: String(base || "")} : String(target || "")
         ]);
       },
-      zotero: function(body) { return call("aaronnote:api:emacs:zotero", [body || {}]); },
-      zoteroImport: function(body) { return call("aaronnote:api:emacs:zotero-import", [body || {}]); },
-      chooseNotePath: function(body) { return call("aaronnote:api:emacs:choose-note-path", [body || {}]); }
+      zotero: function(body) { return call("noema:api:emacs:zotero", [body || {}]); },
+      zoteroImport: function(body) { return call("noema:api:emacs:zotero-import", [body || {}]); },
+      chooseNotePath: function(body) { return call("noema:api:emacs:choose-note-path", [body || {}]); }
     },
     shell: {
-      showInFolder: function(file) { return call("aaronnote:api:shell:show-in-folder", [String(file || "")]); },
-      openPath: function(file) { return call("aaronnote:api:shell:open-path", [String(file || "")]); },
-      openDirectory: function(path, base) { return call("aaronnote:api:shell:open-directory", [{path: String(path || ""), base: String(base || "")}]); },
-      openDirectoryInKitty: function(path, base) { return call("aaronnote:api:shell:open-directory-in-kitty", [{path: String(path || ""), base: String(base || "")}]); },
-      showAttachmentMenu: function(file, base, options) { return call("aaronnote:api:shell:show-attachment-menu", [String(file || ""), String(base || ""), options || {}]); },
-      showEditorContextMenu: function(options) { return call("aaronnote:api:shell:show-editor-context-menu", [options || {}]); }
+      showInFolder: function(file) { return call("noema:api:shell:show-in-folder", [String(file || "")]); },
+      openPath: function(file) { return call("noema:api:shell:open-path", [String(file || "")]); },
+      openDirectory: function(path, base) { return call("noema:api:shell:open-directory", [{path: String(path || ""), base: String(base || "")}]); },
+      openDirectoryInKitty: function(path, base) { return call("noema:api:shell:open-directory-in-kitty", [{path: String(path || ""), base: String(base || "")}]); },
+      showAttachmentMenu: function(file, base, options) { return call("noema:api:shell:show-attachment-menu", [String(file || ""), String(base || ""), options || {}]); },
+      showEditorContextMenu: function(options) { return call("noema:api:shell:show-editor-context-menu", [options || {}]); }
     },
     proseCheck: {
-      run: function(body) { return call("aaronnote:api:prose-check:run", [body || {}]); },
-      acceptWord: function(word) { return call("aaronnote:api:prose-check:accept-word", [String(word || "")]); },
-      disableRule: function(rule, disabled) { return call("aaronnote:api:prose-check:disable-rule", [{rule: String(rule || ""), disabled: disabled !== false}]); },
-      cancel: function(requestId) { return call("aaronnote:api:prose-check:cancel", [String(requestId || "")]); },
-      cancelKeepalive: function(requestId) { callKeepalive("aaronnote:api:prose-check:cancel", [String(requestId || "")]); },
-      settings: function() { return call("aaronnote:api:prose-check:settings", []); },
-      updateSettings: function(body) { return call("aaronnote:api:prose-check:update-settings", [body || {}]); },
-      probe: function(body) { return call("aaronnote:api:prose-check:probe", [body || {}]); },
+      run: function(body) { return call("noema:api:prose-check:run", [body || {}]); },
+      acceptWord: function(word) { return call("noema:api:prose-check:accept-word", [String(word || "")]); },
+      disableRule: function(rule, disabled) { return call("noema:api:prose-check:disable-rule", [{rule: String(rule || ""), disabled: disabled !== false}]); },
+      cancel: function(requestId) { return call("noema:api:prose-check:cancel", [String(requestId || "")]); },
+      cancelKeepalive: function(requestId) { callKeepalive("noema:api:prose-check:cancel", [String(requestId || "")]); },
+      settings: function() { return call("noema:api:prose-check:settings", []); },
+      updateSettings: function(body) { return call("noema:api:prose-check:update-settings", [body || {}]); },
+      probe: function(body) { return call("noema:api:prose-check:probe", [body || {}]); },
       browserSpellcheck: function(words) {
         return Array.isArray(words) ? words.map(function(word) {
           return {word: String(word || ""), misspelled: false, suggestions: []};
@@ -3547,58 +3547,58 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       }
     },
     copilot: {
-      request: function(action, body) { return call("aaronnote:api:copilot:request", [String(action || ""), body || {}]); }
+      request: function(action, body) { return call("noema:api:copilot:request", [String(action || ""), body || {}]); }
     },
     config: {
-      katexMacros: function() { return call("aaronnote:api:config:katex-macros", []); },
-      updateUserKatexMacros: function(body) { return call("aaronnote:api:config:update-user-katex-macros", [body || {}]); },
-      noteKatexMacros: function(body) { return call("aaronnote:api:config:note-katex-macros", [body || {}]); },
-      app: function() { return call("aaronnote:api:config:app", []); },
-      updateApp: function(body) { return call("aaronnote:api:config:update-app", [body || {}]); }
+      katexMacros: function() { return call("noema:api:config:katex-macros", []); },
+      updateUserKatexMacros: function(body) { return call("noema:api:config:update-user-katex-macros", [body || {}]); },
+      noteKatexMacros: function(body) { return call("noema:api:config:note-katex-macros", [body || {}]); },
+      app: function() { return call("noema:api:config:app", []); },
+      updateApp: function(body) { return call("noema:api:config:update-app", [body || {}]); }
     },
     wiki: {
-      bootstrap: function() { return call("aaronnote:api:wiki:bootstrap", []); },
-      environment: function() { return call("aaronnote:api:wiki:environment", []); },
-      refresh: function(body) { return call("aaronnote:api:wiki:refresh", [body || {}]); },
-      indexStatus: function() { return call("aaronnote:api:wiki:index-status", []); },
-      search: function(body) { return call("aaronnote:api:wiki:search", [body || {}]); },
-      resolveLink: function(body) { return call("aaronnote:api:wiki:resolve-link", [body || {}]); },
-      initWorkspace: function() { return call("aaronnote:api:wiki:init-workspace", []); },
-      initRepository: function(body) { return call("aaronnote:api:wiki:init-repository", [body || {}]); },
-      cloneRepository: function(body) { return call("aaronnote:api:wiki:clone-repository", [body || {}]); },
-      adoptRepository: function(body) { return call("aaronnote:api:wiki:adopt-repository", [body || {}]); },
-      repositoryStatus: function(body) { return call("aaronnote:api:wiki:repository-status", [body || {}]); },
-      repositoryDiff: function(body) { return call("aaronnote:api:wiki:repository-diff", [body || {}]); },
-      branches: function(body) { return call("aaronnote:api:wiki:branches", [body || {}]); },
-      branchAction: function(body) { return call("aaronnote:api:wiki:branch-action", [body || {}]); },
-      remotes: function(body) { return call("aaronnote:api:wiki:remotes", [body || {}]); },
-      remoteAction: function(body) { return call("aaronnote:api:wiki:remote-action", [body || {}]); },
-      git: function(body) { return call("aaronnote:api:wiki:git", [body || {}]); },
-      createPage: function(body) { return call("aaronnote:api:wiki:create-page", [body || {}]); },
-      movePage: function(body) { return call("aaronnote:api:wiki:move-page", [body || {}]); },
-      deletePage: function(body) { return call("aaronnote:api:wiki:delete-page", [body || {}]); },
-      trashPages: function() { return call("aaronnote:api:wiki:trash-pages", []); },
-      restoreTrashPage: function(body) { return call("aaronnote:api:wiki:restore-trash-page", [body || {}]); },
-      copyPage: function(body) { return call("aaronnote:api:wiki:copy-page", [body || {}]); },
-      mergePages: function(body) { return call("aaronnote:api:wiki:merge-pages", [body || {}]); },
-      tags: function() { return call("aaronnote:api:wiki:tags", []); },
-      updateTag: function(body) { return call("aaronnote:api:wiki:update-tag", [body || {}]); },
-      updateNamespace: function(body) { return call("aaronnote:api:wiki:update-namespace", [body || {}]); },
-      export: function(body) { return call("aaronnote:api:wiki:export", [body || {}]); },
-      pageHistory: function(body) { return call("aaronnote:api:wiki:page-history", [body || {}]); },
-      pageDiff: function(body) { return call("aaronnote:api:wiki:page-diff", [body || {}]); },
-      restorePage: function(body) { return call("aaronnote:api:wiki:restore-page", [body || {}]); },
-      syncStatus: function(body) { return call("aaronnote:api:wiki:sync-status", [body || {}]); },
-      checkpoint: function(body) { return call("aaronnote:api:wiki:checkpoint", [body || {}]); },
-      sync: function(body) { return call("aaronnote:api:wiki:sync", [body || {}]); },
-      conflict: function(body) { return call("aaronnote:api:wiki:conflict", [body || {}]); },
-      resolveConflict: function(body) { return call("aaronnote:api:wiki:resolve-conflict", [body || {}]); },
-      abortConflict: function(body) { return call("aaronnote:api:wiki:abort-conflict", [body || {}]); },
-      gitUi: function(body) { return call("aaronnote:api:wiki:git-ui", [body || {}]); }
+      bootstrap: function() { return call("noema:api:wiki:bootstrap", []); },
+      environment: function() { return call("noema:api:wiki:environment", []); },
+      refresh: function(body) { return call("noema:api:wiki:refresh", [body || {}]); },
+      indexStatus: function() { return call("noema:api:wiki:index-status", []); },
+      search: function(body) { return call("noema:api:wiki:search", [body || {}]); },
+      resolveLink: function(body) { return call("noema:api:wiki:resolve-link", [body || {}]); },
+      initWorkspace: function() { return call("noema:api:wiki:init-workspace", []); },
+      initRepository: function(body) { return call("noema:api:wiki:init-repository", [body || {}]); },
+      cloneRepository: function(body) { return call("noema:api:wiki:clone-repository", [body || {}]); },
+      adoptRepository: function(body) { return call("noema:api:wiki:adopt-repository", [body || {}]); },
+      repositoryStatus: function(body) { return call("noema:api:wiki:repository-status", [body || {}]); },
+      repositoryDiff: function(body) { return call("noema:api:wiki:repository-diff", [body || {}]); },
+      branches: function(body) { return call("noema:api:wiki:branches", [body || {}]); },
+      branchAction: function(body) { return call("noema:api:wiki:branch-action", [body || {}]); },
+      remotes: function(body) { return call("noema:api:wiki:remotes", [body || {}]); },
+      remoteAction: function(body) { return call("noema:api:wiki:remote-action", [body || {}]); },
+      git: function(body) { return call("noema:api:wiki:git", [body || {}]); },
+      createPage: function(body) { return call("noema:api:wiki:create-page", [body || {}]); },
+      movePage: function(body) { return call("noema:api:wiki:move-page", [body || {}]); },
+      deletePage: function(body) { return call("noema:api:wiki:delete-page", [body || {}]); },
+      trashPages: function() { return call("noema:api:wiki:trash-pages", []); },
+      restoreTrashPage: function(body) { return call("noema:api:wiki:restore-trash-page", [body || {}]); },
+      copyPage: function(body) { return call("noema:api:wiki:copy-page", [body || {}]); },
+      mergePages: function(body) { return call("noema:api:wiki:merge-pages", [body || {}]); },
+      tags: function() { return call("noema:api:wiki:tags", []); },
+      updateTag: function(body) { return call("noema:api:wiki:update-tag", [body || {}]); },
+      updateNamespace: function(body) { return call("noema:api:wiki:update-namespace", [body || {}]); },
+      export: function(body) { return call("noema:api:wiki:export", [body || {}]); },
+      pageHistory: function(body) { return call("noema:api:wiki:page-history", [body || {}]); },
+      pageDiff: function(body) { return call("noema:api:wiki:page-diff", [body || {}]); },
+      restorePage: function(body) { return call("noema:api:wiki:restore-page", [body || {}]); },
+      syncStatus: function(body) { return call("noema:api:wiki:sync-status", [body || {}]); },
+      checkpoint: function(body) { return call("noema:api:wiki:checkpoint", [body || {}]); },
+      sync: function(body) { return call("noema:api:wiki:sync", [body || {}]); },
+      conflict: function(body) { return call("noema:api:wiki:conflict", [body || {}]); },
+      resolveConflict: function(body) { return call("noema:api:wiki:resolve-conflict", [body || {}]); },
+      abortConflict: function(body) { return call("noema:api:wiki:abort-conflict", [body || {}]); },
+      gitUi: function(body) { return call("noema:api:wiki:git-ui", [body || {}]); }
     },
     knowledge: {
-      search: function(body) { return call("aaronnote:api:knowledge:search", [body || {}]); },
-      virtualReferences: function(body) { return call("aaronnote:api:knowledge:virtual-references", [body || {}]); }
+      search: function(body) { return call("noema:api:knowledge:search", [body || {}]); },
+      virtualReferences: function(body) { return call("noema:api:knowledge:virtual-references", [body || {}]); }
     }
   };
 }());
@@ -3620,7 +3620,7 @@ function cleanAssetSource(source) {
 
 function resolveAssetFile(rawUrl) {
   const parsed = new URL(String(rawUrl || ""));
-  if (parsed.protocol !== "aaronnote-asset:") throw new Error(`Unsupported asset URL: ${rawUrl}`);
+  if (parsed.protocol !== "noema-asset:") throw new Error(`Unsupported asset URL: ${rawUrl}`);
   const host = parsed.hostname;
   if (host === "media") {
     return resolveMediaFile(parsed.searchParams.get("file"), parsed.searchParams.get("base"));
@@ -3651,7 +3651,7 @@ function drawioAssetFile(src) {
   const raw = String(src || "");
   if (!raw) throw new Error("Missing draw.io source");
   const parsed = new URL(raw);
-  if (parsed.protocol !== "aaronnote-asset:" || parsed.hostname !== "media") {
+  if (parsed.protocol !== "noema-asset:" || parsed.hostname !== "media") {
     throw new Error(`Unsupported draw.io source: ${raw}`);
   }
   // A published vault resolves assets through its own catalogue, which is also
@@ -3702,7 +3702,7 @@ async function serveDrawioSVG(rawUrl, req, res) {
   }
 }
 
-async function serveAaronnoteAsset(url, req, res) {
+async function serveNoemaAsset(url, req, res) {
   const raw = url.searchParams.get("url") || "";
   let parsedRaw = null;
   try {
@@ -3757,7 +3757,7 @@ async function serveNoteAsset(url, res) {
     res.end(data);
     return;
   }
-  const assetUrl = new URL("aaronnote-asset://media");
+  const assetUrl = new URL("noema-asset://media");
   assetUrl.searchParams.set("file", source);
   if (base) assetUrl.searchParams.set("base", base);
   const file = resolveAssetFile(assetUrl.toString());
@@ -3998,8 +3998,8 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname === "/aaronnote-asset") {
-      await serveAaronnoteAsset(url, req, res);
+    if (url.pathname === "/noema-asset") {
+      await serveNoemaAsset(url, req, res);
       return;
     }
 
@@ -4099,12 +4099,12 @@ html,body{margin:0;padding:0;width:100vw;height:100vh;overflow:hidden;display:fl
 <script src="${origin}/roam-pub/graph.js"></script>
 <script>
 document.addEventListener("DOMContentLoaded", function () {
-  var root = window.__aaronnoteNotesRoot || "";
+  var root = window.__noemaNotesRoot || "";
   window.initKnowledgeGraph({
     onNoteOpen: function (note) {
       var path = (note && (note.path || note.link)) || "";
       if (!path) return;
-      if (window.__aaronnoteHostMode === "server") {
+      if (window.__noemaHostMode === "server") {
         window.open("/?file=" + encodeURIComponent(path), "_blank", "noopener");
         return;
       }
@@ -4116,7 +4116,7 @@ document.addEventListener("DOMContentLoaded", function () {
         while (p.length && p.charAt(0) === "/") p = p.slice(1);
         abs = r + "/" + p;
       }
-      var api = window.aaronnoteApi;
+      var api = window.noemaApi;
       if (api && api.emacs && api.emacs.open) {
         api.emacs.open({ file: abs }).catch(function () {});
       }
@@ -4181,7 +4181,7 @@ jupyterKernelWs = jupyterCell ? installJupyterKernelWebSocket({
 }) : null;
 
 server.on("error", (err) => {
-  process.stderr.write(`[aaronnote-web] Failed to start server: ${err.message}\n`);
+  process.stderr.write(`[noema-web] Failed to start server: ${err.message}\n`);
   process.exit(1);
 });
 if (hostMode !== "server") {
@@ -4193,12 +4193,12 @@ if (hostMode !== "server") {
 }
 server.listen(bindPort, bindHost, () => {
   const port = server.address().port;
-  process.stderr.write(`[aaronnote-web] http://${bindHost}:${port}\n`);
+  process.stderr.write(`[noema-web] http://${bindHost}:${port}\n`);
   if (hostMode !== "server") {
     try {
       writeHostDescriptor(stateRoot, { url: `http://${bindHost}:${port}`, noteRoot });
     } catch (error) {
-      process.stderr.write(`[aaronnote-web] host descriptor update failed: ${error?.message || error}\n`);
+      process.stderr.write(`[noema-web] host descriptor update failed: ${error?.message || error}\n`);
     }
   }
   if (hostMode === "emacs") connectGateway(port);

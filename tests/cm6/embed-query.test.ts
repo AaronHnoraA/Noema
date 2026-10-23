@@ -21,7 +21,7 @@ describe("portable embed-query widget", () => {
     const { editor, cleanup } = await mount(source);
     editor.setSelection(source.length, source.length);
     let request: any = null;
-    editor.view.dom.addEventListener("aaronnote:embed-query-request", (event) => {
+    editor.view.dom.addEventListener("noema:embed-query-request", (event) => {
       event.preventDefault();
       request = (event as CustomEvent).detail;
       request.respond({
@@ -41,7 +41,7 @@ describe("portable embed-query widget", () => {
     expect(editor.view.dom.querySelector(".cm-embed-query-result-markdown strong")?.textContent).toBe("result");
     expect(editor.view.dom.querySelector(".cm-embed-query-result script")).toBeNull();
     let opened: any = null;
-    editor.view.dom.addEventListener("aaronnote:embed-query-open", (event) => {
+    editor.view.dom.addEventListener("noema:embed-query-open", (event) => {
       event.preventDefault();
       opened = (event as CustomEvent).detail;
     });

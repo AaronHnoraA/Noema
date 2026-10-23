@@ -39,8 +39,8 @@
 (require 'noema-agent-acp)
 (require 'noema-agent-promote)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
+(declare-function my/noema--ensure-server "init-noema" (&optional callback))
 (declare-function noema-agent-worker-claim-coordinator-requests "noema-agent-worker" (root))
 (declare-function noema-agent-worker-buffer-busy-p "noema-agent-worker" (buffer))
 (declare-function noema-agent-worker-stop-buffer "noema-agent-worker" (buffer))
@@ -464,7 +464,7 @@ description Pi carries costs tokens on every turn."
   (when (and (buffer-live-p buffer) (fboundp 'my/noema-api-call))
     (condition-case error-object
         (noema-pi-router--api
-         "aaronnote:api:research:session:promote"
+         "noema:api:research:session:promote"
          (noema-agent-promote--session-spec buffer "Pi manager" "Project session management")
          (lambda (result promote-error)
            (if promote-error
@@ -475,7 +475,7 @@ description Pi carries costs tokens on every turn."
                  (with-current-buffer buffer
                    (setq-local noema-agent-promote--session-id id)))
                (noema-pi-router--api
-                "aaronnote:api:research:session:name:bind"
+                "noema:api:research:session:name:bind"
                 `((cwd . ,root) (name . ,noema-pi-router-session-name)
                   (agent . "pi") (sessionId . ,id))
                 (lambda (_bound bind-error)
@@ -557,12 +557,12 @@ ENDPOINT carries the coordinator URL.  Display the buffer when FOCUS."
       (my/noema--ensure-server
        (lambda ()
          (noema-pi-router--api
-          "aaronnote:api:research:coordinator:endpoint" `((cwd . ,root))
+          "noema:api:research:coordinator:endpoint" `((cwd . ,root))
           (lambda (endpoint endpoint-error)
             (if (or endpoint-error (not (noema-pi-router--string endpoint "coordinatorUrl")))
                 (funcall abandon "the coordinator endpoint is unavailable")
               (noema-pi-router--api
-               "aaronnote:api:research:session:name:get"
+               "noema:api:research:session:name:get"
                `((cwd . ,root) (name . ,noema-pi-router-session-name))
                (lambda (result _name-error)
                  (remhash root noema-pi-router--starting)
@@ -835,7 +835,7 @@ An `auth.json' that holds no provider entry does not count."
     (display-buffer buffer)
     (when (and (fboundp 'my/noema-api-call) (bound-and-true-p my/noema--ready))
       (noema-pi-router--api
-       "aaronnote:api:research:coordinator:endpoint" `((cwd . ,root))
+       "noema:api:research:coordinator:endpoint" `((cwd . ,root))
        (lambda (endpoint error-object)
          (when (buffer-live-p buffer)
            (with-current-buffer buffer

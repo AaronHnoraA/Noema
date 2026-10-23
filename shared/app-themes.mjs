@@ -32,8 +32,16 @@ export const NOEMA_APP_THEMES = Object.freeze(entries.map((theme) => Object.free
 
 const themeIds = new Set(NOEMA_APP_THEMES.map((theme) => theme.id));
 
+// Theme id saved in user config before the Noema rename.
+const LEGACY_THEME_IDS = { aaronnote: "noema" };
+
+export function canonicalNoemaAppThemeId(themeId) {
+  const id = String(themeId || "").trim().toLowerCase();
+  return LEGACY_THEME_IDS[id] || id;
+}
+
 export function noemaAppTheme(themeId) {
-  const normalized = String(themeId || "").trim().toLowerCase();
+  const normalized = canonicalNoemaAppThemeId(themeId);
   return NOEMA_APP_THEMES.find((theme) => theme.id === normalized)
     || NOEMA_APP_THEMES.find((theme) => theme.id === NOEMA_DEFAULT_THEME_ID)
     || NOEMA_APP_THEMES[0];

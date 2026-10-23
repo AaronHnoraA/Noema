@@ -12,17 +12,17 @@ import { executeOnKernel } from "../server/jupyter/execution-message-handler.mjs
 // own future.dispose()-on-kernel-dispose rejection (triggered by our
 // kernel-registry exit handler calling kernel.dispose()) actually propagates
 // through executeOnKernel. Gated: real kernel process.
-const RUN = process.env.AARONNOTE_TEST_KERNEL === "1";
+const RUN = process.env.NOEMA_TEST_KERNEL === "1";
 const describeIfKernel = RUN ? describe : describe.skip;
 
-const aaronnoteRoot = join(import.meta.dirname, "..");
-const jupyterDataDir = join(aaronnoteRoot, "jupyter", ".jupyter", "data");
+const noemaRoot = join(import.meta.dirname, "..");
+const jupyterDataDir = join(noemaRoot, "jupyter", ".jupyter", "data");
 
 describeIfKernel("kernel death mid-execution (real ipykernel)", () => {
   test(
     "executeOnKernel rejects promptly (not hangs) when the kernel process is killed mid-run",
     async () => {
-      const runtimeDir = await mkdtemp(join(tmpdir(), "aaronnote-death-"));
+      const runtimeDir = await mkdtemp(join(tmpdir(), "noema-death-"));
       const registry = createKernelRegistry({ runtimeDir, zmq, launchTimeoutMs: 15_000 });
       const searchDirs = defaultKernelSearchDirs({ dataDir: jupyterDataDir, useHomeKernels: false });
       const specs = await findKernelSpecs({ searchDirs });

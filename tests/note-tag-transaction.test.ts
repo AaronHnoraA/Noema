@@ -4,7 +4,7 @@ import {
   metadataTagsFromMarkdown,
   planMarkdownMetadataChanges,
   planMarkdownTagChanges,
-} from "../aaronnote/note-tag-transaction.ts";
+} from "../pages/note-tag-transaction.ts";
 import { wikiPageMetadata } from "../server/lib/wiki-workspace.mjs";
 
 function apply(markdown: string, edit: { changed: boolean; from: number; to: number; insert: string }): string {

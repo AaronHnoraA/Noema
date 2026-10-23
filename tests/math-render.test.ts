@@ -11,7 +11,7 @@ import { getKatexMacrosVersion } from "../src/katex-macros.ts";
 describe("math render source handling", () => {
   test("synchronous render path loads KaTeX CSS", () => {
     document
-      .querySelectorAll("link[data-aaronnote-katex-css]")
+      .querySelectorAll("link[data-noema-katex-css]")
       .forEach((link) => link.remove());
 
     const rendered = renderMathHTML("\\langle v,w \\rangle", {
@@ -21,7 +21,7 @@ describe("math render source handling", () => {
     });
 
     expect(rendered.error).toBeUndefined();
-    const css = document.querySelector<HTMLLinkElement>("link[data-aaronnote-katex-css]");
+    const css = document.querySelector<HTMLLinkElement>("link[data-noema-katex-css]");
     expect(css).toBeTruthy();
     expect(css!.rel).toBe("stylesheet");
 
@@ -31,7 +31,7 @@ describe("math render source handling", () => {
       output: "html",
       strict: false,
     });
-    expect(document.querySelector("link[data-aaronnote-katex-css]")).toBeTruthy();
+    expect(document.querySelector("link[data-noema-katex-css]")).toBeTruthy();
   });
 
   test("renders from the exact TeX source without command-name repairs", () => {

@@ -7,14 +7,14 @@
 :root[data-noema-theme="daylight"] {
   color-scheme: light;
   --noema-window-background: #f4f0e8;
-  --aaronnote-bg: #f4f0e8;
-  --aaronnote-chrome: #ede8de;
-  --aaronnote-border: #c9c0b2;
-  --aaronnote-muted: #746d65;
-  --aaronnote-vim-accent: #b65336;
-  --aaronnote-vim-visual: #7b5a9c;
-  --aaronnote-panel-bg: rgb(250 247 241 / 97%);
-  --aaronnote-surface: rgb(255 253 248 / 96%);
+  --noema-bg: #f4f0e8;
+  --noema-chrome: #ede8de;
+  --noema-border: #c9c0b2;
+  --noema-muted: #746d65;
+  --noema-vim-accent: #b65336;
+  --noema-vim-visual: #7b5a9c;
+  --noema-panel-bg: rgb(250 247 241 / 97%);
+  --noema-surface: rgb(255 253 248 / 96%);
   --aaron-ink: #2f2c28;
   --aaron-muted: #746d65;
   --aaron-faint: #998f84;
@@ -110,7 +110,7 @@
   --aaron-radius-2: 10px;
 }
 
-:root[data-noema-theme="claude"] .aaronnote-status-pill,
-:root[data-noema-theme="daylight"] .aaronnote-status-pill {
+:root[data-noema-theme="claude"] .noema-status-pill,
+:root[data-noema-theme="daylight"] .noema-status-pill {
   box-shadow: none;
 }

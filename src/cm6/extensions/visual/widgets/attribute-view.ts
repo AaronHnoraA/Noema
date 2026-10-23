@@ -101,7 +101,7 @@ function beginCellEdit(cell: HTMLElement, row: AttributeViewRow, key: string, re
         else restore(error || "Cell edit failed");
       },
     };
-    const event = new CustomEvent<AttributeViewCellPatchDetail>("aaronnote:attribute-view-cell-patch", {
+    const event = new CustomEvent<AttributeViewCellPatchDetail>("noema:attribute-view-cell-patch", {
       bubbles: true,
       cancelable: true,
       composed: true,
@@ -143,7 +143,7 @@ function setRowDataset(element: HTMLElement, row: AttributeViewRow): void {
 }
 
 function dispatchOpenRow(element: HTMLElement, row: AttributeViewRow): void {
-  element.dispatchEvent(new CustomEvent<AttributeViewOpenRowDetail>("aaronnote:attribute-view-open-row", {
+  element.dispatchEvent(new CustomEvent<AttributeViewOpenRowDetail>("noema:attribute-view-open-row", {
     bubbles: true,
     cancelable: true,
     composed: true,
@@ -463,7 +463,7 @@ export class AttributeViewWidget extends MeasuredWidget {
           renderModel(root, model, request);
         },
       };
-      const event = new CustomEvent<AttributeViewRequestDetail>("aaronnote:attribute-view-request", {
+      const event = new CustomEvent<AttributeViewRequestDetail>("noema:attribute-view-request", {
         bubbles: true,
         cancelable: true,
         composed: true,

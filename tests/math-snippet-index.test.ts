@@ -1,6 +1,6 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { scanMathCommandChunk } from "../aaronnote/math-snippet-index.ts";
+import { scanMathCommandChunk } from "../pages/math-snippet-index.ts";
 
 describe("math snippet document index", () => {
   test("counts commands only inside inline and display math", () => {

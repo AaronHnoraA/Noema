@@ -1,6 +1,6 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
-import { unionSelectionRect } from "../aaronnote/selection-geometry.ts";
+import { unionSelectionRect } from "../pages/selection-geometry.ts";
 
 function rect(left: number, top: number, right: number, bottom: number) {
   return { left, top, right, bottom };

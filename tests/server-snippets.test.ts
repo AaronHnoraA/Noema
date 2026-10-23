@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "@voidzero-dev/vite-plus-test"
 import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { expandSnippetBody, matchingSnippetsForPrefix } from "../aaronnote/snippets.ts";
+import { expandSnippetBody, matchingSnippetsForPrefix } from "../pages/snippets.ts";
 
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
 import { parseSnippetBody, scanSnippets } from "../server/lib/runtime.mjs";
@@ -22,16 +22,16 @@ type ScannedSnippet = {
   mode?: string;
 };
 
-const originalRoots = process.env.AARONNOTE_SNIPPETS;
+const originalRoots = process.env.NOEMA_SNIPPETS;
 
 afterEach(() => {
-  if (originalRoots == null) delete process.env.AARONNOTE_SNIPPETS;
-  else process.env.AARONNOTE_SNIPPETS = originalRoots;
+  if (originalRoots == null) delete process.env.NOEMA_SNIPPETS;
+  else process.env.NOEMA_SNIPPETS = originalRoots;
 });
 
 describe("server snippet catalog", () => {
   test("offers shared Markdown structure by typed keys", async () => {
-    process.env.AARONNOTE_SNIPPETS = join(process.cwd(), "resources", "snippets");
+    process.env.NOEMA_SNIPPETS = join(process.cwd(), "resources", "snippets");
     const catalog = (await scanSnippets({ force: true }))
       .filter((snippet: ScannedSnippet) => snippet.mode === "markdown-mode");
     const expected = new Map([
@@ -75,7 +75,7 @@ describe("server snippet catalog", () => {
   });
 
   test("keeps the full shared TeX catalog in canonical tabstop form", async () => {
-    process.env.AARONNOTE_SNIPPETS = join(process.cwd(), "resources", "snippets");
+    process.env.NOEMA_SNIPPETS = join(process.cwd(), "resources", "snippets");
     const snippets = (await scanSnippets({ force: true }))
       .filter((snippet: ScannedSnippet) => snippet.mode === "tex-mode");
 
@@ -96,7 +96,7 @@ describe("server snippet catalog", () => {
   });
 
   test("uses explicit priority, merges upstream weight, and classifies backtick snippets", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-snippets-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-snippets-"));
     const personal = join(root, "personal", "tex-mode");
     const upstream = join(root, "upstream", "tex-mode");
     await mkdir(personal, { recursive: true });
@@ -105,7 +105,7 @@ describe("server snippet catalog", () => {
     await writeFile(join(upstream, "alpha"), "# key: alpha\n# provider: overleaf\n# priority: 160\n# weight: 7.5\n# --\n\\alpha$0\n");
     await writeFile(join(personal, "unsafe"), "# key: unsafe\n# --\n`(message \\\"x\\\")`\n");
     await writeFile(join(personal, "inline-code"), "# key: icode\n# --\n`$1` $0\n");
-    process.env.AARONNOTE_SNIPPETS = [join(root, "personal"), join(root, "upstream")].join(delimiter);
+    process.env.NOEMA_SNIPPETS = [join(root, "personal"), join(root, "upstream")].join(delimiter);
 
     const snippets = await scanSnippets({ force: true });
     const alpha = snippets.find((snippet: ScannedSnippet) => snippet.key === "alpha");
@@ -116,7 +116,7 @@ describe("server snippet catalog", () => {
   });
 
   test("decodes generated metadata from YAS-native headers", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-generated-snippets-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-generated-snippets-"));
     const tex = join(root, "tex-mode");
     await mkdir(tex, { recursive: true });
     await writeFile(join(tex, "beta"), [
@@ -128,7 +128,7 @@ describe("server snippet catalog", () => {
       "\\beta",
       "",
     ].join("\n"));
-    process.env.AARONNOTE_SNIPPETS = root;
+    process.env.NOEMA_SNIPPETS = root;
 
     const beta = (await scanSnippets({ force: true }))
       .find((snippet: ScannedSnippet) => snippet.key === "@b");
@@ -143,7 +143,7 @@ describe("server snippet catalog", () => {
   });
 
   test("follows a symlinked mode directory without losing its mode identity", async () => {
-    const root = await mkdtemp(join(tmpdir(), "aaronnote-snippet-links-"));
+    const root = await mkdtemp(join(tmpdir(), "noema-snippet-links-"));
     const catalog = join(root, "catalog");
     const sharedMode = join(root, "shared", "markdown-mode");
     await mkdir(catalog, { recursive: true });
@@ -153,7 +153,7 @@ describe("server snippet catalog", () => {
       "# name: Proof block\n# key: proof\n# --\n#+begin proof\n$0\n#+end proof\n",
     );
     await symlink(sharedMode, join(catalog, "markdown-mode"), "dir");
-    process.env.AARONNOTE_SNIPPETS = catalog;
+    process.env.NOEMA_SNIPPETS = catalog;
 
     const proof = (await scanSnippets({ force: true }))
       .find((snippet: ScannedSnippet & { mode?: string }) => snippet.key === "proof");

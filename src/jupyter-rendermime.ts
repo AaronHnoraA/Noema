@@ -77,7 +77,7 @@ html, body { margin: 0; }
 body { padding: 8px; box-sizing: border-box; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 </style>`;
 
-const HTML_FRAME_AUTOSIZE = `<script>(function(){function p(){try{var h=Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0);parent.postMessage({__aaronnoteCeilFrame:true,height:h},"*");}catch(e){}}window.addEventListener("load",p);try{new ResizeObserver(p).observe(document.documentElement);}catch(e){}setTimeout(p,50);setTimeout(p,400);})();</script>`;
+const HTML_FRAME_AUTOSIZE = `<script>(function(){function p(){try{var h=Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0);parent.postMessage({__noemaCeilFrame:true,height:h},"*");}catch(e){}}window.addEventListener("load",p);try{new ResizeObserver(p).observe(document.documentElement);}catch(e){}setTimeout(p,50);setTimeout(p,400);})();</script>`;
 
 const autoHeightFrames = new Set<HTMLIFrameElement>();
 let frameListenerInstalled = false;
@@ -86,8 +86,8 @@ function ensureFrameListener(): void {
   if (frameListenerInstalled) return;
   frameListenerInstalled = true;
   window.addEventListener("message", (event) => {
-    const data = event.data as { __aaronnoteCeilFrame?: boolean; height?: number } | null;
-    if (!data || data.__aaronnoteCeilFrame !== true || typeof data.height !== "number") return;
+    const data = event.data as { __noemaCeilFrame?: boolean; height?: number } | null;
+    if (!data || data.__noemaCeilFrame !== true || typeof data.height !== "number") return;
     for (const frame of Array.from(autoHeightFrames)) {
       if (!frame.isConnected) { autoHeightFrames.delete(frame); continue; }
       if (frame.contentWindow && frame.contentWindow === event.source) {
@@ -132,7 +132,7 @@ function htmlMathOnly(html: string): string | null {
 
 const stockHtmlFactory = standardRendererFactories.find((factory) => factory.mimeTypes.includes("text/html"));
 
-class AaronnoteMarkdownRenderer extends RenderedMarkdown {
+class NoemaMarkdownRenderer extends RenderedMarkdown {
   async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
     await super.renderModel(model);
     // OutputArea inserts its node directly into the host, so Lumino's
@@ -141,7 +141,7 @@ class AaronnoteMarkdownRenderer extends RenderedMarkdown {
   }
 }
 
-class AaronnoteHtmlRenderer extends Widget implements IRenderMime.IRenderer {
+class NoemaHtmlRenderer extends Widget implements IRenderMime.IRenderer {
   private readonly options: IRenderMime.IRendererOptions;
 
   constructor(options: IRenderMime.IRendererOptions) {
@@ -176,7 +176,7 @@ class AaronnoteHtmlRenderer extends Widget implements IRenderMime.IRenderer {
   }
 }
 
-class AaronnoteJsonRenderer extends Widget implements IRenderMime.IRenderer {
+class NoemaJsonRenderer extends Widget implements IRenderMime.IRenderer {
   private readonly mimeType: string;
 
   constructor(options: IRenderMime.IRendererOptions) {
@@ -309,7 +309,7 @@ function addJsonMimeFactory(registry: RenderMimeRegistry, mimeType: string, rank
   registry.addFactory({
     safe: true,
     mimeTypes: [mimeType],
-    createRenderer: (rendererOptions) => new AaronnoteJsonRenderer(rendererOptions),
+    createRenderer: (rendererOptions) => new NoemaJsonRenderer(rendererOptions),
   }, rank);
 }
 
@@ -401,12 +401,12 @@ export function createBaseRenderMime(options: Pick<RenderMimeOptions, "markdownP
   registry.addFactory({
     safe: false,
     mimeTypes: ["text/html"],
-    createRenderer: (rendererOptions) => new AaronnoteHtmlRenderer(rendererOptions),
+    createRenderer: (rendererOptions) => new NoemaHtmlRenderer(rendererOptions),
   }, 1);
   registry.addFactory({
     safe: true,
     mimeTypes: ["text/markdown"],
-    createRenderer: (rendererOptions) => new AaronnoteMarkdownRenderer(rendererOptions),
+    createRenderer: (rendererOptions) => new NoemaMarkdownRenderer(rendererOptions),
   }, 60);
   registry.addFactory({
     safe: true,
@@ -419,12 +419,12 @@ export function createBaseRenderMime(options: Pick<RenderMimeOptions, "markdownP
   registry.addFactory({
     safe: true,
     mimeTypes: ["application/json"],
-    createRenderer: (rendererOptions) => new AaronnoteJsonRenderer(rendererOptions),
+    createRenderer: (rendererOptions) => new NoemaJsonRenderer(rendererOptions),
   }, 55);
   return registry;
 }
 
-export function createAaronnoteRenderMime(options: RenderMimeOptions = {}): RenderMimeRegistry {
+export function createNoemaRenderMime(options: RenderMimeOptions = {}): RenderMimeRegistry {
   const registry = createBaseRenderMime(options);
   // Jupyter kernels and extensions frequently emit custom `+json` bundles.
   // JupyterLab only uses a vendor-specific renderer when its extension is
@@ -453,7 +453,7 @@ export function renderJupyterOutputs(
   for (const output of outputs) {
     for (const mimeType of jsonMimeTypesForOutput(output)) jsonMimeTypes.add(mimeType);
   }
-  const rendermime = createAaronnoteRenderMime({ ...options, jsonMimeTypes: Array.from(jsonMimeTypes) });
+  const rendermime = createNoemaRenderMime({ ...options, jsonMimeTypes: Array.from(jsonMimeTypes) });
   const model = new OutputAreaModel({ trusted: true });
   const area = new OutputArea({ model, rendermime });
   area.addClass("cm-ceil-output-area");

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AssistScheduler, assistScrollPolicy, type AssistUpdateFlags } from "../aaronnote/assist-scheduler.ts";
+import { AssistScheduler, assistScrollPolicy, type AssistUpdateFlags } from "../pages/assist-scheduler.ts";
 
 function createFrameApi() {
   let nextHandle = 1;
@@ -33,7 +33,7 @@ function createFrameApi() {
 
 describe("AssistScheduler", () => {
   test("main initializes the scheduler before the first mode-label assist update", () => {
-    const source = readFileSync(join(process.cwd(), "aaronnote/main.ts"), "utf8");
+    const source = readFileSync(join(process.cwd(), "pages/main.ts"), "utf8");
     const schedulerIndex = source.indexOf("const assistScheduler = new AssistScheduler");
     const firstModeUpdateIndex = source.indexOf("updateModeLabel(vim.mode())");
     expect(schedulerIndex).toBeGreaterThanOrEqual(0);
@@ -42,7 +42,7 @@ describe("AssistScheduler", () => {
   });
 
   test("caret reveal keeps completion and the resident formula preview open", () => {
-    const source = readFileSync(join(process.cwd(), "aaronnote/main.ts"), "utf8");
+    const source = readFileSync(join(process.cwd(), "pages/main.ts"), "utf8");
     const start = source.indexOf('window.addEventListener("scroll", (event) => {');
     const end = source.indexOf('}, { capture: true, passive: true });', start);
     const handler = source.slice(start, end);

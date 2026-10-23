@@ -12,7 +12,7 @@ const repo = fileURLToPath(new URL("../", import.meta.url));
 const root = "/@fs" + repo;
 const switches = Number(process.env.NOEMA_SOAK_SWITCHES || 600);
 const server = await createServer({
-  configFile: repo + "vite.aaronnote.config.ts", root: repo + "aaronnote",
+  configFile: repo + "vite.pages.config.ts", root: repo + "pages",
   logLevel: "error", server: { host: "127.0.0.1", port: 0, hmr: false },
 });
 await server.listen();
@@ -27,7 +27,7 @@ try {
   }));
   await page.route("**/memory-soak", (route) => route.fulfill({
     contentType: "text/html",
-    body: `<!doctype html><html><head><link rel="stylesheet" href="${root}src/styles/widgets.css"><link rel="stylesheet" href="${root}aaronnote/style.css"></head><body style="margin:0"><div id="host" class="aaronnote-focused-editor" style="height:780px;width:960px"></div></body></html>`,
+    body: `<!doctype html><html><head><link rel="stylesheet" href="${root}src/styles/widgets.css"><link rel="stylesheet" href="${root}pages/style.css"></head><body style="margin:0"><div id="host" class="noema-focused-editor" style="height:780px;width:960px"></div></body></html>`,
   }));
   const big = readFileSync(repo + "tests/synthetic_qc_note_5mb.md", "utf8");
   const notes = Array.from({ length: 40 }, (_, i) => big.slice(i * 60_000, i * 60_000 + 60_000)

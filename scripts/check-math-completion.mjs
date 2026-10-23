@@ -6,13 +6,13 @@ const {webkit}=await import(process.env.NOEMA_PLAYWRIGHT_MODULE || 'playwright')
 import {createServer} from 'vite';
 import assert from 'node:assert/strict';
 const repo=fileURLToPath(new URL('../',import.meta.url));
-const server=await createServer({configFile:repo+'/vite.aaronnote.config.ts',logLevel:'error',server:{host:'127.0.0.1',port:0,hmr:false}});
+const server=await createServer({configFile:repo+'/vite.pages.config.ts',logLevel:'error',server:{host:'127.0.0.1',port:0,hmr:false}});
 await server.listen();
 const browser=await webkit.launch({headless:true});
 try {
  const page=await browser.newPage({viewport:{width:1600,height:800}});
  page.on('pageerror',e=>console.log('PAGEERROR',e.message));
- await page.addInitScript(()=>{window.aaronnoteApi={copilot:{request:async()=>({ok:true})},notes:{bootstrap:()=>new Promise(()=>{})},config:{katexMacros:async()=>({macros:{}})}};});
+ await page.addInitScript(()=>{window.noemaApi={copilot:{request:async()=>({ok:true})},notes:{bootstrap:()=>new Promise(()=>{})},config:{katexMacros:async()=>({macros:{}})}};});
  await page.route('**/main.ts',async route=>{const response=await route.fetch();let body=await response.text();body+=`\nwindow.popupProbe={
   setup(){ paused=false;host.hidden=false;editor.setMarkdown('\\\\(x^2 + \\\\frac{1}{2}\\\\)');editor.setMarkdownSelection(5); },
   preview(anchor){const doc=editor.view.state.doc;const tex='x^2 + \\\\frac{1}{2}';updateMathPreview(editor.cursorContext(),true,{tex,display:false,from:0,to:doc.length,contentFrom:2,contentTo:doc.length-2,doc,geometryEpoch:0,selection:{anchor:3,head:3},rect:anchor,rectEnd:anchor});},

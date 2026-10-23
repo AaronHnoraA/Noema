@@ -1,13 +1,13 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { workspaceGraphDrawPlan, workspaceGraphNeighborKeys, workspaceGraphNodeColor, workspaceGraphNodeMatches } from "../aaronnote/workspace-graph.ts";
+import { workspaceGraphDrawPlan, workspaceGraphNeighborKeys, workspaceGraphNodeColor, workspaceGraphNodeMatches } from "../pages/workspace-graph.ts";
 import {
   createWorkspaceGraphRuntime,
   type WorkspaceForceNode,
   type WorkspaceGraphAdapter,
   type WorkspaceGraphEvents,
   type WorkspaceGraphVisualState,
-} from "../aaronnote/workspace-graph-runtime.ts";
-import type { GraphPayload } from "../aaronnote/types.ts";
+} from "../pages/workspace-graph-runtime.ts";
+import type { GraphPayload } from "../pages/types.ts";
 
 describe("workspace graph performance boundaries", () => {
   test("caps a 50k-node index deterministically while retaining current and searched notes", () => {

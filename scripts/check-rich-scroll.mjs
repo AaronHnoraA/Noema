@@ -8,7 +8,7 @@ const { webkit } = await import(process.env.NOEMA_PLAYWRIGHT_MODULE || "playwrig
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const root = "/@fs" + repo;
 const server = await createServer({
-  configFile: repo + "vite.aaronnote.config.ts", root: repo + "aaronnote",
+  configFile: repo + "vite.pages.config.ts", root: repo + "pages",
   logLevel: "error", server: { host: "127.0.0.1", port: 0, hmr: false },
 });
 await server.listen();
@@ -23,7 +23,7 @@ try {
   }));
   await page.route("**/scroll-audit", (route) => route.fulfill({
     contentType: "text/html",
-    body: `<!doctype html><html><head><link rel="stylesheet" href="${root}src/styles/widgets.css"><link rel="stylesheet" href="${root}aaronnote/style.css"></head><body style="margin:0"><div id="host" class="aaronnote-focused-editor" style="height:800px;width:1000px;--aaronnote-visual-zoom:1"></div></body></html>`,
+    body: `<!doctype html><html><head><link rel="stylesheet" href="${root}src/styles/widgets.css"><link rel="stylesheet" href="${root}pages/style.css"></head><body style="margin:0"><div id="host" class="noema-focused-editor" style="height:800px;width:1000px;--noema-visual-zoom:1"></div></body></html>`,
   }));
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="220"><rect width="640" height="220" fill="#e6efff"/></svg>';
   const img = "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");

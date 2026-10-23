@@ -8,23 +8,23 @@ function source(path: string): string {
 
 describe("Noema Emacs-hosted Web surfaces", () => {
   test("builds and serves the agenda, configuration, Wiki, and Jupyter components", () => {
-    const vite = source("vite.aaronnote.config.ts");
+    const vite = source("vite.pages.config.ts");
     const host = source("web-host.mjs");
-    expect(vite).toContain('agenda: resolve("aaronnote/agenda.html")');
-    expect(vite).toContain('config: resolve("aaronnote/config.html")');
-    expect(vite).toContain('wiki: resolve("aaronnote/wiki.html")');
-    expect(vite).toContain('jupyter: resolve("aaronnote/jupyter.html")');
+    expect(vite).toContain('agenda: resolve("pages/agenda.html")');
+    expect(vite).toContain('config: resolve("pages/config.html")');
+    expect(vite).toContain('wiki: resolve("pages/wiki.html")');
+    expect(vite).toContain('jupyter: resolve("pages/jupyter.html")');
     expect(host).toContain('url.pathname === "/agenda"');
     expect(host).toContain('serveStatic("/agenda.html"');
     expect(host).toContain('url.pathname === "/config"');
     expect(host).toContain('serveStatic("/config.html"');
     expect(host).toContain('url.pathname === "/wiki"');
     expect(source("src/jupyter-rendermime.ts")).toContain("OutputArea");
-    expect(source("aaronnote/config-main.ts")).not.toContain("desktop-bridge");
+    expect(source("pages/config-main.ts")).not.toContain("desktop-bridge");
   });
 
   test("keeps theme selection out of the compact Tools panel", () => {
-    const main = source("aaronnote/main.ts");
+    const main = source("pages/main.ts");
     expect(main).not.toContain("renderThemeTool");
     expect(main).toContain('title: "Configuration"');
     expect(main).toContain('new URL("/config", window.location.origin)');
@@ -33,7 +33,7 @@ describe("Noema Emacs-hosted Web surfaces", () => {
   });
 
   test("exposes the Git synchronization cadence instead of only the environment override", () => {
-    const page = source("aaronnote/config-main.ts");
+    const page = source("pages/config-main.ts");
     expect(page).toContain('id="git-sync"');
     expect(page).toContain("data-sync-automatic");
     expect(page).toContain("data-sync-interval");
@@ -44,7 +44,7 @@ describe("Noema Emacs-hosted Web surfaces", () => {
   });
 
   test("renders manifest-provided themes and saves through the shared config API", () => {
-    const page = source("aaronnote/config-main.ts");
+    const page = source("pages/config-main.ts");
     expect(page).toContain("for (const theme of payload.themes)");
     expect(page).toContain("setNoemaAppTheme(theme.id)");
     expect(page).toContain("payload.configFile");

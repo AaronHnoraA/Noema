@@ -22,8 +22,8 @@
 (require 'subr-x)
 (require 'tabulated-list)
 
-(declare-function my/noema-api-call "init-aaronnote" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-aaronnote" (&optional callback))
+(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
+(declare-function my/noema--ensure-server "init-noema" (&optional callback))
 (declare-function noema-project-scope "noema-research" (path))
 (defvar my/noema--ready)
 
@@ -217,7 +217,7 @@ Graph Board cannot show: an agent handing work to another agent."
     (unless (fboundp 'my/noema-api-call)
       (user-error "Noema host integration is unavailable"))
     (my/noema-api-call
-     "aaronnote:api:research:orchestration:snapshot"
+     "noema:api:research:orchestration:snapshot"
      (vector `((cwd . ,root)
                ,@(when workstream `((workstreamId . ,workstream)))))
      (lambda (result error-object)

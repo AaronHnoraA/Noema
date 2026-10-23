@@ -2,7 +2,7 @@
  * Shared @@cell ("ceil") identity + language helpers.
  *
  * The block widget (block-extras.ts) and the app-shell Jupyter panel
- * (aaronnote/main.ts) both parse `@@cell(...) [id]` lines. They must agree on
+ * (pages/main.ts) both parse `@@cell(...) [id]` lines. They must agree on
  * the auto-generated id for an unlabeled cell and on the kernel→language
  * mapping, otherwise a panel-driven run writes to a different hidden-script
  * marker than the widget's normalized id. Keep this the single source of truth.
