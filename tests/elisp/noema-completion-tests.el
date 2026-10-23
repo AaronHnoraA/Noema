@@ -215,7 +215,7 @@
 (ert-deftest noema-capability-manager-always-opens-global-without-prompt ()
   (save-window-excursion
     (dolist (project '(nil "/current-project/"))
-      (dolist (command '(noema-capability-manager noema-skill-manager noema-mcp-manager))
+      (dolist (command '(noema-capability-manager noema-mcp-manager))
         (let ((noema-capability--cache (make-hash-table :test #'equal)) request)
           (with-temp-buffer
             (cl-letf (((symbol-function 'noema-current-project) (lambda (&optional _) project))
@@ -230,6 +230,77 @@
                     (unless project
                       (should-error (noema-capability-ui-project-patches) :type 'user-error)))
                 (kill-buffer (current-buffer))))))))))
+
+(ert-deftest noema-skill-opens-search-and-filters-effective-skills ()
+  (save-window-excursion
+    (let (request callback)
+      (cl-letf (((symbol-function 'noema-current-project)
+                 (lambda (&optional _) "/project/"))
+                ((symbol-function 'noema-capability-list)
+                 (lambda (&rest args)
+                   (setq request args callback (plist-get args :callback))))
+                ((symbol-function 'read-string)
+                 (lambda (&rest _) "proof")))
+        (noema-skill)
+        (unwind-protect
+            (progn
+              (should (derived-mode-p 'noema-skill-mode))
+              (should (equal noema-skill--query "proof"))
+              (should (equal (plist-get request :project) "/project/"))
+              (should (eq (plist-get request :scope) 'project))
+              (funcall callback
+                       '((skills . [((type . "skill") (id . "proof-review")
+                                     (description . "Proof audit"))
+                                    ((type . "skill") (id . "writing"))])
+                         (packs . [((type . "pack") (id . "proof-pack"))]))
+                       nil)
+              (should (equal (mapcar #'car tabulated-list-entries)
+                             '(("pack" . "proof-pack") ("skill" . "proof-review")))))
+          (kill-buffer (current-buffer)))))))
+
+(ert-deftest noema-skill-cmd-comma-opens-the-full-skill-manager ()
+  (let ((origin (generate-new-buffer " *noema-skill-origin*"))
+        received)
+    (unwind-protect
+        (with-temp-buffer
+          (noema-skill-mode)
+          (setq noema-skill--project "/project/"
+                noema-skill--origin origin)
+          (should (eq (key-binding (kbd "M-,"))
+                      #'noema-skill-open-manager))
+          (cl-letf (((symbol-function 'noema-capability-manager)
+                     (lambda (project type)
+                       (setq received (list project type major-mode)))))
+            (noema-skill-open-manager))
+          (should (equal received '("/project/" "skill" noema-skill-mode))))
+      (kill-buffer origin))))
+
+(ert-deftest noema-skill-manager-compatibility-opens-search ()
+  (let (opened)
+    (cl-letf (((symbol-function 'noema-skill) (lambda (&optional project) (setq opened project))))
+      (noema-skill-manager "/project/"))
+    (should (equal opened "/project/"))))
+
+(ert-deftest noema-skill-result-drafts-into-the-originating-agent ()
+  (let ((origin (generate-new-buffer " *noema-skill-agent*"))
+        drafted)
+    (unwind-protect
+        (progn
+          (with-current-buffer origin (setq-local major-mode 'agent-shell-mode))
+          (with-temp-buffer
+            (noema-skill-mode)
+            (setq noema-skill--origin origin
+                  noema-skill--project "/project/"
+                  noema-skill--resolution
+                  '((skills . [((type . "skill") (id . "proof-review")
+                                (source . ((path . "/project/skills/proof-review/SKILL.md"))))])))
+            (noema-skill--render)
+            (cl-letf (((symbol-function 'noema-capability-lookup--draft)
+                       (lambda (buffer text) (setq drafted (list buffer text)))))
+              (noema-skill-visit))
+            (should (eq (car drafted) origin))
+            (should (string-match-p "proof-review/SKILL.md" (cadr drafted)))))
+      (kill-buffer origin))))
 
 (ert-deftest noema-capability-manager-project-pages-are-explicit-and-local-filtered ()
   (with-temp-buffer

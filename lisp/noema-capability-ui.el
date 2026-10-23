@@ -614,9 +614,177 @@ writes do not reach a running external client."
 
 ;;;###autoload
 (defun noema-skill-manager (&optional project)
-  "Open the global Skill manager, with optional PROJECT page context."
+  "Compatibility entry for `noema-skill' with optional PROJECT context."
   (interactive)
-  (noema-capability-manager project "skill"))
+  (noema-skill project))
+
+(defvar-local noema-skill--project nil)
+(defvar-local noema-skill--origin nil)
+(defvar-local noema-skill--resolution nil)
+(defvar-local noema-skill--query "")
+(defvar-local noema-skill--generation 0)
+
+(defvar noema-skill-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map tabulated-list-mode-map)
+    (define-key map (kbd "M-,") #'noema-skill-open-manager)
+    (define-key map (kbd "C-c ,") #'noema-skill-open-manager)
+    (define-key map (kbd "C-c /") #'noema-skill-search)
+    (define-key map (kbd "C-c g") #'noema-skill-refresh)
+    (define-key map (kbd "RET") #'noema-skill-visit)
+    map)
+  "Keymap for the searchable Noema Skill and pack page.")
+
+(define-derived-mode noema-skill-mode tabulated-list-mode "Noema-Skill"
+  "Search effective Noema Skills and packs.
+RET opens the selected Skill or pack; in an agent input it drafts a reference.
+M-, (Cmd+, on macOS) opens the full management buffer.  C-c / searches again."
+  (setq tabulated-list-format
+        [("Kind" 7 t) ("Skill / pack" 30 t) ("State" 10 t)
+         ("Scope" 12 t) ("Description" 52 t)]
+        tabulated-list-padding 2
+        tabulated-list-use-header-line nil
+        tabulated-list-sort-key '("Skill / pack" . nil))
+  (tabulated-list-init-header))
+
+(with-eval-after-load 'evil
+  (evil-set-initial-state 'noema-skill-mode 'normal)
+  (evil-define-key* '(normal visual motion) noema-skill-mode-map
+    (kbd "M-,") #'noema-skill-open-manager
+    (kbd "RET") #'noema-skill-visit))
+
+(defun noema-skill--records ()
+  "Return effective Skill and pack records for the search page."
+  (append (noema--sequence (noema--value noema-skill--resolution "skills"))
+          (noema--sequence (noema--value noema-skill--resolution "packs"))))
+
+(defun noema-skill--record-at-point ()
+  "Return the Skill or pack on the current search row."
+  (let ((identity (tabulated-list-get-id)))
+    (or (seq-find
+         (lambda (record)
+           (equal identity (cons (noema--value record "type")
+                                 (noema--value record "id"))))
+         (noema-skill--records))
+        (user-error "No Skill or pack on this row"))))
+
+(defun noema-skill--render ()
+  "Filter and render the current effective Skill resolution."
+  (let ((query (downcase (string-trim noema-skill--query))))
+    (setq tabulated-list-entries
+          (mapcar
+           (lambda (record)
+             (let* ((kind (noema--value record "type"))
+                    (id (noema--value record "id"))
+                    (scope (or (noema--value (noema--value record "source") "scope") "—"))
+                    (enabled (noema-capability-ui--truth-p (noema--value record "enabled"))))
+               (list (cons kind id)
+                     (vector kind id (if enabled "enabled" "available") scope
+                             (or (noema--value record "description") "")))))
+           (seq-filter
+            (lambda (record)
+              (let ((text (format "%s %s %s"
+                                  (or (noema--value record "id") "")
+                                  (or (noema--value record "description") "")
+                                  (or (noema--value record "type") ""))))
+                (or (string-empty-p query)
+                    (string-match-p (regexp-quote query) (downcase text)))))
+            (noema-skill--records))))
+    (setq header-line-format
+          (format " Noema Skill · %s · %d matches  |  C-c / search  RET open  Cmd+, manage "
+                  (if (string-empty-p query) "all" query)
+                  (length tabulated-list-entries)))
+    (tabulated-list-print t)
+    (when (and tabulated-list-entries (not (tabulated-list-get-id)))
+      (goto-char (point-min))
+      (forward-line 1))))
+
+(defun noema-skill-refresh ()
+  "Refresh effective Skills and packs for this search page."
+  (interactive)
+  (let ((buffer (current-buffer))
+        (project noema-skill--project)
+        (generation (cl-incf noema-skill--generation)))
+    (setq header-line-format " Resolving Noema Skills…")
+    (noema-capability-list
+     :project project :scope (if project 'project 'global)
+     :callback
+     (lambda (resolution error-object)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (when (= generation noema-skill--generation)
+             (if error-object
+                 (progn
+                   (setq header-line-format " Noema Skill resolution failed; C-c g to retry ")
+                   (noema-capability-ui--show-error error-object))
+               (setq noema-skill--resolution resolution)
+               (noema-skill--render)))))))))
+
+(defun noema-skill-search (query)
+  "Search the current Noema Skill page for QUERY."
+  (interactive (list (read-string "Find Noema Skill or pack: " noema-skill--query)))
+  (setq noema-skill--query query)
+  (when noema-skill--resolution (noema-skill--render)))
+
+(defun noema-skill-open-manager ()
+  "Open the full Skill manager from the search page."
+  (interactive)
+  ;; Stay on the search page while opening: an agent input would route the
+  ;; manager command back into read-only lookup instead of its full buffer.
+  (noema-capability-manager noema-skill--project "skill"))
+
+(defun noema-skill-visit ()
+  "Open the selected Skill, or draft its reference in the originating agent."
+  (interactive)
+  (let* ((record (noema-skill--record-at-point))
+         (origin noema-skill--origin)
+         (path (noema--value (noema--value record "source") "path"))
+         (file (and (stringp path) (not (string-prefix-p "builtin:" path))
+                    (expand-file-name path (or noema-skill--project default-directory)))))
+    (cond
+     ((and (buffer-live-p origin)
+           (with-current-buffer origin (noema-capability-lookup--agent-buffer)))
+      (noema-capability-lookup--draft
+       origin (noema-capability-lookup--reference
+               record noema-skill--project noema-skill--resolution))
+      (message "Noema: drafted %s; review before sending" (noema--value record "id")))
+     ((and (equal (noema--value record "type") "skill")
+           file (file-regular-p file))
+      (noema-capability-ui--open-right file nil (current-buffer)))
+     (t
+      (let ((buffer (get-buffer-create
+                     (format "*Noema Skill: %s*" (noema--value record "id")))))
+        (with-current-buffer buffer
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert (pp-to-string record))
+            (goto-char (point-min))
+            (special-mode)))
+        (display-buffer buffer))))))
+
+;;;###autoload
+(defun noema-skill (&optional project)
+  "Search effective Noema Skills and packs in PROJECT.
+Without PROJECT, use the opening buffer's project. Cmd+, opens the full manager."
+  (interactive)
+  (let* ((origin (current-buffer))
+         (directory default-directory)
+         (work-origin (if (derived-mode-p 'noema-research-mode)
+                          (point-marker)
+                        noema-capability-ui--origin))
+         (project (or project (noema-current-project origin)))
+         (buffer (get-buffer-create "*Noema Skill*")))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'noema-skill-mode) (noema-skill-mode))
+      (setq noema-skill--project project
+            noema-skill--origin origin
+            noema-skill--query ""
+            noema-skill--resolution nil
+            noema-capability-ui--origin work-origin
+            default-directory directory)
+      (noema-skill-refresh))
+    (pop-to-buffer buffer)
+    (call-interactively #'noema-skill-search)))
 
 ;;;###autoload
 (defun noema-mcp-manager (&optional project)

@@ -59,6 +59,7 @@
 (autoload 'noema-research-propose-memory-from-run "noema-research-synthesis" nil t)
 (autoload 'noema-research-settings "noema-research-settings" nil t)
 (autoload 'noema-capability-manager "noema-capability-ui" nil t)
+(autoload 'noema-skill "noema-capability-ui" nil t)
 (autoload 'noema-skill-manager "noema-capability-ui" nil t)
 (autoload 'noema-mcp-manager "noema-capability-ui" nil t)
 (autoload 'noema-skill-upstream "noema-skill-upstream-ui" nil t)

@@ -50,65 +50,84 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
 
 (ert-deftest noema-context-xwidget-region-asks-its-page-for-selection ()
   "The Emacs region command targets the Noema page when it has focus."
-  (let (sent)
-    (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
-              ((symbol-function 'my/noema-command)
-               (lambda (command &optional detail) (setq sent (list command detail)))))
-      (unwind-protect
-          (progn
-            (noema-context-send-region)
-            (should (equal (car sent) "emacs-selection"))
-            (should (equal (alist-get 'action (cadr sent)) "agent"))
-            (should (equal (alist-get 'scope (cadr sent)) "selection"))
-            (should (gethash (alist-get 'requestId (cadr sent))
-                             noema-md-bridge--pending)))
-        (noema-md-bridge--settle (alist-get 'requestId (cadr sent)))))))
+  (with-temp-buffer
+    (setq-local my/noema-buffer-file-name "/tmp/noema-context-selection.md")
+    (let (sent)
+      (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
+                ((symbol-function 'my/noema-command)
+                 (lambda (command &optional detail) (setq sent (list command detail)))))
+        (unwind-protect
+            (progn
+              (noema-context-send-region)
+              (should (equal (car sent) "emacs-selection"))
+              (should (equal (alist-get 'action (cadr sent)) "agent"))
+              (should (equal (alist-get 'scope (cadr sent)) "selection"))
+              (should (gethash (alist-get 'requestId (cadr sent))
+                               noema-md-bridge--pending)))
+          (noema-md-bridge--settle (alist-get 'requestId (cadr sent))))))))
 
 (ert-deftest noema-md-bridge-silent-page-is-reported ()
   "A request the page never answers ends in a message, not silence."
-  (let ((noema-md-bridge-answer-timeout 0.01)
-        (messages nil))
-    (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
-              ((symbol-function 'my/noema-command) #'ignore)
-              ((symbol-function 'message)
-               (lambda (format &rest args)
-                 (when format (push (apply #'format format args) messages)))))
-      (noema-md-bridge-request "rewrite" "line")
-      (sleep-for 0.05)
-      (should (seq-some (lambda (text) (string-match-p "did not answer" text))
-                        messages)))))
+  (with-temp-buffer
+    (setq-local my/noema-buffer-file-name "/tmp/noema-context-timeout.md")
+    (let ((noema-md-bridge-answer-timeout 0.01)
+          (messages nil))
+      (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
+                ((symbol-function 'my/noema-command) #'ignore)
+                ((symbol-function 'message)
+                 (lambda (format &rest args)
+                   (when format (push (apply #'format format args) messages)))))
+        (noema-md-bridge-request "rewrite" "line")
+        (sleep-for 0.05)
+        (should (seq-some (lambda (text) (string-match-p "did not answer" text))
+                          messages))))))
 
 (ert-deftest noema-md-bridge-page-failure-is-shown-and-settles ()
   "The page's reason for having no range reaches the person."
-  (let ((noema-md-bridge-answer-timeout 60))
-    (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
-              ((symbol-function 'my/noema-command) #'ignore))
-      (noema-md-bridge-request "agent" "selection")
-      (let ((id (car (hash-table-keys noema-md-bridge--pending))))
-        (should-error
-         (noema-md-bridge-handle-selection
-          `((client . "c") (requestId . ,id) (error . "No selection in the Noema page")))
-         :type 'user-error)
-        (should-not (gethash id noema-md-bridge--pending))))))
+  (with-temp-buffer
+    (setq-local my/noema-buffer-file-name "/tmp/noema-context-failure.md")
+    (let ((noema-md-bridge-answer-timeout 60))
+      (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
+                ((symbol-function 'my/noema-command) #'ignore))
+        (noema-md-bridge-request "agent" "selection")
+        (let ((id (car (hash-table-keys noema-md-bridge--pending))))
+          (should-error
+           (noema-md-bridge-handle-selection
+            `((client . "c") (requestId . ,id) (error . "No selection in the Noema page")))
+           :type 'user-error)
+          (should-not (gethash id noema-md-bridge--pending)))))))
 
-(ert-deftest noema-md-bridge-whole-note-needs-no-page-answer ()
-  "Sending the whole note runs at once on the pane's file."
+(ert-deftest noema-md-bridge-whole-note-waits-for-the-page-save ()
+  "Sending the whole note runs after its saved-range reply."
   (noema-context-tests--with-project '(("a.md" . "one\ntwo\n"))
     (let ((file (alist-get "a.md" files nil nil #'equal))
-          commands ran)
+          commands ran detail)
       (with-temp-buffer
-        (setq-local my/noema-buffer-file-name file)
-        (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
-                  ((symbol-function 'my/noema-command)
-                   (lambda (command &optional _) (push command commands)))
-                  ((symbol-function 'noema-md-bridge-run)
-                   (lambda (action buffer begin end)
-                     (push buffer opened)
-                     (setq ran (list action (with-current-buffer buffer
-                                              (buffer-substring-no-properties begin end)))))))
-          (noema-context-send-buffer)))
-      (should (equal commands '("save")))
-      (should (equal ran '("agent" "one\ntwo\n"))))))
+        (let ((pane (current-buffer)))
+          (setq-local my/noema-buffer-file-name file)
+          (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
+                    ((symbol-function 'my/noema--buffer-for-client) (lambda (_) pane))
+                    ((symbol-function 'my/noema-command)
+                     (lambda (command &optional request)
+                       (push command commands)
+                       (setq detail request)))
+                    ((symbol-function 'noema-md-bridge-run)
+                     (lambda (action buffer begin end)
+                       (push buffer opened)
+                       (setq ran (list action (with-current-buffer buffer
+                                                (buffer-substring-no-properties begin end)))))))
+            (noema-context-send-buffer)
+            (should (equal commands '("emacs-selection")))
+            (should (equal (alist-get 'scope detail) "document"))
+            (should-not ran)
+            (noema-md-bridge-handle-selection
+             `((client . "c") (file . ,file) (action . "agent")
+               (requestId . ,(alist-get 'requestId detail))
+               (lineStart . 1) (lineEnd . 2)
+               (fromLine . 1) (fromColumn . 0)
+               (toLine . 3) (toColumn . 0)))
+            (sleep-for 0.05)
+            (should (equal ran '("agent" "one\ntwo\n")))))))))
 
 (ert-deftest noema-context-region-send-carries-only-the-region ()
   "Sending a region never drags along context gathered earlier."
