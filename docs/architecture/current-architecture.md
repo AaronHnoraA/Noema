@@ -3,6 +3,8 @@
 本结构在 Overleaf Source Editor 的分层原则上改造，但 Noema 仍以 Markdown
 为唯一真相源；不包含 LaTeX Visual Editor、OT、编译或 Overleaf UI。
 
+顶层目录与改动落点见 [repository-map.md](repository-map.md)。
+
 ## 编辑器
 
 ```text
