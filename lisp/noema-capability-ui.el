@@ -624,8 +624,15 @@ writes do not reach a running external client."
 (defun noema-skill--manage-from-minibuffer ()
   "Leave Skill completion and open the full manager."
   (interactive)
-  (setq noema-skill--manage-requested t)
-  (abort-recursive-edit))
+  (let ((candidate (car (all-completions "" minibuffer-completion-table
+                                         minibuffer-completion-predicate))))
+    (unless candidate (user-error "No Skills to manage"))
+    (setq noema-skill--manage-requested t)
+    ;; Complete with a valid candidate so a must-match prompt exits normally;
+    ;; the flag sends control to the manager instead of visiting that record.
+    (delete-minibuffer-contents)
+    (insert candidate)
+    (exit-minibuffer)))
 
 (defun noema-skill--minibuffer-setup ()
   "Make Cmd+, open the full Skill manager from its search prompt."
