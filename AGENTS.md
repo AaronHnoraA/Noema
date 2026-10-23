@@ -226,7 +226,7 @@ See `../../docs/noema/records/audits/pisper-agent-lifecycle-study-2026-09.md` fo
 - **Attention is derived, never stored.** A session name's `unread`,
   `failed`, `needsAttention` and `attentionReason` are projected by the kernel
   from its latest Run and `read_at`; only reading is a write. Reading clears
-  `unread` and nothing else: a failure stays until a later Run succeeds, and a
+  `unread` and nothing else: 2a failure stays until a later Run succeeds, and a
   pending permission or input outranks it. Never infer attention from file
   mtimes or UI state.
 - **Failure kinds are projections of the reason.** `ClassifyRunFailure` sets
