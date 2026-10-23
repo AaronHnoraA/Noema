@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 ;;
-;; A Noema Markdown pane is an inert xwidget placeholder: the live document,
+;; A Noema Markdown pane is an inert Portal or xwidget shell: the live document,
 ;; selection and history belong to the CM6 renderer.  Emacs commands that work
 ;; on "the region" or "this buffer" -- gptel context, gptel rewrite with its
 ;; diff review, agent references, the compose buffer -- therefore cannot run in
@@ -32,6 +32,8 @@
 
 (declare-function my/noema--xwidget-buffer-p "noema-xwidget-keys" (&optional buffer))
 (declare-function my/noema--jupyter-xwidget-buffer-p "noema-xwidget-keys" (&optional buffer))
+(declare-function my/noema-portal-buffer-p "noema-portal" (&optional buffer))
+(declare-function portal-input-unfocus "portal-input" ())
 (declare-function my/noema--buffer-for-client "init-noema" (client))
 (declare-function my/noema--host-file "init-noema" (file))
 (declare-function my/noema--select-emacs-window "noema-xwidget-keys" (&optional window))
@@ -74,10 +76,13 @@ document   the whole note")
 (defun noema-md-bridge-pane-p (&optional buffer)
   "Return non-nil when BUFFER (default current) is a Noema Markdown pane."
   (let ((buffer (or buffer (current-buffer))))
-    (and (fboundp 'my/noema--xwidget-buffer-p)
-         (my/noema--xwidget-buffer-p buffer)
-         (not (and (fboundp 'my/noema--jupyter-xwidget-buffer-p)
-                   (my/noema--jupyter-xwidget-buffer-p buffer))))))
+    (or (and (fboundp 'my/noema-portal-buffer-p)
+             (my/noema-portal-buffer-p buffer)
+             (buffer-local-value 'my/noema-buffer-file-name buffer))
+        (and (fboundp 'my/noema--xwidget-buffer-p)
+             (my/noema--xwidget-buffer-p buffer)
+             (not (and (fboundp 'my/noema--jupyter-xwidget-buffer-p)
+                       (my/noema--jupyter-xwidget-buffer-p buffer)))))))
 
 (defcustom noema-md-bridge-answer-timeout 4
   "Seconds to wait for a Noema page to answer a selection request.
@@ -120,31 +125,28 @@ handled by `noema-md-bridge-handle-selection'.  The page always answers, with
 a range or with the reason it cannot; no answer within
 `noema-md-bridge-answer-timeout' seconds is reported too.
 
-The whole note needs no answer: SCOPE \"document\" asks the page to save and
-runs ACTION on the pane's file at once."
+The whole note also waits for the page's saved-range answer, so unsaved edits
+cannot make the agent read stale text from disk."
   (unless (member action noema-md-bridge-actions)
     (error "Unknown Noema bridge action: %s" action))
   (unless (member scope noema-md-bridge-scopes)
     (error "Unknown Noema bridge scope: %s" scope))
   (unless (fboundp 'my/noema-command)
     (user-error "Noema browser command bridge is unavailable"))
-  (if (equal scope "document")
-      (let ((file (or my/noema-buffer-file-name
-                      (user-error "This Noema pane shows no file"))))
-        (my/noema-command "save")
-        (let ((buffer (noema-md-bridge-source-buffer file)))
-          (noema-md-bridge-run action buffer
-                               (with-current-buffer buffer (point-min))
-                               (with-current-buffer buffer (point-max)))))
-    (let ((id (format "emacs-%d-%d" (emacs-pid)
+  (unless my/noema-buffer-file-name
+    (user-error "This Noema pane shows no file"))
+  (let ((id (format "emacs-%d-%d" (emacs-pid)
                       (cl-incf noema-md-bridge--request-counter))))
       (puthash id (run-at-time noema-md-bridge-answer-timeout nil
                                #'noema-md-bridge--timeout id action)
                noema-md-bridge--pending)
       (message "Noema: asking the page for its %s…"
-               (if (equal scope "line") "selection or cursor line" "selection"))
+               (pcase scope
+                 ("line" "selection or cursor line")
+                 ("document" "whole note")
+                 (_ "selection")))
       (my/noema-command "emacs-selection"
-                        `((action . ,action) (scope . ,scope) (requestId . ,id))))))
+                        `((action . ,action) (scope . ,scope) (requestId . ,id)))))
 
 (defmacro noema-md-bridge-define-pane-command (name action scope doc)
   "Define command NAME asking the current pane for SCOPE and running ACTION.
@@ -429,12 +431,18 @@ report whose pane no longer shows that file is refused."
 
 (defun noema-md-bridge--run-interactively (pane action buffer begin end)
   "Run ACTION on BEGIN..END of BUFFER with the keyboard on Emacs, not PANE.
-The Noema page kept WebKit's keyboard focus when it answered; without this
-the session prompt appears but every key goes to the page."
+The page kept its native keyboard focus when it answered; without this the
+session prompt appears but every key goes to the page."
   (when (buffer-live-p buffer)
     (when (and (buffer-live-p pane)
                (fboundp 'my/noema--release-xwidget-input-buffer))
       (my/noema--release-xwidget-input-buffer pane))
+    (when (and (buffer-live-p pane)
+               (fboundp 'my/noema-portal-buffer-p)
+               (my/noema-portal-buffer-p pane)
+               (fboundp 'portal-input-unfocus))
+      (when-let* ((window (get-buffer-window pane 'visible)))
+        (with-selected-window window (portal-input-unfocus))))
     (when (fboundp 'my/noema--select-emacs-window)
       (my/noema--select-emacs-window))
     (let ((minibuffer-setup-hook
@@ -459,8 +467,8 @@ the session prompt appears but every key goes to the page."
                      (noema-md-bridge--same-file-p
                       (buffer-local-value 'my/noema-buffer-file-name buffer) file)))
               (seq-filter (lambda (buffer)
-                            (eq (buffer-local-value 'major-mode buffer)
-                                'xwidget-webkit-mode))
+                            (memq (buffer-local-value 'major-mode buffer)
+                                  '(xwidget-webkit-mode portal-web-mode)))
                           (buffer-list))))
 
 (defun noema-md-bridge-notify-saved (&optional file)

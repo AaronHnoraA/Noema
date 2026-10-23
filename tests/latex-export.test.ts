@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-t
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 
 // @ts-ignore The converter is a Node ESM module outside the TS app graph.
 import { noemaMarkdownToLatex, applyLatexTemplate, escapeLatexText, escapeLatexTitle, latexMacrosPackage, latexSideCommentPreamble, writeLatexExport } from "../server/lib/latex-export.mjs";
@@ -575,18 +576,35 @@ describe("LaTeX export", () => {
     expect(result.features).toEqual({ usesSideComment: true });
   });
 
+  test("keeps footnote side comments inline while protecting link references", () => {
+    const prepared = preprocessNoemaForPandoc([
+      "Body.[^note]", "",
+      "[^note]: First @@scomment [footnote one]",
+      "    Next @@scomment [footnote two]", "",
+      "[link]: https://example.org/@@scomment", "",
+    ].join("\n"));
+    expect(prepared.markdown).toContain("\\sidecommentinline{footnote one}");
+    expect(prepared.markdown).toContain("\\sidecommentinline{footnote two}");
+    expect(prepared.markdown).toContain("[link]: https://example.org/@@scomment");
+  });
+
   test("keeps side-comment support in the stable shared package", () => {
     const enabled = latexSideCommentPreamble(true);
     expect(enabled).toContain("todonotes");
     expect(enabled).toContain("\\providecommand{\\sidecomment}");
-    // An in-flow aside that splits across pages, not an unbreakable margin note.
-    expect(enabled).toContain("breakable");
-    expect(enabled).not.toContain("fancyline");
+    expect(enabled).toContain("marginfix");
+    expect(enabled).toContain("\\marginpar{");
+    expect(enabled).toContain("\\ifnoema@infootnote\\sidecommentinline");
+    expect(enabled).not.toContain("tcolorbox");
     expect(latexSideCommentPreamble(false)).toBe("");
 
     const plain = noemaMarkdownToLatex("Plain body.");
     expect(plain.features).toEqual({ usesSideComment: false });
-    expect(latexMacrosPackage({})).toContain("todonotes");
+    const macros = latexMacrosPackage({});
+    expect(macros).toContain("todonotes");
+    expect(macros).toContain("\\todo[noline,color=AaronTodo");
+    expect(macros).toContain("\\todo[noline,color=AaronRev#1");
+    expect(macros).not.toContain("\\todo[fancyline");
   });
 
   test("writes export and remembers the last path per note", async () => {
@@ -604,12 +622,38 @@ describe("LaTeX export", () => {
     const tex = await readFile(out, "utf8");
     expect(tex).toContain("\\title{ A }");
     expect(tex).not.toContain("\\providecommand{\\sidecomment}");
-    expect(tex).toContain("\\usepackage{noema-macros}");
+    expect(tex).toContain("\\usepackage[marginnotes]{noema-macros}");
     expect(await readFile(join(notes, "out", "noema-macros.sty"), "utf8")).toContain("\\providecommand{\\sidecomment}");
     expect(tex).toContain("\\sidecomment{Review \\(x\\).}");
 
     const defaults = await latexExportDefaults({ file: note }) as { outputPath?: string };
     expect(defaults.outputPath).toBe(out);
+  });
+
+  test("keeps long side notes, footnotes, and revision notes in the compiled PDF", async () => {
+    const { notes } = await setupRoot();
+    const note = join(notes, "page-notes.md");
+    const out = join(notes, "page-notes.tex");
+    const prose = "A paragraph about the layout and its consequences. ".repeat(95);
+    const marginText = "This side note must survive the page boundary. ".repeat(28) + "SIDE-NOTE-END";
+    await writeFile(note, [
+      "# Page notes", "", prose,
+      `Body @@scomment [${marginText}] continues with a footnote.[^1]`, "",
+      "[^1]: FOOTNOTE-START @@scomment [FOOTNOTE-SIDE] FOOTNOTE-END.", "",
+      "A @@revision(suggest) [previous claim] {advice: \"REVISION-ADVICE\"; reason: \"REVISION-REASON\"} follows.",
+    ].join("\n"), "utf8");
+
+    const exported = await exportLatex({ file: note, outputPath: out }) as { ok?: boolean; pdfFile?: string };
+    expect(exported.ok).toBe(true);
+    const tex = await readFile(out, "utf8");
+    expect(tex).toContain("\\usepackage[marginnotes]{noema-macros}");
+    expect(tex).toContain("\\sidecommentinline{FOOTNOTE-SIDE}");
+    const extracted = spawnSync("pdftotext", ["-layout", exported.pdfFile!, "-"], { encoding: "utf8" });
+    if (extracted.error && (extracted.error as NodeJS.ErrnoException).code === "ENOENT") return;
+    expect(extracted.status).toBe(0);
+    const compactText = extracted.stdout.replace(/\s+/g, "");
+    for (const marker of ["SIDE-NOTE-END", "FOOTNOTE-START", "FOOTNOTE-SIDE", "FOOTNOTE-END", "REVISION-ADVICE", "REVISION-REASON"])
+      expect(compactText).toContain(marker);
   });
 
   test("routes production preparation, metadata, postprocess, and template planning through the configured kernel provider", async () => {

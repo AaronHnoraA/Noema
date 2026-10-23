@@ -30,6 +30,7 @@ function marginNoteSafeLine(content) {
   const text = String(content || "");
   if (/^ {0,3}#{1,6}(?:[ \t]|$)/.test(text)) return false;
   if (/^ {0,3}\|/.test(text)) return false;
+  if (/^ {0,3}\[\^[^\]\n]+\]:/.test(text)) return false;
   return true;
 }
 
@@ -235,7 +236,9 @@ function stripPrivateCommandsFromLinkLabels(line) {
 
 function protectedInlineRanges(line) {
   const ranges = [];
-  if (/^ {0,3}\[[^\]\n]+\]:/.test(line)) ranges.push({ from: 0, to: line.length });
+  // Footnote definitions carry visible prose; only link reference definitions
+  // are opaque. Treating both alike left Noema annotations literal in PDFs.
+  if (/^ {0,3}\[(?!\^)[^\]\n]+\]:/.test(line)) ranges.push({ from: 0, to: line.length });
   for (const match of line.matchAll(/(`+)[\s\S]*?\1/g)) ranges.push({ from: match.index, to: match.index + match[0].length });
   for (const match of line.matchAll(/\\\([^\n]*?\\\)|(?<!\\)\$[^$\n]+?(?<!\\)\$/g)) ranges.push({ from: match.index, to: match.index + match[0].length });
   ranges.push(...markdownLinkRanges(line));
@@ -504,6 +507,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
   let rawTikz = null;
   let privatePlanning = null;
   let htmlComment = false;
+  let inFootnote = false;
   const singletonMarks = new Set();
   const unresolvedCitations = [];
   // `annotations: none` restores the pre-annotation behaviour: every todo,
@@ -525,6 +529,11 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
       marginSafe: marginNoteSafeLine(markdownContainerLine(line).content),
     };
     let container = markdownContainerLine(line);
+    const footnoteDefinition = /^ {0,3}\[\^[^\]\n]+\]:/.test(container.content);
+    if (footnoteDefinition) inFootnote = true;
+    else if (inFootnote && container.content.trim() && !/^ {4}/.test(container.content)) inFootnote = false;
+    if (inFootnote) markContext.marginSafe = false;
+    const footnoteContinuation = inFootnote && !footnoteDefinition && /^ {4}(?! {4})/.test(container.content);
     if (index <= frontMatter.end) continue;
     if (privatePlanning) {
       const continued = continuePrivatePlanning(line, privatePlanning);
@@ -580,7 +589,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
 
     // Pandoc owns indented code/list continuation parsing. Never execute an
     // Noema command merely because its literal text occurs after 4 spaces.
-    if (/^(?: {4}|\t)/.test(container.content)) { output.push(line); continue; }
+    if (/^(?: {4}|\t)/.test(container.content) && !footnoteContinuation) { output.push(line); continue; }
 
     if (htmlComment) {
       const closeComment = line.indexOf("-->");

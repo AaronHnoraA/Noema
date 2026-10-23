@@ -607,30 +607,86 @@ export function latexMacrosPreamble(macros) {
 
 export function latexSideCommentPreamble(enabled) {
   if (!enabled) return "";
-  // A side comment is an aside in the text flow, set off by a thin rule. It is
-  // not a todonotes margin note: those cannot break, so a long one near the
-  // foot of a page ran off it. A breakable tcolorbox splits across pages,
-  // follows list indentation, and keeps its colour from leaking past a break.
+  // A side comment reads as it does in the editor: a short orange mark at its
+  // place in the text and the comment beside the text column. The note is
+  // plain margin text, not a todonotes box. Split a note taller than a page
+  // into bounded pieces before marginfix places them across pages; otherwise
+  // marginfix can lose an oversized note. Where a margin note cannot be set (a box,
+  // a footnote, a minipage), the comment stays inline.
   return String.raw`% Noema side comments
 \makeatletter
 \@ifpackageloaded{todonotes}{}{\usepackage[textsize=footnotesize]{todonotes}}
-\@ifpackageloaded{tcolorbox}{}{\usepackage{tcolorbox}}
-\makeatother
-\tcbuselibrary{skins,breakable}
+\@ifpackageloaded{marginfix}{}{\usepackage{marginfix}}
 \providecolor{AaronSideCommentBackground}{HTML}{A94700}
 \providecolor{AaronSideCommentText}{HTML}{5A4A3E}
+\providecommand{\AaronSideCommentMark}{%
+  \textcolor{AaronSideCommentBackground}{\rule[-0.3ex]{0.7em}{1.2pt}}}
+\newbox\noema@sidebox
+\newbox\noema@sidepart
+\newdimen\noema@sidechunkheight
+\def\noema@send@sidebox{%
+  \ifdim\dimexpr\ht\noema@sidebox+\dp\noema@sidebox\relax>\noema@sidechunkheight
+    \setbox\noema@sidepart=\vsplit\noema@sidebox to \noema@sidechunkheight
+    \ifdim\ht\noema@sidepart<1pt
+      \sidecommentinline{\noema@sideoriginal}%
+    \else
+      \marginpar{\unvbox\noema@sidepart}%
+      \expandafter\noema@send@sidebox
+    \fi
+  \else
+    \marginpar{\unvbox\noema@sidebox}%
+  \fi}
+\def\noema@mpfootnote{mpfootnote}
+\newif\ifnoema@infootnote
+\AtBeginDocument{\let\noema@makefntext\@makefntext
+  \def\@makefntext{\noema@infootnotetrue\noema@makefntext}}
 \providecommand{\sidecomment}[1]{%
-  \begin{tcolorbox}[enhanced,breakable,frame hidden,interior hidden,
-    borderline west={0.6pt}{0pt}{AaronSideCommentBackground},
-    boxsep=0pt,left=0.8em,right=0pt,top=1pt,bottom=1pt,
-    before skip=0.5\baselineskip,after skip=0.5\baselineskip,
-    parbox=false,fontupper=\small\upshape,colupper=AaronSideCommentText]%
-  #1%
-  \end{tcolorbox}%
-  \ignorespaces
-}
+  \ifinner\sidecommentinline{#1}%
+  \else\ifnoema@infootnote\sidecommentinline{#1}%
+  \else\ifx\@mpfn\noema@mpfootnote\sidecommentinline{#1}%
+  \else
+    \AaronSideCommentMark
+    \begingroup
+      \def\noema@sideoriginal{#1}%
+      \noema@sidechunkheight=.68\textheight
+      \setbox\noema@sidebox=\vbox{\hsize=\marginparwidth
+        \raggedright\footnotesize\upshape\color{AaronSideCommentText}%
+        \noindent\AaronMarginLeader{AaronSideCommentBackground}%
+        \AaronSideCommentMark\nobreakspace #1\par}%
+      \noema@send@sidebox
+    \endgroup
+  \fi\fi\fi}
+\makeatother
 
 `;
+}
+
+// With margin notes the right margin must hold them. A template's margin
+// that is narrower than `\AaronMarginNoteSpace` grows to it; the left margin
+// and every other template setting stay as they are.
+export function latexMarginLayoutPreamble() {
+  return String.raw`% Noema margin layout
+\makeatletter
+\newif\ifnoema@marginnotes
+\DeclareOption{marginnotes}{\noema@marginnotestrue}
+\DeclareOption*{}
+\ProcessOptions\relax
+\providecommand{\AaronMarginNoteSpace}{52mm}
+\ifnoema@marginnotes
+  \newlength\noema@rightmargin
+  \setlength\noema@rightmargin{\dimexpr\paperwidth-1in-\hoffset-\oddsidemargin-\textwidth\relax}%
+  \ifdim\noema@rightmargin<\AaronMarginNoteSpace\relax
+    \@ifpackageloaded{geometry}%
+      {\geometry{right=\AaronMarginNoteSpace}}%
+      {\addtolength\textwidth{\noema@rightmargin}%
+       \addtolength\textwidth{-\AaronMarginNoteSpace}}%
+    \setlength\noema@rightmargin{\AaronMarginNoteSpace}%
+  \fi
+  \setlength\marginparsep{5mm}%
+  \setlength\marginparwidth{\dimexpr\noema@rightmargin-\marginparsep-8mm\relax}%
+  \setlength\marginparpush{4pt}%
+\fi
+\makeatother`;
 }
 
 // Annotation macros. `\todo` comes from todonotes, which
@@ -639,14 +695,17 @@ export function latexSideCommentPreamble(enabled) {
 export function latexAnnotationPreamble() {
   const lines = [
     "% Noema annotations",
+    "\\providecommand{\\AaronMarginLeader}[1]{%",
+    "  \\rlap{\\hskip-3mm\\textcolor{#1}{\\rule[0.4ex]{2mm}{0.6pt}\\ensuremath{\\rightarrow}}}}",
     "\\providecolor{AaronDisplayComment}{HTML}{EC008C}",
     "\\providecommand{\\aaroncomment}[1]{%",
     "  \\textcolor{AaronDisplayComment}{\\textbf{COMMENT:}\\nobreakspace #1}%",
     "}",
     "\\providecolor{AaronTodo}{HTML}{E8730A}",
     "\\providecommand{\\aarontodo}[1]{%",
-    "  \\todo[fancyline,color=AaronTodo,textcolor=white,linecolor=AaronTodo,bordercolor=white]{%",
-    "    \\textbf{TODO:} #1}%",
+    "  \\textcolor{AaronTodo}{\\rule[-0.3ex]{0.7em}{1.2pt}}%",
+    "  \\todo[noline,color=AaronTodo,textcolor=white,bordercolor=white]{%",
+    "    \\AaronMarginLeader{AaronTodo}\\textbf{TODO:} #1}%",
     "}",
     // `\\todo` cannot appear in a moving argument or a tabular cell. The
     // preprocessor routes those contexts here so an annotated heading or table
@@ -671,8 +730,8 @@ export function latexAnnotationPreamble() {
   lines.push(
     "\\providecommand{\\aaronrevision}[4][suggest]{%",
     "  \\textcolor{AaronRev#1}{\\uline{#2}}%",
-    "  \\todo[fancyline,color=AaronRev#1,textcolor=white,linecolor=AaronRev#1,bordercolor=white]{%",
-    "    \\textbf{\\csname AaronRevLabel#1\\endcsname:} #3\\ifstrempty{#4}{}{\\par\\textit{#4}}}%",
+    "  \\todo[noline,color=AaronRev#1,textcolor=white,bordercolor=white]{%",
+    "    \\AaronMarginLeader{AaronRev#1}\\textbf{\\csname AaronRevLabel#1\\endcsname:} #3\\ifstrempty{#4}{}{\\newline\\textit{#4}}}%",
     "}",
     "\\providecommand{\\aaronrevisioninline}[4][suggest]{%",
     "  \\textcolor{AaronRev#1}{\\uline{#2}}%",
@@ -687,6 +746,7 @@ export function latexMacrosPackage(macros, features = {}) {
   return [
     "\\NeedsTeXFormat{LaTeX2e}",
     "\\ProvidesPackage{noema-macros}[2026/07/12 Noema shared macros]",
+    latexMarginLayoutPreamble(),
     "\\RequirePackage{graphicx}",
     "\\RequirePackage{booktabs,longtable,array,calc,etoolbox}",
     "\\RequirePackage{footnote}",

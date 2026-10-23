@@ -6768,14 +6768,18 @@ export async function exportLatex(body = {}) {
     ...converted.features,
     usesWrapfig: /\\begin\{wrapfigure\}/.test(converted.body),
   };
-  const templateText = macroFeatures.usesTikz && !template.text.includes("\\usepackage{noema-macros}")
-    ? template.text.replace(/\\begin\{document\}/, (begin) => [
+  const hasNoemaMacros = /\\(?:usepackage|RequirePackage)(?:\[[^\]]*\])?\{noema-macros\}/.test(template.text);
+  const marginTemplate = macroFeatures.usesSideComment
+    ? template.text.replace(/\\usepackage\{noema-macros\}/g, "\\usepackage[marginnotes]{noema-macros}")
+    : template.text;
+  const templateText = macroFeatures.usesTikz && !hasNoemaMacros
+    ? marginTemplate.replace(/\\begin\{document\}/, (begin) => [
       /\\(?:usepackage|RequirePackage)(?:\[[^\]]*\])?\{tikz\}/.test(template.text) ? "" : "\\usepackage{tikz}",
       "\\usetikzlibrary{calc}",
       begin,
     ].filter(Boolean).join("\n"))
-    : template.text;
-  const generatedSharedFiles = template.text.includes("\\usepackage{noema-macros}")
+    : marginTemplate;
+  const generatedSharedFiles = hasNoemaMacros
     ? [{ name: "noema-macros.sty", content: Buffer.from(latexMacrosPackage(macroResult.macros, macroFeatures), "utf8") }]
     : [];
   const sharedFiles = [...declaredSharedFiles, ...generatedSharedFiles, ...diagramFiles];
