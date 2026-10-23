@@ -29,9 +29,9 @@ separate editor implementation.
 | `src/cm6/paste-context.ts` | What a paste becomes where it lands (code, table row, link destination, URL over a selection, multi-cursor). `src/paste.ts` converts the clipboard once and passes its plain text along. |
 | `src/cm6/code-block-input.ts`, `src/cm6/history-grouping.ts` | Fenced-code Enter/Tab/Mod-Enter, and word/kind-boundary undo grouping through CM6 `joinToEvent`. |
 | `src/cm6/table-rect-selection.ts` | Rectangular table cell selection model (copy as GFM sub-table, two-stage delete); the table widget in `live-preview.ts` owns the DOM. |
-| `src/emoji-shortcodes.ts` | `:name:` emoji rendering and completion from export's markdown-it-emoji table. See `docs/marker-marktext-filesmd-study.md`. |
+| `src/emoji-shortcodes.ts` | `:name:` emoji rendering and completion from export's markdown-it-emoji table. See `../../docs/noema/records/audits/marker-marktext-filesmd-study-2026-10.md`. |
 | `src/cjk-emphasis.ts` | CJK-friendly emphasis flanking shared by the Lezer editor grammar and the markdown-it renderer; strictly additive over CommonMark. |
-| `src/cm6/extensions/visual/constructs/` | The rendered-construct layer: reveal policies and roles, Vim pinning as state, literal (code/math) ranges, the construct registry, and the `inlineConstruct` factory. See `docs/architecture/rendered-constructs.md`. |
+| `src/cm6/extensions/visual/constructs/` | The rendered-construct layer: reveal policies and roles, Vim pinning as state, literal (code/math) ranges, the construct registry, and the `inlineConstruct` factory. See `../../docs/noema/design/rendered-constructs.md`. |
 | `src/cm6/embedded-surface.ts` | Marks and recognizes elements inside the editor that take their own keys and focus (MathLive, the diagram lightbox, a rendered table's cell selection), for Vim, focus, scrolling and Emacs key forwarding. |
 | `src/cm6/screen-rows.ts` | Visual rows — soft-wrapped lines, a drawn block as one row — measured from the DOM; the one row model behind Vim's `j`/`k` and the editor's ArrowUp/ArrowDown (`moveByVisualRow`). |
 | `src/cm6/extensions/visual/widgets/*.ts` | Math, code fence, image, task, TOC, org-env, and related widgets. `block-extras.ts` hosts the `@@cell` Jupyter widget; it renders cell output through the shared JupyterLab stack (lazy-loaded). |
@@ -58,16 +58,16 @@ separate editor implementation.
 | `src/layout-attrs.ts` | Layout-attribute normalization (align, wrap, width, height) and CSS-class/style helpers. |
 | `src/image-attrs.ts` | Image-specific layout attr reader/writer and DOM/token applicators, built on `layout-attrs.ts`. `imageLayoutToTrailingAttrs` serializes a layout back to `{...}` source (round-trips through `imageLayoutFromAttrs`); used by the image widget's hover toolbar. |
 | `shared/command-syntax.mjs` | Canonical browser/server parser for inline `@@cmd` and block `#+begin kind` commands; `src/command-syntax.ts` is its typed facade. |
-| `shared/planning-dsl.mjs` | Structural parser for the `@@todo`/`@@itodo`/`@@project`/`@@milestone`/`@@clock` planning DSL — inline/block shapes, bracket-less titles, parse-time diagnostics, patch/serialize helpers. See `docs/agenda.md`. |
+| `shared/planning-dsl.mjs` | Structural parser for the `@@todo`/`@@itodo`/`@@project`/`@@milestone`/`@@clock` planning DSL — inline/block shapes, bracket-less titles, parse-time diagnostics, patch/serialize helpers. See `../../docs/noema/design/agenda-dsl.md`. |
 | `shared/planning-values.mjs` | Value-grammar layer for the planning DSL: dates, repeaters, lead-time, dep-refs, durations, canonical-key aliasing, status normalization. Shared by the server and `src/planning-values.ts` (browser facade) so both validate identically. |
 | `src/styles/*.css` | CM6 editor chrome and swappable Markdown themes. |
 | `pages/main.ts` | CM6 editor composition shell hosted by Emacs; server mode reuses it read-only. |
-| `pages/vim-lite.ts`, `src/cm6/screen-rows.ts` | The modal layer. Native Vim is the reference: `tests/vim-native-parity.test.ts` replays results recorded from Neovim (`scripts/record-vim-parity.mjs`), and `docs/vim.md` lists the deliberate differences. Lines are screen rows; a row takes in the hidden Markdown syntax drawn on it. Outside Insert, keys an input method has taken are dropped (`inputMethodKey`). `scripts/check-vim-rows.mjs` checks rows, the painted selection, search and undo under WebKit. |
+| `pages/vim-lite.ts`, `src/cm6/screen-rows.ts` | The modal layer. Native Vim is the reference: `tests/vim-native-parity.test.ts` replays results recorded from Neovim (`scripts/record-vim-parity.mjs`), and `../../docs/noema/guide/vim.md` lists the deliberate differences. Lines are screen rows; a row takes in the hidden Markdown syntax drawn on it. Outside Insert, keys an input method has taken are dropped (`inputMethodKey`). `scripts/check-vim-rows.mjs` checks rows, the painted selection, search and undo under WebKit. |
 | `src/cm6/selection-column-clip.ts` | Clips `drawSelection`'s layer to the text column. The browser's own `::selection` stays hidden on editor lines; do not style it back in, or every selection is painted twice. |
-| `pages/agenda-view.ts` | Agenda implementation shared by the Emacs-hosted editor panel and `/agenda` surface. It is not an independent product; all edits round-trip through `patchTodo`/`clockIn`/`clockOut`. See `docs/agenda.md`. |
+| `pages/agenda-view.ts` | Agenda implementation shared by the Emacs-hosted editor panel and `/agenda` surface. It is not an independent product; all edits round-trip through `patchTodo`/`clockIn`/`clockOut`. See `../../docs/noema/design/agenda-dsl.md`. |
 | `pages/latex-export-scope.ts` | Pure whole-note/selection/heading-subtree range model used by the LaTeX scope picker. |
-| `server/lib/runtime.mjs` | Compatibility facade plus remaining note/index/save/agenda/Copilot implementation. New channel controllers live in `server/Features/`; transport helpers live in `server/infrastructure/`. See `docs/architecture/current-architecture.md`. |
-| `kernel/noema/wikisearch/`, `server/lib/kernel-knowledge-search.mjs` | The one Knowledge search. The Go package reads `wiki.db` (which Node still builds) and does all matching, ranking, fuzzy matching and excerpts, and in mode `references` lists what a note can link to (pages, headings, tags, citations) with the link text for each (`pages/reference-picker.ts` is the Command-R popup that shows it); the Node module only forwards a request to `/api/noema/knowledge/search` and falls back to `searchWikiDatabase` while the kernel cannot answer. Clients render `matchKind`, `titleRanges`, `explain`, `corrected` and `create`; none filters or ranks. See `docs/wiki-workspace.md`. |
+| `server/lib/runtime.mjs` | Compatibility facade plus remaining note/index/save/agenda/Copilot implementation. New channel controllers live in `server/Features/`; transport helpers live in `server/infrastructure/`. See `../../docs/noema/design/current-architecture.md`. |
+| `kernel/noema/wikisearch/`, `server/lib/kernel-knowledge-search.mjs` | The one Knowledge search. The Go package reads `wiki.db` (which Node still builds) and does all matching, ranking, fuzzy matching and excerpts, and in mode `references` lists what a note can link to (pages, headings, tags, citations) with the link text for each (`pages/reference-picker.ts` is the Command-R popup that shows it); the Node module only forwards a request to `/api/noema/knowledge/search` and falls back to `searchWikiDatabase` while the kernel cannot answer. Clients render `matchKind`, `titleRanges`, `explain`, `corrected` and `create`; none filters or ranks. See `../../docs/noema/design/wiki-workspace.md`. |
 | `server/lib/latex-export-pandoc.mjs` | Noema-aware preprocessing, fixed Pandoc Markdown profile, typed LaTeX marks, and academic LaTeX postprocessing. Pandoc is required in this fixed environment. |
 | `server/lib/latex-export-diagrams.mjs` | Turns diagrams into LaTeX figures before Pandoc sees the Markdown: `.drawio` is exported straight to PDF by draw.io, and a Mermaid fence uses the SVG the page sent with the request (Mermaid needs a browser to lay text out, so there is no server renderer) converted by `rsvg-convert`. Figures ride along as support files. A diagram that cannot be made into a figure stays source and is reported as a warning, never dropped. |
 | `pages/export-diagrams.ts` | The page side of that contract: finds the diagram fences in the exported scope, renders each with `textLabels: true`, and files them under the same key the server computes. Text labels matter — a vector converter drops a `foreignObject`, so HTML labels would arrive missing. |
@@ -119,7 +119,7 @@ Every piece of Markdown the visual editor draws as something else — formula,
 image, footnote, reference, task box, table, diagram, org-env block, `@@`
 command, HTML block — goes through one layer,
 `src/cm6/extensions/visual/constructs/`. Read
-`docs/architecture/rendered-constructs.md` before adding or changing one.
+`../../docs/noema/design/rendered-constructs.md` before adding or changing one.
 
 - Decide the role first: an **object** (Vim moves over it, it stays rendered
   in Normal/Visual) or **structure** (syntax Vim edits as text).
@@ -147,7 +147,7 @@ command, HTML block — goes through one layer,
 ## Editor viewport
 
 The viewport has one owner, `src/cm6/viewport-stability.ts`; see
-`docs/architecture/scroll-ownership.md`. Every focus of the editor content goes
+`../../docs/noema/design/scroll-ownership.md`. Every focus of the editor content goes
 through it (`installFocusOwner`), elements inside the editor are focused with
 `{ preventScroll: true }`, reveals go through a transaction's `scrollIntoView`,
 and only the owner writes `scrollTop`. `tests/architecture-scroll.test.ts`

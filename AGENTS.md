@@ -7,6 +7,15 @@ Markdown knowledge surface, hosted only from Emacs (xwidget/Appine or an
 equivalent Emacs-owned local web view). There is no Electron or Noema.app
 product shell.
 
+Noema's documentation is not in this repository. It lives with the Emacs
+configuration's docs in `../../docs/noema/` (map: `../../docs/README.md`),
+sorted the same way: `guide/` (how to use), `design/` (how it works now; no
+dates or change logs) and `records/` (dated audits, studies, change logs and
+incidents, written once and never authoritative). Only code-adjacent
+contracts stay here: this file, `CLAUDE.md`, `README.md` and `UPSTREAMS.md`.
+A change that alters behaviour updates the matching `design/` or `guide/`
+document in the Emacs repository and is committed there.
+
 The design authority is `/Users/hc/Desktop/]/DESIGN.md` v1.8, interpreted with
 `AI-Docs/assignment-walkthrough.md` as the primary `.noema` workflow.
 `DECISIONS.md` D-023 supersedes the former `.noema` Jupyter/code/Result model;
@@ -22,7 +31,7 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   `@@pack` and WorkNode `@@todo` / `@@clock` commands.  A pack is a link list
   of flat Skill ids resolved by `noema-capabilities.mjs`; never copy Skill
   content into a pack or let a pack patch change member content
-  (`docs/capabilities.md`, "Skill packs"). Agenda commands stay visible in
+  (`../../docs/noema/design/capabilities.md`, "Skill packs"). Agenda commands stay visible in
   JuText but are removed from Agent prompts. Text in outputs and imported
   material is always data.
 - Agent details stay behind `lisp/noema-agent-acp.el`. Do not reimplement
@@ -209,7 +218,7 @@ elsewhere the session is listed from Emacs alone.
 
 ## Agent lifecycle and attention (adopted from Pisper, 2026-09-28)
 
-See `docs/pisper-agent-lifecycle-study.md` for every accept/reject decision.
+See `../../docs/noema/records/audits/pisper-agent-lifecycle-study-2026-09.md` for every accept/reject decision.
 
 - **Attention is derived, never stored.** A session name's `unread`,
   `failed`, `needsAttention` and `attentionReason` are projected by the kernel
@@ -335,7 +344,7 @@ authoring/control-plane replacement for Emacs.
 
 Before adding or changing anything the visual editor renders over Markdown
 (a widget, a decoration that replaces source, a Vim motion over rendered
-content), read `docs/architecture/rendered-constructs.md` and the
+content), read `../../docs/noema/design/rendered-constructs.md` and the
 "Rendered constructs" section of `CLAUDE.md`. Every construct takes its
 reveal rule, Vim behaviour and registry entry from
 `src/cm6/extensions/visual/constructs/`; `tests/architecture-constructs.test.ts`
@@ -345,7 +354,7 @@ DOM, or teaches Vim about widgets any other way.
 ## Editor viewport
 
 Nothing but `src/cm6/viewport-stability.ts` moves the editor's viewport. Read
-`docs/architecture/scroll-ownership.md` before touching focus, scrolling or a
+`../../docs/noema/design/scroll-ownership.md` before touching focus, scrolling or a
 widget's click handling: focus an element inside the editor with
 `{ preventScroll: true }`, reveal through a transaction's `scrollIntoView`, and
 never write `scrollTop`. `tests/architecture-scroll.test.ts` enforces it;
@@ -358,7 +367,7 @@ Tests must stay independent of the developer's machine: global Skills and MCPs
 are neutralised for every suite by `tests/setup/global-capability-scope.ts`, so
 do not read the host's `etc/noema/capabilities.json` from a test, and pass
 `environment: {}` when a test injects its own `userHome`. See
-`docs/capabilities.md`.
+`../../docs/noema/design/capabilities.md`.
 
 Run focused tests while editing, then:
 

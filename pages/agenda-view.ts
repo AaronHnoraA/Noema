@@ -7,7 +7,7 @@ import {promptAgendaCapture, type CaptureCatalog} from "./agenda-capture-view.ts
 // surface via `openAgendaView`. All edits
 // round-trip through `api.notes.patchTodo`/`clockIn`/`clockOut`, which write
 // straight back into native Markdown/WorkNode sources — this view holds no state that isn't
-// re-derivable from it. See `docs/agenda.md` for the view-model shapes.
+// re-derivable from it. See `../../docs/noema/design/agenda-dsl.md` for the view-model shapes.
 import type { AgendaDagEdge, AgendaDagNode, AgendaEntry, AgendaMsg, ClockReference, GanttMilestone, GanttTask, ProjectRollup, TodoItem, TodoLint } from "./api-client.ts";
 import {renderAttention} from './agenda-attention-view.ts';
 import type {AttentionSnapshot,AttentionAction} from './agenda-attention-view.ts';

@@ -2,7 +2,7 @@
  * Architecture guard for rendered constructs.
  *
  * Every rendered construct goes through `src/cm6/extensions/visual/constructs/`
- * (see `docs/architecture/rendered-constructs.md`). These tests fail when new
+ * (see `../../docs/noema/design/rendered-constructs.md`). These tests fail when new
  * code bypasses that layer, so the editor keeps one answer to "when does this
  * show its source" and "what is drawn here" as it grows. There are no
  * exceptions: every widget drawn over source is a construct. When a rule

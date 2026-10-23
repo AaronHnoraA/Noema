@@ -8,7 +8,7 @@
  * alone, and Emacs does not receive them. A surface opts in with
  * `markEmbeddedSurface`; every place that has to tell such a surface from the
  * document asks through the selectors here, so the rule has one spelling.
- * See `docs/architecture/rendered-constructs.md`.
+ * See `../../docs/noema/design/rendered-constructs.md`.
  */
 
 /** The attribute that marks an embedded surface, and its value. */

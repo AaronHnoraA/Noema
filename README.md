@@ -131,18 +131,18 @@ name is projected first, and one this machine cannot reach is refused.
 
 ## Emacs workflow
 
-Opening `research.noema` visits the real file in `noema-research-mode`. JuText supplies block navigation and editing while stable IDs remain hidden. Work prompts may begin with `@@agent(id)`, `@@session(continue|fork|fresh|name|parent:child)`, repeated `@@ctx(ref)`, `@@skill(id)` and `@@pack(id)` directives; a pack selects a curated list of Skills (see `docs/capabilities.md`). `@@ctx(lineage:N)` widens the ancestor context to N (1–3) levels and `@@ctx(none)` turns off the context Noema attaches automatically; automatic context (derived lineage and upstream outputs) only uses the 64 KiB budget declared context leaves, and anything it cannot fit is recorded as `context_omitted` in the RunSpec. `C-c C-c` strips that leading control region, freezes a RunSpec and dispatches the body through the configured ACP agent.
+Opening `research.noema` visits the real file in `noema-research-mode`. JuText supplies block navigation and editing while stable IDs remain hidden. Work prompts may begin with `@@agent(id)`, `@@session(continue|fork|fresh|name|parent:child)`, repeated `@@ctx(ref)`, `@@skill(id)` and `@@pack(id)` directives; a pack selects a curated list of Skills (see `../../docs/noema/design/capabilities.md`). `@@ctx(lineage:N)` widens the ancestor context to N (1–3) levels and `@@ctx(none)` turns off the context Noema attaches automatically; automatic context (derived lineage and upstream outputs) only uses the 64 KiB budget declared context leaves, and anything it cannot fit is recorded as `context_omitted` in the RunSpec. `C-c C-c` strips that leading control region, freezes a RunSpec and dispatches the body through the configured ACP agent.
 
 Project Skills and MCPs are resolved from built-in, global, explicitly shared
 and project scopes before that RunSpec is frozen. `M-x noema-capability-manager`
 shows effective state, source, patches, validation and MCP runtime state; in an
 agent-shell buffer the same command becomes a read-only lookup that drafts a
 reference to the selected capability's source. See
-[Project Skills and MCP capabilities](docs/capabilities.md) and the
-[semantic Elisp API](docs/noema-elisp-api.md).
+[Project Skills and MCP capabilities](../../docs/noema/design/capabilities.md) and the
+[semantic Elisp API](../../docs/noema/design/elisp-api.md).
 
 Automatic conversation recall and its private model configuration are described
-in [Noema automatic memory](docs/hy-memory.md).
+in [Noema automatic memory](../../docs/noema/design/hy-memory.md).
 
 Key commands include:
 
@@ -312,7 +312,7 @@ It opens an Emacs workspace containing a v2 `.noema` WorkDocument, WorkNode DAG 
 
 ## Publishing reader
 
-The repository still contains a read-only server renderer for publishing Markdown. It is an output/publication surface, not a Noema control UI: authoring, Jupyter, permissions, agents, Proposals and Run control are denied. Server mode also exposes the published notes as an unauthenticated, read-only Streamable HTTP MCP endpoint at `/mcp`; it uses the same public catalog as the reader. See `server-config/`, `docs/mcp.md` and `docs/wiki-workspace.md` for that separately scoped service.
+The repository still contains a read-only server renderer for publishing Markdown. It is an output/publication surface, not a Noema control UI: authoring, Jupyter, permissions, agents, Proposals and Run control are denied. Server mode also exposes the published notes as an unauthenticated, read-only Streamable HTTP MCP endpoint at `/mcp`; it uses the same public catalog as the reader. See `server-config/`, `../../docs/noema/design/mcp.md` and `../../docs/noema/design/wiki-workspace.md` for that separately scoped service.
 
 ## Development map
 
@@ -334,4 +334,4 @@ The authoritative product model is maintained in `~/Desktop/]/DESIGN.md`, with d
 
 ## License
 
-AGPL-3.0-only. The source-editor infrastructure includes attributed adaptations from Overleaf; see `NOTICE` and `docs/architecture/overleaf-source-editor-study.md`.
+AGPL-3.0-only. The source-editor infrastructure includes attributed adaptations from Overleaf; see `NOTICE` and `../../docs/noema/records/audits/overleaf-source-editor-study-2026-07.md`.

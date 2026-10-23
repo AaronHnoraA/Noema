@@ -5,7 +5,7 @@ description: Use before adding or changing anything the Noema visual editor draw
 
 # Adding or changing a rendered construct
 
-The rules live in `docs/architecture/rendered-constructs.md`. Read it first; this is the working checklist.
+The rules live in `../../docs/noema/design/rendered-constructs.md`. Read it first; this is the working checklist.
 
 ## Decide
 
@@ -36,7 +36,7 @@ The rules live in `docs/architecture/rendered-constructs.md`. Read it first; thi
 
 ## Viewport
 
-- A click on the construct must not move the view (unless it navigates). Focus anything inside the widget with `{ preventScroll: true }`; reveal with a transaction's `scrollIntoView`, never `element.scrollIntoView` or `scrollTop` (docs/architecture/scroll-ownership.md, enforced by tests/architecture-scroll.test.ts).
+- A click on the construct must not move the view (unless it navigates). Focus anything inside the widget with `{ preventScroll: true }`; reveal with a transaction's `scrollIntoView`, never `element.scrollIntoView` or `scrollTop` (../../docs/noema/design/scroll-ownership.md, enforced by tests/architecture-scroll.test.ts).
 - Add a sample of the construct to the fixture in `scripts/check-scroll-invariance.mjs` with its click intent (`opens`, `edits`, `navigates`) and run `npm run check:scroll` (WebKit), in full-app mode when the click involves host focus.
 
 ## Verify
@@ -47,4 +47,4 @@ npx vp test --run tests/architecture-constructs.test.ts tests/rendered-construct
 npm test
 ```
 
-The caret must never rest strictly inside a construct that is still drawn — it opens, or the caret lands on its edge; the "caret is never hidden" sweeps in the guard check it for every family in the sample note. There is no allowlist: every widget drawn over source must be in the registry. Add a sample of the new construct to the conformance note in `tests/architecture-constructs.test.ts` and its `kind` to the list it checks, so the registry and the drawing are proven to agree. If a guard fails, fix the code; if the rule itself must change, change `docs/architecture/rendered-constructs.md` first, then the guard.
+The caret must never rest strictly inside a construct that is still drawn — it opens, or the caret lands on its edge; the "caret is never hidden" sweeps in the guard check it for every family in the sample note. There is no allowlist: every widget drawn over source must be in the registry. Add a sample of the new construct to the conformance note in `tests/architecture-constructs.test.ts` and its `kind` to the list it checks, so the registry and the drawing are proven to agree. If a guard fails, fix the code; if the rule itself must change, change `../../docs/noema/design/rendered-constructs.md` first, then the guard.

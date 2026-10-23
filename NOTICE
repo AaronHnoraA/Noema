@@ -14,7 +14,7 @@ Affero General Public License version 3. The reviewed upstream revision is:
 Each directly adapted source file also records its upstream path and revision.
 The architecture review and migration matrix are in:
 
-  docs/architecture/overleaf-source-editor-study.md
+  ../../docs/noema/records/audits/overleaf-source-editor-study-2026-07.md
 
 The raw-ZMQ Jupyter transport includes code ported from microsoft/vscode-jupyter
 under the MIT License; its existing source notices remain in the relevant
@@ -72,7 +72,7 @@ License. The reviewed upstream revision is:
   https://github.com/ling-kong-ran/pisper
   commit c40db63214ec66b65e12e4a3b6da15e7fe7f53f9
 
-See docs/pisper-agent-lifecycle-study.md for what was adopted.
+See ../../docs/noema/records/audits/pisper-agent-lifecycle-study-2026-09.md for what was adopted.
 
 shared/nanomuse-recall.mjs is a translation of the relative relevance cut
 (standouts) from nanoMuse's memory recall, copyright the nanoMuse

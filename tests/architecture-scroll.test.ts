@@ -6,7 +6,7 @@
  * viewport — a widget focusing an input, a handler focusing the editor while
  * its caret was still where the reader left it, a write to scrollTop. Each fix
  * covered one path. Now the viewport belongs to `src/cm6/viewport-stability.ts`
- * (see docs/architecture/scroll-ownership.md); these rules keep other code from
+ * (see ../../docs/noema/design/scroll-ownership.md); these rules keep other code from
  * moving it behind the owner's back. The behaviour itself is checked in a real
  * WebKit by scripts/check-scroll-invariance.mjs, for every construct family.
  *

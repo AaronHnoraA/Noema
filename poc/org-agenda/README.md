@@ -1,7 +1,7 @@
 # Org Agenda 复用原型
 
 这是本次研究的可运行实验，**不是已接入日常配置的完整 Agenda**。
-总体设计见 [统一 Agenda 研究](../../docs/architecture/agenda-org-integration-study.md)。
+总体设计见 [统一 Agenda 研究](../../../../docs/noema/records/audits/agenda-org-integration-study-2026-09.md)。
 
 ## 已验证的链路
 
@@ -12,7 +12,7 @@ example.noema → WorkNode.agenda ─────┘               → Noema sou
 ```
 
 `WorkNode.agenda` 最初是原型提案；2026-09-16 已接入生产 JS / Go / Elisp 元数据协议。
-本目录仍是只读实验。正式入口及剩余工作见 [实装记录](../../docs/architecture/agenda-implementation.md)。
+本目录仍是只读实验。正式入口及剩余工作见 [实装记录](../../../../docs/noema/records/changes/agenda-implementation-2026-09.md)。
 示例保留了 question → 两条探索分支 → checkpoint 的 DAG，并单独保存 `depends`。
 一个节点绑定多个 Cell 时，只投影一条任务；原生 Agenda 可以按日期显示多条 occurrence。
 

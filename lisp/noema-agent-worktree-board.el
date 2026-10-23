@@ -13,7 +13,7 @@
 ;; person's act, through Magit; removing the group keeps every branch.
 ;;
 ;; Design source: Agent Fleet's parallel tasks
-;; (docs/agent-fleet-noema-audit-2026-10.md in the Emacs configuration),
+;; (../../docs/noema/records/audits/agent-fleet-noema-audit-2026-10.md in the Emacs configuration),
 ;; with the grouping persisted, which Agent Fleet keeps only in memory.
 
 ;;; Code:

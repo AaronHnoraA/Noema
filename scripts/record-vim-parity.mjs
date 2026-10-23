@@ -7,7 +7,7 @@
 // The first step writes Neovim's result for every case; the second marks the
 // cases Noema reproduces.  The test then holds Noema to exactly those, so a
 // case can only leave the set on purpose.  What stays outside is deliberate
-// (Markdown indentation on `o`/`cc`, the Visual `w` convention of docs/vim.md,
+// (Markdown indentation on `o`/`cc`, the Visual `w` convention of ../../docs/noema/guide/vim.md,
 // Evil's Visual `I`) or Neovim-specific (bracket objects searching forward).
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

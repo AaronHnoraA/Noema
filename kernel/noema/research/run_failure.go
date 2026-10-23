@@ -6,7 +6,7 @@ package research
 import "regexp"
 
 // Failure kinds, adopted from Pisper's stream-retry and team error
-// classification (docs/pisper-agent-lifecycle-study.md).  A kind is a
+// classification (../../docs/noema/records/audits/pisper-agent-lifecycle-study-2026-09.md).  A kind is a
 // projection of the recorded reason, never stored, so improving the patterns
 // reclassifies old Runs.  Only transient kinds are retryable; authentication,
 // quota and context failures need the person, and "error" is an execution

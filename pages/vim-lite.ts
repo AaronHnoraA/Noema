@@ -7,7 +7,7 @@
  * `dd`/`yy`/`cc`, `V`, `D`/`C`/`Y`, `A`/`I`, `H`/`M`/`L` and `f`/`t` all act on
  * screen rows, and columns are pixel columns.  The `g` forms (`gj`, `gk`,
  * `g0`, `g^`, `g$`) and the line-number motions (`gg`, `G`, `+`, `-`, `_`)
- * keep their source-line meaning.  `docs/vim.md` is the user-facing contract;
+ * keep their source-line meaning.  `../../docs/noema/guide/vim.md` is the user-facing contract;
  * keep it in step with this file.
  *
  * Key handling is one small parser shared by Normal, Visual and

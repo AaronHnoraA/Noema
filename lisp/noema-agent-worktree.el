@@ -19,7 +19,7 @@
 ;; branch, so committed work survives cleanup.
 ;;
 ;; Design source: Agent Fleet's per-agent worktrees and Magit review
-;; (docs/agent-fleet-noema-audit-2026-10.md in the Emacs configuration).
+;; (../../docs/noema/records/audits/agent-fleet-noema-audit-2026-10.md in the Emacs configuration).
 
 ;;; Code:
 

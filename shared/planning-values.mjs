@@ -4,7 +4,7 @@
 // knows the `@@kind(status) [title]{attrs}` *structure*) so both the server
 // (server/lib/runtime.mjs) and the browser editor (src/planning-values.ts
 // facade) can share one parser for validation, not just structure. See
-// docs/agenda.md for the full grammar reference.
+// ../../docs/noema/design/agenda-dsl.md for the full grammar reference.
 
 export const TODO_STATUSES = new Set(["todo", "doing", "done", "blocked", "cancelled"]);
 

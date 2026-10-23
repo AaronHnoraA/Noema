@@ -3,7 +3,7 @@
  *
  * Value grammar (parseDateValue/formatDateValue/normalizeDateValue/DATE_KEYS)
  * is the shared planning DSL value layer — see src/planning-values.ts and
- * docs/agenda.md — so the editor and the server validate dates identically.
+ * ../../docs/noema/design/agenda-dsl.md — so the editor and the server validate dates identically.
  * This module keeps only the editor-local presentation helpers (relative
  * labels/classes, date-key display labels).
  */

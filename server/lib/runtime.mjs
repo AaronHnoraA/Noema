@@ -97,7 +97,7 @@ let templatesRoot = resolve(process.env.NOEMA_TEMPLATES_ROOT || join(workspaceRo
 let latexTemplatesRoot = resolve(process.env.NOEMA_LATEX_TEMPLATES_ROOT || join(workspaceRoot, "templates"));
 let katexMacrosRoot = resolve(process.env.NOEMA_KATEX_MACROS_DIR || join(workspaceRoot, "etc", "katex-macros"));
 // LaTeX export engine (mechanical base + optional codex polish). See
-// server/lib/latex-export-codex.mjs and docs/latex-export-style.md.
+// server/lib/latex-export-codex.mjs and ../../docs/noema/design/latex-export-style.md.
 let latexAgentDir = resolve(process.env.NOEMA_LATEX_AGENT_DIR || join(appDir, "agents", "latex-export"));
 let latexExportEngine = String(process.env.NOEMA_LATEX_EXPORT_ENGINE || "codex").trim().toLowerCase();
 let latexExportAgent = String(process.env.NOEMA_LATEX_EXPORT_AGENT || "codex").trim().toLowerCase();
@@ -3971,7 +3971,7 @@ async function scanPlanningItemsForFile(scopeFile = "") {
 // Agenda engine: repeaters, dependency resolution (no ids — text refs), the
 // urgency/sort formula, day-bucketed view-model, and canonical-key patching
 // (priority/scheduled/deadline/repeat/after) that writes straight back into
-// the @@todo line. See docs/agenda.md.
+// the @@todo line. See ../../docs/noema/design/agenda-dsl.md.
 // ---------------------------------------------------------------------------
 
 const CLOSED_STATUSES = new Set(["done", "cancelled"]);
