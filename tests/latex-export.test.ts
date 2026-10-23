@@ -593,6 +593,9 @@ describe("LaTeX export", () => {
     expect(enabled).toContain("todonotes");
     expect(enabled).toContain("\\providecommand{\\sidecomment}");
     expect(enabled).toContain("marginfix");
+    expect(enabled).toContain("zref-abspage");
+    expect(enabled).toContain("noema-side-source-");
+    expect(enabled).toContain("noema-side-note-");
     expect(enabled).toContain("\\marginpar{");
     expect(enabled).toContain("\\ifnoema@infootnote\\sidecommentinline");
     expect(enabled).not.toContain("tcolorbox");
@@ -602,8 +605,8 @@ describe("LaTeX export", () => {
     expect(plain.features).toEqual({ usesSideComment: false });
     const macros = latexMacrosPackage({});
     expect(macros).toContain("todonotes");
-    expect(macros).toContain("\\todo[noline,color=AaronTodo");
-    expect(macros).toContain("\\todo[noline,color=AaronRev#1");
+    expect(macros).toContain("\\todo[line,linecolor=AaronTodo");
+    expect(macros).toContain("\\todo[line,linecolor=AaronRev#1");
     expect(macros).not.toContain("\\todo[fancyline");
   });
 

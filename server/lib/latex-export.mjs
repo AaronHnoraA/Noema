@@ -608,7 +608,9 @@ export function latexMacrosPreamble(macros) {
 export function latexSideCommentPreamble(enabled) {
   if (!enabled) return "";
   // A side comment reads as it does in the editor: a short orange mark at its
-  // place in the text and the comment beside the text column. The note is
+  // place in the text and the comment beside the text column. A same-page
+  // note gets an elbow leader in the space below the source line and the
+  // gutter; a note moved to another page keeps its source mark. The note is
   // plain margin text, not a todonotes box. Split a note taller than a page
   // into bounded pieces before marginfix places them across pages; otherwise
   // marginfix can lose an oversized note. Where a margin note cannot be set (a box,
@@ -617,10 +619,13 @@ export function latexSideCommentPreamble(enabled) {
 \makeatletter
 \@ifpackageloaded{todonotes}{}{\usepackage[textsize=footnotesize]{todonotes}}
 \@ifpackageloaded{marginfix}{}{\usepackage{marginfix}}
+\@ifpackageloaded{zref-abspage}{}{\usepackage{zref-abspage}}
+\@ifpackageloaded{zref-user}{}{\usepackage{zref-user}}
 \providecolor{AaronSideCommentBackground}{HTML}{A94700}
 \providecolor{AaronSideCommentText}{HTML}{5A4A3E}
 \providecommand{\AaronSideCommentMark}{%
   \textcolor{AaronSideCommentBackground}{\rule[-0.3ex]{0.7em}{1.2pt}}}
+\newcounter{noema@sidecomment}
 \newbox\noema@sidebox
 \newbox\noema@sidepart
 \newdimen\noema@sidechunkheight
@@ -645,13 +650,25 @@ export function latexSideCommentPreamble(enabled) {
   \else\ifnoema@infootnote\sidecommentinline{#1}%
   \else\ifx\@mpfn\noema@mpfootnote\sidecommentinline{#1}%
   \else
+    \stepcounter{noema@sidecomment}%
+    \edef\noema@sideid{\arabic{noema@sidecomment}}%
     \AaronSideCommentMark
+    \zlabel{noema-side-source-\noema@sideid}%
+    \tikz[remember picture,overlay]\coordinate (noema-side-source-\noema@sideid);%
     \begingroup
       \def\noema@sideoriginal{#1}%
       \noema@sidechunkheight=.68\textheight
       \setbox\noema@sidebox=\vbox{\hsize=\marginparwidth
         \raggedright\footnotesize\upshape\color{AaronSideCommentText}%
-        \noindent\AaronMarginLeader{AaronSideCommentBackground}%
+        \noindent\zlabel{noema-side-note-\noema@sideid}%
+        \tikz[remember picture,overlay]\coordinate (noema-side-note-\noema@sideid);%
+        \ifnum\zref@extractdefault{noema-side-source-\noema@sideid}{abspage}{0}=\zref@extractdefault{noema-side-note-\noema@sideid}{abspage}{-1}\relax
+          \tikz[remember picture,overlay]{%
+            \draw[draw=AaronSideCommentBackground,line width=.6pt,->]
+              ([yshift=-1mm]noema-side-source-\noema@sideid) -|
+              ([xshift=-2.5mm,yshift=-1mm]noema-side-note-\noema@sideid) --
+              ([yshift=-1mm]noema-side-note-\noema@sideid);}%
+        \fi
         \AaronSideCommentMark\nobreakspace #1\par}%
       \noema@send@sidebox
     \endgroup
@@ -695,8 +712,6 @@ export function latexMarginLayoutPreamble() {
 export function latexAnnotationPreamble() {
   const lines = [
     "% Noema annotations",
-    "\\providecommand{\\AaronMarginLeader}[1]{%",
-    "  \\rlap{\\hskip-3mm\\textcolor{#1}{\\rule[0.4ex]{2mm}{0.6pt}\\ensuremath{\\rightarrow}}}}",
     "\\providecolor{AaronDisplayComment}{HTML}{EC008C}",
     "\\providecommand{\\aaroncomment}[1]{%",
     "  \\textcolor{AaronDisplayComment}{\\textbf{COMMENT:}\\nobreakspace #1}%",
@@ -704,8 +719,8 @@ export function latexAnnotationPreamble() {
     "\\providecolor{AaronTodo}{HTML}{E8730A}",
     "\\providecommand{\\aarontodo}[1]{%",
     "  \\textcolor{AaronTodo}{\\rule[-0.3ex]{0.7em}{1.2pt}}%",
-    "  \\todo[noline,color=AaronTodo,textcolor=white,bordercolor=white]{%",
-    "    \\AaronMarginLeader{AaronTodo}\\textbf{TODO:} #1}%",
+    "  \\todo[line,linecolor=AaronTodo,color=AaronTodo,textcolor=white,bordercolor=white]{%",
+    "    \\textbf{TODO:} #1}%",
     "}",
     // `\\todo` cannot appear in a moving argument or a tabular cell. The
     // preprocessor routes those contexts here so an annotated heading or table
@@ -730,8 +745,8 @@ export function latexAnnotationPreamble() {
   lines.push(
     "\\providecommand{\\aaronrevision}[4][suggest]{%",
     "  \\textcolor{AaronRev#1}{\\uline{#2}}%",
-    "  \\todo[noline,color=AaronRev#1,textcolor=white,bordercolor=white]{%",
-    "    \\AaronMarginLeader{AaronRev#1}\\textbf{\\csname AaronRevLabel#1\\endcsname:} #3\\ifstrempty{#4}{}{\\newline\\textit{#4}}}%",
+    "  \\todo[line,linecolor=AaronRev#1,color=AaronRev#1,textcolor=white,bordercolor=white]{%",
+    "    \\textbf{\\csname AaronRevLabel#1\\endcsname:} #3\\ifstrempty{#4}{}{\\newline\\textit{#4}}}%",
     "}",
     "\\providecommand{\\aaronrevisioninline}[4][suggest]{%",
     "  \\textcolor{AaronRev#1}{\\uline{#2}}%",
