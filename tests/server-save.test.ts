@@ -203,6 +203,29 @@ describe("server save API", () => {
     expect(await readFile(file, "utf8")).toBe("# External\n");
   });
 
+  test("reviewed disk version permits an explicit replacement but rejects a newer write", async () => {
+    const { notes } = await setupRoot();
+    const file = join(notes, "a.md");
+    await writeFile(file, "# Original\n", "utf8");
+    await writeFile(file, "# External\n", "utf8");
+    const reviewed = await readNote(file) as { version: string; mtimeMs: number };
+
+    const replaced = await saveNote({
+      file, content: "# Draft\n", clientId: "reviewed-replacement", seq: 1,
+      baseVersion: reviewed.version, baseMtimeMs: reviewed.mtimeMs,
+    }) as { ok?: boolean };
+    expect(replaced.ok).toBe(true);
+    expect(await readFile(file, "utf8")).toBe("# Draft\n");
+
+    await writeFile(file, "# Newer external edit\n", "utf8");
+    const stale = await saveNote({
+      file, content: "# Old draft\n", clientId: "reviewed-replacement", seq: 2,
+      baseVersion: reviewed.version, baseMtimeMs: reviewed.mtimeMs,
+    }) as { conflict?: boolean };
+    expect(stale.conflict).toBe(true);
+    expect(await readFile(file, "utf8")).toBe("# Newer external edit\n");
+  });
+
   test("deferred save invalidates the lazy todo cache", async () => {
     const { notes } = await setupRoot();
     const file = join(notes, "a.md");

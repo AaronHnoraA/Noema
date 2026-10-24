@@ -92,6 +92,7 @@ import {
 import { preserveEditorViewport } from "../../../viewport-stability.ts";
 import { AttributeViewWidget } from "./attribute-view.ts";
 import { EmbedQueryWidget } from "./embed-query.ts";
+import { EdiffWidget } from "./ediff.ts";
 import { getKatexMacrosVersion } from "../../../../katex-macros.ts";
 import { renderTocInlineMath } from "../../../../toc-inline-math.ts";
 import { prepareTikzSvg, renderTikzBrowser, sanitizedTikzSvg, type BrowserTikzResult } from "../../../../tikz-browser.ts";
@@ -4494,6 +4495,16 @@ function addOrgEnvBlockExtraDecos(
   state: EditorState,
   block: OrgEnvBlock,
 ): void {
+  if (block.kind === "ediff") {
+    if (!opensSource(state, block.from, block.to, "caret-interior")) {
+      decos.push(Decoration.replace({
+        widget: new EdiffWidget(block.from, block.to, state.doc.sliceString(block.from, block.to)),
+        block: true,
+      }).range(block.from, block.to));
+      occupied?.push([block.from, block.to]);
+    }
+    return;
+  }
   if (block.kind === "meta") {
     decos.push(
       Decoration.replace({
@@ -4748,6 +4759,7 @@ function activeBlockExtraKey(state: EditorState): string {
   }
   for (const block of blocks) {
     if (((block.kind === "comment" || block.kind === "fold" || block.kind === "av" || block.kind === "embed" || block.kind === "layout") && opensSource(state, block.from, block.to))
+        || (block.kind === "ediff" && opensSource(state, block.from, block.to, "caret-interior"))
         || (block.kind === "tikz" && tikzSourceActive(state, block))) {
       parts.push(`${block.kind}:${block.from}:${block.to}`);
       continue;
@@ -4778,7 +4790,7 @@ function canMapBlockExtraDecos(state: EditorState, changes: ChangeSet): boolean 
   if (ranges.hrs.some((range) => changesTouchRange(changes, range.from, range.to))) return false;
   if (ranges.frontMatter && changesTouchRange(changes, ranges.frontMatter.from, ranges.frontMatter.to)) return false;
   if (blocks.some((block) => (
-    (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz" || block.kind === "av" || block.kind === "embed")
+    (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz" || block.kind === "av" || block.kind === "embed" || block.kind === "ediff")
     && changesTouchRange(changes, block.from, block.to)
   ))) {
     return false;
@@ -4797,7 +4809,7 @@ function canPatchBlockExtraDecosNearChanges(state: EditorState, changes: ChangeS
   // Whole-block widgets own their body source. Rebuild them only when touched;
   // ordinary prose and line-owned commands can stay on the bounded path.
   return !blocks.some((block) => (
-    (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz" || block.kind === "av" || block.kind === "embed")
+    (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz" || block.kind === "av" || block.kind === "embed" || block.kind === "ediff")
     && changesTouchRange(changes, block.from, block.to)
   ));
 }
@@ -4846,6 +4858,7 @@ function patchBlockExtraDecosForOrgEnvTitleChange(
 
   const fullBlockWidgetActive = block.kind === "meta"
     || block.kind === "html"
+    || (block.kind === "ediff" && !opensSource(state, block.from, block.to, "caret-interior"))
     || (block.kind === "tikz" && !tikzSourceActive(state, block))
     || (block.kind === "av" && !opensSource(state, block.from, block.to))
     || (block.kind === "embed" && !opensSource(state, block.from, block.to))

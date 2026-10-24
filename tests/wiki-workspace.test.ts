@@ -211,6 +211,20 @@ describe("Wiki workspace", () => {
     expect(searchWikiDatabase(root, { query: "attachment metadata only" })).toMatchObject({ total: 0 });
   });
 
+  test("pending ediff text does not become searchable content or Wiki links", async () => {
+    const root = await tempRoot();
+    const repository = await gitRepository(root, "public", "notes");
+    const source = note("review-id", "Review page", "Approved term.").replace(
+      "Approved term.",
+      "#+begin ediff Revise a claim\n-Approved term.\n+UNAPPROVEDTOKEN [[Missing Page]]\n#+end ediff",
+    );
+    await writeFile(join(repository, "review.md"), source);
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    expect(index.reports.wanted).toHaveLength(0);
+    expect(searchWikiDatabase(root, { query: "Approved term" })).toMatchObject({ total: 1 });
+    expect(searchWikiDatabase(root, { query: "UNAPPROVEDTOKEN" })).toMatchObject({ total: 0 });
+  });
+
   test("updates wiki.db incrementally without mutating Git", async () => {
     const root = await tempRoot();
     const repository = await gitRepository(root, "private", "research");
@@ -236,7 +250,7 @@ describe("Wiki workspace", () => {
     expect(existsSync(join(root, "roam.db"))).toBe(false);
     expect(wikiIndexStatus(root)).toMatchObject({
       ok: true,
-      schemaVersion: 10,
+      schemaVersion: 11,
       lastMode: "incremental",
       repositories: [expect.objectContaining({ repositoryId: "private/research", headSha: headBefore })],
     });

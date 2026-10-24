@@ -1,6 +1,7 @@
 import { scanInlineCommands } from "./command-syntax.mjs";
 
 const TECHNICAL_ORG_ENV_KINDS = new Set([
+  "ediff",
   "src",
   "source",
   "example",

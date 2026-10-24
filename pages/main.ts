@@ -65,6 +65,7 @@ import { buildMacroPanel, LIVE_TEX_MACRO_CATEGORY, macroPaletteItems, validateMa
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
 import { formatCitationLabel } from "../src/render-html.ts";
 import { hrefProtocol, safeHref } from "../src/url-safety.ts";
+import { approvedEdiffMarkdown, ediffActionEdit, scanEdiffBlocks, type EdiffAction } from "../src/ediff.ts";
 import {
   api,
   type NoemaAppConfigMsg,
@@ -546,6 +547,20 @@ toolsPanel.innerHTML = `
 document.body.appendChild(toolsPanel);
 const toolsList = toolsPanel.querySelector<HTMLElement>("[data-tools-list]")!;
 const toolsClose = toolsPanel.querySelector<HTMLButtonElement>("[data-tools-close]")!;
+
+const ediffPanel = document.createElement("aside");
+ediffPanel.className = "noema-ediff-panel";
+ediffPanel.hidden = true;
+ediffPanel.setAttribute("role", "dialog");
+ediffPanel.setAttribute("aria-label", "Review proposed edits");
+document.body.appendChild(ediffPanel);
+ediffPanel.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopPropagation();
+  ediffPanel.hidden = true;
+  editor.focus();
+});
 
 const jupyterPanel = document.createElement("aside");
 jupyterPanel.className = "noema-jupyter-panel";
@@ -6115,6 +6130,8 @@ type EditorSaveSnapshot = {
   body: ReturnType<typeof saveBody>;
 };
 
+let lastSaveProblem: { kind: "conflict" | "error"; message: string } | null = null;
+
 function restoreEditorSaveChanges(snapshot: EditorSaveSnapshot): void {
   if (!snapshot.changeToken || snapshot.file !== currentFile) return;
   if (!editorSaveChanges.restore(snapshot.changeToken)) forceFullEditorSave = true;
@@ -6123,6 +6140,7 @@ function restoreEditorSaveChanges(snapshot: EditorSaveSnapshot): void {
 const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof api.notes.save>>>({
   capture() {
     if (currentReadOnly || !currentFile || revision === savedRevision) return null;
+    lastSaveProblem = null;
     updateTitle();
     setStatus("Saving...");
     const changeToken = editorSaveChanges.capture();
@@ -6148,12 +6166,16 @@ const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof ap
     }
     if (result.conflict) {
       restoreEditorSaveChanges(snapshot);
-      setStatus(result.message || `Save conflict; reopen from ${sourceEditorName()}`);
+      const message = `${result.message || "File changed on disk."} Choose Refresh from disk to compare.`;
+      lastSaveProblem = { kind: "conflict", message };
+      setStatus(message);
       return false;
     }
     if (result.ok === false) {
       restoreEditorSaveChanges(snapshot);
-      setStatus(result.message || "Save rejected");
+      const message = result.message || "Save rejected";
+      lastSaveProblem = { kind: "error", message };
+      setStatus(message);
       return false;
     }
     currentMtimeMs = Number(result.mtimeMs) || currentMtimeMs;
@@ -6169,6 +6191,7 @@ const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof ap
   fail(error, snapshot, retryInMs) {
     restoreEditorSaveChanges(snapshot);
     const message = error instanceof Error ? error.message : "Save failed";
+    lastSaveProblem = { kind: "error", message };
     setStatus(retryInMs === null ? message : `${message} — retrying in ${Math.round(retryInMs / 1000)}s`);
   },
   active() {
@@ -6567,6 +6590,7 @@ function applyOpenedNote(
   const resetVim = options.resetVim !== false;
   const reloadNoteIndex = options.reloadNotes !== false;
   currentFile = String(opened.file || fallbackFile || "");
+  ediffPanel.hidden = true;
   detachedDraftName = "";
   // A retry scheduled for the previous note must not fire into this one.
   if (currentFile !== previousFile) saveDrain.cancelRetry();
@@ -6599,6 +6623,7 @@ function applyOpenedNote(
   syncFormatPainterUi();
   revision = 0;
   savedRevision = 0;
+  lastSaveProblem = null;
   // Cursor memory restores position, not the transient Source/Markdown tool
   // view. A regular note open should use the file's natural mode (Markdown
   // for notes), otherwise leaving a note in Source makes every later open of
@@ -6738,6 +6763,8 @@ async function reloadCurrentFilePreservingCursor(options: {
   silent?: boolean;
   preserveView?: boolean;
   ifClean?: boolean;
+  discardUnsaved?: boolean;
+  expectedDiskContent?: string;
 } = {}): Promise<boolean> {
   if (!currentFile || (options.ifClean && revision !== savedRevision)) return false;
   if (!commitActiveLiveTexForBoundary(false)) return false;
@@ -6746,7 +6773,7 @@ async function reloadCurrentFilePreservingCursor(options: {
   const startingExternalSave = pendingExternalSave;
   const position = trackCursorPosition();
   if (position) rememberCursorPosition(position);
-  if (!currentReadOnly && revision !== savedRevision) {
+  if (!options.discardUnsaved && !currentReadOnly && revision !== savedRevision) {
     if (options.ifClean) return false;
     if (!noteAutoSaveEnabled(currentRemote)) {
       setStatus("Remote note has unsaved changes; save before refreshing");
@@ -6758,6 +6785,11 @@ async function reloadCurrentFilePreservingCursor(options: {
   if (!options.silent) setStatus("Refreshing...");
   try {
     const opened = await api.notes.open(file);
+    if (options.expectedDiskContent !== undefined
+        && String(opened.content ?? "") !== options.expectedDiskContent) {
+      setStatus("The file changed again while you reviewed it. Compare the new version before replacing your draft.");
+      return false;
+    }
     // A refresh also re-reads the note's `macros-from` files from disk.
     await noteMacros.prepare(file, String(opened.content ?? ""), true);
     // Every reload is asynchronous, including a manual refresh and a core
@@ -6787,6 +6819,141 @@ async function reloadCurrentFilePreservingCursor(options: {
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Refresh failed");
     return false;
+  }
+}
+
+type SaveConflictChoice = "keep" | "use-disk" | "overwrite";
+
+function chooseSaveConflict(draft: string, disk: string): Promise<SaveConflictChoice> {
+  return new Promise((resolve) => {
+    modal.innerHTML = "";
+    const panel = document.createElement("section");
+    panel.className = "noema-modal-panel noema-save-conflict-panel";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    const title = document.createElement("h2");
+    title.textContent = "File changed on disk";
+    const explanation = document.createElement("p");
+    explanation.textContent = "Compare your unsaved draft with the current file. Nothing is replaced until you choose an action.";
+    const comparison = document.createElement("div");
+    comparison.className = "noema-save-conflict-versions";
+    for (const [label, content] of [["On disk", disk], ["Your draft", draft]]) {
+      const column = document.createElement("section");
+      const heading = document.createElement("h3");
+      heading.textContent = label;
+      const source = document.createElement("pre");
+      source.textContent = content;
+      column.append(heading, source);
+      comparison.appendChild(column);
+    }
+    const actions = document.createElement("div");
+    actions.className = "noema-modal-actions";
+    const close = (choice: SaveConflictChoice): void => {
+      modal.removeEventListener("mousedown", dismissOnBackdrop);
+      panel.removeEventListener("keydown", dismissOnEscape);
+      modal.hidden = true;
+      modal.innerHTML = "";
+      editor.focus();
+      resolve(choice);
+    };
+    const dismissOnBackdrop = (event: MouseEvent): void => {
+      if (event.target === modal) close("keep");
+    };
+    const dismissOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape" && !event.isComposing) {
+        event.preventDefault();
+        event.stopPropagation();
+        close("keep");
+      }
+    };
+    for (const [label, choice] of [
+      ["Keep editing", "keep"],
+      ["Use disk version", "use-disk"],
+      ["Overwrite disk with my draft", "overwrite"],
+    ] as const) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", () => close(choice));
+      actions.appendChild(button);
+    }
+    panel.append(title, explanation, comparison, actions);
+    modal.appendChild(panel);
+    modal.addEventListener("mousedown", dismissOnBackdrop);
+    panel.addEventListener("keydown", dismissOnEscape);
+    modal.hidden = false;
+    actions.querySelector("button")?.focus();
+  });
+}
+
+async function reviewSaveConflict(): Promise<void> {
+  if (!currentFile || !modal.hidden) return;
+  const file = currentFile;
+  const draftRevision = revision;
+  const draft = editor.getMarkdown();
+  let disk: Awaited<ReturnType<typeof api.notes.open>>;
+  try {
+    disk = await api.notes.open(file);
+  } catch (error) {
+    setStatus(`Could not compare with disk: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  if (currentFile !== file || revision !== draftRevision) return;
+  const choice = await chooseSaveConflict(draft, String(disk.content ?? ""));
+  if (currentFile !== file || revision !== draftRevision) return;
+  if (choice === "keep") {
+    setStatus("Your unsaved draft is still open");
+    return;
+  }
+  if (choice === "use-disk") {
+    await reloadCurrentFilePreservingCursor({
+      preserveView: true,
+      discardUnsaved: true,
+      expectedDiskContent: String(disk.content ?? ""),
+    });
+    return;
+  }
+  // This explicit overwrite still compares against the version the person
+  // reviewed. A newer write during the comparison must open a fresh review.
+  try {
+    const body = {
+      ...saveBody(null, true),
+      content: sourceWithLineEnding(draft, currentLineEnding.eol),
+      baseVersion: String(disk.version || ""),
+      baseMtimeMs: Number(disk.mtimeMs) || 0,
+    };
+    const result = await api.notes.save(body);
+    if (result.ok === false || result.conflict || result.stale) {
+      setStatus(result.message || "The disk version changed again. Compare before overwriting.");
+      return;
+    }
+    if (currentFile !== file) return;
+    currentMtimeMs = Number(result.mtimeMs) || currentMtimeMs;
+    currentVersion = String(result.version || currentVersion);
+    applyIndexPayload(result);
+    savedRevision = Math.max(savedRevision, draftRevision);
+    lastSaveProblem = null;
+    editorSaveChanges.reset();
+    forceFullEditorSave = revision !== savedRevision;
+    updateTitle();
+    setStatus(forceFullEditorSave ? "Draft saved; saving newer edits…" : "Draft saved over the reviewed disk version");
+    if (forceFullEditorSave) scheduleSave();
+  } catch (error) {
+    setStatus(`Could not overwrite disk: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+let refreshInFlight = false;
+
+async function refreshCurrentFile(): Promise<void> {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  try {
+    lastSaveProblem = null;
+    const refreshed = await reloadCurrentFilePreservingCursor({ preserveView: true });
+    if (!refreshed && lastSaveProblem?.kind === "conflict") await reviewSaveConflict();
+  } finally {
+    refreshInFlight = false;
   }
 }
 
@@ -10743,6 +10910,7 @@ function currentNoteIsSlides(): boolean {
 }
 
 function toolActions(): ToolAction[] {
+  const ediffCount = currentFile ? scanEdiffBlocks(editor.getMarkdown()).length : 0;
   const offerSlideView = Boolean(
     currentFile
     && /\.(?:md|markdown)$/i.test(currentFile)
@@ -10759,7 +10927,7 @@ function toolActions(): ToolAction[] {
       run: () => void openConfigurationPage(),
     },
     { id: "save", group: "document", title: "Save document", detail: "Write current changes to disk", disabled: currentReadOnly || !currentFile, run: () => void save() },
-    { id: "refresh", group: "document", title: "Refresh from disk", detail: "Reload the current document", disabled: !currentFile, run: () => void reloadCurrentFilePreservingCursor({ preserveView: true }) },
+    { id: "refresh", group: "document", title: "Refresh from disk", detail: "Reload the current document", disabled: !currentFile, run: () => void refreshCurrentFile() },
     { id: "source", group: "view", title: editor.isSourceMode() ? "Markdown view" : "Source view", detail: "Switch between rendered Markdown and source", run: () => toggleSourceMode() },
     { id: "heading-numbers", group: "view", title: headingNumberingPreference.enabled ? "Hide heading numbers" : "Show heading numbers", detail: `${headingNumberingPreference.format} · visual only`, run: toggleHeadingNumbering },
     {
@@ -10773,6 +10941,7 @@ function toolActions(): ToolAction[] {
         .catch((error) => setStatus(`Open failed: ${String(error)}`)),
     },
     { id: "copy-note-path", group: "document", title: "Copy document path", detail: currentFile ? fileNameFromPath(currentFile) : "No document open", disabled: !currentFile, run: () => void copyCurrentNotePath() },
+    { id: "review-ediffs", group: "document", title: "Review proposed edits", detail: `${ediffCount} proposals in this document`, disabled: !ediffCount, run: openEdiffPanel },
     { id: "trash-note", group: "document", title: `Move document to ${platformLabels.trash}`, detail: "Recoverable deletion from the note root", disabled: currentReadOnly || !currentFile, danger: true, run: () => { runHostCommand({ command: "trash-current-note" }); } },
     ...(offerSlideView ? [{
       id: "slide-view",
@@ -10889,6 +11058,89 @@ function openConfigurationPage(): void {
   const url = new URL("/config", window.location.origin);
   openHostedSurface(`${url.pathname}${url.search}`);
   setStatus("Opening configuration");
+}
+
+function renderEdiffPanel(): void {
+  const source = editor.getMarkdown();
+  const blocks = scanEdiffBlocks(source);
+  ediffPanel.replaceChildren();
+  const head = document.createElement("header");
+  const heading = document.createElement("strong");
+  heading.textContent = `Proposed edits · ${blocks.length}`;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "Close";
+  close.addEventListener("click", () => { ediffPanel.hidden = true; editor.focus(); });
+  head.append(heading, close);
+  ediffPanel.append(head);
+  const list = document.createElement("div");
+  list.className = "noema-ediff-panel-list";
+  if (!blocks.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "No proposed edits remain in this document.";
+    list.append(empty);
+  }
+  for (const block of blocks) {
+    const blockSource = source.slice(block.from, block.to);
+    const item = document.createElement("section");
+    item.className = "noema-ediff-panel-item";
+    const line = approvedEdiffMarkdown(source.slice(0, block.from)).split("\n").length;
+    const title = document.createElement("strong");
+    title.textContent = `L${line} · ${block.title}`;
+    const summary = document.createElement("span");
+    const additions = block.changes.filter((change) => change.kind === "+").length;
+    const deletions = block.changes.filter((change) => change.kind === "-").length;
+    summary.textContent = block.error || `${block.rejected ? "Rejected" : "Pending"} · +${additions} −${deletions} · ${block.comments.length} comments`;
+    const controls = document.createElement("div");
+    const action = (label: string, run: () => void, disabled = false): void => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.disabled = disabled;
+      button.addEventListener("click", run);
+      controls.append(button);
+    };
+    action("Go to edit", () => {
+      ediffPanel.hidden = true;
+      editor.setMarkdownSelection(block.from, undefined, { scrollIntoView: true });
+      editor.focus();
+    });
+    const apply = (kind: EdiffAction, message = ""): void => {
+      try {
+        const latest = editor.getMarkdown();
+        if (latest.slice(block.from, block.to) !== blockSource)
+          throw new Error("This proposal changed. Reopen the review list before acting.");
+        const edit = ediffActionEdit(latest, block.from, kind, message);
+        editor.replaceMarkdownRange(edit.from, edit.to, edit.insert);
+        renderEdiffPanel();
+      } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+    };
+    action("Accept", () => apply("accept"), currentReadOnly || !!block.error);
+    action("Reject", () => apply("reject"), currentReadOnly || block.rejected);
+    action("Comment", () => {
+      const form = document.createElement("div");
+      form.className = "noema-ediff-panel-comment";
+      const input = document.createElement("textarea");
+      input.rows = 2;
+      input.placeholder = "Comment for the agent";
+      const send = document.createElement("button");
+      send.type = "button";
+      send.textContent = "Add comment";
+      send.addEventListener("click", () => apply("comment", input.value));
+      form.append(input, send);
+      item.append(form);
+      input.focus({ preventScroll: true });
+    }, currentReadOnly);
+    item.append(title, summary, controls);
+    list.append(item);
+  }
+  ediffPanel.append(list);
+}
+
+function openEdiffPanel(): void {
+  renderEdiffPanel();
+  ediffPanel.hidden = false;
+  ediffPanel.querySelector<HTMLButtonElement>("header button")?.focus({ preventScroll: true });
 }
 
 function renderToolsPanel(): void {
@@ -12774,9 +13026,12 @@ async function sendSelectionToEmacs(
   const end = emacsSourcePosition(to);
   const file = currentFile;
   try {
+    lastSaveProblem = null;
     await save();
     if (file !== currentFile || revision !== savedRevision) {
-      await fail("The note could not be saved, so its selection was not sent");
+      await fail(file !== currentFile
+        ? "The note changed before its selection could be sent"
+        : `${lastSaveProblem?.message || "The note could not be saved"}; its selection was not sent`);
       return;
     }
     await api.emacs.sendSelection({
@@ -13376,7 +13631,7 @@ function runHostCommand(detail: unknown): boolean {
     }
     case "refresh":
     case "reload":
-      void reloadCurrentFilePreservingCursor({ preserveView: true });
+      void refreshCurrentFile();
       return true;
     // Explicit "take the file on disk", e.g. after an agent edited it.  Unlike
     // `refresh` it never saves this pane's draft over the newer file: a pane
@@ -13387,9 +13642,9 @@ function runHostCommand(detail: unknown): boolean {
           setStatus("Unsaved edits in this pane; refresh-file with C-u discards them");
           return true;
         }
-        savedRevision = revision;
       }
-      void reloadCurrentFilePreservingCursor({ preserveView: true });
+      void reloadCurrentFilePreservingCursor({ preserveView: true,
+        discardUnsaved: String(body.value || "") === "discard" });
       return true;
     }
     // Emacs saved this file (a bridged source buffer, an accepted rewrite):

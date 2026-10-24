@@ -6,6 +6,7 @@ import type StateCore from "markdown-it/lib/rules_core/state_core.mjs";
 import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 
 import { cleanEditorHTML } from "./export-html.ts";
+import { approvedEdiffMarkdown } from "../shared/ediff-source.mjs";
 import { markdownItCjkEmphasis } from "./cjk-emphasis.ts";
 import { supportedDiagramLang } from "./diagram-langs.ts";
 import { hydrateDiagramForeignObjectMarkup, sanitizeDiagramSvg } from "./diagram-sanitize.ts";
@@ -1263,6 +1264,8 @@ function renderOrgEnv(
   const meta = tokens[idx]!.meta as OrgEnvTokenMeta;
   const kind = meta.kind;
   if (kind.toLowerCase() === "meta") return renderMetaCover(md, meta.body);
+  // Pending review is editor-only; published/exported content is the approved note.
+  if (kind.toLowerCase() === "ediff") return "";
   if (kind.toLowerCase() === "html") {
     return meta.body.trim() ? `<div class="noema-html">${meta.body}</div>` : "";
   }
@@ -1735,6 +1738,7 @@ export function renderMarkdownHTML(
   options?: RenderMarkdownHTMLOptions,
   topLevelBlocks?: Array<{ from: number; to: number }>,
 ): string {
+  markdown = approvedEdiffMarkdown(markdown);
   const md = markdownItForRender(options);
   const root = document.createElement("div");
   const env = {};

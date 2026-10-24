@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { scanInlineCommands } from "../../shared/command-syntax.mjs";
+import { approvedEdiffMarkdown } from "../../shared/ediff-source.mjs";
 import { LATEX_MARKS, latexMark } from "../../shared/latex-marks.mjs";
 import {
   layoutFromAttrs,
@@ -17,7 +18,7 @@ const ENV_MAP = new Map([
   ["proof", "proof"], ["remark", "remark"], ["example", "example"],
 ]);
 const REMARK_BLOCKS = new Set(["comment", "summary", "note", "important", "warning", "attention", "fold"]);
-const HIDDEN_BLOCKS = new Set(["lean4", "src", "source", "meta"]);
+const HIDDEN_BLOCKS = new Set(["lean4", "src", "source", "meta", "ediff"]);
 const PRIVATE_INLINE = new Set(["todo", "itodo", "project", "milestone", "clock", "comment", "cell", "lean4", "note-code"]);
 // Review annotations that reach the exported document. Planning bookkeeping
 // (`project`, `milestone`, `clock`) and machine blocks stay private.
@@ -488,7 +489,7 @@ export function extractNoemaMetadata(markdown) {
 }
 
 export function preprocessNoemaForPandoc(markdown, options = {}) {
-  const source = String(markdown || "").replace(/\r\n?/g, "\n");
+  const source = approvedEdiffMarkdown(String(markdown || "").replace(/\r\n?/g, "\n"));
   const lines = source.split("\n");
   const frontMatter = parseYamlFrontMatter(lines);
   const meta = extractNoemaMetadata(source);

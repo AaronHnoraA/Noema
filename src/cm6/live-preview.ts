@@ -1055,7 +1055,10 @@ const TABLE_BODY_BREAK_RE = /^(?: {0,3}(?:#{1,6}(?:\s|$)|>|[-*+]\s|\d{1,9}[.)]\s
 
 function isTableBodyLine(line: string): boolean {
   // A `{...}` layout line belongs to the table as its attributes, not a row.
-  return line.trim().length > 0 && !TABLE_BODY_BREAK_RE.test(line) && !readLayoutAttrsLine(line);
+  // A local review card occupies this source span. Let its own block widget
+  // render here instead of swallowing it as an editable table row.
+  return line.trim().length > 0 && !/^#\+begin ediff(?:\s|$)/i.test(line)
+    && !TABLE_BODY_BREAK_RE.test(line) && !readLayoutAttrsLine(line);
 }
 
 function nextLayoutAttrsLine(doc: Text, sourceTo: number): { to: number; layout: LayoutAttrs } | null {

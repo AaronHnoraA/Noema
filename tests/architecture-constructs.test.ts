@@ -255,6 +255,10 @@ const SAMPLE_NOTE = [
   "```",
   "",
   "Tail line.",
+  "",
+  "#+begin ediff Review preface",
+  "+Preface.",
+  "#+end ediff",
 ].join("\n");
 
 describe("rendered constructs: what is drawn and what the registry reports agree", () => {

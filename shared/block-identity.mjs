@@ -9,6 +9,7 @@ const BLOCK_REFERENCE_ID_RE = new RegExp(`^(?:${BLOCK_REFERENCE_ID_SOURCE})$`);
 const TRAILING_BLOCK_ID_RE = new RegExp(`^(?:(.*?)[ \\t]+)?${BLOCK_ANCHOR_SOURCE}[ \\t]*$`);
 
 const NON_SEMANTIC_ORG_ENVS = new Set([
+  "ediff",
   "comment",
   "fold",
   "html",

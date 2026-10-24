@@ -11,6 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { isUuidV7, newNoemaId } from "../../shared/identity.mjs";
 import { BLOCK_ID_SOURCE, parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
+import { approvedEdiffMarkdown } from "../../shared/ediff-source.mjs";
 import {
   knowledgeCreatedTime,
   knowledgeDateBound,
@@ -34,7 +35,7 @@ const execFileAsync = promisify(execFile);
 const PARTITIONS = Object.freeze(["public", "private"]);
 const NOTE_EXTENSIONS = new Set([".md", ".markdown"]);
 const REPOSITORY_MANIFEST = "noema.toml";
-const WIKI_SCHEMA_VERSION = 10;
+const WIKI_SCHEMA_VERSION = 11;
 const WIKI_FULL_REBUILD_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 const REPOSITORY_GITIGNORE = [
   ".DS_Store",
@@ -724,6 +725,7 @@ async function noteForFile(file, repository, workspaceRoot, cache = null, infoVa
     } catch {}
   }
   const content = await readFile(file, "utf8");
+  const approvedContent = approvedEdiffMarkdown(content);
   const meta = metadata(content);
   const title = titleFor(file, content, meta);
   const namespace = normalizeWikiNamespace(meta.namespace || repository.namespace || repository.name);
@@ -731,9 +733,9 @@ async function noteForFile(file, repository, workspaceRoot, cache = null, infoVa
   const pageNamespaceAliases = parseList(meta.namespace_aliases).map(normalizeWikiNamespace).filter(Boolean);
   const persistedId = String(meta.id || "").trim();
   const id = persistedId || provisionalKey(repository.uid || repository.id, repositoryPath);
-  const parsedBlocks = blockIds(content);
+  const parsedBlocks = blockIds(approvedContent);
   const blocks = parsedBlocks.blocks;
-  const dependencies = dependencyRefs(content, file, repository);
+  const dependencies = dependencyRefs(approvedContent, file, repository);
   return {
     key: id,
     pageKey: `${repository.uid || repository.id}:${repositoryPath}`,
@@ -773,8 +775,8 @@ async function noteForFile(file, repository, workspaceRoot, cache = null, infoVa
     blocks,
     duplicateBlockIds: parsedBlocks.duplicateIds,
     dependencies,
-    wikiLinks: wikiLinks(content),
-    searchText: content,
+    wikiLinks: wikiLinks(approvedContent),
+    searchText: approvedContent,
     refs: [],
     backlinks: [],
   };

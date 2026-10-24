@@ -3,6 +3,7 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { REVISION_KINDS, revisionKind } from "../../shared/revision-kinds.mjs";
+import { approvedEdiffMarkdown } from "../../shared/ediff-source.mjs";
 
 // The bundled article template is the single source for the default export
 // preamble. It used to be duplicated as a literal here and had already
@@ -383,7 +384,7 @@ function flushParagraph(out, paragraph, options = {}) {
 }
 
 export function noemaMarkdownToLatex(markdown, options = {}) {
-  const lines = String(markdown ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const lines = approvedEdiffMarkdown(String(markdown ?? "").replace(/\r\n?/g, "\n")).split("\n");
   const meta = parseMeta(lines);
   const bodyLines = stripMeta(lines);
   const envMap = effectiveEnvMap(options.rules);
@@ -467,7 +468,7 @@ export function noemaMarkdownToLatex(markdown, options = {}) {
       flushParagraph(out, paragraph, options);
       closeList();
       const kind = begin.kind;
-      if (kind === "lean4" || kind === "src" || kind === "source") {
+      if (kind === "lean4" || kind === "src" || kind === "source" || kind === "ediff") {
         ignoredOrgBlock = kind;
         ignoredOrgDepth = 1;
         continue;

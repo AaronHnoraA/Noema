@@ -1122,6 +1122,41 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   display: none;
 }
 
+.noema-ediff-panel {
+  position: fixed;
+  top: 54px;
+  left: 24px;
+  z-index: 85;
+  width: min(440px, calc(100vw - 48px));
+  max-height: min(680px, calc(100vh - 72px));
+  overflow: hidden;
+  border: 1px solid var(--aaron-paper-line);
+  border-radius: 8px;
+  background: var(--aaron-paper);
+  color: var(--aaron-ink);
+  box-shadow: var(--aaron-shadow);
+  font: 12px/1.45 var(--aaron-font-sans);
+}
+.noema-ediff-panel[hidden] { display: none; }
+.noema-ediff-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--aaron-paper-line);
+  background: color-mix(in srgb, #58a6ff, var(--aaron-paper) 93%);
+}
+.noema-ediff-panel-list { display: grid; gap: 8px; max-height: 580px; overflow: auto; padding: 10px; }
+.noema-ediff-panel-item { display: grid; gap: 5px; border: 1px solid var(--aaron-paper-line); border-radius: 6px; padding: 9px; }
+.noema-ediff-panel-item > span { color: var(--aaron-muted); }
+.noema-ediff-panel-item > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.noema-ediff-panel button { border: 1px solid var(--aaron-paper-line); border-radius: 4px; padding: 4px 7px; background: transparent; color: inherit; cursor: pointer; }
+.noema-ediff-panel button:disabled { opacity: .45; cursor: default; }
+.noema-ediff-panel-item button:nth-child(2) { color: #3fb950; }
+.noema-ediff-panel-item button:nth-child(3) { color: #f85149; }
+.noema-ediff-panel-item button:nth-child(4) { color: #58a6ff; }
+.noema-ediff-panel-comment textarea { width: 100%; min-height: 54px; resize: vertical; }
+
 .noema-jupyter-panel {
   position: fixed;
   right: 14px;
@@ -4323,6 +4358,49 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
 
 .noema-modal-panel.has-tags {
   width: min(680px, calc(100vw - 32px));
+}
+
+.noema-save-conflict-panel {
+  width: min(1100px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  grid-template-rows: auto auto minmax(120px, 1fr) auto;
+}
+
+.noema-save-conflict-panel p {
+  margin: 0;
+}
+
+.noema-save-conflict-versions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-height: 0;
+}
+
+.noema-save-conflict-versions section {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.noema-save-conflict-versions h3 {
+  margin: 0 0 6px;
+}
+
+.noema-save-conflict-versions pre {
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--aaron-paper-line);
+  white-space: pre;
+  font: 12px/1.45 monospace;
+}
+
+@media (max-width: 700px) {
+  .noema-save-conflict-versions {
+    grid-template-columns: 1fr;
+  }
 }
 
 .noema-latex-export-panel {

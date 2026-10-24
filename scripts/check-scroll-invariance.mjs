@@ -37,7 +37,8 @@ const constructs = [
 const wrapTables = ["left", "right"].map((side) =>
   `| wrap ${side} | formula |\n|---|---|\n| label | \\(z+1\\) |\n{align=${side} wrap=true width=40%}`);
 const markdown = [prose(40), ...constructs.flatMap((c) => [c, prose(6)]),
-  ...wrapTables.flatMap((c) => [c, prose(6)]), prose(40), "[^1]: The note."].join("\n\n");
+  ...wrapTables.flatMap((c) => [c, prose(6)]), prose(40), "[^1]: The note.",
+  "#+begin ediff Scroll review\n-Old intro\n+New intro\n#+end ediff"].join("\n\n");
 
 const server = await createServer({
   configFile: repo + "vite.pages.config.ts", root: repo + "pages",
@@ -100,6 +101,7 @@ try {
         ["image", "![Plot]"], ["table", "| name |"], ["display math", "\\[\n\\int"],
         ["inline math", "\\(\\alpha"], ["org env", "#+begin theorem"],
         ["code block", "```python"], ["task box", "- [ ] open", "edits"], ["rule", "\n---\n"],
+        ["ediff", "#+begin ediff"],
         ["footnote", "[^1] too", "navigates"],
       ].filter(([family]) => !process.env.ONLY || process.env.ONLY.split(",").includes(family)).map(([family, needle, click = "opens"]) => {
         const at = markdown.indexOf(needle);
