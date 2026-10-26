@@ -58,7 +58,7 @@ cleanup() {
   if [ -z "$EMACS_PID" ]; then EMACS_PID="$LAUNCHED_EMACS_PID"; fi
   local closer_command=""
   if [ -n "$EMACS_PID" ] && kill -0 "$EMACS_PID" 2>/dev/null; then
-    client '(progn (ignore-errors (my/noema-stop)) (kill-emacs))' >/dev/null 2>&1 &
+    client '(progn (ignore-errors (+noema/stop)) (kill-emacs))' >/dev/null 2>&1 &
     local closer=$!
     for _ in $(seq 1 20); do
       kill -0 "$EMACS_PID" 2>/dev/null || break
@@ -158,13 +158,13 @@ if [ -z "$EMACS_PID" ] || ! client '(emacs-version)' | grep -q GNU; then
   exit 1
 fi
 
-open_result="$(client '(let ((file (getenv "NOEMA_MEASURE_NOTE"))) (require '\''init-noema) (setq my/noema-web-port 0) (find-file file) (my/noema-open-file file) "opened")')"
+open_result="$(client '(let ((file (getenv "NOEMA_MEASURE_NOTE"))) (require '\''init-noema) (setq +noema-web-port 0) (find-file file) (+noema/open-file file) "opened")')"
 case "$open_result" in
   *'"opened"'*) ;;
   *) echo "Noema open request failed: $open_result" >&2; exit 1 ;;
 esac
 for _ in $(seq 1 60); do
-  ready="$(client '(and my/noema--ready (process-live-p my/noema--process) (buffer-live-p my/noema--app-buffer) (with-current-buffer my/noema--app-buffer (eq major-mode '\''xwidget-webkit-mode)))')"
+  ready="$(client '(and +noema--ready (process-live-p +noema--process) (buffer-live-p +noema--app-buffer) (with-current-buffer +noema--app-buffer (eq major-mode '\''xwidget-webkit-mode)))')"
   [ "$ready" = "t" ] && break
   kill -0 "$EMACS_PID" 2>/dev/null || break
   sleep 1
@@ -178,7 +178,7 @@ if [ "${ready:-nil}" != "t" ]; then
     tail -80 "$EMACS_LOG" >&2
     exit 1
   fi
-  echo "Noema xwidget/core never became ready: $(client '(list :ready my/noema--ready :process (and my/noema--process (process-status my/noema--process)) :buffer (and (buffer-live-p my/noema--app-buffer) (buffer-name my/noema--app-buffer)) :callbacks (length my/noema--ready-callbacks) :watchdog (timerp my/noema--ready-watchdog) :last-port my/noema--last-port)')" >&2
+  echo "Noema xwidget/core never became ready: $(client '(list :ready +noema--ready :process (and +noema--process (process-status +noema--process)) :buffer (and (buffer-live-p +noema--app-buffer) (buffer-name +noema--app-buffer)) :callbacks (length +noema--ready-callbacks) :watchdog (timerp +noema--ready-watchdog) :last-port +noema--last-port)')" >&2
   echo "Noema web-host log tail:" >&2
   client '(if-let* ((buffer (get-buffer " *Noema web host*"))) (with-current-buffer buffer (buffer-substring-no-properties (max (point-min) (- (point-max) 12000)) (point-max))) "(missing)")' >&2
   echo "Emacs messages tail:" >&2
@@ -188,26 +188,26 @@ if [ "${ready:-nil}" != "t" ]; then
 fi
 
 if [ "$SCENE" = background ]; then
-  client '(when-let* ((window (get-buffer-window my/noema--app-buffer t))) (with-selected-window window (switch-to-buffer (get-buffer-create "*Noema measurement background*")))) (setq my/noema--last-activity-signature :unknown) (my/noema--update-activity)' >/dev/null
+  client '(when-let* ((window (get-buffer-window +noema--app-buffer t))) (with-selected-window window (switch-to-buffer (get-buffer-create "*Noema measurement background*")))) (setq +noema--last-activity-signature :unknown) (+noema--update-activity)' >/dev/null
 else
-  client '(when-let* ((window (get-buffer-window my/noema--app-buffer t))) (select-frame-set-input-focus (window-frame window)) (select-window window)) (setq my/noema--last-activity-signature :unknown) (my/noema--update-activity)' >/dev/null
+  client '(when-let* ((window (get-buffer-window +noema--app-buffer t))) (select-frame-set-input-focus (window-frame window)) (select-window window)) (setq +noema--last-activity-signature :unknown) (+noema--update-activity)' >/dev/null
   osascript -e "tell application \"System Events\" to set frontmost of first application process whose unix id is $EMACS_PID to true" >/dev/null 2>&1 || true
 fi
 expected_activity="$(if [ "$SCENE" = background ]; then printf t; else printf nil; fi)"
 actual_activity=""
 for _ in $(seq 1 20); do
-  client '(setq my/noema--last-activity-signature :unknown) (my/noema--update-activity)' >/dev/null
+  client '(setq +noema--last-activity-signature :unknown) (+noema--update-activity)' >/dev/null
   sleep 0.2
-  actual_activity="$(client '(and (buffer-live-p my/noema--app-buffer) (with-current-buffer my/noema--app-buffer my/noema--activity-paused))')"
+  actual_activity="$(client '(and (buffer-live-p +noema--app-buffer) (with-current-buffer +noema--app-buffer +noema--activity-paused))')"
   [ "$actual_activity" = "$expected_activity" ] && break
   if [ "$SCENE" = foreground ]; then
-    client '(when-let* ((window (get-buffer-window my/noema--app-buffer t))) (select-frame-set-input-focus (window-frame window)) (select-window window))' >/dev/null
+    client '(when-let* ((window (get-buffer-window +noema--app-buffer t))) (select-frame-set-input-focus (window-frame window)) (select-window window))' >/dev/null
     osascript -e "tell application \"System Events\" to set frontmost of first application process whose unix id is $EMACS_PID to true" >/dev/null 2>&1 || true
   fi
 done
 if [ "$actual_activity" != "$expected_activity" ]; then
   echo "Noema activity state mismatch for $SCENE: expected paused=$expected_activity, got $actual_activity" >&2
-  echo "Emacs activity diagnostics: $(client '(list :selected-buffer (buffer-name (window-buffer (selected-window))) :app-buffer (and (buffer-live-p my/noema--app-buffer) (buffer-name my/noema--app-buffer)) :app-window (and (buffer-live-p my/noema--app-buffer) (get-buffer-window my/noema--app-buffer t)) :selected-frame-focus (frame-focus-state (selected-frame)) :selected-frame-visible (frame-visible-p (selected-frame)) :app-active (my/noema--app-buffer-visible-p) :snapshot (mapcar (lambda (entry) (cons (buffer-name (car entry)) (cdr entry))) (my/noema--activity-snapshot)) :paused (and (buffer-live-p my/noema--app-buffer) (with-current-buffer my/noema--app-buffer my/noema--activity-paused))))')" >&2
+  echo "Emacs activity diagnostics: $(client '(list :selected-buffer (buffer-name (window-buffer (selected-window))) :app-buffer (and (buffer-live-p +noema--app-buffer) (buffer-name +noema--app-buffer)) :app-window (and (buffer-live-p +noema--app-buffer) (get-buffer-window +noema--app-buffer t)) :selected-frame-focus (frame-focus-state (selected-frame)) :selected-frame-visible (frame-visible-p (selected-frame)) :app-active (+noema--app-buffer-visible-p) :snapshot (mapcar (lambda (entry) (cons (buffer-name (car entry)) (cdr entry))) (+noema--activity-snapshot)) :paused (and (buffer-live-p +noema--app-buffer) (with-current-buffer +noema--app-buffer +noema--activity-paused))))')" >&2
   echo "macOS frontmost process: $(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true' 2>&1) pid=$(osascript -e 'tell application "System Events" to get unix id of first application process whose frontmost is true' 2>&1)" >&2
   exit 1
 fi
@@ -240,18 +240,18 @@ if [ "$TRACE_ACTIVITY" = 1 ]; then
   window.__noemaIdleTrace = trace;
 })()
 JS
-  client "(with-current-buffer my/noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) $(printf '%s' "$TRACE_ACTIVITY_JS" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')))" >/dev/null
+  client "(with-current-buffer +noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) $(printf '%s' "$TRACE_ACTIVITY_JS" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')))" >/dev/null
 fi
 
 echo "opened $NOTE in $SCENE scene; settling ${SETTLE}s"
 sleep "$SETTLE"
 
-if [ "$(client '(and my/noema--ready (process-live-p my/noema--process) (buffer-live-p my/noema--app-buffer))')" != "t" ]; then
-  echo "Noema process chain died during settle: $(client '(list :ready my/noema--ready :process (and my/noema--process (process-status my/noema--process)) :buffer (and (buffer-live-p my/noema--app-buffer) (buffer-name my/noema--app-buffer)))')" >&2
+if [ "$(client '(and +noema--ready (process-live-p +noema--process) (buffer-live-p +noema--app-buffer))')" != "t" ]; then
+  echo "Noema process chain died during settle: $(client '(list :ready +noema--ready :process (and +noema--process (process-status +noema--process)) :buffer (and (buffer-live-p +noema--app-buffer) (buffer-name +noema--app-buffer)))')" >&2
   dump_failure_context
   exit 1
 fi
-actual_activity="$(client '(with-current-buffer my/noema--app-buffer my/noema--activity-paused)')"
+actual_activity="$(client '(with-current-buffer +noema--app-buffer +noema--activity-paused)')"
 if [ "$actual_activity" != "$expected_activity" ]; then
   echo "Noema activity state drifted during settle: expected paused=$expected_activity, got $actual_activity" >&2
   exit 1
@@ -262,7 +262,7 @@ case "$FOCUS_PROBE" in
   blur) FOCUS_PROBE_JS="document.querySelector('[data-editor] .cm-content')?.blur()" ;;
   *) FOCUS_PROBE_JS="void 0" ;;
 esac
-client "(with-current-buffer my/noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) $(printf '%s' "$FOCUS_PROBE_JS" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')))" >/dev/null
+client "(with-current-buffer +noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) $(printf '%s' "$FOCUS_PROBE_JS" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')))" >/dev/null
 sleep 1
 
 read -r -d '' IDLE_AUDIT <<'JS' || true
@@ -305,9 +305,9 @@ JSON.stringify((() => {
   };
 })())
 JS
-client "(with-current-buffer my/noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) $(printf '%s' "$IDLE_AUDIT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))') (lambda (result) (setq my/noema-idle-audit result))))" >/dev/null
+client "(with-current-buffer +noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) $(printf '%s' "$IDLE_AUDIT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))') (lambda (result) (setq +noema-idle-audit result))))" >/dev/null
 sleep 0.3
-if ! idle_audit="$(client 'my/noema-idle-audit')" \
+if ! idle_audit="$(client '+noema-idle-audit')" \
     || ! kill -0 "$EMACS_PID" 2>/dev/null \
     || [[ "$idle_audit" == *"emacsclient:"* ]]; then
   echo "Measurement Emacs exited before the idle audit completed" >&2

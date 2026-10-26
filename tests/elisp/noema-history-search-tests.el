@@ -12,7 +12,7 @@
           noema-history-search--query "spectral"
           noema-history-search--source "codex")
     (let (calls)
-      (cl-letf (((symbol-function 'my/noema-api-call)
+      (cl-letf (((symbol-function '+noema-api-call)
                  (lambda (channel args callback &optional _timeout)
                    (push (list channel args callback) calls))))
         (noema-history-search-refresh)

@@ -1734,8 +1734,8 @@ visible-only render policy.  Neither setting affects ACP transport or events."
     ;; both the agent and execution target/workspace.
     (if-let* ((existing (and session-id
                              (eq (map-elt config :identifier) 'codex)
-                             (fboundp 'my/agent-shell--find-execution)
-                             (my/agent-shell--find-execution
+                             (fboundp '+agent-shell--find-execution)
+                             (+agent-shell--find-execution
                               session-id config directory))))
         (progn
           (when focus (noema-agent-acp-show-buffer existing))

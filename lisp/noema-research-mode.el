@@ -31,13 +31,13 @@
 (require 'noema-research-completion)
 (require 'flymake)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-noema" (&optional callback))
-(declare-function my/noema--host-file "init-noema" (file))
-(declare-function my/noema-jupyter-output-open-document
-                  "init-noema" (payload &optional focus))
-(declare-function my/noema-jupyter-cell--api-sync
-                  "init-noema-jupyter-cell" (channel body &optional timeout))
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
+(declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
+(declare-function +noema--host-file "noema/bridge/config" (file))
+(declare-function +noema-jupyter-output-open-document
+                  "noema/bridge/config" (payload &optional focus))
+(declare-function +noema-jupyter-cell--api-sync
+                  "noema/jupyter/cell" (channel body &optional timeout))
 (declare-function noema-research-graph-follow-source
                   "noema-research-graph" (source work-node-id))
 (declare-function noema-research-graph-buffer
@@ -45,8 +45,8 @@
 (declare-function noema-research-graph-pop-buffer
                   "noema-research-graph" (graph))
 (declare-function noema-research-graph-refresh "noema-research-graph" ())
-(defvar my/noema--ready)
-(defvar my/auto-revert-agent-refresh-function)
+(defvar +noema--ready)
+(defvar +auto-revert-agent-refresh-function)
 (defvar noema-research-graph--source)
 
 (defvar-local noema-research--inspector-run-id nil
@@ -824,7 +824,7 @@ The claim marker sets its own face; a blanket `propertize' would erase it."
   "Ask the host which named session each saved work block will run in."
   (interactive)
   (when (and buffer-file-name noema-research--document
-             (fboundp 'my/noema-api-call) (bound-and-true-p my/noema--ready))
+             (fboundp '+noema-api-call) (bound-and-true-p +noema--ready))
     (let* ((buffer (current-buffer))
            (preview (copy-hash-table (noema-research-mode--sync)))
            (tick (buffer-chars-modified-tick))
@@ -841,7 +841,7 @@ The claim marker sets its own face; a blanket `propertize' would erase it."
                                        (puthash "outputs" [] copy))
                                      copy))
                                  (noema-research-cells preview))) preview)
-      (my/noema-api-call
+      (+noema-api-call
        "noema:api:research:session:names" (vector `((cwd . ,root)))
        (lambda (result error-object)
          (when (and (buffer-live-p buffer) (not error-object))
@@ -851,7 +851,7 @@ The claim marker sets its own face; a blanket `propertize' would erase it."
                                      (append (noema-research--route-field result "names") nil)))))))
        30)
       (when cell-ids
-        (my/noema-api-call
+        (+noema-api-call
          "noema:api:research:session:resolve"
          (vector `((file . ,(noema-project-host-file buffer-file-name)) (cwd . ,root)
                    (notebook . ,preview)
@@ -1312,9 +1312,9 @@ An empty work block is a valid sketch of the DAG; it just cannot run yet."
   ;; index to refresh, so it is skipped rather than reported as missing.
   (when-let* ((noema-research-sync-host)
               (file (and file (noema-project-client-path file)))
-              ((fboundp 'my/noema-api-call))
-              ((bound-and-true-p my/noema--ready)))
-    (my/noema-api-call
+              ((fboundp '+noema-api-call))
+              ((bound-and-true-p +noema--ready)))
+    (+noema-api-call
      "noema:api:research:notebook:sync"
      (vector (noema-research--table "file" file
                                     "actor" "emacs"
@@ -1392,11 +1392,11 @@ showing outputs keeps the file's directory as a fallback root."
   "Return right-side renderer payload for CONTEXT and optional RUN-ID."
   (let* ((file (plist-get context :script-file))
          (project-root (plist-get context :project-root))
-         (host-file (if (fboundp 'my/noema--host-file)
-                        (my/noema--host-file file)
+         (host-file (if (fboundp '+noema--host-file)
+                        (+noema--host-file file)
                       file))
-         (host-root (if (fboundp 'my/noema--host-file)
-                        (my/noema--host-file project-root)
+         (host-root (if (fboundp '+noema--host-file)
+                        (+noema--host-file project-root)
                       project-root)))
     `((scriptFile . ,host-file)
       (sourceFile . ,host-file)
@@ -1408,17 +1408,17 @@ showing outputs keeps the file's directory as a fallback root."
   "Show this `.noema' document in Emacs' right-side rich-output view.
 With FOCUS non-nil (interactively, with a prefix), select the output window."
   (interactive "P")
-  (unless (fboundp 'my/noema-jupyter-output-open-document)
+  (unless (fboundp '+noema-jupyter-output-open-document)
     (user-error "Noema's Jupyter output renderer is unavailable"))
   (let ((context (noema-research--output-context)))
-    (my/noema-jupyter-output-open-document
+    (+noema-jupyter-output-open-document
      (noema-research--output-payload context) focus)))
 
 (defun noema-research--project-run-body (context project-file args confirmed)
   "Return host request for CONTEXT, PROJECT-FILE, ARGS and CONFIRMED policy."
   (let ((host-path (lambda (path)
-                     (if (fboundp 'my/noema--host-file)
-                         (my/noema--host-file path)
+                     (if (fboundp '+noema--host-file)
+                         (+noema--host-file path)
                        path))))
     (vector
      (noema-research--table
@@ -1461,14 +1461,14 @@ project files are linked back to the Work as immutable Artifacts."
              (format "Run %s locally? It may execute code and modify project files. The frozen Run will record the default capability policy. "
                      (file-relative-name project-file root)))
       (user-error "Project-file Run cancelled"))
-    (unless (and (fboundp 'my/noema--ensure-server)
-                 (fboundp 'my/noema-api-call))
+    (unless (and (fboundp '+noema--ensure-server)
+                 (fboundp '+noema-api-call))
       (user-error "Noema web-host integration is unavailable"))
     (let ((request (noema-research--project-run-body context project-file args t)))
       (message "Noema project-file Run waiting for web-host")
-      (my/noema--ensure-server
+      (+noema--ensure-server
        (lambda ()
-         (my/noema-api-call
+         (+noema-api-call
           "noema:api:research:run:project-file" request
           (lambda (result error-object)
             (if error-object
@@ -1478,8 +1478,8 @@ project files are linked back to the Work as immutable Artifacts."
                              "request failed"))
               (let* ((run (and (hash-table-p result) (gethash "run" result)))
                      (run-id (and (hash-table-p run) (gethash "id" run))))
-                (when (fboundp 'my/noema-jupyter-output-open-document)
-                  (my/noema-jupyter-output-open-document
+                (when (fboundp '+noema-jupyter-output-open-document)
+                  (+noema-jupyter-output-open-document
                    (noema-research--output-payload context run-id) nil))
                 (message "Noema project-file Run started%s"
                          (if run-id (format ": %s" run-id) "")))))
@@ -1630,9 +1630,9 @@ context and the budget it has to fit into."
          (root (and buffer-file-name (noema-research-repository-root buffer-file-name))))
     (unless (equal (noema-research-cell-kind cell document) "work")
       (user-error "Only work blocks run with context"))
-    (unless (and root (fboundp 'my/noema-api-call))
+    (unless (and root (fboundp '+noema-api-call))
       (user-error "This document has no Noema host"))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:run:context-preview"
      (vector `((file . ,(noema-project-host-file buffer-file-name)) (cwd . ,root)
                (cellId . ,(noema-research-cell-id cell)) (notebook . ,document)
@@ -1738,10 +1738,10 @@ SNAPSHOT is ignored; the `.noema' file is the sole durable authority."
   (unless buffer-file-name (user-error "This work document has no file"))
   (when (buffer-modified-p)
     (user-error "Save or discard edits before migration"))
-  (unless (fboundp 'my/noema-jupyter-cell--api-sync)
+  (unless (fboundp '+noema-jupyter-cell--api-sync)
     (user-error "Noema host integration is unavailable"))
   (let* ((root (noema-research-repository-root buffer-file-name))
-         (result (my/noema-jupyter-cell--api-sync
+         (result (+noema-jupyter-cell--api-sync
                   "noema:api:research:notebook:migrate"
                   `((file . ,(noema-project-host-file buffer-file-name))
                     (cwd . ,root)) 120))
@@ -2514,15 +2514,15 @@ With a prefix argument, also prompt for OUTCOME (empty clears it)."
   "Load WORK-NODE-ID source staleness into BUFFER between two markers.
 Answers whether this claim was verified against the files that are there now.
 It only reports: what a changed foundation means is the person\='s judgement."
-  (if (not (and (fboundp 'my/noema-api-call)
-                (bound-and-true-p my/noema--ready)))
+  (if (not (and (fboundp '+noema-api-call)
+                (bound-and-true-p +noema--ready)))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (let ((inhibit-read-only t))
             (goto-char start-marker)
             (delete-region start-marker end-marker)
             (insert "Runtime index unavailable.\n"))))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:source:changes"
      (vector (noema-research--table
               "cwd" root "notebookId" notebook-id
@@ -2566,15 +2566,15 @@ It only reports: what a changed foundation means is the person\='s judgement."
 (defun noema-research--load-inspector-artifacts
     (buffer start-marker end-marker root notebook-id work-node-id)
   "Load WORK-NODE-ID artifact provenance into BUFFER between two markers."
-  (if (not (and (fboundp 'my/noema-api-call)
-                (bound-and-true-p my/noema--ready)))
+  (if (not (and (fboundp '+noema-api-call)
+                (bound-and-true-p +noema--ready)))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (let ((inhibit-read-only t))
             (goto-char start-marker)
             (delete-region start-marker end-marker)
             (insert "Runtime index unavailable; ordinary files remain accessible.\n"))))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:artifact:links"
      (vector (noema-research--table
               "cwd" root "notebookId" notebook-id
@@ -2679,15 +2679,15 @@ It only reports: what a changed foundation means is the person\='s judgement."
 (defun noema-research--load-inspector-run-context
     (buffer start-marker end-marker root run-id)
   "Load RUN-ID's frozen context receipt into BUFFER between two markers."
-  (if (not (and (fboundp 'my/noema-api-call)
-                (bound-and-true-p my/noema--ready)))
+  (if (not (and (fboundp '+noema-api-call)
+                (bound-and-true-p +noema--ready)))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (let ((inhibit-read-only t))
             (goto-char start-marker)
             (delete-region start-marker end-marker)
             (insert "Runtime index unavailable.\n"))))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:run:context-receipt"
      (vector (noema-research--table "cwd" root "runId" run-id))
      (lambda (result error-object)
@@ -3009,7 +3009,7 @@ register file watches, start agents, or rearrange the workspace."
   ;; outputs, accepted Proposals) merge in place through a file watch, never
   ;; through auto-revert's reload or the stale-file prompt.
   (setq-local global-auto-revert-ignore-buffer t)
-  (setq-local my/auto-revert-agent-refresh-function
+  (setq-local +auto-revert-agent-refresh-function
               #'noema-research--sync-from-disk)
   (add-hook 'kill-buffer-hook #'noema-research--unwatch-file nil t)
   (let* ((file buffer-file-name)

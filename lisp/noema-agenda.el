@@ -7,8 +7,8 @@
 (require 'seq)
 (require 'subr-x)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-noema" (callback))
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
+(declare-function +noema--ensure-server "noema/bridge/config" (callback))
 (declare-function noema-open-node "noema-api" (node))
 (declare-function noema-research-graph-buffer "noema-research-graph" (&optional source))
 (declare-function noema-research-graph-pop-buffer "noema-research-graph" (graph))
@@ -73,12 +73,12 @@ an error before any host request or project scan.")
       "Knowledge"))
 (defun noema-agenda--call (operation body callback)
   "Use the existing long-lived host gateway, without spawning a reader."
-  (unless (fboundp 'my/noema-api-call) (require 'init-noema))
+  (unless (fboundp '+noema-api-call) (require 'noema/bridge/config))
   (let ((protected (delq nil (mapcar (lambda (buffer)
                                       (with-current-buffer buffer
                                         (when (buffer-modified-p) buffer-file-name))) (buffer-list)))))
-    (my/noema--ensure-server
-     (lambda () (my/noema-api-call
+    (+noema--ensure-server
+     (lambda () (+noema-api-call
                  (concat "noema:api:agenda:" operation)
                  (vector (cons (cons 'protectedFiles (vconcat protected)) body))
                  (lambda (result error-object)
@@ -399,8 +399,8 @@ CALLBACK receives (SCOPE ERROR) once entry succeeds, fails or is superseded."
              (noema-agenda--finish-project-requests nil error-object))
            (noema-agenda--error (error-message-string error-object))))))))
 
-(with-eval-after-load 'init-project
-  (add-hook 'my/project-activated-hook #'noema-agenda-activate-project))
+(with-eval-after-load 'tools/project/config
+  (add-hook '+project-activated-hook #'noema-agenda-activate-project))
 
 (defun noema-agenda--visible ()
   (when (and noema-agenda--dirty (get-buffer-window (current-buffer) t))

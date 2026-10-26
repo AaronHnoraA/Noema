@@ -29,9 +29,9 @@ describe("org-env block ID snippets", () => {
     for (const [name, idKey] of Object.entries(pairs)) {
       const ordinary = await readFile(join(root, name), "utf8");
       const identified = await readFile(join(root, `${name}-id`), "utf8");
-      expect(ordinary).not.toContain('my/noema-new-id "block"');
+      expect(ordinary).not.toContain('noema-new-id "block"');
       expect(identified).toContain(`# key: ${idKey}`);
-      expect(identified).toContain('{#`(my/noema-new-id "block")`}');
+      expect(identified).toContain('{#`(noema-new-id "block")`}');
     }
   });
 });

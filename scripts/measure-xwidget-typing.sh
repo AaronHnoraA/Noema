@@ -100,7 +100,7 @@ cleanup() {
   if [ -z "$EMACS_PID" ]; then EMACS_PID="$LAUNCHED_EMACS_PID"; fi
   local closer_command=""
   if [ -n "$EMACS_PID" ] && kill -0 "$EMACS_PID" 2>/dev/null; then
-    client '(progn (ignore-errors (my/noema-stop)) (kill-emacs))' >/dev/null 2>&1 &
+    client '(progn (ignore-errors (+noema/stop)) (kill-emacs))' >/dev/null 2>&1 &
     local closer=$!
     for _ in $(seq 1 20); do
       kill -0 "$EMACS_PID" 2>/dev/null || break
@@ -194,13 +194,13 @@ if [ -z "$EMACS_PID" ] || ! client '(emacs-version)' | grep -q GNU; then
   exit 1
 fi
 
-open_result="$(client '(let ((file (getenv "NOEMA_MEASURE_NOTE"))) (require '\''init-noema) (setq my/noema-web-port 0) (find-file file) (my/noema-open-file file) "opened")')"
+open_result="$(client '(let ((file (getenv "NOEMA_MEASURE_NOTE"))) (require '\''init-noema) (setq +noema-web-port 0) (find-file file) (+noema/open-file file) "opened")')"
 case "$open_result" in
   *'"opened"'*) ;;
   *) echo "Noema open request failed: $open_result" >&2; exit 1 ;;
 esac
 for _ in $(seq 1 60); do
-  ready="$(client '(and my/noema--ready (process-live-p my/noema--process) (buffer-live-p my/noema--app-buffer) (with-current-buffer my/noema--app-buffer (eq major-mode '\''xwidget-webkit-mode)))')"
+  ready="$(client '(and +noema--ready (process-live-p +noema--process) (buffer-live-p +noema--app-buffer) (with-current-buffer +noema--app-buffer (eq major-mode '\''xwidget-webkit-mode)))')"
   [ "$ready" = "t" ] && break
   kill -0 "$EMACS_PID" 2>/dev/null || break
   sleep 1
@@ -214,7 +214,7 @@ if [ "${ready:-nil}" != "t" ]; then
     tail -80 "$EMACS_LOG" >&2
     exit 1
   fi
-  echo "Noema xwidget/core never became ready: $(client '(list :ready my/noema--ready :process (and my/noema--process (process-status my/noema--process)) :buffer (and (buffer-live-p my/noema--app-buffer) (buffer-name my/noema--app-buffer)) :mode (and (buffer-live-p my/noema--app-buffer) (with-current-buffer my/noema--app-buffer major-mode)) :frames (length (frame-list)) :callbacks (length my/noema--ready-callbacks) :watchdog (timerp my/noema--ready-watchdog) :last-port my/noema--last-port)')" >&2
+  echo "Noema xwidget/core never became ready: $(client '(list :ready +noema--ready :process (and +noema--process (process-status +noema--process)) :buffer (and (buffer-live-p +noema--app-buffer) (buffer-name +noema--app-buffer)) :mode (and (buffer-live-p +noema--app-buffer) (with-current-buffer +noema--app-buffer major-mode)) :frames (length (frame-list)) :callbacks (length +noema--ready-callbacks) :watchdog (timerp +noema--ready-watchdog) :last-port +noema--last-port)')" >&2
   echo "Noema web-host log tail:" >&2
   client '(if-let* ((buffer (get-buffer " *Noema web host*"))) (with-current-buffer buffer (buffer-substring-no-properties (max (point-min) (- (point-max) 12000)) (point-max))) "(missing)")' >&2
   echo "Emacs messages tail:" >&2
@@ -224,32 +224,32 @@ if [ "${ready:-nil}" != "t" ]; then
 fi
 
 if [ "$TYPING_MODE" = source ]; then
-  client '(with-current-buffer my/noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) "window.dispatchEvent(new CustomEvent(\"noema:command\",{detail:{command:\"toggle-source\"}}))"))' >/dev/null
+  client '(with-current-buffer +noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) "window.dispatchEvent(new CustomEvent(\"noema:command\",{detail:{command:\"toggle-source\"}}))"))' >/dev/null
   sleep 1
 fi
 
 # Typing only happens in a foreground pane, so make this one the active client
 # and confirm the renderer agrees before attributing any cost to it.
-client '(when-let* ((window (get-buffer-window my/noema--app-buffer t))) (select-frame-set-input-focus (window-frame window)) (select-window window)) (setq my/noema--last-activity-signature :unknown) (my/noema--update-activity)' >/dev/null
+client '(when-let* ((window (get-buffer-window +noema--app-buffer t))) (select-frame-set-input-focus (window-frame window)) (select-window window)) (setq +noema--last-activity-signature :unknown) (+noema--update-activity)' >/dev/null
 # Multiple Emacs instances share the same application name. Activate the exact
 # measurement process so an existing user frame cannot accidentally receive
 # the generic `tell application "Emacs" to activate` request.
 osascript -e "tell application \"System Events\" to set frontmost of first application process whose unix id is $EMACS_PID to true" >/dev/null 2>&1 || true
 typing_activity=""
 for _ in $(seq 1 20); do
-  client '(setq my/noema--last-activity-signature :unknown) (my/noema--update-activity)' >/dev/null
+  client '(setq +noema--last-activity-signature :unknown) (+noema--update-activity)' >/dev/null
   # Foreground resume is deliberately event-debounced by 120 ms. Read the
   # applied state after that boundary instead of repeatedly cancelling and
   # rescheduling it in the same emacsclient request.
   sleep 0.2
-  typing_activity="$(client '(with-current-buffer my/noema--app-buffer my/noema--activity-paused)')"
+  typing_activity="$(client '(with-current-buffer +noema--app-buffer +noema--activity-paused)')"
   [ "$typing_activity" = "nil" ] && break
-  client '(when-let* ((window (get-buffer-window my/noema--app-buffer t))) (select-frame-set-input-focus (window-frame window)) (select-window window))' >/dev/null
+  client '(when-let* ((window (get-buffer-window +noema--app-buffer t))) (select-frame-set-input-focus (window-frame window)) (select-window window))' >/dev/null
   osascript -e "tell application \"System Events\" to set frontmost of first application process whose unix id is $EMACS_PID to true" >/dev/null 2>&1 || true
 done
 if [ "$typing_activity" != "nil" ]; then
   echo "Noema pane is not the active client; refusing to attribute typing cost to a paused renderer" >&2
-  echo "Emacs activity diagnostics: $(client '(list :selected-buffer (buffer-name (window-buffer (selected-window))) :app-buffer (and (buffer-live-p my/noema--app-buffer) (buffer-name my/noema--app-buffer)) :app-window (and (buffer-live-p my/noema--app-buffer) (get-buffer-window my/noema--app-buffer t)) :selected-frame-focus (frame-focus-state (selected-frame)) :selected-frame-visible (frame-visible-p (selected-frame)) :app-active (my/noema--app-buffer-visible-p) :snapshot (mapcar (lambda (entry) (cons (buffer-name (car entry)) (cdr entry))) (my/noema--activity-snapshot)) :paused (and (buffer-live-p my/noema--app-buffer) (with-current-buffer my/noema--app-buffer my/noema--activity-paused))))')" >&2
+  echo "Emacs activity diagnostics: $(client '(list :selected-buffer (buffer-name (window-buffer (selected-window))) :app-buffer (and (buffer-live-p +noema--app-buffer) (buffer-name +noema--app-buffer)) :app-window (and (buffer-live-p +noema--app-buffer) (get-buffer-window +noema--app-buffer t)) :selected-frame-focus (frame-focus-state (selected-frame)) :selected-frame-visible (frame-visible-p (selected-frame)) :app-active (+noema--app-buffer-visible-p) :snapshot (mapcar (lambda (entry) (cons (buffer-name (car entry)) (cdr entry))) (+noema--activity-snapshot)) :paused (and (buffer-live-p +noema--app-buffer) (with-current-buffer +noema--app-buffer +noema--activity-paused))))')" >&2
   echo "macOS frontmost process: $(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true' 2>&1) pid=$(osascript -e 'tell application "System Events" to get unix id of first application process whose frontmost is true' 2>&1)" >&2
   echo "exact activation result: $(osascript -e "tell application \"System Events\" to set frontmost of first application process whose unix id is $EMACS_PID to true" 2>&1)" >&2
   exit 1
@@ -397,19 +397,19 @@ for i in "${!PIDS[@]}"; do printf ' %s=%s' "${NAMES[$i]}" "${PIDS[$i]}"; done
 printf '\n'
 
 started_at="$(date +%s)"
-client "(with-current-buffer my/noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) $(printf '%s' "$DRIVER" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')))" >/dev/null
+client "(with-current-buffer +noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) $(printf '%s' "$DRIVER" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')))" >/dev/null
 
 budget=$(( (KEYS * INTERVAL_MS) / 1000 + 30 ))
 for _ in $(seq 1 "$budget"); do
   sleep 1
-  client '(with-current-buffer my/noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) "JSON.stringify(window.__noemaTypingProbe || {})" (lambda (result) (setq my/noema-measure-probe result))))' >/dev/null
+  client '(with-current-buffer +noema--app-buffer (xwidget-webkit-execute-script (xwidget-webkit-current-session) "JSON.stringify(window.__noemaTypingProbe || {})" (lambda (result) (setq +noema-measure-probe result))))' >/dev/null
   sleep 0.3
-  probe="$(client 'my/noema-measure-probe')"
+  probe="$(client '+noema-measure-probe')"
   case "$probe" in *'\"done\":true'*|*'"done":true'*) break ;; esac
 done
 elapsed=$(( $(date +%s) - started_at ))
 
-probe="$(client 'my/noema-measure-probe')"
+probe="$(client '+noema-measure-probe')"
 echo "driver probe: $probe"
 if ! printf '%s' "$probe" | NOEMA_EXPECTED_KEYS="$KEYS" NOEMA_EXPECTED_ACTION="$TYPING_ACTION" python3 -c '
 import ast

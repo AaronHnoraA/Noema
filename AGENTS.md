@@ -186,7 +186,7 @@ full-project symlink. The retired `/Users/hc/HC/SOURCE/Noema`,
 
 gptel and Magent remain complete internalized source trees under `upstream/`.
 agent-shell, acp.el and shell-maker are pristine package-vc dependencies;
-their audited revisions are declared in AaronEmacs `init-ai-ide.el` and
+their audited revisions are declared in AaronEmacs `tools/agent/config.el` and
 `package-lock.el`. Do not re-vendor or modify their package source. Preserve
 upstream features and complete implementations rather than writing replacements.
 `agent-shell-fork-tree` is likewise a pinned, pristine package-vc dependency.
@@ -259,7 +259,7 @@ Skills live in two places, and the split is about versioning, not taste:
   (`noema-work-dag`, `noema-elisp-api`). They ship with the code because they
   are only correct for the code they ship with.
 - `<NOEMA_ROOT>/public/README/Skills/skills/` — the growable library, wired
-  through `NOEMA_GLOBAL_SKILLS` (defaulted by `my/noema-skills-directory` in
+  through `NOEMA_GLOBAL_SKILLS` (defaulted by `+noema-skills-directory` in
   AaronEmacs). Skills are knowledge: they live beside the notes, are versioned
   by the same git, found by the same search, and can be added to without a
   Noema release. The library is laid out as a Portable Agent Plugin
@@ -301,8 +301,8 @@ that disabled `noema` meant all of it.
 
 ## Host and compatibility
 
-`init-noema.el` owns the CM6 xwidget/Appine lifecycle, header line, buffer
-integration, gateway, and every `my/noema-*` entry point. Graph Board, JuText,
+`noema/bridge/config.el` owns the CM6 xwidget/Appine lifecycle, header line, buffer
+integration, gateway, and every `+noema-*` entry point. Graph Board, JuText,
 Inspector, approvals and project navigation are composed by Emacs. CM6
 Markdown, private Wiki/Graph, Agenda/Config and Jupyter output retain their
 Web implementations as Emacs-hosted surfaces; do not delete or downgrade them,
@@ -315,7 +315,7 @@ now uses `noema`; the Emacs-hosted page sources live in `pages/` and build to
 read: `@aaronnote` code markers beside `@noema`/`@note-code`, the `aaronnote`
 theme id in a saved config (`canonicalNoemaAppThemeId`), and the Emacs side's
 one-time move of `var/aaronnote/` into `var/noema/`. Do not add new
-`aaronnote` names. The Emacs Lisp public implementation uses `my/noema-*`; the
+`aaronnote` names. The Emacs Lisp public implementation uses `+noema-*`; the
 searchable `noema-*` menus own their Transient layouts directly.
 
 Chrome plus the Noema extension is an explicit external capture boundary, not
@@ -325,7 +325,7 @@ authoring/control-plane replacement for Emacs.
 ## Native Agenda source ownership
 
 - Capture templates are declarative data in the shared host catalogue, configured
-  by AaronEmacs `my/noema-agenda-capture-templates`. Both native and hosted Web
+  by AaronEmacs `+noema-agenda-capture-templates`. Both native and hosted Web
   clients submit to the scoped writer. Keep template expansion free of IO,
   executable hooks, implicit project activation and temporary Org sources.
   Preserve failed capture drafts and prevent concurrent duplicate submissions.

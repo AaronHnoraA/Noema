@@ -24,23 +24,23 @@
 (require 'seq)
 (require 'subr-x)
 
-(defvar my/noema-buffer-file-name)
+(defvar +noema-buffer-file-name)
 (defvar gptel-context)
 (defvar noema-md-bridge-source-mode)
-(defvar my/programmatic-file-visit)
-(defvar my/noema--inhibit-redirect)
+(defvar +programmatic-file-visit)
+(defvar +noema--inhibit-redirect)
 
-(declare-function my/noema--xwidget-buffer-p "noema-xwidget-keys" (&optional buffer))
-(declare-function my/noema--jupyter-xwidget-buffer-p "noema-xwidget-keys" (&optional buffer))
-(declare-function my/noema-portal-buffer-p "noema-portal" (&optional buffer))
+(declare-function noema--xwidget-buffer-p "noema-xwidget-keys" (&optional buffer))
+(declare-function noema--jupyter-xwidget-buffer-p "noema-xwidget-keys" (&optional buffer))
+(declare-function +noema-portal-buffer-p "noema/bridge/portal" (&optional buffer))
 (declare-function portal-input-unfocus "portal-input" ())
-(declare-function my/noema--buffer-for-client "init-noema" (client))
-(declare-function my/noema--host-file "init-noema" (file))
-(declare-function my/noema--select-emacs-window "noema-xwidget-keys" (&optional window))
-(declare-function my/noema--release-xwidget-input-buffer "noema-xwidget-keys" (&optional buffer))
-(declare-function my/noema--focus-minibuffer-if-active "noema-xwidget-keys" ())
-(declare-function my/noema-command "init-noema" (command &optional detail))
-(declare-function my/noema-open-file "init-noema" (file))
+(declare-function +noema--buffer-for-client "noema/bridge/config" (client))
+(declare-function +noema--host-file "noema/bridge/config" (file))
+(declare-function noema--select-emacs-window "noema-xwidget-keys" (&optional window))
+(declare-function noema--release-xwidget-input-buffer "noema-xwidget-keys" (&optional buffer))
+(declare-function noema--focus-minibuffer-if-active "noema-xwidget-keys" ())
+(declare-function +noema/command "noema/bridge/config" (command &optional detail))
+(declare-function +noema/open-file "noema/bridge/config" (file))
 (declare-function gptel-context--add-region "gptel-context"
                   (buffer region-beginning region-end &optional advance))
 (declare-function gptel-rewrite "gptel-rewrite" ())
@@ -76,13 +76,13 @@ document   the whole note")
 (defun noema-md-bridge-pane-p (&optional buffer)
   "Return non-nil when BUFFER (default current) is a Noema Markdown pane."
   (let ((buffer (or buffer (current-buffer))))
-    (or (and (fboundp 'my/noema-portal-buffer-p)
-             (my/noema-portal-buffer-p buffer)
-             (buffer-local-value 'my/noema-buffer-file-name buffer))
-        (and (fboundp 'my/noema--xwidget-buffer-p)
-             (my/noema--xwidget-buffer-p buffer)
-             (not (and (fboundp 'my/noema--jupyter-xwidget-buffer-p)
-                       (my/noema--jupyter-xwidget-buffer-p buffer)))))))
+    (or (and (fboundp '+noema-portal-buffer-p)
+             (+noema-portal-buffer-p buffer)
+             (buffer-local-value '+noema-buffer-file-name buffer))
+        (and (fboundp 'noema--xwidget-buffer-p)
+             (noema--xwidget-buffer-p buffer)
+             (not (and (fboundp 'noema--jupyter-xwidget-buffer-p)
+                       (noema--jupyter-xwidget-buffer-p buffer)))))))
 
 (defcustom noema-md-bridge-answer-timeout 4
   "Seconds to wait for a Noema page to answer a selection request.
@@ -131,9 +131,9 @@ cannot make the agent read stale text from disk."
     (error "Unknown Noema bridge action: %s" action))
   (unless (member scope noema-md-bridge-scopes)
     (error "Unknown Noema bridge scope: %s" scope))
-  (unless (fboundp 'my/noema-command)
+  (unless (fboundp '+noema/command)
     (user-error "Noema browser command bridge is unavailable"))
-  (unless my/noema-buffer-file-name
+  (unless +noema-buffer-file-name
     (user-error "This Noema pane shows no file"))
   (let ((id (format "emacs-%d-%d" (emacs-pid)
                       (cl-incf noema-md-bridge--request-counter))))
@@ -145,7 +145,7 @@ cannot make the agent read stale text from disk."
                  ("line" "selection or cursor line")
                  ("document" "whole note")
                  (_ "selection")))
-      (my/noema-command "emacs-selection"
+      (+noema/command "emacs-selection"
                         `((action . ,action) (scope . ,scope) (requestId . ,id)))))
 
 (defmacro noema-md-bridge-define-pane-command (name action scope doc)
@@ -181,8 +181,8 @@ DOC is its documentation."
 (defun noema-md-bridge--same-file-p (a b)
   "Return non-nil when files A and B name the same note."
   (let ((canonical (lambda (file)
-                     (if (fboundp 'my/noema--host-file)
-                         (or (ignore-errors (my/noema--host-file file))
+                     (if (fboundp '+noema--host-file)
+                         (or (ignore-errors (+noema--host-file file))
                              (expand-file-name file))
                        (expand-file-name file)))))
     (and (stringp a) (stringp b)
@@ -193,11 +193,11 @@ DOC is its documentation."
 Called from an interactive command, a plain `find-file-noselect' would hand the
 file to Noema (the Markdown redirect) and return a blank placeholder, so the
 visit is marked programmatic.  A leftover redirect placeholder is replaced."
-  (let ((my/programmatic-file-visit t)
-        (my/noema--inhibit-redirect t))
+  (let ((+programmatic-file-visit t)
+        (+noema--inhibit-redirect t))
     (when-let* ((existing (find-buffer-visiting file)))
       (when (and (with-current-buffer existing
-                   (bound-and-true-p my/noema--markdown-redirected))
+                   (bound-and-true-p +noema--markdown-redirected))
                  (not (buffer-modified-p existing)))
         (kill-buffer existing)))
     (let ((existing (find-buffer-visiting file))
@@ -245,8 +245,8 @@ visit is marked programmatic.  A leftover redirect placeholder is replaced."
                (not (buffer-local-value 'noema-md-bridge-source-mode buffer)))
       (let ((file (buffer-local-value 'buffer-file-name buffer)))
         (switch-to-prev-buffer window t)
-        (when (and file (fboundp 'my/noema-open-file))
-          (run-at-time 0 nil #'my/noema-open-file file))))))
+        (when (and file (fboundp '+noema/open-file))
+          (run-at-time 0 nil #'+noema/open-file file))))))
 
 (defun noema-md-bridge--drop-hidden (buffer)
   "Kill hidden BUFFER when nothing uses it any more."
@@ -318,8 +318,8 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
                     display-buffer-pop-up-window)
                    (inhibit-same-window . t)))))
     (when (window-live-p window)
-      (if (fboundp 'my/noema--select-emacs-window)
-          (my/noema--select-emacs-window window)
+      (if (fboundp 'noema--select-emacs-window)
+          (noema--select-emacs-window window)
         (select-window window)))
     (with-current-buffer buffer
       ;; Shown on purpose: it is the person's buffer from now on.
@@ -359,8 +359,8 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
        ;; Asked from a Noema page: continue in the session, not the page.
        (when-let* ((window (and (buffer-live-p session)
                                 (get-buffer-window session 'visible))))
-         (if (fboundp 'my/noema--select-emacs-window)
-             (my/noema--select-emacs-window window)
+         (if (fboundp 'noema--select-emacs-window)
+             (noema--select-emacs-window window)
            (select-window window))
          (with-current-buffer session (goto-char (point-max))))
        ;; References name the file; the agent needs no Emacs buffer.
@@ -373,8 +373,8 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
                        :references (noema-context--region-references buffer begin end)))))
        (when-let* ((window (and (buffer-live-p session)
                                 (get-buffer-window session 'visible))))
-         (if (fboundp 'my/noema--select-emacs-window)
-             (my/noema--select-emacs-window window)
+         (if (fboundp 'noema--select-emacs-window)
+             (noema--select-emacs-window window)
            (select-window window)))
        (noema-md-bridge--drop-hidden buffer)))
     ("context"
@@ -409,8 +409,8 @@ report whose pane no longer shows that file is refused."
          (file (alist-get 'file event))
          (action (or (alist-get 'action event) "agent"))
          (failure (alist-get 'error event))
-         (pane (and (fboundp 'my/noema--buffer-for-client)
-                    (my/noema--buffer-for-client client))))
+         (pane (and (fboundp '+noema--buffer-for-client)
+                    (+noema--buffer-for-client client))))
     (noema-md-bridge--settle (alist-get 'requestId event))
     ;; The page could not produce a range (nothing selected, save failed...).
     ;; Say why here: page statuses only reach the echo area as errors.
@@ -419,7 +419,7 @@ report whose pane no longer shows that file is refused."
     (message nil)
     (unless (and (buffer-live-p pane)
                  (noema-md-bridge--same-file-p
-                  (buffer-local-value 'my/noema-buffer-file-name pane) file))
+                  (buffer-local-value '+noema-buffer-file-name pane) file))
       (user-error "Noema selection no longer matches its pane"))
     (pcase-let ((`(,buffer ,begin . ,end)
                  (noema-md-bridge-region file (noema-md-bridge--event-range event))))
@@ -435,19 +435,19 @@ The page kept its native keyboard focus when it answered; without this the
 session prompt appears but every key goes to the page."
   (when (buffer-live-p buffer)
     (when (and (buffer-live-p pane)
-               (fboundp 'my/noema--release-xwidget-input-buffer))
-      (my/noema--release-xwidget-input-buffer pane))
+               (fboundp 'noema--release-xwidget-input-buffer))
+      (noema--release-xwidget-input-buffer pane))
     (when (and (buffer-live-p pane)
-               (fboundp 'my/noema-portal-buffer-p)
-               (my/noema-portal-buffer-p pane)
+               (fboundp '+noema-portal-buffer-p)
+               (+noema-portal-buffer-p pane)
                (fboundp 'portal-input-unfocus))
       (when-let* ((window (get-buffer-window pane 'visible)))
         (with-selected-window window (portal-input-unfocus))))
-    (when (fboundp 'my/noema--select-emacs-window)
-      (my/noema--select-emacs-window))
+    (when (fboundp 'noema--select-emacs-window)
+      (noema--select-emacs-window))
     (let ((minibuffer-setup-hook
-           (if (fboundp 'my/noema--focus-minibuffer-if-active)
-               (cons #'my/noema--focus-minibuffer-if-active minibuffer-setup-hook)
+           (if (fboundp 'noema--focus-minibuffer-if-active)
+               (cons #'noema--focus-minibuffer-if-active minibuffer-setup-hook)
              minibuffer-setup-hook)))
       (condition-case failure
           (noema-md-bridge-run action buffer begin end)
@@ -462,10 +462,10 @@ session prompt appears but every key goes to the page."
 (defun noema-md-bridge--panes-for (file)
   "Return the live Noema Markdown panes showing FILE."
   (seq-filter (lambda (buffer)
-                (and (buffer-local-value 'my/noema-buffer-file-name buffer)
+                (and (buffer-local-value '+noema-buffer-file-name buffer)
                      (noema-md-bridge-pane-p buffer)
                      (noema-md-bridge--same-file-p
-                      (buffer-local-value 'my/noema-buffer-file-name buffer) file)))
+                      (buffer-local-value '+noema-buffer-file-name buffer) file)))
               (seq-filter (lambda (buffer)
                             (memq (buffer-local-value 'major-mode buffer)
                                   '(xwidget-webkit-mode portal-web-mode)))
@@ -477,13 +477,13 @@ A pane holding unsaved text of its own keeps it and says so instead."
   (when-let* ((file (or file buffer-file-name)))
     (dolist (pane (noema-md-bridge--panes-for file))
       (with-current-buffer pane
-        (my/noema-command "reload-if-clean"
-                          `((file . ,my/noema-buffer-file-name)))))))
+        (+noema/command "reload-if-clean"
+                          `((file . ,+noema-buffer-file-name)))))))
 
 (defun noema-md-bridge--after-save ()
   "After an Emacs save, refresh the Noema panes that show this file."
   (when (and buffer-file-name
-             (fboundp 'my/noema-command)
+             (fboundp '+noema/command)
              (member (file-name-extension buffer-file-name) '("md" "markdown")))
     (noema-md-bridge-notify-saved)))
 
@@ -522,7 +522,7 @@ A pane holding unsaved text of its own keeps it and says so instead."
     (quit-window)
     (when-let* ((window (and pane (get-buffer-window pane 'visible))))
       (select-window window)
-      (with-current-buffer pane (my/noema-command "focus")))))
+      (with-current-buffer pane (+noema/command "focus")))))
 
 (defvar-keymap noema-md-bridge-source-mode-map
   :doc "Keys in an Emacs source buffer opened from a Noema pane."

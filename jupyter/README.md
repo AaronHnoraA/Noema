@@ -201,7 +201,7 @@ kernel is bound to a path, gets a working directory, and appears in the
 server's own UI; shutting one down removes the session too. A gateway has no
 sessions or contents API, so `kind: "gateway"` starts bare kernels instead.
 
-In **Emacs host mode the broker owns the server list** (`my/noema-jupyter-servers`):
+In **Emacs host mode the broker owns the server list** (`+noema-jupyter-servers`):
 it reads secrets from `auth-source`, and for a server that only exists on a
 Remote target it opens a channel and hands Noema a client-side URL. A target
 that cannot provide a channel is an error, never a client-side connection.

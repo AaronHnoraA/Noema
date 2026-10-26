@@ -39,14 +39,14 @@
 (require 'noema-agent-acp)
 (require 'noema-agent-promote)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-noema" (&optional callback))
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
+(declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
 (declare-function noema-agent-worker-claim-coordinator-requests "noema-agent-worker" (root))
 (declare-function noema-agent-worker-buffer-busy-p "noema-agent-worker" (buffer))
 (declare-function noema-agent-worker-stop-buffer "noema-agent-worker" (buffer))
 (declare-function noema-agent-worker-cancel-buffer "noema-agent-worker" (buffer))
 (declare-function noema-agent-worker-buffer "noema-agent-worker" (worker))
-(defvar my/noema--ready)
+(defvar +noema--ready)
 
 (defgroup noema-pi-router nil
   "Per-project Pi session manager for Noema."
@@ -271,9 +271,9 @@ otherwise DIRECTORY itself is the root."
 
 (defun noema-pi-router--api (channel body callback)
   "Call Noema CHANNEL with BODY and CALLBACK (RESULT ERROR)."
-  (unless (fboundp 'my/noema-api-call)
+  (unless (fboundp '+noema-api-call)
     (user-error "Noema host integration is unavailable"))
-  (my/noema-api-call channel (vector body) callback 30))
+  (+noema-api-call channel (vector body) callback 30))
 
 (defun noema-pi-router--warn (format-string &rest args)
   "Log a Pi manager problem built from FORMAT-STRING and ARGS to `*Warnings*'."
@@ -461,7 +461,7 @@ description Pi carries costs tokens on every turn."
 
 (defun noema-pi-router--adopt (root buffer)
   "Record BUFFER's native Pi session as ROOT's `pi' session name."
-  (when (and (buffer-live-p buffer) (fboundp 'my/noema-api-call))
+  (when (and (buffer-live-p buffer) (fboundp '+noema-api-call))
     (condition-case error-object
         (noema-pi-router--api
          "noema:api:research:session:promote"
@@ -546,7 +546,7 @@ ENDPOINT carries the coordinator URL.  Display the buffer when FOCUS."
   (when focus
     (puthash root t noema-pi-router--show))
   (unless (or (noema-pi-router-buffer root) (gethash root noema-pi-router--starting))
-    (unless (fboundp 'my/noema--ensure-server)
+    (unless (fboundp '+noema--ensure-server)
       (user-error "Noema host integration is unavailable"))
     (puthash root t noema-pi-router--starting)
     (let ((abandon (lambda (reason)
@@ -554,7 +554,7 @@ ENDPOINT carries the coordinator URL.  Display the buffer when FOCUS."
                      (remhash root noema-pi-router--show)
                      (noema-pi-router--warn "Pi for %s did not start: %s"
                                             (abbreviate-file-name root) reason))))
-      (my/noema--ensure-server
+      (+noema--ensure-server
        (lambda ()
          (noema-pi-router--api
           "noema:api:research:coordinator:endpoint" `((cwd . ,root))
@@ -815,8 +815,8 @@ An `auth.json' that holds no provider entry does not count."
                (format "pool default: %s" (car (noema-pi-router--pool)))
              noema-pi-model))
      (list t "model pool" (string-join (noema-pi-router--pool) ", "))
-     (list (bound-and-true-p my/noema--ready) "Noema host"
-           (if (bound-and-true-p my/noema--ready) "ready" "not started (it starts on first use)")))))
+     (list (bound-and-true-p +noema--ready) "Noema host"
+           (if (bound-and-true-p +noema--ready) "ready" "not started (it starts on first use)")))))
 
 ;;;###autoload
 (defun noema-pi-doctor ()
@@ -833,7 +833,7 @@ An `auth.json' that holds no provider entry does not count."
           (insert (format "%s %-32s %s\n" (if (car check) "✓" "✗") (nth 1 check) (nth 2 check)))))
       (special-mode))
     (display-buffer buffer)
-    (when (and (fboundp 'my/noema-api-call) (bound-and-true-p my/noema--ready))
+    (when (and (fboundp '+noema-api-call) (bound-and-true-p +noema--ready))
       (noema-pi-router--api
        "noema:api:research:coordinator:endpoint" `((cwd . ,root))
        (lambda (endpoint error-object)

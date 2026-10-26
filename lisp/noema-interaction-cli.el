@@ -23,17 +23,17 @@
 (require 'noema-interaction-profile)
 (require 'noema-interaction-backend)
 
-(defvar my/terminal-startup-cd-inhibited)
-(defvar my/portal-popup-kind nil)
-(defvar my/portal-popup-title nil)
+(defvar +terminal-startup-cd-inhibited)
+(defvar +portal-popup-kind nil)
+(defvar +portal-popup-title nil)
 (defvar portal-view--target)
 (defvar eat-terminal)
 (defvar eat-term-name)
 
-(declare-function my/portal-popup-display-buffer "init-portal-popup" (buffer))
+(declare-function +portal-popup-display-buffer "term/portal/popup" (buffer))
 (declare-function turn-off-evil-mode "evil" ())
 (declare-function evil-emacs-state "evil" ())
-(declare-function my/portal-create "init-portal" (&rest args))
+(declare-function +portal-create "term/portal/config" (&rest args))
 (declare-function portal--terminal-paste "portal-terminal" (target text &optional enter))
 (declare-function portal-terminal-metadata "portal-terminal" (&optional buffer))
 (declare-function eat-mode "eat" ())
@@ -172,7 +172,7 @@ See `noema-interaction-cli--tools' for the expected plist keys."
   "Ensure the configured terminal backend for tool ID is available."
   (pcase (noema-interaction-cli--terminal-backend id)
     ('portal
-     (require 'init-portal))
+     (require 'term/portal/config))
     ('eat
      (unless (featurep 'eat) (require 'eat nil t))
      (unless (featurep 'eat)
@@ -204,8 +204,8 @@ See `noema-interaction-cli--tools' for the expected plist keys."
   (with-current-buffer buffer
     (setq default-directory project-root)
     (let ((kind (noema-interaction-cli--spec id :popup-kind)))
-      (when kind (setq-local my/portal-popup-kind kind)))
-    (setq-local my/portal-popup-title
+      (when kind (setq-local +portal-popup-kind kind)))
+    (setq-local +portal-popup-title
                 (format "%s  %s"
                         (or (noema-interaction-cli--spec id :name) (symbol-name id))
                         (abbreviate-file-name project-root)))
@@ -235,7 +235,7 @@ Returns a (BUFFER . PROCESS) cons cell."
     (pcase (noema-interaction-cli--terminal-backend id)
       ('portal
        (let* ((parts (split-string-shell-command command-string))
-              (buffer (my/portal-create
+              (buffer (+portal-create
                        :directory project-root :name buffer-name
                        :command (append (list "env") env-vars parts)
                        :display nil)))
@@ -250,7 +250,7 @@ Returns a (BUFFER . PROCESS) cons cell."
          (with-current-buffer buffer
            (unless (eq major-mode 'eat-mode) (eat-mode))
            (setq-local process-environment (append env-vars process-environment))
-           (let ((my/terminal-startup-cd-inhibited t))
+           (let ((+terminal-startup-cd-inhibited t))
              (apply #'eat-exec buffer buffer-name program nil args))
            (noema-interaction-cli--configure-buffer id buffer project-root)
            (let ((process (get-buffer-process buffer)))
@@ -322,7 +322,7 @@ Returns the session buffer."
   "Open the terminal buffer for tool ID via the popup window system."
   (if-let* ((buf (noema-interaction-cli-buffer
                   id (noema-interaction-cli--working-directory project-root))))
-      (my/portal-popup-display-buffer buf)
+      (+portal-popup-display-buffer buf)
     (user-error "No %s session for this project" id)))
 
 (defun noema-interaction-cli-stop (id &optional project-root)

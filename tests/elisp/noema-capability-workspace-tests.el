@@ -274,7 +274,7 @@
       (should (equal (aref row 2) "0123456789ab")))
     (should (string-match-p "1 updates · 1 edited locally" (car header-line-format)))
     (should (eq (key-binding (kbd "C-c u")) #'noema-skill-upstream-ui-update)))
-  (let ((my/noema--ready t) calls)
+  (let ((+noema--ready t) calls)
     (cl-letf (((symbol-function 'noema--host-call-now)
                (lambda (channel body _callback &optional timeout) (push (list channel body timeout) calls))))
       (noema-skill-upstream-status :check t :callback #'ignore)

@@ -13,7 +13,7 @@
     (setq noema-findings--root "/tmp/noema-findings-test/"
           noema-findings--query "signal")
     (let (body callback)
-      (cl-letf (((symbol-function 'my/noema-api-call)
+      (cl-letf (((symbol-function '+noema-api-call)
                  (lambda (channel args done &optional _timeout)
                    (should (equal channel "noema:api:research:finding:list"))
                    (setq body (aref args 0) callback done))))
@@ -56,7 +56,7 @@
   "The command submits an exact excerpt and never accepts it itself."
   (let (request)
     (cl-letf (((symbol-function 'noema-current-project) (lambda (&optional _) "/tmp/project/"))
-              ((symbol-function 'my/noema-api-call)
+              ((symbol-function '+noema-api-call)
                (lambda (channel args callback &optional _timeout)
                  (should (equal channel "noema:api:research:memory:propose-from-run"))
                  (setq request (aref args 0))
@@ -83,7 +83,7 @@
     ;; native-compilation trampoline being buildable in the test process.
     (let ((native-comp-enable-subr-trampolines nil)
           channels body)
-      (cl-letf (((symbol-function 'my/noema-api-call)
+      (cl-letf (((symbol-function '+noema-api-call)
                  (lambda (channel args done &optional _timeout)
                    (push channel channels)
                    (when (equal channel "noema:api:research:finding:retire")

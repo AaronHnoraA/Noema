@@ -1,6 +1,6 @@
 ;;; check-roam-agenda-actions.el --- Real Roam/source contract -*- lexical-binding: t; -*-
 ;; Runs under the root configuration against a disposable host and project.
-(require 'init-md-roam)
+(require 'noema/roam/config)
 (require 'noema-agenda)
 (require 'noema-agenda-capture)
 (require 'url)
@@ -26,18 +26,18 @@
     (funcall callback result nil)))
 
 (cl-letf (((symbol-function 'noema-agenda--call) #'noema-roam-smoke--call)
-          ((symbol-function 'my/noema-roam--runtime-call) (lambda (&rest _) (error "CLI fallback")))
-          ((symbol-function 'my/noema-roam--note-records) (lambda () (error "Roam source scan")))
-          ((symbol-function 'my/noema-roam-ui-refresh) #'ignore))
+          ((symbol-function '+noema-roam--runtime-call) (lambda (&rest _) (error "CLI fallback")))
+          ((symbol-function '+noema-roam--note-records) (lambda () (error "Roam source scan")))
+          ((symbol-function '+noema-roam/ui-refresh) #'ignore))
   (with-temp-buffer
     (setq buffer-file-name "/fs:never-entered:/project/unsaved.md")
     (insert "😀\n```md\n@@todo [Example]\n```\n\n@@itodo(doing) [Read proof]{due: 2026-09-20}\n@@todo [Same]\n@@todo [Same]\n")
     (let ((source (buffer-string)) (tick (buffer-chars-modified-tick)) entries)
-      (my/noema-roam--current-file-todos (lambda (todos) (setq entries todos)))
+      (+noema-roam--current-file-todos (lambda (todos) (setq entries todos)))
       (cl-assert (= 3 (length entries)))
-      (cl-assert (equal "doing" (my/noema-roam--todo-status (car entries))))
-      (cl-assert (equal "2026-09-20" (my/noema-roam--todo-agenda-date (car entries))))
-      (cl-assert (= 8 (line-number-at-pos (my/noema-roam--todo-field (nth 2 entries) "bufferPoint"))))
+      (cl-assert (equal "doing" (+noema-roam--todo-status (car entries))))
+      (cl-assert (equal "2026-09-20" (+noema-roam--todo-agenda-date (car entries))))
+      (cl-assert (= 8 (line-number-at-pos (+noema-roam--todo-field (nth 2 entries) "bufferPoint"))))
       (cl-assert (= tick (buffer-chars-modified-tick)))
       (cl-assert (equal source (buffer-string)))))
   (noema-roam-smoke--call
@@ -45,21 +45,21 @@
                 (text . "Roam repeat proof") (sche . "2026-09-15") (repeat . "+1w"))
    (lambda (_result _error) nil))
   (let (entry)
-    (my/noema-roam--todos
+    (+noema-roam--todos
      (lambda (todos) (setq entry (seq-find (lambda (todo) (equal "Roam repeat proof" (gethash "text" todo))) todos))))
     (cl-assert (gethash "sourceRef" entry))
-    (my/noema-roam-update-todo-metadata "priority" "B" entry)
-    (my/noema-roam--todos
+    (+noema-roam/update-todo-metadata "priority" "B" entry)
+    (+noema-roam--todos
      (lambda (todos) (setq entry (seq-find (lambda (todo) (equal "Roam repeat proof" (gethash "text" todo))) todos))))
     (cl-assert (equal "B" (gethash "prio" (gethash "canon" entry))))
-    (my/noema-roam-update-todo-status "done" entry)
-    (my/noema-roam--todos
+    (+noema-roam/update-todo-status "done" entry)
+    (+noema-roam--todos
      (lambda (todos) (setq entry (seq-find (lambda (todo) (equal "Roam repeat proof" (gethash "text" todo))) todos))))
     (cl-assert (equal "todo" (gethash "status" entry)))
     (cl-assert (equal "2026-09-22" (gethash "sche" (gethash "canon" entry)))))
   ;; The main Agenda must distinguish an actual task from its identical code example.
   (let (entry)
-    (my/noema-roam--todos
+    (+noema-roam--todos
      (lambda (todos) (setq entry (seq-find (lambda (todo) (equal "Roam repeat proof" (gethash "text" todo))) todos))))
     (let ((buffer (find-file-noselect (gethash "file" entry))))
       (unwind-protect

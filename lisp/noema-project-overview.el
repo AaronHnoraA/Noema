@@ -12,16 +12,16 @@
 (require 'button)
 (require 'noema-api)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-noema" (&optional callback))
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
+(declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
 (declare-function noema-sessions "noema-sessions" (&optional scope))
 (declare-function noema-agent-inbox "noema-agent-inbox" ())
 (declare-function noema-sessions-open-reference "noema-sessions" (root &optional name session-id))
 (declare-function noema-orchestration "noema-orchestration" (&optional directory))
 (declare-function noema-capability-manager "noema-capability-ui" (&optional project type))
 (declare-function noema-research-attention "noema-research-inspector" (&optional origin))
-(declare-function my/noema-agenda "init-noema" (&optional query))
-(declare-function my/noema-workspace-graph "init-noema" ())
+(declare-function +noema/agenda "noema/bridge/config" (&optional query))
+(declare-function +noema/workspace-graph "noema/bridge/config" ())
 (declare-function noema-research-goto-cell "noema-research-mode" (id))
 (declare-function noema-research-workflow-preview "noema-research-workflow" (kind file title))
 (declare-function noema-history-search "noema-history-search" (&optional directory query))
@@ -66,7 +66,7 @@
         (cell-id (noema-project-overview--field run "cellId")))
     (unless (and notebook-id cell-id)
       (user-error "This Run has no source work block"))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:cell:resolve"
      (vector `((cwd . ,root) (notebookId . ,notebook-id) (cellId . ,cell-id)))
      (lambda (result error-object)
@@ -131,7 +131,7 @@
                                                                  (noema-research-attention root)))))
     (insert "   ")
     (noema-project-overview--button "Agenda" (lambda () (noema-project-overview--open
-                                                            (lambda () (my/noema-agenda)))))
+                                                            (lambda () (+noema/agenda)))))
     (insert "   ")
     (noema-project-overview--button "New workflow" (lambda ()
                                                         (noema-project-overview--open
@@ -225,7 +225,7 @@
 (defun noema-project-overview-refresh ()
   "Refresh this project's overview from the existing Noema APIs."
   (interactive)
-  (unless (and noema-project-overview--root (fboundp 'my/noema-api-call))
+  (unless (and noema-project-overview--root (fboundp '+noema-api-call))
     (user-error "Noema project host is unavailable"))
   (setq noema-project-overview--generation
         (cl-incf noema-project-overview--request-serial))
@@ -238,7 +238,7 @@
     (dolist (query noema-project-overview--queries)
       (let ((name (car query))
             (channel (cdr query)))
-        (my/noema-api-call
+        (+noema-api-call
          (format "noema:api:research:%s" channel)
          (vector `((cwd . ,root) (limit . 50)))
          (lambda (result error-object)
@@ -276,8 +276,8 @@
       (setq noema-project-overview--root root
             default-directory root))
     (pop-to-buffer buffer)
-    (if (fboundp 'my/noema--ensure-server)
-        (my/noema--ensure-server
+    (if (fboundp '+noema--ensure-server)
+        (+noema--ensure-server
          (lambda () (when (buffer-live-p buffer)
                       (with-current-buffer buffer (noema-project-overview-refresh)))))
       (with-current-buffer buffer (noema-project-overview-refresh)))

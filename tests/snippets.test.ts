@@ -320,10 +320,10 @@ describe("noema snippets", () => {
     const expanded = expandSnippetBody({
       key: "anchor",
       mode: "markdown-mode",
-      body: "{#`(my/noema-new-id \"block\")`}$0",
+      body: "{#`(noema-new-id \"block\")`}$0",
     }, { newId: () => "0198fbac-0780-7c99-85e6-333333333333" });
     expect(expanded.text).toBe("{#0198fbac-0780-7c99-85e6-333333333333}");
-    expect(snippetBrowserCompatibility("`(my/noema-new-id \"page\")`").compatible).toBe(true);
+    expect(snippetBrowserCompatibility("`(noema-new-id \"page\")`").compatible).toBe(true);
     expect(snippetBrowserCompatibility("`(shell-command \"uuidgen\")`").compatible).toBe(false);
   });
 

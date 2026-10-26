@@ -18,11 +18,11 @@
 (require 'magent-ledger)
 (require 'magent-runtime-queue)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-noema" (&optional callback))
-(declare-function my/noema--host-file "init-noema" (file))
-(declare-function my/noema-jupyter-output-open-document
-                  "init-noema" (payload &optional focus))
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
+(declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
+(declare-function +noema--host-file "noema/bridge/config" (file))
+(declare-function +noema-jupyter-output-open-document
+                  "noema/bridge/config" (payload &optional focus))
 (declare-function noema-agent-promote--session-spec "noema-agent-promote" (&optional buffer title goal))
 (declare-function noema-sessions-open-reference "noema-sessions" (root &optional name session-id))
 (declare-function noema-research-graph-refresh-runs "noema-research-graph" ())
@@ -536,9 +536,9 @@ Workers that still hold THREAD keep using it until they finish."
 
 (defun noema-agent-worker--api (channel body callback &optional timeout)
   "Call CHANNEL with one BODY object and invoke CALLBACK with result/error."
-  (unless (fboundp 'my/noema-api-call)
+  (unless (fboundp '+noema-api-call)
     (user-error "Noema web-host integration is unavailable"))
-  (my/noema-api-call channel (vector body) callback (or timeout 30)))
+  (+noema-api-call channel (vector body) callback (or timeout 30)))
 
 (defun noema-agent-worker--worker-body (worker &rest entries)
   "Return a Node channel payload for WORKER extended by ENTRIES."
@@ -1718,16 +1718,16 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
                   ((equal (noema-agent-worker--string source "kind") "work-cell"))
                   (relative (noema-agent-worker--string source "file"))
                   (cell-id (noema-agent-worker--string source "cell_id"))
-                  ((fboundp 'my/noema-jupyter-output-open-document)))
+                  ((fboundp '+noema-jupyter-output-open-document)))
         (let* ((file (expand-file-name relative (noema-agent-worker-root worker)))
                (root (noema-agent-worker-root worker))
-               (host-file (if (fboundp 'my/noema--host-file)
-                              (my/noema--host-file file) file))
-               (host-root (if (fboundp 'my/noema--host-file)
-                              (my/noema--host-file root) root)))
+               (host-file (if (fboundp '+noema--host-file)
+                              (+noema--host-file file) file))
+               (host-root (if (fboundp '+noema--host-file)
+                              (+noema--host-file root) root)))
           ;; Open before ACP dispatch so the renderer receives the first live
           ;; snapshot and every durable segment for this exact Run.
-          (my/noema-jupyter-output-open-document
+          (+noema-jupyter-output-open-document
            `((scriptFile . ,host-file)
              (sourceFile . ,host-file)
              (projectRoot . ,host-root)
@@ -1832,8 +1832,8 @@ When SUBMISSION is non-nil, fill and dispatch that pre-freeze queue token."
                   :submission-id id :prepare-body body :target target
                   :root target :queue-state 'queued)))
     (puthash id worker noema-agent-worker--submissions)
-    (if (fboundp 'my/noema--ensure-server)
-        (my/noema--ensure-server
+    (if (fboundp '+noema--ensure-server)
+        (+noema--ensure-server
          (lambda () (noema-agent-worker--begin-preparation worker)))
       (noema-agent-worker--begin-preparation worker))
     id))

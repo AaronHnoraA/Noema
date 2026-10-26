@@ -187,7 +187,7 @@ class MyWidget extends MeasuredWidget {
 Custom KaTeX macros are defined as `.tex` files (LaTeX `\newcommand` syntax) in
 `etc/katex-macros/` in the Emacs config and apply **globally** to every note.
 Flow: the Node server reads the folder (env `NOEMA_KATEX_MACROS_DIR`, wired in
-`lisp/roam/init-noema.el`) via `server/lib/katex-macros.mjs`; the browser
+`lisp/noema/bridge/config.el`) via `server/lib/katex-macros.mjs`; the browser
 fetches them through `api.config.katexMacros()` (channel
 `noema:api:config:katex-macros`) and installs them with `setKatexMacros`
 before the first note renders; `scripts/render-html.mjs` does the same for

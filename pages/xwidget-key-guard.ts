@@ -700,7 +700,7 @@ export function guardXwidgetControlBeforeInput(event: InputEvent): boolean {
 }
 
 // ── Emacs key forwarding ──────────────────────────────────────────────────────
-// macOS modifier mapping from init-macos.el:
+// macOS modifier mapping from os/macos/config.el:
 //   mac-option-modifier 'hyper  → Option/altKey  → H-
 //   mac-command-modifier 'meta  → Cmd/metaKey    → M-
 //   Ctrl stays Ctrl             → ctrlKey        → C-

@@ -14,10 +14,10 @@ remain unverified.
 
 ## Daily use
 
-1. Enable the selected kind with `M-x my/noema-agenda-apple-enable`.
+1. Enable the selected kind with `M-x +noema/agenda-apple-enable`.
 2. In native Agenda, press `P` on a task and choose `reminder` or `event`, then
    choose a writable list/calendar. In the hosted Web view, use **Promote**.
-3. `v a` or `M-x my/noema-agenda-attention` opens global attention. The Web
+3. `v a` or `M-x +noema/agenda-attention` opens global attention. The Web
    equivalent is the **Global attention** tab. Opening or refreshing this view
    reads saved bindings without scanning or activating inactive projects.
 
@@ -41,8 +41,8 @@ saved receipts. These values do not assert that Apple is currently up to date.
 
 ## Ownership and permissions
 
-`M-x my/noema-agenda-apple-enable` starts the helper and explicitly requests
-Reminders or Calendar full access. `my/noema-agenda-apple-disable` closes it.
+`M-x +noema/agenda-apple-enable` starts the helper and explicitly requests
+Reminders or Calendar full access. `+noema/agenda-apple-disable` closes it.
 It has a dedicated client workspace, independent of the current project.
 Emacs exit closes the process; recovery uses workspace resources, not timers.
 Gateway clients cannot invoke authorization or implicitly start the helper.

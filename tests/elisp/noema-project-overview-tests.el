@@ -12,7 +12,7 @@
     (noema-project-overview-mode)
     (setq noema-project-overview--root "/tmp/noema-overview-test/")
     (let (callbacks)
-      (cl-letf (((symbol-function 'my/noema-api-call)
+      (cl-letf (((symbol-function '+noema-api-call)
                  (lambda (channel _args callback &optional _timeout)
                    (push (cons channel callback) callbacks))))
         (noema-project-overview-refresh)
@@ -74,7 +74,7 @@
 (ert-deftest noema-project-overview-run-opens-durable-source ()
   "Run navigation resolves its notebook and cell identity before visiting."
   (let (requested visited cell)
-    (cl-letf (((symbol-function 'my/noema-api-call)
+    (cl-letf (((symbol-function '+noema-api-call)
                (lambda (channel args callback &optional _timeout)
                  (should (equal channel "noema:api:research:cell:resolve"))
                  (setq requested (aref args 0))

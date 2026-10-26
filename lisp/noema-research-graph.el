@@ -22,8 +22,8 @@
 (require 'noema-research-mode)
 (require 'noema-research-settings)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-noema" (&optional callback))
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
+(declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
 (declare-function evil-local-set-key "evil-core" (state key def))
 
 (defcustom noema-research-graph-dot-program "dot"
@@ -2054,10 +2054,10 @@ NOCONFIRM."
 (defun noema-research-graph-refresh-proposals ()
   "Refresh pending Proposal ghosts from the Noema authority."
   (interactive)
-  (unless (fboundp 'my/noema-api-call)
+  (unless (fboundp '+noema-api-call)
     (when (called-interactively-p 'interactive)
       (user-error "Noema web-host integration is unavailable")))
-  (when (and (fboundp 'my/noema-api-call)
+  (when (and (fboundp '+noema-api-call)
              (buffer-live-p noema-research-graph--source))
     (let* ((graph (current-buffer))
            (source noema-research-graph--source)
@@ -2067,7 +2067,7 @@ NOCONFIRM."
            (workstream-id (noema-research--get
                            (noema-research-notebook-meta document) "workstream_id" "")))
       (when root
-        (my/noema-api-call
+        (+noema-api-call
          "noema:api:research:proposal:list"
          (vector `((cwd . ,root) (workstreamId . ,workstream-id) (limit . 1000)))
          (lambda (result error-object)
@@ -2086,7 +2086,7 @@ NOCONFIRM."
 (defun noema-research-graph-refresh-runs ()
   "Refresh durable Run activity used by the Graph Board."
   (interactive)
-  (when (and (fboundp 'my/noema-api-call)
+  (when (and (fboundp '+noema-api-call)
              (buffer-live-p noema-research-graph--source))
     (let* ((graph (current-buffer))
            (source noema-research-graph--source)
@@ -2097,7 +2097,7 @@ NOCONFIRM."
                            (noema-research-notebook-meta document)
                            "workstream_id" "")))
       (when root
-        (my/noema-api-call
+        (+noema-api-call
          "noema:api:research:run:list"
          (vector `((cwd . ,root) (workstreamId . ,workstream-id) (limit . 1000)))
          (lambda (result error-object)
@@ -2114,7 +2114,7 @@ NOCONFIRM."
 (defun noema-research-graph-refresh-events ()
   "Refresh durable WorkNode event times used by fold summaries."
   (interactive)
-  (when (and (fboundp 'my/noema-api-call)
+  (when (and (fboundp '+noema-api-call)
              (buffer-live-p noema-research-graph--source))
     (let* ((graph (current-buffer))
            (source noema-research-graph--source)
@@ -2123,7 +2123,7 @@ NOCONFIRM."
            (root (and file (noema-research-repository-root file)))
            (notebook-id (noema-research-notebook-id document)))
       (when root
-        (my/noema-api-call
+        (+noema-api-call
          "noema:api:research:events:list"
          (vector `((file . ,(noema-project-host-file file))
                    (cwd . ,root) (notebookId . ,notebook-id)
@@ -2144,7 +2144,7 @@ NOCONFIRM."
 (defun noema-research-graph-refresh-artifacts ()
   "Refresh ArtifactLinks used by the Graph Board detail projection."
   (interactive)
-  (when (and (fboundp 'my/noema-api-call)
+  (when (and (fboundp '+noema-api-call)
              (buffer-live-p noema-research-graph--source))
     (let* ((graph (current-buffer))
            (source noema-research-graph--source)
@@ -2156,7 +2156,7 @@ NOCONFIRM."
                            "workstream_id" ""))
            (notebook-id (noema-research-notebook-id document)))
       (when root
-        (my/noema-api-call
+        (+noema-api-call
          "noema:api:research:artifact:links"
          (vector `((cwd . ,root) (workstreamId . ,workstream-id)
                    (notebookId . ,notebook-id) (limit . 1000)))
@@ -3008,9 +3008,9 @@ pop-up; merely selecting a different JuText window never retargets it."
             noema-research-graph--selected
             (and cell (noema-research-cell-work-node-id cell)))
       (noema-research-graph-refresh)
-      (if (fboundp 'my/noema--ensure-server)
+      (if (fboundp '+noema--ensure-server)
           (let ((graph buffer))
-            (my/noema--ensure-server
+            (+noema--ensure-server
              (lambda ()
                (when (and (buffer-live-p graph)
                           (eq (buffer-local-value

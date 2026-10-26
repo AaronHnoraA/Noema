@@ -14,9 +14,9 @@
 (require 'subr-x)
 (require 'noema-research)
 
-(declare-function my/noema-api-call "init-noema"
+(declare-function +noema-api-call "noema/bridge/config"
                   (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-noema" (&optional callback))
+(declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
 (declare-function noema-research--cell-at-point "noema-research-mode" ())
 (declare-function noema-research-op-create "noema-research-mode"
                   (kind title parents after-id))
@@ -31,7 +31,7 @@
 (declare-function noema-agent-worker-cancel-run "noema-agent-worker" (run-id))
 (declare-function noema-research-run-project-file "noema-research-mode" (project-file &optional args))
 
-(defvar my/noema--ready)
+(defvar +noema--ready)
 (defvar noema-research--document)
 (defvar noema-capability--last-resolution nil
   "Most recent effective capability resolution returned by the Noema host.")
@@ -308,8 +308,8 @@ runtime effect and retains the explicit local-execution confirmation."
 (defun noema--host-call-now (channel body callback &optional timeout)
   "Call host CHANNEL with BODY and CALLBACK after readiness was checked.
 TIMEOUT defaults to 30 seconds."
-  (if (and (bound-and-true-p my/noema--ready) (fboundp 'my/noema-api-call))
-      (my/noema-api-call channel (vector body) callback (or timeout 30))
+  (if (and (bound-and-true-p +noema--ready) (fboundp '+noema-api-call))
+      (+noema-api-call channel (vector body) callback (or timeout 30))
     (funcall callback nil '((code . "offline")
                             (message . "Noema web-host is not ready")))))
 
@@ -325,9 +325,9 @@ for channels that do network work, such as upstream Skill fetches."
              (not (string-prefix-p "noema:api:research:capability:global:" channel))
              (equal (alist-get 'scope body) "global"))
     (setq channel (replace-regexp-in-string ":capability:" ":capability:global:" channel t t)))
-  (if (and (fboundp 'my/noema--ensure-server)
-           (not (bound-and-true-p my/noema--ready)))
-      (my/noema--ensure-server
+  (if (and (fboundp '+noema--ensure-server)
+           (not (bound-and-true-p +noema--ready)))
+      (+noema--ensure-server
        (lambda () (apply #'noema--host-call-now channel body callback (and timeout (list timeout)))))
     (apply #'noema--host-call-now channel body callback (and timeout (list timeout)))))
 

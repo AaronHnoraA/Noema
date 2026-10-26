@@ -18,7 +18,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
 
 (defvar-local noema-research-attention--origin nil
   "Directory used to resolve the current Noema project.")
@@ -62,7 +62,7 @@
         (version (noema-research-attention--value permission "version" 0))
         (origin noema-research-attention--origin)
         (buffer (current-buffer)))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:permission:decide"
      (vector `((cwd . ,origin) (permissionId . ,permission-id)
                (optionId . ,option-id) (expectedVersion . ,version)
@@ -181,7 +181,7 @@ kernel's normalized action."
         (origin noema-research-attention--origin)
         (buffer (current-buffer))
         (answer (noema-research-attention--read-answer request)))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:input:respond"
      (vector `((cwd . ,origin) (runId . ,run-id) (requestId . ,request-id)
                (answer . ,answer) (answeredBy . "emacs-attention")))
@@ -251,7 +251,7 @@ kernel's normalized action."
          (root noema-research-attention--origin))
     (unless (and root (not (string-empty-p artifact-id)))
       (user-error "Run memory Proposal has no Handoff evidence"))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:artifact:read"
      (vector `((root . ,root) (id . ,artifact-id)))
      (lambda (result error-object)
@@ -297,7 +297,7 @@ Without this, the next JuText save would overwrite the Cell Node wrote."
          (buffer (current-buffer)))
     (when (and (equal decision "reject") (string-empty-p reason))
       (user-error "A rejection reason is required"))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:proposal:review"
      (vector `((cwd . ,origin) (proposalId . ,proposal-id)
                (decision . ,decision) (expectedVersion . ,version)
@@ -384,11 +384,11 @@ Without this, the next JuText save would overwrite the Cell Node wrote."
 (defun noema-research-attention-refresh ()
   "Refresh the current Attention projection from Go."
   (interactive)
-  (unless (fboundp 'my/noema-api-call)
+  (unless (fboundp '+noema-api-call)
     (user-error "Noema web-host integration is unavailable"))
   (let ((buffer (current-buffer))
         (origin (or noema-research-attention--origin default-directory)))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:attention:list"
      (vector `((cwd . ,origin)))
      (lambda (result error-object)

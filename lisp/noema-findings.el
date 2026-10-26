@@ -11,8 +11,8 @@
 (require 'tabulated-list)
 (require 'noema-api)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-noema" (&optional callback))
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
+(declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
 
 (defvar-local noema-findings--root nil)
 (defvar-local noema-findings--query "")
@@ -55,7 +55,7 @@
         (generation noema-findings--generation)
         (root noema-findings--root)
         (query noema-findings--query))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:finding:list"
      (vector `((cwd . ,root) (query . ,query) (includeLocal . t) (limit . 200)))
      (lambda (result error-object)
@@ -115,7 +115,7 @@
   (let ((id (tabulated-list-get-id))
         (root noema-findings--root))
     (unless id (user-error "No Finding on this line"))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:finding:get"
      (vector `((cwd . ,root) (id . ,id)))
      (lambda (result error-object)
@@ -146,7 +146,7 @@ here brings it back: a retired claim returns through a new evidence review."
     (when (string-empty-p (string-trim reason)) (user-error "A reason is required"))
     (unless (yes-or-no-p (format "Retire this Finding as %s? " status))
       (user-error "Finding left unchanged"))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:finding:retire"
      (vector `((cwd . ,root) (id . ,id) (status . ,status)
                (reason . ,(string-trim reason)) (expectedVersion . ,version)))
@@ -188,8 +188,8 @@ here brings it back: a retired claim returns through a new evidence review."
       (noema-findings-mode)
       (setq noema-findings--root root default-directory root))
     (pop-to-buffer buffer)
-    (if (fboundp 'my/noema--ensure-server)
-        (my/noema--ensure-server
+    (if (fboundp '+noema--ensure-server)
+        (+noema--ensure-server
          (lambda () (when (buffer-live-p buffer)
                       (with-current-buffer buffer (noema-findings-refresh)))))
       (with-current-buffer buffer (noema-findings-refresh)))

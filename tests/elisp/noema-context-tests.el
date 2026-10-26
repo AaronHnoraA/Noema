@@ -51,10 +51,10 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
 (ert-deftest noema-context-xwidget-region-asks-its-page-for-selection ()
   "The Emacs region command targets the Noema page when it has focus."
   (with-temp-buffer
-    (setq-local my/noema-buffer-file-name "/tmp/noema-context-selection.md")
+    (setq-local +noema-buffer-file-name "/tmp/noema-context-selection.md")
     (let (sent)
-      (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
-                ((symbol-function 'my/noema-command)
+      (cl-letf (((symbol-function 'noema--xwidget-buffer-p) (lambda (&optional _) t))
+                ((symbol-function '+noema/command)
                  (lambda (command &optional detail) (setq sent (list command detail)))))
         (unwind-protect
             (progn
@@ -69,11 +69,11 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
 (ert-deftest noema-md-bridge-silent-page-is-reported ()
   "A request the page never answers ends in a message, not silence."
   (with-temp-buffer
-    (setq-local my/noema-buffer-file-name "/tmp/noema-context-timeout.md")
+    (setq-local +noema-buffer-file-name "/tmp/noema-context-timeout.md")
     (let ((noema-md-bridge-answer-timeout 0.01)
           (messages nil))
-      (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
-                ((symbol-function 'my/noema-command) #'ignore)
+      (cl-letf (((symbol-function 'noema--xwidget-buffer-p) (lambda (&optional _) t))
+                ((symbol-function '+noema/command) #'ignore)
                 ((symbol-function 'message)
                  (lambda (format &rest args)
                    (when format (push (apply #'format format args) messages)))))
@@ -85,10 +85,10 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
 (ert-deftest noema-md-bridge-page-failure-is-shown-and-settles ()
   "The page's reason for having no range reaches the person."
   (with-temp-buffer
-    (setq-local my/noema-buffer-file-name "/tmp/noema-context-failure.md")
+    (setq-local +noema-buffer-file-name "/tmp/noema-context-failure.md")
     (let ((noema-md-bridge-answer-timeout 60))
-      (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
-                ((symbol-function 'my/noema-command) #'ignore))
+      (cl-letf (((symbol-function 'noema--xwidget-buffer-p) (lambda (&optional _) t))
+                ((symbol-function '+noema/command) #'ignore))
         (noema-md-bridge-request "agent" "selection")
         (let ((id (car (hash-table-keys noema-md-bridge--pending))))
           (should-error
@@ -104,10 +104,10 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
           commands ran detail)
       (with-temp-buffer
         (let ((pane (current-buffer)))
-          (setq-local my/noema-buffer-file-name file)
-          (cl-letf (((symbol-function 'my/noema--xwidget-buffer-p) (lambda (&optional _) t))
-                    ((symbol-function 'my/noema--buffer-for-client) (lambda (_) pane))
-                    ((symbol-function 'my/noema-command)
+          (setq-local +noema-buffer-file-name file)
+          (cl-letf (((symbol-function 'noema--xwidget-buffer-p) (lambda (&optional _) t))
+                    ((symbol-function '+noema--buffer-for-client) (lambda (_) pane))
+                    ((symbol-function '+noema/command)
                      (lambda (command &optional request)
                        (push command commands)
                        (setq detail request)))
@@ -279,14 +279,14 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
 
 (ert-deftest noema-sessions-native-resume-keeps-the-recorded-name ()
   "A session chosen from official history reuses its Noema name."
-  (let ((my/noema--ready t)
+  (let ((+noema--ready t)
         (entry '((name . "saved-name")
                  (sessionId . "logical-id")
                  (nativeSessionId . "native-id")))
         visited)
     (cl-letf (((symbol-function 'noema-project-root)
                (lambda (&optional _) "/project/"))
-              ((symbol-function 'my/noema--api-call-sync)
+              ((symbol-function '+noema--api-call-sync)
                (lambda (&rest _) `((names . (,entry)))))
               ((symbol-function 'noema-sessions--visit-entry)
                (lambda (selected root)
@@ -396,7 +396,7 @@ the next open of the note (which would then show raw Markdown)."
         (push buffer opened)
         (noema-md-bridge-run "context" buffer begin end)
         (should (buffer-live-p buffer))
-        (cl-letf (((symbol-function 'my/noema-open-file)
+        (cl-letf (((symbol-function '+noema/open-file)
                    (lambda (target) (push target handed))))
           (save-window-excursion
             (let ((before (window-buffer (selected-window))))
@@ -589,7 +589,7 @@ that machine cannot reach is refused rather than sent as a dead path."
     (unwind-protect
         (cl-letf (((symbol-function 'noema-agent-acp-agent-buffer-p)
                    (lambda (candidate) (buffer-live-p candidate)))
-                  ((symbol-function 'my/noema-api-call)
+                  ((symbol-function '+noema-api-call)
                    (lambda (&rest _) (setq called t))))
           (with-current-buffer buffer (setq-local default-directory root))
           (noema-agent-acp-adopt buffer :agent 'claude :origin 'popup)

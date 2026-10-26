@@ -22,10 +22,10 @@
 (require 'subr-x)
 (require 'tabulated-list)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-noema" (&optional callback))
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
+(declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
 (declare-function noema-project-scope "noema-research" (path))
-(defvar my/noema--ready)
+(defvar +noema--ready)
 
 (defgroup noema-orchestration nil
   "Reading Noema's Task/Job/Invocation/Worker/Delegation model."
@@ -214,9 +214,9 @@ Graph Board cannot show: an agent handing work to another agent."
   (let ((buffer (current-buffer))
         (root noema-orchestration--root)
         (workstream noema-orchestration--workstream))
-    (unless (fboundp 'my/noema-api-call)
+    (unless (fboundp '+noema-api-call)
       (user-error "Noema host integration is unavailable"))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:orchestration:snapshot"
      (vector `((cwd . ,root)
                ,@(when workstream `((workstreamId . ,workstream)))))
@@ -307,8 +307,8 @@ t tasks   j jobs   w workers   d delegations   e events   g refresh
       (noema-orchestration-mode)
       (setq noema-orchestration--root root))
     (pop-to-buffer buffer)
-    (if (fboundp 'my/noema--ensure-server)
-        (my/noema--ensure-server
+    (if (fboundp '+noema--ensure-server)
+        (+noema--ensure-server
          (lambda ()
            (when (buffer-live-p buffer)
              (with-current-buffer buffer (noema-orchestration-refresh)))))

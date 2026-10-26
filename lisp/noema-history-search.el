@@ -11,8 +11,8 @@
 (require 'tabulated-list)
 (require 'noema-api)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
-(declare-function my/noema--ensure-server "init-noema" (&optional callback))
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
+(declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
 (declare-function noema-research-history-index "noema-agent-promote" (&optional directory))
 
 (defvar-local noema-history-search--root nil)
@@ -68,7 +68,7 @@
         (root noema-history-search--root)
         (query noema-history-search--query)
         (source noema-history-search--source))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:history:search"
      (vector `((cwd . ,root) (projectRoot . ,root) (query . ,query)
                (source . ,source) (limit . 100)))
@@ -122,7 +122,7 @@
   (let ((id (tabulated-list-get-id))
         (root noema-history-search--root))
     (unless id (user-error "No history hit on this line"))
-    (my/noema-api-call
+    (+noema-api-call
      (if complete "noema:api:research:history:read"
        "noema:api:research:history:peek")
      (vector `((cwd . ,root) (id . ,id) (maxRunes . 1200)))
@@ -173,8 +173,8 @@
             noema-history-search--query (or query noema-history-search--query)
             default-directory root))
     (pop-to-buffer buffer)
-    (if (fboundp 'my/noema--ensure-server)
-        (my/noema--ensure-server
+    (if (fboundp '+noema--ensure-server)
+        (+noema--ensure-server
          (lambda () (when (buffer-live-p buffer)
                       (with-current-buffer buffer (noema-history-search-refresh)))))
       (with-current-buffer buffer (noema-history-search-refresh)))

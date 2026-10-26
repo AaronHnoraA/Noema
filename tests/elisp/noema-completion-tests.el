@@ -352,7 +352,7 @@
       (should (gethash :global noema-capability--cache)))))
 
 (ert-deftest noema-capability-global-wire-channels-fail-closed-on-old-hosts ()
-  (let ((my/noema--ready t) request)
+  (let ((+noema--ready t) request)
     (cl-letf (((symbol-function 'noema--host-call-now)
                (lambda (channel body _callback) (setq request (cons channel body)))))
       (noema--host-call "noema:api:research:capability:mutate" '((scope . "global")) #'ignore)

@@ -8,14 +8,14 @@
   (add-to-list 'load-path (expand-file-name directory user-emacs-directory)))
 (require 'remote-framework)
 (require 'remote-gateway)
-(require 'init-noema-agenda-source)
+(require 'noema/bridge/agenda-source)
 (setq remote-gateway-discovery-directory (getenv "NOEMA_AGENDA_GATEWAY_TEST_STATE"))
 
 ;; This isolated process owns no editing buffers. Actual dirty-buffer
 ;; protection is covered by init-noema-agenda-source-tests.el.
-(defun my/noema--agenda-protected-sources (_params _client) '((files . [])))
-(remote-gateway-register-method "noema.agenda.protected-sources" #'my/noema--agenda-protected-sources)
-(remote-gateway-register-method "noema.agenda.source" #'my/noema--agenda-source-request)
+(defun +noema--agenda-protected-sources (_params _client) '((files . [])))
+(remote-gateway-register-method "noema.agenda.protected-sources" #'+noema--agenda-protected-sources)
+(remote-gateway-register-method "noema.agenda.source" #'+noema--agenda-source-request)
 (remote-gateway-register-method "noema.event" (lambda (&rest _) '((ok . t))))
 ;; Disposable EventKit protocol peer for host integration. This process never
 ;; loads the production Apple bridge or requests personal-data permissions.

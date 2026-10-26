@@ -14,9 +14,9 @@
 (require 'subr-x)
 (require 'noema-agent-acp)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
-(declare-function my/portal-create "init-portal" (&rest args))
-(defvar my/noema--ready)
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
+(declare-function +portal-create "term/portal/config" (&rest args))
+(defvar +noema--ready)
 (defvar-local noema-agent-promote--session-id)
 
 (defvar-local noema-agent-takeover--intervention-id nil)
@@ -59,7 +59,7 @@ REASON is stored in the durable handback event."
               (config noema-agent-takeover--agent-config))
 	  (when (and restart (get-buffer-process buffer))
 	    (delete-process (get-buffer-process buffer)))
-          (my/noema-api-call
+          (+noema-api-call
            "noema:api:research:session:handback"
            (vector `((root . ,root) (interventionId . ,intervention-id)
                      (expectedVersion . ,version) (endedBy . "emacs") (reason . ,reason)))
@@ -98,7 +98,7 @@ REASON is stored in the durable handback event."
 	 (version (noema-agent-takeover--value intervention "version"))
 	 (root (noema-agent-takeover--value result "root")))
     (when (and id version root)
-      (my/noema-api-call
+      (+noema-api-call
        "noema:api:research:session:handback"
        (vector `((root . ,root) (interventionId . ,id) (expectedVersion . ,version)
 		 (endedBy . "emacs") (reason . ,reason)))
@@ -131,11 +131,11 @@ REASON is stored in the durable handback event."
       (error "Noema takeover response is incomplete"))
     (unless (executable-find (car command))
       (user-error "Native TUI executable not found: %s" (car command)))
-    (require 'init-portal)
+    (require 'term/portal/config)
     (when (buffer-live-p origin)
       (noema-agent-acp-shutdown origin))
     (let* ((default-directory directory)
-           (buffer (my/portal-create
+           (buffer (+portal-create
                     :directory directory
                     :name (generate-new-buffer-name
                            (format "*noema-takeover:%s*" id))
@@ -157,7 +157,7 @@ REASON is stored in the durable handback event."
 (defun noema-agent-takeover-session ()
   "Hand the current promoted, idle agent-shell Session to a native Portal TUI."
   (interactive)
-  (unless (and (fboundp 'my/noema-api-call) (bound-and-true-p my/noema--ready))
+  (unless (and (fboundp '+noema-api-call) (bound-and-true-p +noema--ready))
     (user-error "Noema web-host is not ready"))
   (unless (and (derived-mode-p 'agent-shell-mode) noema-agent-promote--session-id)
     (user-error "Current agent-shell buffer is not attached to a Noema Session"))
@@ -167,7 +167,7 @@ REASON is stored in the durable handback event."
         (root (or (bound-and-true-p noema-agent-acp-session-root)
                   (expand-file-name default-directory)))
         (session-id noema-agent-promote--session-id))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:session:takeover"
      (vector `((root . ,root) (sessionId . ,session-id) (startedBy . "emacs")))
      (lambda (result error-object)

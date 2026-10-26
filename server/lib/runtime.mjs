@@ -5885,7 +5885,7 @@ function snippetContributorMetadata(headers) {
 function snippetBrowserCompatibility(body) {
   const safeSelected = /`\(or\s+yas-selected-text\s+(?:"[^"]*"|'[^']*'|nil)\)`/g;
   const safeChoice = /\$\{\d+:\$\$\(yas-choose-value\s+'\([^)]*\)\)\}/g;
-  const safeNoemaId = /`\(my\/noema-new-id\s+(?:"(?:repository|page|block)"|'(?:repository|page|block))\)`/g;
+  const safeNoemaId = /`\(noema-new-id\s+(?:"(?:repository|page|block)"|'(?:repository|page|block))\)`/g;
   const stripped = String(body || "")
     .replace(safeSelected, "")
     .replace(safeChoice, "")

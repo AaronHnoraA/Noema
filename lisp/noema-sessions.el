@@ -21,15 +21,15 @@
 (require 'noema-agent-promote)
 (require 'noema-agent-worktree)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
-(declare-function my/noema--api-call-sync "init-noema" (channel args &optional timeout))
-(declare-function my/noema--ensure-server "init-noema" (&optional callback))
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
+(declare-function +noema--api-call-sync "noema/bridge/config" (channel args &optional timeout))
+(declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
 (declare-function noema-pi-router-open "noema-pi-router" (&optional directory))
 (declare-function noema-research-pin-session "noema-research-mode" (name))
 (declare-function noema-research-rename-session-directives "noema-research-mode" (old new))
 (declare-function noema-research-goto-cell "noema-research-mode" (id))
 (defvar noema-research--document)
-(defvar my/noema--ready)
+(defvar +noema--ready)
 
 (defvar-local noema-sessions--root nil "Project root listed in this buffer.")
 (defvar-local noema-sessions--scope 'project "Either `project' or `file'.")
@@ -65,14 +65,14 @@ its project is not a Noema project, so it is listed here beside the rest.")
 
 (defun noema-sessions--api (channel body callback)
   "Call Noema CHANNEL with BODY asynchronously; CALLBACK gets (RESULT ERROR)."
-  (unless (fboundp 'my/noema-api-call)
+  (unless (fboundp '+noema-api-call)
     (user-error "Noema host integration is unavailable"))
-  (my/noema-api-call channel (vector body) callback 30))
+  (+noema-api-call channel (vector body) callback 30))
 
 (defun noema-sessions--ensure-host (callback)
   "Call CALLBACK once the Noema host is ready."
-  (if (fboundp 'my/noema--ensure-server)
-      (my/noema--ensure-server callback)
+  (if (fboundp '+noema--ensure-server)
+      (+noema--ensure-server callback)
     (funcall callback)))
 
 (defun noema-sessions--error (error-object)
@@ -981,10 +981,10 @@ first; a context send must never revive a recorded conversation."
 (defun noema-sessions--native-entry (native-id root)
   "Return ROOT's durable entry for NATIVE-ID, if registered."
   (when-let* ((root (and root (noema-project-root root)))
-              ((bound-and-true-p my/noema--ready))
-              ((fboundp 'my/noema--api-call-sync))
+              ((bound-and-true-p +noema--ready))
+              ((fboundp '+noema--api-call-sync))
               (result (ignore-errors
-                        (my/noema--api-call-sync
+                        (+noema--api-call-sync
                          "noema:api:research:session:names"
                          (vector `((cwd . ,root))) 2)))
               (entry (seq-find
@@ -1054,10 +1054,10 @@ and never queries or resumes the durable registry.  With COPY-TO-CLIPBOARD,
 append a clipboard choice after every session and return `clipboard' for it."
   (let* ((root (noema-sessions--project-root root))
          (result (and (not live-only)
-                      (bound-and-true-p my/noema--ready)
-                      (fboundp 'my/noema--api-call-sync)
+                      (bound-and-true-p +noema--ready)
+                      (fboundp '+noema--api-call-sync)
                       (ignore-errors
-                        (my/noema--api-call-sync "noema:api:research:session:names"
+                        (+noema--api-call-sync "noema:api:research:session:names"
                                                  (vector `((cwd . ,root))) 2))))
          (choices (noema-sessions--switch-candidates
                    (noema-sessions--list (noema-sessions--get result "names"))

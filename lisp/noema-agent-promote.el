@@ -15,9 +15,9 @@
 (declare-function noema-project-client-path "noema-research" (path))
 (declare-function noema-project-host-file "noema-research" (file))
 
-(declare-function my/noema-api-call "init-noema"
+(declare-function +noema-api-call "noema/bridge/config"
                   (channel args callback &optional timeout))
-(defvar my/noema--ready)
+(defvar +noema--ready)
 
 (defvar-local noema-agent-promote--session-id nil
   "Noema Session id attached to the current agent-shell buffer.")
@@ -83,12 +83,12 @@ already been attached.  Repeating the command is idempotent."
   (interactive
    (list (read-string "Research title (empty uses session title): ")
          (read-string "Research goal (optional): ")))
-  (unless (and (fboundp 'my/noema-api-call)
-               (bound-and-true-p my/noema--ready))
+  (unless (and (fboundp '+noema-api-call)
+               (bound-and-true-p +noema--ready))
     (user-error "Noema web-host is not ready"))
   (let ((buffer (current-buffer))
         (payload (noema-agent-promote--session-spec nil title goal)))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:session:promote"
      (vector payload)
      (lambda (result error-object)
@@ -108,10 +108,10 @@ already been attached.  Repeating the command is idempotent."
 When DIRECTORY is nil, use `default-directory'.  Source discovery happens in
 the host and never changes native history files."
   (interactive)
-  (unless (and (fboundp 'my/noema-api-call)
-               (bound-and-true-p my/noema--ready))
+  (unless (and (fboundp '+noema-api-call)
+               (bound-and-true-p +noema--ready))
     (user-error "Noema web-host is not ready"))
-  (my/noema-api-call
+  (+noema-api-call
    "noema:api:research:history:index"
    (vector `((cwd . ,(let ((directory (or directory default-directory)))
                         (if (fboundp 'noema-project-host-file)
@@ -136,8 +136,8 @@ session stays registered on the Emacs side alone and nothing is signalled.
 CALLBACK, when given, receives the Session id or nil."
   (let ((done (lambda (id) (when callback (funcall callback id)))))
     (if (not (and (buffer-live-p buffer)
-                  (fboundp 'my/noema-api-call)
-                  (bound-and-true-p my/noema--ready)))
+                  (fboundp '+noema-api-call)
+                  (bound-and-true-p +noema--ready)))
         (funcall done nil)
       (let* ((root (buffer-local-value 'noema-agent-acp-session-root buffer))
              (agent (or (buffer-local-value 'noema-agent-acp-session-agent buffer) ""))
@@ -145,7 +145,7 @@ CALLBACK, when given, receives the Session id or nil."
                         (noema-agent-promote--session-spec buffer name nil root))))
         (if (not payload)
             (funcall done nil)
-          (my/noema-api-call
+          (+noema-api-call
            "noema:api:research:session:promote" (vector payload)
            (lambda (result error-object)
              (let ((id (and (not error-object) (hash-table-p result) (gethash "id" result))))
@@ -156,7 +156,7 @@ CALLBACK, when given, receives the Session id or nil."
                  (when (buffer-live-p buffer)
                    (with-current-buffer buffer
                      (setq noema-agent-promote--session-id id)))
-                 (my/noema-api-call
+                 (+noema-api-call
                   "noema:api:research:session:name:bind"
                   (vector `((cwd . ,root) (name . ,name) (agent . ,agent) (sessionId . ,id)))
                   (lambda (_bound bind-error)

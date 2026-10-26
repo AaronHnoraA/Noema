@@ -16,7 +16,7 @@
 (require 'noema-sessions)
 (require 'noema-agent-worktree)
 
-(declare-function my/noema-workspace-root "init-noema" ())
+(declare-function +noema-workspace-root "noema/bridge/config" ())
 (declare-function remote-file-name-target "remote-fs" (file-name))
 
 (defvar-local noema-agent-inbox--roots nil)
@@ -40,8 +40,8 @@
 
 (defun noema-agent-inbox--note-root ()
   "Return the configured local Noema note root, if available."
-  (let ((root (if (fboundp 'my/noema-workspace-root)
-                  (my/noema-workspace-root)
+  (let ((root (if (fboundp '+noema-workspace-root)
+                  (+noema-workspace-root)
                 (or (getenv "NOEMA_ROOT") "~/Documents/Noema"))))
     (when (and (stringp root) (file-directory-p root)
                (not (file-remote-p root)))

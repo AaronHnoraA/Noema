@@ -14,7 +14,7 @@
 (require 'subr-x)
 (require 'noema-research)
 
-(declare-function my/noema-api-call "init-noema" (channel args callback &optional timeout))
+(declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
 (declare-function magent-llm-request-create "magent-llm" (&rest args))
 (declare-function magent-llm-event-type "magent-llm" (event))
 (declare-function magent-llm-event-text "magent-llm" (event))
@@ -45,7 +45,7 @@ DISCLOSURE is local_only or project. The result stays pending in Attention."
          (read-string "Exact Handoff excerpt: ")
          (completing-read "Disclosure: " '("local_only" "project") nil t nil nil "local_only")))
   (let ((root (or (noema-current-project) (user-error "No Noema project here"))))
-    (my/noema-api-call
+    (+noema-api-call
      "noema:api:research:memory:propose-from-run"
      (vector `((root . ,root) (runId . ,run-id) (kind . ,kind)
                (statement . ,statement) (disclosure . ,disclosure)))
@@ -209,7 +209,7 @@ writes a notebook cell."
     (user-error "Not in a research notebook"))
   (unless (and buffer-file-name noema-research--revision (not (buffer-modified-p)))
     (user-error "Save the research notebook before requesting a Proposal"))
-  (unless (fboundp 'my/noema-api-call)
+  (unless (fboundp '+noema-api-call)
     (user-error "Noema web-host integration is unavailable"))
   (require 'magent-llm)
   (require 'magent-llm-gptel)
@@ -266,7 +266,7 @@ writes a notebook cell."
                           (model (noema-research-synthesis--parse-model-json text))
                           (body (noema-research-synthesis--build-request
                                  kind model document file revision client-request-id parent-id)))
-                     (my/noema-api-call
+                     (+noema-api-call
                       "noema:api:research:proposal:create"
                       (vector body)
                       (lambda (result error-response)

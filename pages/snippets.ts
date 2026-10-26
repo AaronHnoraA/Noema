@@ -48,7 +48,7 @@ export type SnippetExpansionOptions = {
 
 const SAFE_SELECTED_TEXT_RE = /`\(or\s+yas-selected-text\s+(?:"([^"]*)"|'([^']*)|nil)\)`/g;
 const SAFE_CHOICE_RE = /\$\{(\d+):\$\$\(yas-choose-value\s+'\(([^)]*)\)\)\}/g;
-const SAFE_NOEMA_ID_RE = /`\(my\/noema-new-id\s+(?:"(repository|page|block)"|'(repository|page|block))\)`/g;
+const SAFE_NOEMA_ID_RE = /`\(noema-new-id\s+(?:"(repository|page|block)"|'(repository|page|block))\)`/g;
 const YAS_TABSTOP_RE = /\$(?:\d+|\{\d+(?::[^}]*)?\})/;
 
 function hasDynamicBacktickExpression(body: string): boolean {

@@ -278,7 +278,7 @@ Versions and licenses are recorded in [UPSTREAMS.md](UPSTREAMS.md).
 
 The Node host owns transport, Jupyter processes/events, document services and renderer assets. The Go kernel owns project-local research/runtime indexes, append-only events, CAS and MCP data access. External agents remain independent processes, normally integrated through ACP/agent-shell.
 
-Aaronnote was the product's earlier name. Paths, channels (`noema:api:*`), environment variables (`NOEMA_*`) and Emacs modules (`init-noema.el`) all use `noema` now; old `@aaronnote` code markers and the `aaronnote` theme id are still read. Emacs product commands use `noema-*` or `my/noema-*` names.
+Aaronnote was the product's earlier name. Paths, channels (`noema:api:*`), environment variables (`NOEMA_*`) and Emacs modules (`noema/bridge/config.el`) all use `noema` now; old `@aaronnote` code markers and the `aaronnote` theme id are still read. Emacs product commands use `noema-*` or `+noema-*` names.
 
 ## Build and install
 

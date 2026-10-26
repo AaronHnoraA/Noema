@@ -303,7 +303,7 @@ smoke harness 加固后的第二轮全量 `make test` 仍为 159 files passed / 
 
 最终卫生检查：安装包 Noema/Node/Go 三个 Mach-O 均为 arm64；默认 `~/Documents/Noema` 与临时 root 均无 `.siyuan`；Emacs full-project link 和 7 个 shared resource 链接全部指向本仓库，retired `lisp/roam/noema` 缺席；安装包可执行文件无被残留进程打开，临时 root 已移入废纸篓，`git diff --check` 干净。
 
-**App Agenda workbench 纵切已落地（2026-08-25，当前工作树）**：评估确认旧小 Agenda 只是当前文件 `notes.todos` modal，而 week/list/month/log/gantt/projects/clocktable/lints 八视图、编辑与刷新语义已全部集中在共享 `agenda-view.ts`。App 的 `toggle-agenda` 现直接把这一 renderer 挂为底部 fixed workbench；editor 在宽屏为它让出高度，与右侧 Knowledge dock 同时打开时互不覆盖，窄屏退化为 overlay。Close / `q` / `Esc` 会恢复 editor 布局和焦点；跨文件 todo 导航复用现有 source/index/line target，`notes-index-changed` / `agenda-changed` 会刷新打开的 workbench。renderer 把数据面来源显式标为 `kernel-agenda`。Emacs/Server 仍使用原当前文件 quick Agenda，没有改 `my/noema-*` 入口。聚焦 Agenda/desktop/planning 组 6 个文件 43 项全过，后续与构建链改造合并的主组 4 个文件 36 项也全过；`tsc --noEmit`、脚本语法、Make dry-run 与 `git diff --check` 干净。
+**App Agenda workbench 纵切已落地（2026-08-25，当前工作树）**：评估确认旧小 Agenda 只是当前文件 `notes.todos` modal，而 week/list/month/log/gantt/projects/clocktable/lints 八视图、编辑与刷新语义已全部集中在共享 `agenda-view.ts`。App 的 `toggle-agenda` 现直接把这一 renderer 挂为底部 fixed workbench；editor 在宽屏为它让出高度，与右侧 Knowledge dock 同时打开时互不覆盖，窄屏退化为 overlay。Close / `q` / `Esc` 会恢复 editor 布局和焦点；跨文件 todo 导航复用现有 source/index/line target，`notes-index-changed` / `agenda-changed` 会刷新打开的 workbench。renderer 把数据面来源显式标为 `kernel-agenda`。Emacs/Server 仍使用原当前文件 quick Agenda，没有改 `+noema-*` 入口。聚焦 Agenda/desktop/planning 组 6 个文件 43 项全过，后续与构建链改造合并的主组 4 个文件 36 项也全过；`tsc --noEmit`、脚本语法、Make dry-run 与 `git diff --check` 干净。
 
 **本地构建/安装链接模式已改造（2026-08-25，当前工作树）**：`make` / `make build` 继续只走 Tauri + Go kernel + official Node 新模式，并在 macOS 默认 `NOEMA_PORTABLE=0`。Node 仅保留下载/解压缓存，`src-tauri/binaries/noema-node-*` 链接过去；Go 仅保留 `build/kernel/<platform-arch>/noema-kernel`，Tauri input 同样链接。Tauri 出包后把 bundle 内 Node/Go sidecar 与 `web-host/server/shared/dist/js/agents/plugins/jupyter/resources/app/themes/package.json/node_modules` 全部替换为指向仓库真相源的链接。`make install` 默认原子替换为 `/Applications/Noema.app -> release bundle` 整包链接，不再复制第二份 App。`make build NOEMA_PORTABLE=1` 与 `make install LOCAL_APP_MODE=copy` 保留真正可分发的全自包含/复制语义。
 
@@ -355,7 +355,7 @@ TOC popover 最终安装门禁已过：`make install` 事务更新 `/Application
 
 **双宿主后端边界重新收敛（2026-08-25，当前工作树）**：用户明确要求 Tauri 只做 UI/系统适配，App 与 Emacs 必须共用同一个 web-host 后端，不能在 Rust 与 Emacs Lisp 各维护一套 Go 启动/重连逻辑。审计确认此前实现确有分叉：Rust 先 spawn Go、解析端口、再用 `NOEMA_KERNEL_BASE` spawn Node，而 `web-host.mjs` 又把所有 Go provider 硬限制为 `hostMode=desktop`；Emacs 虽然启动同一 Node host，却永远落回 JS 数据面。当前边界已定为：Node web host 统一拥有 Go 数据 kernel 的发现、启动、健康检查、external Markdown box 挂载、provider 切换、故障降级/重连和优雅退出；Tauri 只启动 Node sidecar并提供窗口/菜单/拖放/原生对话框适配，Emacs 继续只启动 Node 并提供 xwidget/Appine、gateway、buffer/key adapter。Jupyter/Copilot 继续由现有 Node registry/gateway 持有，绝不经 Go 数据 kernel 或 Tauri 重写。`hostMode` 只选择宿主适配器，不再选择两套数据后端；远程 `/fs:` 仍走 Emacs gateway，本地 Markdown root 才接统一 Go 数据面。kernel 缺失或重启期间两个宿主同样保留 Node 兼容路径，单次已进入 Go 的写操作失败关闭，避免重复落盘。上面各纵切中“desktop-only provider / Emacs 永远 fallback”的表述只记录当时里程碑，均由本节当前边界取代。
 
-**统一 web-host kernel supervisor 第一批已落地（2026-08-25，当前工作树）**：新增 `server/lib/kernel-supervisor.mjs`，同一份状态机现在负责 external `NOEMA_KERNEL_BASE` 接管或 canonical binary 自动发现、分块 discovery line 解析、独立 workspace、`bootProgress`、external Markdown box 注册、provider 动态安装/卸载、健康降级、指数退避重启、SIGTERM 优雅退出和进程退出兜底。Go `serve` 新增 `--supervisor-pid`，连续确认 Node PID 消失后自行 `Close`，覆盖 Tauri/Emacs 强杀 Node 时来不及执行 JS cleanup 的孤儿场景。Rust 已删除 `kernel_child`/`kernel_url`/`start_kernel` 与重复 `kernel_status` command，只给统一 Node host 传 canonical kernel binary/workspace/wd 并立即启动 host；桌面 smoke 改从统一 `/health` 取状态。Emacs Lisp 只显式传 `NOEMA_HOST_MODE=emacs`，没有新增任何 Go lifecycle；现有 Node gateway/Jupyter/Copilot/xwidget/split-client 路径未改。远程 `/fs:` 被 supervisor 明确判为非本地 root，不会误交给 Go，markdown-box lab 则会从 `/health` 动态发现重启后的端口。聚焦 Node supervisor + 六个 Go provider + Tauri 合约为 8 files / 31 tests，TypeScript、Go compile、Rust 5 tests 全过；Emacs `jupyter-test` 四组 87+24+18+12 共 141 项全过，覆盖 gateway、分栏 client、xwidget、Jupyter broker/notebook/LSP/board。真 Emacs-mode Node 进程用隔离 root 启动后，先快速报告 web URL，再由自身拉起 Go；`/health` 返回 `hostMode:emacs`、owned/listening kernel 与正确 box，生产 `create-todo` 经 Go 分配 stable id/UUIDv7 并写入 Markdown。随后又从完整 Emacs init 真正调用 `my/noema--start-server`，不是手工模拟环境；同样在隔离 state/root 上得到 `hostMode:emacs`、owned/listening kernel，`my/noema-stop` 正常回收两层进程。真机还抓到单次 2 秒健康探针可能撞上索引繁忙，已改成连续三次失败才降级，避免手感抖动。两个测试 root/shadow 均已精确永久删除；另清掉一个已孤儿 11 小时、占 18MB 的旧 Claude scratch kernel workspace 和 PID 195（不可恢复），没有动三个既有 Vite dev server或用户会话。
+**统一 web-host kernel supervisor 第一批已落地（2026-08-25，当前工作树）**：新增 `server/lib/kernel-supervisor.mjs`，同一份状态机现在负责 external `NOEMA_KERNEL_BASE` 接管或 canonical binary 自动发现、分块 discovery line 解析、独立 workspace、`bootProgress`、external Markdown box 注册、provider 动态安装/卸载、健康降级、指数退避重启、SIGTERM 优雅退出和进程退出兜底。Go `serve` 新增 `--supervisor-pid`，连续确认 Node PID 消失后自行 `Close`，覆盖 Tauri/Emacs 强杀 Node 时来不及执行 JS cleanup 的孤儿场景。Rust 已删除 `kernel_child`/`kernel_url`/`start_kernel` 与重复 `kernel_status` command，只给统一 Node host 传 canonical kernel binary/workspace/wd 并立即启动 host；桌面 smoke 改从统一 `/health` 取状态。Emacs Lisp 只显式传 `NOEMA_HOST_MODE=emacs`，没有新增任何 Go lifecycle；现有 Node gateway/Jupyter/Copilot/xwidget/split-client 路径未改。远程 `/fs:` 被 supervisor 明确判为非本地 root，不会误交给 Go，markdown-box lab 则会从 `/health` 动态发现重启后的端口。聚焦 Node supervisor + 六个 Go provider + Tauri 合约为 8 files / 31 tests，TypeScript、Go compile、Rust 5 tests 全过；Emacs `jupyter-test` 四组 87+24+18+12 共 141 项全过，覆盖 gateway、分栏 client、xwidget、Jupyter broker/notebook/LSP/board。真 Emacs-mode Node 进程用隔离 root 启动后，先快速报告 web URL，再由自身拉起 Go；`/health` 返回 `hostMode:emacs`、owned/listening kernel 与正确 box，生产 `create-todo` 经 Go 分配 stable id/UUIDv7 并写入 Markdown。随后又从完整 Emacs init 真正调用 `+noema--start-server`，不是手工模拟环境；同样在隔离 state/root 上得到 `hostMode:emacs`、owned/listening kernel，`+noema/stop` 正常回收两层进程。真机还抓到单次 2 秒健康探针可能撞上索引繁忙，已改成连续三次失败才降级，避免手感抖动。两个测试 root/shadow 均已精确永久删除；另清掉一个已孤儿 11 小时、占 18MB 的旧 Claude scratch kernel workspace 和 PID 195（不可恢复），没有动三个既有 Vite dev server或用户会话。
 
 **统一 supervisor 正式门禁完成（2026-08-25）**：新增 owned-kernel crash/restart 用例已证明旧端口退出后 provider 会先进入 degraded，再随新进程 discovery 到新端口并恢复 listening；supervisor 聚焦组现为 5 项，连同六个 provider 与 Tauri 合约共 31 项。精确 Node 26.5.0/npm 11.17.0 下 `make test` 全过：163 files passed / 7 skipped、1577 tests passed / 16 skipped；`go test ./noema/... ./api/... ./cli/cmd`、supervisor PID model 聚焦组及固定 Rust + 兼容 SDK 的 5 个宿主测试也通过。正式 `make build` 完成 4000-module renderer、official Node、FTS5 Go 与 Rust release app，明确报告 `APFS-cloned executable and linked 16 local resources and sidecars`；`make install` 用真实 App shell + APFS-cloned executable + linked runtime 事务更新 `/Applications/Noema.app`。AGENTS.md 原样 packaged smoke 日志显示 `owner=web-host`：Tauri 启动共享 Node，Node 再拥有 Go；报告 `hostMode:desktop`、preload、54px、五项标题栏、独立 TOC popover、Knowledge 双击入口、八视图 `kernel-agenda`、`kernel-katex-macros` 与 owned/listening kernel 全绿，关机后 Node/Go 均无遗留。安装 App 是 18MB 真实目录，Cargo/bundle/install 三个主程序 inode 独立，Resources 与 sidecar 都是链接，`src-tauri/binaries` 为 0B links；默认笔记根无 `.siyuan`，Emacs full-project + 7 个 shared resource links 和 retired path 规则通过，两个仓库 `git diff --check` 干净。另精确永久清理了无进程持有的 `/private/tmp/noema-kernel-facade.quonPq` 旧 facade 测试副本（141MB）及 0B baseline 日志；不可恢复，没有触碰其他临时目录或用户会话。
 
@@ -873,7 +873,7 @@ AGENTS.md 原样无附加变量 smoke 最终再次报告 `protocolRegistered:tru
 
 **P2（可延后）**：多工作区、自动更新、代理/header、原生拼写、rich clipboard、powerMonitor。多工作区若实现，仍是一工作区一份共享 web host + kernel，两个宿主只连接，不复制后端。
 
-**验证**：Electron 窗口能起共享 host/kernel、开文档、TOC popup 与 Knowledge dock 语义正确；Emacs 侧 `my/noema-*`、Jupyter 和 gateway 行为全部不变。
+**验证**：Electron 窗口能起共享 host/kernel、开文档、TOC popup 与 Knowledge dock 语义正确；Emacs 侧 `+noema-*`、Jupyter 和 gateway 行为全部不变。
 
 ---
 
@@ -902,7 +902,7 @@ AGENTS.md 原样无附加变量 smoke 最终再次报告 `protocolRegistered:tru
 
 **Phase 5 b3 正式门禁（2026-08-26）**：b3/Electron 聚焦组 2 files、10 tests 与 `tsc --noEmit` 全绿；最终精确 Node 26.5.0/npm 11.17.0 `make test` 为 176 files passed / 7 skipped、1642 tests passed / 16 skipped。`make build` 重建 3996-module renderer、FTS5 Go kernel 与 Electron shell，`make install` 事务更新真实 `/Applications/Noema.app`。AGENTS.md 原样 smoke 的 production audit 报告 `surfaces:21`、`candidates:21`、2 dialogs、3 dialog hosts、4 menus、12 panels、110 controls、`unadopted:[]`，并明确确认 Knowledge dock、TOC popover、Agenda dock 都命中 `b3-panel`；同一报告继续保持 desktop/preload、54px、五个规定控件、四 tab Knowledge、八视图 `kernel-agenda`、102 macros、完整 Noema b3 computed values 与 owned/listening kernel 全绿。三处 kernel SHA-256 均为 `3c0101ee68aadd16d6953f8b03bf3fcbdc5de8373ac2bdd3ef7a16487a2bbd67`；默认 root 无 `.siyuan`/`.sy`，Emacs 两个 full-project 入口与 7 个 shared resource links 正确、retired lowercase path 缺席，无 Electron/web-host/kernel 或 smoke temp 残留，`make disk-audit` 仍为安装 App 44KB unique physical accounting，`git diff --check` 干净。
 
-**Phase 5 手感逐项收口（2026-08-26，当前工作树）**：没有用“既有文件未改”代替验收，而是沿用户可见的真实输入链逐项复核。Vim normal/visual/insert、多光标、Unicode grapheme、`s`/`S` jump、`z` fold 与销毁清理由 `roundtrip`、`vim-jump`、`vim-unhandled-key` 锁定；数学 snippet 从 source `SnippetSession`、嵌套 tabstop 到 LiveTeX/MathLive commit、undo/redo 与 Cmd-bracket handoff 由 snippet/MathLive/CM6 回归锁定；VS Code 式 bracket type-over、成对删除、selection wrapping、TeX source pair 与 xwidget control-byte 去重走真实 `keydown`/`beforeinput`。有序列表 Enter/嵌套提升会经过 canonical key dispatch 再重编号，programmatic load 与 undo/redo 保持 opt-out；heading fold 的 `zc`/`zo`/`zM`/`zR` 和按文件恢复、结构跳转的 Markdown block/inline math/display math 有界作用域也都有行为断言。Emacs 侧同时运行 renderer xwidget guard 与 `init-noema.el` ERT，证明前缀键、client/source-window、undo/redo、focus release 和 gateway key event 仍由 `my/noema-*` 适配器处理。
+**Phase 5 手感逐项收口（2026-08-26，当前工作树）**：没有用“既有文件未改”代替验收，而是沿用户可见的真实输入链逐项复核。Vim normal/visual/insert、多光标、Unicode grapheme、`s`/`S` jump、`z` fold 与销毁清理由 `roundtrip`、`vim-jump`、`vim-unhandled-key` 锁定；数学 snippet 从 source `SnippetSession`、嵌套 tabstop 到 LiveTeX/MathLive commit、undo/redo 与 Cmd-bracket handoff 由 snippet/MathLive/CM6 回归锁定；VS Code 式 bracket type-over、成对删除、selection wrapping、TeX source pair 与 xwidget control-byte 去重走真实 `keydown`/`beforeinput`。有序列表 Enter/嵌套提升会经过 canonical key dispatch 再重编号，programmatic load 与 undo/redo 保持 opt-out；heading fold 的 `zc`/`zo`/`zM`/`zR` 和按文件恢复、结构跳转的 Markdown block/inline math/display math 有界作用域也都有行为断言。Emacs 侧同时运行 renderer xwidget guard 与 `noema/bridge/config.el` ERT，证明前缀键、client/source-window、undo/redo、focus release 和 gateway key event 仍由 `+noema-*` 适配器处理。
 
 排版宽度是本轮发现的唯一证据缺口：实现已有 `clamp(max(floor, 4%), (width - 95ch) / 2, 8%)`，但旧测试只验证扩展启停。现在该式提为单一 source-owned 常量，并以同一纯函数覆盖 gutter floor、4% 下限、95ch 居中和 8% 上限；packaged smoke 还会无修改地测量 production CM6 的 computed style。真实安装版在 919px 内容宽度下读到左右 gutter 均为 36.76px，95ch 为 1102px，计算期望同为 36.76px，`installed:true`、`matchesContract:true`，说明当前窄视口正确落在 4% 分支而不是伪造固定宽度。
 
@@ -1362,13 +1362,13 @@ Emacs full-project link 与 7 个 shared asset links 全部指向当前仓库/`r
 `xwidget-webkit-pass-command-event` 在 GTK 之外没有实现。对 Emacs 31 的这份
 `--with-ns --with-xwidgets` 构建做 `nm`，只有
 `nsxwidget_{init,init_view,resize,webkit_execute_script,webkit_goto_uri,...}`，
-**没有 `nsxwidget_perform_lispy_event`**。所以 `init-browser.el` 里绑到该命令的每个键
+**没有 `nsxwidget_perform_lispy_event`**。所以 `app/browser/config.el` 里绑到该命令的每个键
 （`M-c`/`M-v` 在内）在 xwidget buffer 中都被 Emacs 吞掉且什么都不做：当 Emacs 持有键位时，
 复制和粘贴根本不会发生。
 
 `emacs/noema-xwidget-keys.el` 因此改为把 `M-c`/`M-v` 路由到 Noema 自己的 `copy`/`paste`
 命令（与既有 `M-z`→undo 同一条通道），由页面执行复制、经 web host 的 pasteboard 通路落盘。
-键位安装抽成 `my/noema--install-xwidget-keys`，并额外挂在 `xwidget-webkit-mode-hook` 上——
+键位安装抽成 `noema--install-xwidget-keys`，并额外挂在 `xwidget-webkit-mode-hook` 上——
 通用浏览器配置也在抢同一批键，两个 `with-eval-after-load 'xwidget` 之间没有确定顺序。
 非 Noema 页面的回退路径未改动。
 
@@ -1431,18 +1431,18 @@ CM6 侧新增 `src/cm6/copied-text.ts`（复刻 CodeMirror 自己的 copiedRange
 
 ### Emacs 侧收尾：passthrough 的 arity 修正与 ERT 覆盖（2026-08-28）
 
-`my/noema--pass-xwidget-command-event` 一直以 `(xwidget-webkit-pass-command-event event)`
+`noema--pass-xwidget-command-event` 一直以 `(xwidget-webkit-pass-command-event event)`
 调用，而该命令是零参数的（它自己读 `last-command-event`），文件顶部的 `declare-function` 也写成了
 一个参数。于是"非 Noema xwidget buffer 上按 M-z/M-c/M-v"这条回退路径每次都抛
 `wrong-number-of-arguments`，而不是把事件传下去。改成零参数调用，并对"以命令名调用、没有事件"
-的情况直接返回；`my/noema-xwidget-cut` 也改为 `(interactive (list last-input-event))`，
+的情况直接返回；`noema-xwidget-cut` 也改为 `(interactive (list last-input-event))`，
 在还没有分配键位之前可以用 `M-x` 调用。
 
 Emacs 配置仓库（`~/.config/emacs`，独立仓库，用户有未提交的改动，**本轮没有提交**）里：
 两处 `xwidget-webkit-pass-command-event` 的 stub 从固定一个参数放宽成 `&optional`，
 断言改为验证"确实透传了"而不是某个 arity；新增
-`my/noema-xwidget-clipboard-keys-route-to-the-page` 与
-`my/noema-xwidget-clipboard-keys-win-the-shared-keymaps` 两个用例。
+`+noema-xwidget-clipboard-keys-route-to-the-page` 与
+`+noema-xwidget-clipboard-keys-win-the-shared-keymaps` 两个用例。
 `make jupyter-test` 四组 91+24+18+12 共 145 项全过。
 
 ### idle/功耗 第一刀：内核不再定时联网，选区统计不再随选区增长（2026-08-28，当前工作树）
