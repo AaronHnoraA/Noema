@@ -61,6 +61,7 @@ import {
 import { adaptPasteText, pasteTransactionSpec } from "./paste-context.ts";
 import { joinTypingEvent, lastEditKindField } from "./history-grouping.ts";
 import { selectionColumnClip } from "./selection-column-clip.ts";
+import { isPointerSelecting, updateHasPointerSelectionEffect } from "./extensions/visual/selection.ts";
 import { exitFencedCode } from "./code-block-input.ts";
 import { renderMarkdownHTML } from "../render-html.ts";
 import {
@@ -1385,7 +1386,10 @@ function buildExtensions(
           options.onChange(md);
         }
       }
-      if ((update.selectionSet || update.docChanged) && options.onSelectionChange && !documentReset) {
+      const pointerSelectionSettled = updateHasPointerSelectionEffect(update)
+        && !isPointerSelecting(update.state);
+      if ((update.selectionSet || update.docChanged || pointerSelectionSettled)
+          && options.onSelectionChange && !documentReset) {
         const { from, to } = update.state.selection.main;
         options.onSelectionChange({ from, to });
       }

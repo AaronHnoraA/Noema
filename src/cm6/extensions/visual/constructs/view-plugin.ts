@@ -8,8 +8,8 @@
  * - a selection move during input-method composition changes nothing;
  * - a typing burst maps the decorations instead of rebuilding (the family may
  *   map its own state too, or refuse, which forces a rebuild);
- * - a pointer drag settles once, when the button is released;
- * - a document, viewport or refresh change rebuilds;
+ * - pointer selection alone settles when the button is released;
+ * - a document, viewport or refresh change rebuilds using the selection at mousedown;
  * - a selection change rebuilds only if it changed which constructs are open
  *   (`revealKey`), and so does Vim pinning or releasing objects;
  * - the decorations survive the plugin being recreated (visual-mode toggles)
@@ -90,7 +90,8 @@ export function constructViewPlugin<Extra = undefined>(
           return;
         }
       }
-      // A pointer drag settles once, when the button is released.
+      // Only the moving selection is held. A viewport change still draws new
+      // constructs, using the mousedown selection for reveal decisions.
       if (selectionOnly && isPointerSelecting(update.state)) return;
       const settled = updateHasPointerSelectionEffect(update) && !isPointerSelecting(update.state);
       const rebuild = update.docChanged || update.viewportChanged || hasViewportDecorationRefresh(update)

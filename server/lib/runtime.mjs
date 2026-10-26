@@ -274,21 +274,26 @@ const pathSuggestionCodeExts = new Set([
   ".zsh",
 ]);
 async function atomicWriteFile(file, data, options) {
-  await mkdir(dirname(file), { recursive: true });
-  const tmp = await runtimeTmpFile("save", file, `.tmp-${process.pid}-${Date.now()}-${++atomicWriteCounter}`);
+  beginSelfWrite(file);
   try {
-    await writeFile(tmp, data, options);
+    await mkdir(dirname(file), { recursive: true });
+    const tmp = await runtimeTmpFile("save", file, `.tmp-${process.pid}-${Date.now()}-${++atomicWriteCounter}`);
     try {
-      await rename(tmp, file);
+      await writeFile(tmp, data, options);
+      try {
+        await rename(tmp, file);
+      } catch (err) {
+        if (err?.code !== "EXDEV") throw err;
+        await copyFile(tmp, file);
+        await rm(tmp, { force: true }).catch(() => {});
+      }
+      noteSelfWrite(file);
     } catch (err) {
-      if (err?.code !== "EXDEV") throw err;
-      await copyFile(tmp, file);
       await rm(tmp, { force: true }).catch(() => {});
+      throw err;
     }
-    noteSelfWrite(file);
-  } catch (err) {
-    await rm(tmp, { force: true }).catch(() => {});
-    throw err;
+  } finally {
+    endSelfWrite(file);
   }
 }
 
@@ -327,26 +332,31 @@ async function writeMarkdownFile(file, content, options = {}) {
     await atomicWriteFile(file, content, "utf8");
     return { ok: true, content: String(content) };
   }
-  const wrote = await markdownFileProvider.write({
-    file: String(file),
-    content: String(content),
-    expectedVersion: String(options.expectedVersion || ""),
-    force: options.force === true,
-  });
-  if (wrote?.conflict === true) return wrote;
-  if (wrote?.ok === false) {
-    const err = new Error(String(wrote?.message || "Markdown persistence provider rejected the save"));
-    err.statusCode = Number(wrote?.statusCode) || 500;
-    throw err;
+  beginSelfWrite(file);
+  try {
+    const wrote = await markdownFileProvider.write({
+      file: String(file),
+      content: String(content),
+      expectedVersion: String(options.expectedVersion || ""),
+      force: options.force === true,
+    });
+    if (wrote?.conflict === true) return wrote;
+    if (wrote?.ok === false) {
+      const err = new Error(String(wrote?.message || "Markdown persistence provider rejected the save"));
+      err.statusCode = Number(wrote?.statusCode) || 500;
+      throw err;
+    }
+    const saved = String(wrote?.content ?? wrote?.markdown ?? content);
+    if (saved !== content) {
+      const err = new Error("Markdown persistence provider changed the source bytes");
+      err.statusCode = 502;
+      throw err;
+    }
+    noteSelfWrite(file);
+    return wrote;
+  } finally {
+    endSelfWrite(file);
   }
-  const saved = String(wrote?.content ?? wrote?.markdown ?? content);
-  if (saved !== content) {
-    const err = new Error("Markdown persistence provider changed the source bytes");
-    err.statusCode = 502;
-    throw err;
-  }
-  noteSelfWrite(file);
-  return wrote;
 }
 
 function canonicalExistingPath(path) {
@@ -2766,6 +2776,15 @@ export function notesIndexVersionValue() { return notesIndexVersion; }
 // final file identity and high-resolution timestamp as well. This costs one
 // local stat per write/event, never a poll or a whole-vault scan.
 const recentSelfWrites = new Map();
+const activeSelfWrites = new Map();
+function beginSelfWrite(file) {
+  activeSelfWrites.set(file, (activeSelfWrites.get(file) || 0) + 1);
+}
+function endSelfWrite(file) {
+  const remaining = (activeSelfWrites.get(file) || 0) - 1;
+  if (remaining > 0) activeSelfWrites.set(file, remaining);
+  else activeSelfWrites.delete(file);
+}
 function noteFileSignature(file) {
   if (file.startsWith("/fs:")) return null;
   try {
@@ -2788,6 +2807,11 @@ export function noteSelfWriteRecently(file, windowMs = 2000) {
   if (!record) return false;
   if (Date.now() - record.at > windowMs) { recentSelfWrites.delete(file); return false; }
   return record.signature !== null && record.signature === noteFileSignature(file);
+}
+/** A pending host write cannot be classified until its final signature exists. */
+export function noteSelfWriteState(file) {
+  if (activeSelfWrites.has(file)) return "pending";
+  return noteSelfWriteRecently(file);
 }
 
 // Whether a vault-relative path is eligible to affect the note index.
@@ -9541,23 +9565,28 @@ export async function saveNote(body) {
         }
       }
     }
-    const persisted = incrementalChanges && !standaloneIncremental
-      ? await markdownFileProvider.writeChanges({
+    let persisted;
+    if (incrementalChanges && !standaloneIncremental) {
+      beginSelfWrite(file);
+      try {
+        persisted = await markdownFileProvider.writeChanges({
           file,
           changes: incrementalChanges,
           expectedVersion: kernelExpectedVersion,
           force,
-        })
-      : await writeMarkdownFile(file, content, { expectedVersion: kernelExpectedVersion, force });
+        });
+        if (persisted?.conflict !== true && persisted?.rejected !== true && persisted?.ok !== false)
+          noteSelfWrite(file);
+      } finally {
+        endSelfWrite(file);
+      }
+    } else {
+      persisted = await writeMarkdownFile(file, content, { expectedVersion: kernelExpectedVersion, force });
+    }
     if (persisted?.conflict === true || persisted?.rejected === true || persisted?.ok === false)
       return persisted;
-    // The Go kernel performs the write, so the host's own watcher sees a plain
-    // external modification unless the save is registered here. writeMarkdownFile()
-    // already does this for the whole-source path; the incremental path is the one
-    // every keystroke autosave takes, and without this each save was counted twice:
-    // once by the save handler and once by the watcher, doubling the index
-    // invalidation, the notes-index-changed broadcast and the catalog refetch.
-    if (incrementalChanges && !standaloneIncremental) noteSelfWrite(file);
+    // Both Go write paths register their final signature before leaving the
+    // active-write state, so queued watch events can be classified correctly.
     const info =
       Number(persisted?.mtimeMs) > 0
         ? {

@@ -83,6 +83,12 @@
   white-space: break-spaces;
 }
 .cm-editor.cm-focused { outline: none; }
+/* CodeMirror handles the drag and draws its selection. During the gesture,
+ * suppress WebKit's own selection pass through rendered formula/widget DOM. */
+.cm-editor .cm-content.noema-pointer-selecting {
+  -webkit-user-select: none;
+  user-select: none;
+}
 /* One painter. `drawSelection` hides the browser's own highlight on editor
  * lines and paints `.cm-selectionBackground`; styling `::selection` here as
  * well showed every selection twice, in two shapes. */

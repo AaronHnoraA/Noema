@@ -43,7 +43,7 @@ export function startNoteWatcher({
   debounceMs = 250,
   isRelevant,     // (relPath: string) => boolean
   isDirectoryRelevant = isRelevant, // (relPath: string) => boolean
-  isSelfWrite,    // (absPath: string) => boolean
+  isSelfWrite,    // (absPath: string) => boolean | "pending"
   onBatch,        // (files: string[]) => void
   onFullRescan,   // () => void
   watchImplementation = watch,
@@ -56,9 +56,21 @@ export function startNoteWatcher({
   function flush() {
     timer = null;
     if (closed) return;
-    const batch = [...pending];
-    pending.clear();
+    // A write event can arrive before saveNote has registered its final file
+    // signature. Check again after the debounce window so that race does not
+    // turn our own autosave into an apparent external edit. A later external
+    // write changes the signature and must still be delivered.
+    const batch = [];
+    for (const file of pending) {
+      const state = isSelfWrite(file);
+      if (state === "pending") continue;
+      pending.delete(file);
+      if (!state) batch.push(file);
+    }
     if (batch.length > 0) onBatch(batch);
+    // Go can finish writing before its response reaches Node. Keep that
+    // event until the write is registered or fails, however long it takes.
+    if (pending.size > 0) scheduleFlush();
   }
 
   function scheduleFlush() {
@@ -94,7 +106,7 @@ export function startNoteWatcher({
     }
 
     if (!isRelevant(relPath)) return;
-    if (isSelfWrite(abs)) return;
+    if (isSelfWrite(abs) === true) return;
 
     pending.add(abs);
     scheduleFlush();

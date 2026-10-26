@@ -5578,7 +5578,6 @@ html.noema-paused *::after {
   color: var(--aaron-ink);
   font: 700 12px/1 "Avenir Next", Inter, ui-sans-serif, system-ui, sans-serif;
   box-shadow: var(--aaron-shadow);
-  backdrop-filter: blur(10px);
   max-width: calc(100vw - 16px);
   flex-wrap: wrap;
 }

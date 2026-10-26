@@ -16,6 +16,9 @@ import {
 } from "@codemirror/state";
 import { EditorView, ViewPlugin } from "@codemirror/view";
 import { updateHasEffect } from "../../utils/effects.ts";
+import { isInEmbeddedSurface } from "../../embedded-surface.ts";
+
+const POINTER_SELECTION_CLASS = "noema-pointer-selecting";
 
 export const selectionIntersects = (
   selection: EditorSelection,
@@ -98,6 +101,38 @@ const mousedownSelectionField = StateField.define<EditorSelection | undefined>({
 
 const pointerSelectionGeneration = new WeakMap<EditorView, number>();
 const pointerSelectionEndCleanup = new WeakMap<EditorView, () => void>();
+const pointerDomSelectionCleanup = new WeakMap<EditorView, () => void>();
+
+/**
+ * CM6 paints the logical range in its viewport-clipped selection layer, but
+ * also writes the entire range into WebKit's native DOM Selection on every
+ * mousemove. That cross-viewport native range can trigger browser selection
+ * and paint work even though its highlight is hidden. Hold the DOM caret for
+ * the gesture and let CM6 synchronize it once on release.
+ *
+ * CM6 has no public switch for this sync. Keep this override scoped to one
+ * pointer gesture and to the current DocView; a later setState gets a fresh
+ * DocView and the next mousedown installs a fresh override.
+ */
+function suspendPointerDomSelectionSync(view: EditorView): void {
+  const docView = (view as unknown as {
+    docView?: { updateSelection?: (...args: unknown[]) => void };
+  }).docView;
+  const original = docView?.updateSelection;
+  if (!docView || !original) return;
+  const suspended = function (...args: unknown[]): void {
+    if (!isPointerSelecting(view.state)) original.apply(docView, args);
+  };
+  docView.updateSelection = suspended;
+  pointerDomSelectionCleanup.set(view, () => {
+    if (docView.updateSelection === suspended) docView.updateSelection = original;
+  });
+}
+
+function restorePointerDomSelectionSync(view: EditorView): void {
+  pointerDomSelectionCleanup.get(view)?.();
+  pointerDomSelectionCleanup.delete(view);
+}
 
 function stopWatchingPointerSelectionEnd(view: EditorView): void {
   const cleanup = pointerSelectionEndCleanup.get(view);
@@ -108,6 +143,7 @@ function stopWatchingPointerSelectionEnd(view: EditorView): void {
 
 function invalidatePointerSelectionLifecycle(view: EditorView): number {
   stopWatchingPointerSelectionEnd(view);
+  restorePointerDomSelectionSync(view);
   const generation = (pointerSelectionGeneration.get(view) ?? 0) + 1;
   pointerSelectionGeneration.set(view, generation);
   return generation;
@@ -138,6 +174,8 @@ function finishPointerSelection(view: EditorView): void {
   stopWatchingPointerSelectionEnd(view);
   globalThis.setTimeout(() => {
     if (pointerSelectionGeneration.get(view) !== generation) return;
+    restorePointerDomSelectionSync(view);
+    view.contentDOM.classList.remove(POINTER_SELECTION_CLASS);
     if (view.dom.isConnected && isPointerSelecting(view.state)) {
       const selection = view.state.selection;
       // A click that replaces a drag can leave CM6 with an empty main cursor
@@ -157,6 +195,7 @@ function finishPointerSelection(view: EditorView): void {
 
 export function cancelPointerSelection(view: EditorView, collapseAt?: number): void {
   invalidatePointerSelectionLifecycle(view);
+  view.contentDOM.classList.remove(POINTER_SELECTION_CLASS);
   const pointerSelecting = isPointerSelecting(view.state);
   const position = collapseAt == null
     ? null
@@ -175,12 +214,18 @@ export function cancelPointerSelection(view: EditorView, collapseAt?: number): v
 
 function beginPointerSelection(view: EditorView): void {
   invalidatePointerSelectionLifecycle(view);
+  // CM6 owns pointer selection. Prevent WebKit from doing a second native drag
+  // selection over thousands of rendered Math/Markdown DOM nodes. CM6 keeps
+  // its logical range and paints only the viewport; DOM sync resumes on up.
+  view.contentDOM.classList.add(POINTER_SELECTION_CLASS);
+  suspendPointerDomSelectionSync(view);
   view.dispatch({ effects: pointerSelectionEffect.of(true) });
   watchPointerSelectionEnd(view);
 }
 
 const pointerSelectionListener = EditorView.domEventHandlers({
-  mousedown: (_event, view) => {
+  mousedown: (event, view) => {
+    if (isInEmbeddedSurface(event.target)) return false;
     beginPointerSelection(view);
     return false;
   },
@@ -197,6 +242,7 @@ const pointerSelectionListener = EditorView.domEventHandlers({
 const pointerSelectionLifecycle = ViewPlugin.define((view) => ({
   destroy(): void {
     invalidatePointerSelectionLifecycle(view);
+    view.contentDOM.classList.remove(POINTER_SELECTION_CLASS);
   },
 }));
 
@@ -206,6 +252,11 @@ export function isPointerSelecting(state: EditorState): boolean {
 
 export function getMousedownSelection(state: EditorState): EditorSelection | undefined {
   return state.field(mousedownSelectionField, false);
+}
+
+/** The selection preview widgets should see until the pointer gesture settles. */
+export function visualSelection(state: EditorState): EditorSelection {
+  return isPointerSelecting(state) ? getMousedownSelection(state) ?? state.selection : state.selection;
 }
 
 export const pointerSelectionExtension = [

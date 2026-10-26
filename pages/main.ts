@@ -265,6 +265,7 @@ import {
 import { installActiveCoreReconnect } from "./active-core-reconnect.ts";
 import { noteAutoSaveEnabled } from "./save-policy.ts";
 import { defaultSaveRetryDelayMs, SaveDrain } from "./save-drain.ts";
+import { diskVersionChangedAfterSave } from "./external-save.ts";
 import { activeInlineFormats, INLINE_FORMAT_KINDS, inlineFormatAvailable, inlineFormatsAvailable, type InlineFormatKind } from "../src/cm6/inline-format.ts";
 import {
   EditorSaveChangeTracker,
@@ -2176,6 +2177,11 @@ const editor = createEditor(host, {
     slideDeck?.refresh();
   },
   onSelectionChange: () => {
+    // Pointer motion can publish dozens of intermediate ranges. Vim adopts
+    // the final range on release; stats, Copilot and assist surfaces likewise
+    // only need the settled selection. The editor emits one final callback
+    // when the pointer-selection effect ends, even if its range is unchanged.
+    if (isPointerSelecting(editor.view.state)) return;
     reconcileVimSelection?.();
     selectionChangeHandlers.forEach((handler) => handler());
     scheduleWritingStats(writingStatsController?.isDocumentChanged() ?? true);
@@ -6996,12 +7002,26 @@ async function refreshPendingExternalSaveOnFocus(): Promise<void> {
 
 function noteExternalFileChanged(file: string, mtimeMs = 0, immediate = false): void {
   if (!currentFile || file !== currentFile) return;
-  pendingExternalSave = { file, mtimeMs };
-  if (revision !== savedRevision) {
-    setStatus("Changed on disk; local edits kept — review before saving");
-  } else if (immediate && !paused) {
-    void refreshPendingExternalSaveOnFocus();
-  }
+  const markChanged = (): void => {
+    if (currentFile !== file) return;
+    pendingExternalSave = { file, mtimeMs };
+    if (revision !== savedRevision) {
+      setStatus("Changed on disk; local edits kept — review before saving");
+    } else if (immediate && !paused) {
+      void refreshPendingExternalSaveOnFocus();
+    }
+  };
+  // A watcher event may precede the response to this pane's own Go save.
+  // Compare content versions after that response, rather than treating every
+  // file event received while the editor is dirty as another writer's edit.
+  void diskVersionChangedAfterSave(
+    file,
+    () => ({ file: currentFile, version: currentVersion }),
+    () => saveDrain.whenIdle(),
+    async (path) => String((await api.notes.open(path)).version || ""),
+  ).then((changed) => {
+    if (changed) markChanged();
+  }).catch(markChanged);
 }
 
 async function openInitialFile(beforeApply?: Promise<unknown>): Promise<void> {
@@ -8757,17 +8777,14 @@ async function copyEditorSelection(cut = false): Promise<boolean> {
     setStatus(copied ? "Output selection copied" : "Copy failed");
     return copied;
   }
-  const active = activeEditorSelection();
-  let text = active ? active.text() : "";
-  if (!text) {
-    const selection = editor.getMarkdownSelection();
-    const from = Math.min(selection.from, selection.to);
-    const to = Math.max(selection.from, selection.to);
-    // A copy the host asked for arrives with no DOM selection at all — Emacs
-    // owns the focus at that moment. Fall back to CodeMirror's own rule, which
-    // also gives a bare cursor its whole line instead of nothing.
-    text = from < to ? editor.textBetween(from, to) : copiedText(editor.view.state);
-  }
+  // Copy needs bytes, not toolbar geometry. Looking up the painted selection
+  // boxes here forced a synchronous layout read immediately before the host
+  // clipboard write, even when CodeMirror already owned the exact range.
+  const state = editor.view.state;
+  const hasEditorRange = state.selection.ranges.some((range) => !range.empty);
+  const native = !hasEditorRange && selectionTouchesEditor() ? window.getSelection() : null;
+  const nativeText = native && !native.isCollapsed ? native.toString() : "";
+  const text = nativeText || copiedText(state);
   if (!text) return false;
   const copied = await writeSystemClipboard(text);
   if (!copied) {
@@ -8803,8 +8820,8 @@ function runClipboardShortcut(event: KeyboardEvent): boolean {
   if (!modal.hidden || !toolsPanel.hidden || !roamToolsPanel.hidden || focusedEditableOutsideEditor()) return false;
   const key = event.key.toLowerCase();
   if (key === "c") {
-    const selection = editor.getMarkdownSelection();
-    if (selection.from === selection.to && !activeEditorSelection()) return false;
+    if (editor.view.state.selection.ranges.every((range) => range.empty)
+        && (window.getSelection()?.isCollapsed !== false || !selectionTouchesEditor())) return false;
     event.preventDefault();
     void copyEditorSelection();
     return true;
@@ -12808,7 +12825,7 @@ function updateMathPreview(
   }
 }
 
-type ActiveEditorSelection = { rect: DOMRect; text: () => string };
+type ActiveEditorSelection = { rect: DOMRect };
 
 /** Whitespace-only selections offer no command; the read is bounded on purpose. */
 const BLANK_SELECTION_PROBE_LIMIT = 4096;
@@ -12846,12 +12863,8 @@ function editorSelectionRect(from: number, to: number): DOMRect | null {
  * only for text selected outside CodeMirror's model, such as inside a rendered
  * widget, which the browser still reports normally.
  *
- * `text` is a thunk on purpose. Positioning the floating toolbar needs only the
- * rect, and it runs on every `selectionchange` — which a pointer drag emits
- * continuously. Materializing the selected string there meant a drag across a
- * large note allocated the whole selection once per frame, which is enough on
- * its own to stall the WebKit surface (and, in the Emacs xwidget host, Emacs
- * along with it). Commands that genuinely need the text call the thunk.
+ * Positioning the floating toolbar needs only the rect. The small blank-text
+ * probe is bounded; copying reads from CodeMirror without measuring geometry.
  */
 function activeEditorSelection(): ActiveEditorSelection | null {
   if (editor.isSourceMode()) return null;
@@ -12864,7 +12877,7 @@ function activeEditorSelection(): ActiveEditorSelection | null {
     const read = (): string => editor.textBetween(from, to);
     if (selectionLooksBlank(read, to - from)) return null;
     const rect = editorSelectionRect(from, to);
-    return rect ? { rect, text: read } : null;
+    return rect ? { rect } : null;
   }
 
   const selection = window.getSelection();
@@ -12876,7 +12889,7 @@ function activeEditorSelection(): ActiveEditorSelection | null {
   if (selectionLooksBlank(read, BLANK_SELECTION_PROBE_LIMIT)) return null;
   const rect = selection.getRangeAt(0).getBoundingClientRect();
   if (rect.width === 0 && rect.height === 0) return null;
-  return { rect, text: read };
+  return { rect };
 }
 
 function selectionTouchesEditor(): boolean {
@@ -12924,18 +12937,6 @@ function markActiveSelectionFormats(): void {
       : !available;
     if (format) button.setAttribute("aria-pressed", String(active.has(command as InlineFormatKind)));
   }
-}
-
-async function copyActiveSelection(): Promise<void> {
-  if (readOnlyOutputSelectionText()) {
-    await copyEditorSelection();
-    return;
-  }
-  const active = activeEditorSelection();
-  if (!active) return;
-  const copied = await writeSystemClipboard(active.text());
-  setStatus(copied ? "Selection copied" : "Copy failed");
-  closeSelectionTool();
 }
 
 type EmacsSelectionAction = "agent" | "related" | "context" | "rewrite" | "compose" | "source";
@@ -13073,7 +13074,7 @@ function runSelectionCommand(command: string): void {
     return;
   }
   if (command === "copy") {
-    void copyActiveSelection();
+    void copyEditorSelection();
     return;
   }
   if (command === "more") {
@@ -14411,6 +14412,10 @@ document.addEventListener("selectionchange", () => {
     scheduleAssistUpdate({ selectionTool: true });
   }
 });
+document.addEventListener("mousedown", (event) => {
+  if (editorSurfaceVisible() && event.target instanceof Node
+      && editor.view.dom.contains(event.target)) closeSelectionTool();
+}, true);
 document.addEventListener("mousedown", (event) => {
   if (!editorSurfaceVisible() || event.defaultPrevented) return;
   if (!(event.target instanceof Node) || editor.view.dom.contains(event.target)) return;

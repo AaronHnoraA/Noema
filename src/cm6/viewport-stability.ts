@@ -5,6 +5,7 @@ import type {
 } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { normalizedEditorKey } from "./focus-quiescence.ts";
+import { isPointerSelecting, pointerSelectionEffect } from "./extensions/visual/selection.ts";
 import { invalidatePersistentVisualState } from "./extensions/visual/visual-mode.ts";
 import { EMBEDDED_SURFACE_SELECTOR } from "./embedded-surface.ts";
 
@@ -401,6 +402,17 @@ export class EditorViewportStabilizer {
         this.scrollRequested = false;
       }));
     }
+    // A drag's moving range does not change the visual layout: all reveal
+    // decisions remain at the mousedown selection until pointerup. Restoring
+    // the pressed line for every mousemove otherwise schedules a measure and
+    // two animation-frame scroll corrections each time. Those corrections
+    // fight CodeMirror's edge auto-scroll and make the page oscillate.
+    if (!forced && isPointerSelecting(this.view.state) && transactions.every((transaction) => (
+      !transaction.docChanged
+      && !transaction.reconfigured
+      && !transaction.scrollIntoView
+      && transaction.effects.every((effect) => effect.is(pointerSelectionEffect))
+    ))) return;
     // An ordinary click may refold the block the caret left; keep the pressed
     // line fixed. A transaction with scrollIntoView has released that press
     // above, so links and outline jumps can move the viewport.

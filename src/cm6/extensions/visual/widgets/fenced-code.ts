@@ -44,6 +44,7 @@ import {
   type RenderedConstruct,
 } from "../constructs/index.ts";
 import { persistentVisualStateField } from "../visual-mode.ts";
+import { pointerSelectionEffect, visualSelection } from "../selection.ts";
 
 function setSourceRange(el: HTMLElement, from: number, to: number, anchor?: number, openSource = false): void {
   el.dataset.cmSourceFrom = String(from);
@@ -677,7 +678,7 @@ function diagramOpened(state: EditorState, block: { from: number; to: number }):
 }
 
 function activeMermaidBlockKey(state: EditorState): string {
-  const sel = state.selection.main;
+  const sel = visualSelection(state).main;
   if (!sel.empty) return "";
   const block = rangeAtPosition(sel.head, state.field(mermaidBlocksField, false) ?? collectMermaidBlocks(state));
   return block && diagramOpened(state, block) ? `${block.from}:${block.to}` : "";
@@ -698,7 +699,8 @@ const mermaidField = StateField.define<DecorationSet>({
       }
       return buildMermaidDecos(tr.state);
     }
-    if (tr.selection != null || transactionChangesPinning(tr)) {
+    if (tr.selection != null || transactionChangesPinning(tr)
+        || tr.effects.some((effect) => effect.is(pointerSelectionEffect) && !effect.value)) {
       const oldKey = activeMermaidBlockKey(tr.startState);
       const newKey = activeMermaidBlockKey(tr.state);
       return rebuildForRevealChange(value, oldKey, newKey, (from, to) => buildMermaidDecoRanges(tr.state, from, to));
@@ -739,7 +741,7 @@ function patchMermaidDecosNearChanges(
 
 function buildFencedCodeDecos(view: EditorView): DecorationSet {
   const decos: Range<Decoration>[] = [];
-  const sel = view.state.selection.main;
+  const sel = visualSelection(view.state).main;
   const doc = view.state.doc;
   const cursorLine = doc.lineAt(sel.from).number;
   const blockMathRanges = getBlockMathRanges(view.state);
@@ -849,7 +851,7 @@ function buildFencedCodeDecos(view: EditorView): DecorationSet {
 const FENCE_CHROME_LINE_RE = /^[ \t]{0,3}(?:`{3,}|~{3,})/;
 
 function activeFenceChromeLineKey(view: EditorView): string {
-  const line = view.state.doc.lineAt(view.state.selection.main.from);
+  const line = view.state.doc.lineAt(visualSelection(view.state).main.from);
   return FENCE_CHROME_LINE_RE.test(line.text) ? String(line.number) : "";
 }
 

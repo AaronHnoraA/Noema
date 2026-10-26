@@ -835,13 +835,15 @@ export function xwidgetEmacsPrefixPending(): boolean {
  * and Option-l/u/A.  In the bubble phase such a chord has already moved the
  * cursor (or selected a line) by the time it is forwarded, so `C-c C-e` ran
  * both CM6's line-end and the Emacs command, and `H-l`/`H-u` ran twice.  A
- * pending prefix always claims its next key.  A top-level chord is claimed
- * only from inside the CM6 editor (EDITOR), and never from a native widget
- * input or an active visual-math editor, which keep their own key ownership.
+ * pending prefix always claims its next key.  Cmd-W closes an Emacs pane from
+ * any page control.  Other top-level chords are claimed only from inside the
+ * CM6 editor (EDITOR), and never from a native widget input or an active
+ * visual-math editor, which keep their own key ownership.
  */
 export function claimsXwidgetEmacsKeyEarly(event: KeyboardEvent, editor: HTMLElement): boolean {
   if (pendingPrefix !== null) return true;
   if (!shouldForwardToEmacs(event)) return false;
+  if (event.metaKey && !event.shiftKey && !event.ctrlKey && !event.altKey && event.code === "KeyW") return true;
   const target = targetElement(event.target);
   if (!target || !editor.contains(target)) return false;
   if (target.closest(`${EMBEDDED_SURFACE_SELECTOR}, input, textarea, select`)) return false;

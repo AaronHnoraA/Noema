@@ -1583,7 +1583,7 @@ describe("xwidget key guard", () => {
     });
   });
 
-  test("forwards M-w so the app keeps Emacs kill-ring-save semantics", () => {
+  test("forwards M-w to Emacs' pane command", () => {
     withForwardedEmacsKeys((forwarded) => {
       const event = new KeyboardEvent("keydown", {
         key: "w",
@@ -1795,5 +1795,34 @@ describe("early Emacs chord claim", () => {
       editor.remove();
       outside.remove();
     }
+  });
+
+  test("Cmd-W reaches Emacs from a native page input without changing Cmd-Shift-W", () => {
+    withForwardedEmacsKeys((forwarded) => {
+      const { editor, native } = editorHost();
+      const capture = (event: KeyboardEvent): void => {
+        if (claimsXwidgetEmacsKeyEarly(event, editor)) handleXwidgetEmacsKeydown(event);
+      };
+      window.addEventListener("keydown", capture, true);
+      try {
+        const close = new KeyboardEvent("keydown", {
+          key: "w", code: "KeyW", metaKey: true, bubbles: true, cancelable: true,
+        });
+        native.dispatchEvent(close);
+        expect(close.defaultPrevented).toBe(true);
+        expect(forwarded).toEqual(["M-w"]);
+
+        const picker = new KeyboardEvent("keydown", {
+          key: "W", code: "KeyW", metaKey: true, shiftKey: true,
+          bubbles: true, cancelable: true,
+        });
+        native.dispatchEvent(picker);
+        expect(picker.defaultPrevented).toBe(false);
+        expect(forwarded).toEqual(["M-w"]);
+      } finally {
+        window.removeEventListener("keydown", capture, true);
+        editor.remove();
+      }
+    });
   });
 });

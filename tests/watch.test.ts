@@ -51,6 +51,80 @@ describe("note watcher", () => {
     }
   });
 
+  test("checks queued events again after a host save completes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-watch-save-race-"));
+    const file = join(root, "note.md");
+    let handleEvent: ((eventType: string, filename: string | null) => void) | undefined;
+    const batches: string[][] = [];
+    const watcher = startNoteWatcher({
+      root,
+      debounceMs: 100,
+      isRelevant: () => true,
+      isSelfWrite: noteSelfWriteRecently,
+      onBatch: (files: string[]) => batches.push(files),
+      onFullRescan: () => {},
+      watchImplementation: (_root: string, _options: object, callback: typeof handleEvent) => {
+        handleEvent = callback;
+        return { on() {}, close() {} };
+      },
+    });
+    try {
+      await writeFile(file, "saved by Noema");
+      handleEvent?.("change", "note.md"); // Go has written, host has not recorded it yet.
+      noteSelfWrite(file);
+      await new Promise((resolve) => setTimeout(resolve, 130));
+      expect(batches).toEqual([]);
+
+      await writeFile(file, "saved by Noema again");
+      handleEvent?.("change", "note.md");
+      noteSelfWrite(file);
+      await writeFile(file, "external edit"); // A different writer changes the signature before flush.
+      handleEvent?.("change", "note.md");
+      await new Promise((resolve) => setTimeout(resolve, 130));
+      expect(batches).toEqual([[file]]);
+    } finally {
+      watcher.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("holds a write event past the debounce until the host write is classified", async () => {
+    let handleEvent: ((eventType: string, filename: string | null) => void) | undefined;
+    let state: boolean | "pending" = "pending";
+    const batches: string[][] = [];
+    const watcher = startNoteWatcher({
+      root: "/notes",
+      debounceMs: 15,
+      isRelevant: () => true,
+      // The JS watcher accepts this sentinel; its inferred TS callback type
+      // only sees the boolean branch of the implementation.
+      isSelfWrite: () => state as boolean,
+      onBatch: (files: string[]) => batches.push(files),
+      onFullRescan: () => {},
+      watchImplementation: (_root: string, _options: object, callback: typeof handleEvent) => {
+        handleEvent = callback;
+        return { on() {}, close() {} };
+      },
+    });
+    try {
+      handleEvent?.("change", "note.md");
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(batches).toEqual([]);
+      state = true;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(batches).toEqual([]);
+
+      state = "pending";
+      handleEvent?.("change", "note.md");
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      state = false;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(batches).toEqual([["/notes/note.md"]]);
+    } finally {
+      watcher.close();
+    }
+  });
+
   test("ignores extensionless Git ref renames before requesting a full rescan", () => {
     let handleEvent: ((eventType: string, filename: string | null) => void) | undefined;
     let fullRescans = 0;

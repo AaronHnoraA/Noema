@@ -21,6 +21,7 @@ import { revisionKindOf } from "../../../../revision-kinds.ts";
 import { findInlineCommandClose, isEscapedCommandStart, parseCommandArgs, scanInlineCommands, type InlineCommand } from "../../../../command-syntax.ts";
 import { renderInlineMarkdownHTML } from "../../../../render-html.ts";
 import { StateField, type Range, type Text, type Transaction } from "@codemirror/state";
+import { isPointerSelecting, updateHasPointerSelectionEffect, visualSelection } from "../selection.ts";
 import {
   dispatchConstructEdit,  constructSources,
   constructViewPlugin,
@@ -1103,7 +1104,7 @@ function buildInlineCommandDecos(
 }
 
 function activeInlineCommandKey(view: EditorView): string {
-  const sel = view.state.selection.main;
+  const sel = visualSelection(view.state).main;
   // Range selection keeps command/citation widgets rendered. Returning a key
   // containing the moving endpoints made a wide drag rebuild the entire
   // visible command layer once per pointer event.
@@ -1235,8 +1236,13 @@ class SideCommentLayout {
   update(update: ViewUpdate): void {
     if (!this.hasRail) return;
     // Selection matters because a card turns back into source under the cursor.
+    // Its layout stays fixed through the gesture, including edge scrolling.
+    if (isPointerSelecting(update.state) && update.selectionSet
+        && !update.docChanged && !update.viewportChanged && !update.geometryChanged) return;
+    const pointerSettled = updateHasPointerSelectionEffect(update);
     if (update.docChanged || update.viewportChanged || update.geometryChanged
-      || update.heightChanged || update.selectionSet || update.focusChanged) this.schedule();
+      || update.heightChanged || update.selectionSet || update.focusChanged
+      || pointerSettled) this.schedule();
   }
 
   schedule(): void {

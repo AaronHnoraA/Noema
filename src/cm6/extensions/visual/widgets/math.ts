@@ -58,8 +58,10 @@ import {
 } from "../constructs/index.ts";
 import {
   isPointerSelecting,
+  pointerSelectionEffect,
   transactionHasPointerSelection,
   updateHasPointerSelectionEffect,
+  visualSelection,
 } from "../selection.ts";
 import {
   persistentVisualStateField,
@@ -91,7 +93,7 @@ function setSourceRange(el: HTMLElement, from: number, to: number, openSource = 
 
 /** Whether any selection range reaches inside the formula source [FROM, TO]. */
 function anySelectionInFormula(state: EditorState, from: number, to: number): boolean {
-  return anySelectionRevealsSource(state.selection, from, to, "interior");
+  return anySelectionRevealsSource(visualSelection(state), from, to, "interior");
 }
 
 function addActiveBlockSourceLineDecos(
@@ -787,20 +789,21 @@ function activeBlockMathKey(state: EditorState): string {
   // and a range lookup stay logarithmic in the number of display formulas;
   // scanning every formula here made dragging *towards* the first formula in
   // a multi-megabyte note pay for the whole document on every mouse move.
-  if (state.selection.ranges.length === 1 && state.selection.main.empty) {
-    const range = blockMathRangeSpanning(state, state.selection.main.from);
+  const selection = visualSelection(state);
+  if (selection.ranges.length === 1 && selection.main.empty) {
+    const range = blockMathRangeSpanning(state, selection.main.from);
     return range && anySelectionInFormula(state, range.from, range.to)
       ? blockMathKey(range)
       : "";
   }
-  const nonEmpty = state.selection.ranges
+  const nonEmpty = selection.ranges
     .filter((selection) => !selection.empty)
     .map((selection) => ({ from: selection.from, to: selection.to }));
   const overlapping = blockMathRangesOverlapping(state, nonEmpty)[0];
   if (overlapping) return blockMathKey(overlapping);
-  for (const selection of state.selection.ranges) {
-    if (!selection.empty) continue;
-    const range = blockMathRangeSpanning(state, selection.from);
+  for (const selectedRange of selection.ranges) {
+    if (!selectedRange.empty) continue;
+    const range = blockMathRangeSpanning(state, selectedRange.from);
     if (range && anySelectionInFormula(state, range.from, range.to)) return blockMathKey(range);
   }
   return "";
@@ -1138,7 +1141,8 @@ const mathBlockField = StateField.define<BlockMathFieldValue>({
       } else {
         decorations = buildBlockMathDecos(tr.state, active, suppressedKey, renderWindow);
       }
-    } else if (tr.selection != null || sessionTransition) {
+    } else if (tr.selection != null || sessionTransition
+        || tr.effects.some((effect) => effect.is(pointerSelectionEffect) && !effect.value)) {
       // Only the formulas whose rendering actually changed: the one the caret
       // left, the one it entered, and either side of a suppression change. When
       // none of those keys moved there is nothing to repaint — a caret moving
@@ -1631,7 +1635,7 @@ function inlineMathRangesOnSelectionLines(state: EditorState): InlineMathRange[]
 
 /** Whether the main selection reaches inside the formula source RANGE. */
 function selectionInFormula(state: EditorState, range: { from: number; to: number }): boolean {
-  return selectionRevealsSource(state.selection, range.from, range.to, "interior");
+  return selectionRevealsSource(visualSelection(state), range.from, range.to, "interior");
 }
 
 function rangeContainsWholeSelection(state: EditorState, range: { from: number; to: number }): boolean {
@@ -1641,7 +1645,8 @@ function rangeContainsWholeSelection(state: EditorState, range: { from: number; 
 }
 
 function inlineMathAtSelection(state: EditorState): InlineMathRange | null {
-  if (state.selection.ranges.length !== 1 || !state.selection.main.empty) return null;
+  const selection = visualSelection(state);
+  if (selection.ranges.length !== 1 || !selection.main.empty) return null;
   return inlineMathRangesOnSelectionLines(state)
     .find((range) => selectionInFormula(state, range)) ?? null;
 }
@@ -1791,6 +1796,8 @@ class MathInlinePlugin {
     // `selectionKey` is deliberately left stale so the transaction that ends
     // the drag rebuilds from the final selection.
     if (!aborted && !this.active && isPointerSelecting(update.view.state)) {
+      // Scroll still needs widgets for newly visible formulas. Their reveal
+      // state comes from the mousedown selection, not the moving range.
       if (rebuild) {
         ({ decorations: this.decorations, atomicRanges: this.atomicRanges } = buildInlineMathDecos(
           update.view,
@@ -2014,8 +2021,9 @@ type MultilineInlineFieldValue = {
 };
 
 function selectedMultilineInlineKey(state: EditorState): string {
-  if (state.selection.ranges.length !== 1) return "";
-  const selection = state.selection.main;
+  const visual = visualSelection(state);
+  if (visual.ranges.length !== 1) return "";
+  const selection = visual.main;
   const range = rangeAtPosition(selection.head, getMultilineInlineMathRanges(state));
   return range && selectionInFormula(state, range) ? `${range.from}:${range.to}` : "";
 }
@@ -2093,7 +2101,8 @@ function patchMultilineInlineField(
 const mathMultilineInlineField = StateField.define<MultilineInlineFieldValue>({
   create: buildMultilineInlineField,
   update(value, tr) {
-    if (!tr.docChanged && !tr.selection) return value;
+    if (!tr.docChanged && !tr.selection
+        && !tr.effects.some((effect) => effect.is(pointerSelectionEffect) && !effect.value)) return value;
     const selectedKey = selectedMultilineInlineKey(tr.state);
     if (!tr.docChanged) {
       return selectedKey === value.selectedKey ? value

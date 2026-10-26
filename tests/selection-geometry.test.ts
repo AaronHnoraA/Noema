@@ -1,6 +1,9 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
+import { EditorSelection, EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 
 import { unionSelectionRect } from "../pages/selection-geometry.ts";
+import { selectionColumnClip } from "../src/cm6/selection-column-clip.ts";
 
 function rect(left: number, top: number, right: number, bottom: number) {
   return { left, top, right, bottom };
@@ -43,4 +46,32 @@ describe("unionSelectionRect", () => {
     expect(result).not.toBeNull();
     expect({ width: result!.width, height: result!.height }).toEqual({ width: 80, height: 0 });
   });
+});
+
+test("moving a selection does not remeasure the text column", () => {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const view = new EditorView({
+    parent: host,
+    state: EditorState.create({
+      doc: "First line\nSecond line\nThird line",
+      extensions: [selectionColumnClip],
+    }),
+  });
+  const plugin = view.plugin(selectionColumnClip);
+  const originalMeasure = view.requestMeasure.bind(view);
+  let columnMeasures = 0;
+  view.requestMeasure = (request) => {
+    if (request?.key === plugin) columnMeasures++;
+    originalMeasure(request);
+  };
+  try {
+    for (const head of [5, 11, 18, 25, 30]) {
+      view.dispatch({ selection: EditorSelection.range(0, head) });
+    }
+    expect(columnMeasures).toBe(0);
+  } finally {
+    view.destroy();
+    host.remove();
+  }
 });

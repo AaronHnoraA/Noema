@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
-import { configure, configureMarkdownFileProvider } from "../server/lib/state.mjs";
+import { configure, configureMarkdownFileProvider, noteSelfWriteState } from "../server/lib/state.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
 import { readNote } from "../server/lib/index.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
@@ -20,6 +20,38 @@ afterEach(async () => {
 });
 
 describe("server facade with data-kernel persistence", () => {
+  test("keeps a Go save pending until its delayed response records the final file", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-go-save-watch-race-"));
+    const notes = join(root, "notes");
+    const file = join(notes, "note.md");
+    roots.push(root);
+    await mkdir(notes, { recursive: true });
+    await writeFile(file, "before", "utf8");
+    configure({ root: notes, workspaceRoot: root, stateRoot: join(root, "state") });
+    let wroteDisk!: () => void;
+    let finishReply!: () => void;
+    const diskWritten = new Promise<void>((resolve) => { wroteDisk = resolve; });
+    const delayedReply = new Promise<void>((resolve) => { finishReply = resolve; });
+    configureMarkdownFileProvider({
+      owns(candidate: string) { return candidate === file; },
+      async writeChanges() {
+        await writeFile(file, "after", "utf8");
+        wroteDisk();
+        await delayedReply;
+        return { ok: true, version: "after-version" };
+      },
+    });
+
+    const save = saveNote({ file, changes: { changes: [] }, baseVersion: "before-version" });
+    await diskWritten;
+    expect(noteSelfWriteState(file)).toBe("pending");
+    finishReply();
+    await save;
+    expect(noteSelfWriteState(file)).toBe(true);
+    await writeFile(file, "external", "utf8");
+    expect(noteSelfWriteState(file)).toBe(false);
+  });
+
   test("requires the Go core for canonical notes while preserving standalone compatibility", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-required-go-core-"));
     const notes = join(root, "notes");

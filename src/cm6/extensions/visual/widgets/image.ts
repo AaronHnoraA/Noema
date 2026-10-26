@@ -32,6 +32,7 @@ import {
   selectionOpensSource,
   type ConstructSource,
 } from "../constructs/index.ts";
+import { visualSelection } from "../selection.ts";
 import {
   applyImageLayout,
   imageLayoutFromAttrs,
@@ -666,8 +667,9 @@ function buildImageDecorations(view: EditorView): DecorationSet {
 /** The images the caret has opened; only the caret's line can hold one. */
 function activeImageSourceKey(view: EditorView): string {
   const state = view.state;
-  if (!state.selection.main.empty || renderedConstructsPinned(state)) return "";
-  return imagesOnLine(state, state.doc.lineAt(state.selection.main.head))
+  const selection = visualSelection(state).main;
+  if (!selection.empty || renderedConstructsPinned(state)) return "";
+  return imagesOnLine(state, state.doc.lineAt(selection.head))
     .filter((image) => imageOpened(state, image))
     .map((image) => `${image.from}:${image.fullTo}`)
     .join("|");

@@ -53,6 +53,11 @@ export class SaveDrain<Snapshot, Result> {
     return this.running !== null;
   }
 
+  /** Wait for an already active write without starting a save for a new draft. */
+  whenIdle(): Promise<void> {
+    return this.running ?? Promise.resolve();
+  }
+
   /** Whether a failed write is waiting for its retry. */
   retryPending(): boolean {
     return this.retryTimer !== null;

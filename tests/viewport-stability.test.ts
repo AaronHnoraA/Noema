@@ -1,3 +1,4 @@
+import { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import {
@@ -7,6 +8,7 @@ import {
   minimalDocumentChange,
   preserveEditorViewport,
 } from "../src/cm6/viewport-stability.ts";
+import { pointerSelectionEffect, pointerSelectionExtension } from "../src/cm6/extensions/visual/selection.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -85,7 +87,7 @@ describe("CM6 viewport position mapping", () => {
     const fakeView = {
       dom,
       contentDOM,
-      state: { doc: { length: 200 } },
+      state: EditorState.create({ doc: "x".repeat(200) }),
       viewport: { from: 0, to: 100 },
       documentTop: 0,
       scaleY: 1,
@@ -382,10 +384,11 @@ describe("CM6 viewport position mapping", () => {
       // The pressed line sits 500px into the document until the block the
       // caret left, above it, refolds and changes height.
       const layout = { pressedLineTop: 500 };
+      let measurements = 0;
       const fakeView = {
         dom,
         contentDOM,
-        state: { doc: { length: 1000 } },
+        state: EditorState.create({ doc: "x".repeat(1_000) }),
         viewport: { from: 0, to: 1000 },
         get documentTop() { return -scrollHost.scrollTop; },
         scaleY: 1,
@@ -393,6 +396,7 @@ describe("CM6 viewport position mapping", () => {
         lineBlockAtHeight: () => ({ from: 0, top: 0 }),
         lineBlockAt: () => ({ from: 400, top: layout.pressedLineTop }),
         requestMeasure: (request: { read: () => unknown; write: (value: unknown) => void }) => {
+          measurements += 1;
           request.write(request.read());
         },
       } as unknown as EditorView;
@@ -413,10 +417,73 @@ describe("CM6 viewport position mapping", () => {
       fireFrames();
       fireFrames();
       return {
-        scrollHost, layout, stabilizer, selectionTransaction, press, fireFrames,
+        scrollHost, layout, stabilizer, fakeView, selectionTransaction, press, fireFrames,
+        measurements: () => measurements,
         dispose: () => { stabilizer.destroy(); scrollHost.remove(); vi.useRealTimers(); vi.restoreAllMocks(); },
       };
     }
+
+    test("does not correct scroll on each selection move during a pointer drag", () => {
+      const env = setup();
+      try {
+        let state = EditorState.create({
+          doc: "x".repeat(1_000),
+          extensions: [pointerSelectionExtension],
+        });
+        Object.assign(env.fakeView, { state });
+        env.press();
+        const start = state.update({ effects: pointerSelectionEffect.of(true) });
+        state = start.state;
+        Object.assign(env.fakeView, { state });
+        env.stabilizer.afterUpdate([start]);
+        for (let head = 410; head <= 450; head += 10) {
+          const move = state.update({ selection: { anchor: 400, head } });
+          state = move.state;
+          Object.assign(env.fakeView, { state });
+          env.stabilizer.afterUpdate([move]);
+        }
+        env.fireFrames();
+        env.fireFrames();
+        expect(env.measurements()).toBe(0);
+        expect(env.scrollHost.scrollTop).toBe(300);
+
+        env.layout.pressedLineTop = 350;
+        const end = state.update({ effects: pointerSelectionEffect.of(false) });
+        Object.assign(env.fakeView, { state: end.state });
+        env.stabilizer.afterUpdate([end]);
+        expect(env.scrollHost.scrollTop).toBe(150);
+        expect(env.measurements()).toBe(1);
+      } finally {
+        env.dispose();
+      }
+    });
+
+    test("edge auto-scroll keeps ownership while the selection changes", () => {
+      const env = setup();
+      try {
+        let state = EditorState.create({
+          doc: "x".repeat(1_000),
+          extensions: [pointerSelectionExtension],
+        });
+        Object.assign(env.fakeView, { state });
+        env.press();
+        const start = state.update({ effects: pointerSelectionEffect.of(true) });
+        state = start.state;
+        Object.assign(env.fakeView, { state });
+        env.stabilizer.afterUpdate([start]);
+        env.scrollHost.scrollTop = 250;
+        env.scrollHost.dispatchEvent(new Event("scroll"));
+        const move = state.update({ selection: { anchor: 400, head: 450 } });
+        Object.assign(env.fakeView, { state: move.state });
+        env.stabilizer.afterUpdate([move]);
+        env.fireFrames();
+        env.fireFrames();
+        expect(env.scrollHost.scrollTop).toBe(250);
+        expect(env.measurements()).toBe(0);
+      } finally {
+        env.dispose();
+      }
+    });
 
     test("keeps the pressed line under the pointer when a block above refolds", () => {
       const env = setup();

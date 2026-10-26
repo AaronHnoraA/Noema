@@ -46,20 +46,52 @@ describe("visual pointer selection state", () => {
       configurable: true,
       value: () => ({ pos: 0, assoc: 1 }),
     });
+    const docView = (view as unknown as { docView: { updateSelection: (...args: unknown[]) => void } }).docView;
+    let nativeSelectionSyncCalls = 0;
+    docView.updateSelection = () => { nativeSelectionSyncCalls++; };
+    const nativeSelectionSync = docView.updateSelection;
 
     try {
       view.contentDOM.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
       expect(isPointerSelecting(view.state)).toBe(true);
+      expect(view.contentDOM.classList.contains("noema-pointer-selecting")).toBe(true);
+      expect(docView.updateSelection).not.toBe(nativeSelectionSync);
+      view.dispatch({ selection: { anchor: 0, head: 5 } });
+      expect(view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)).toBe("alpha");
+      expect(nativeSelectionSyncCalls).toBe(0);
 
       outside.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
       await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
 
       expect(isPointerSelecting(view.state)).toBe(false);
+      expect(view.contentDOM.classList.contains("noema-pointer-selecting")).toBe(false);
       expect(getMousedownSelection(view.state)).toBeUndefined();
+      expect(docView.updateSelection).toBe(nativeSelectionSync);
+      expect(nativeSelectionSyncCalls).toBe(1);
     } finally {
       view.destroy();
       host.remove();
       outside.remove();
+    }
+  });
+
+  test("embedded text controls keep their native pointer selection", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const view = new EditorView({
+      state: EditorState.create({ doc: "alpha", extensions: [pointerSelectionExtension] }),
+      parent: host,
+    });
+    const input = document.createElement("input");
+    input.setAttribute("data-noema-vim", "native");
+    view.contentDOM.append(input);
+    try {
+      input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      expect(isPointerSelecting(view.state)).toBe(false);
+      expect(view.contentDOM.classList.contains("noema-pointer-selecting")).toBe(false);
+    } finally {
+      view.destroy();
+      host.remove();
     }
   });
 

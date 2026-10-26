@@ -77,6 +77,13 @@ import {
 } from "../../../markdown-link-events.ts";
 import { hasViewportDecorationRefresh, refreshViewportDecorations } from "../../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "../typing-burst.ts";
+import {
+  isPointerSelecting,
+  pointerSelectionEffect,
+  transactionHasPointerSelection,
+  updateHasPointerSelectionEffect,
+  visualSelection,
+} from "../selection.ts";
 import { persistentVisualStateField } from "../visual-mode.ts";
 import {
   dispatchConstructEdit,  constructSources,
@@ -4014,7 +4021,7 @@ function tikzSourceActive(state: EditorState, block: OrgEnvBlock): boolean {
 
 function orgEnvCloseBoundaryActive(state: EditorState, block: OrgEnvBlock): boolean {
   return opensSource(state, block.closeFrom, block.closeTo)
-    && state.selection.main.from > block.closeFrom;
+    && visualSelection(state).main.from > block.closeFrom;
 }
 
 function addOrgEnvBoundaryDecos(
@@ -4299,8 +4306,10 @@ class OrgEnvRailPlugin {
 
   update(update: ViewUpdate): void {
     if (isCoalescedVisualTyping(update)) return;
+    if (isPointerSelecting(update.state) && update.selectionSet
+        && !update.docChanged && !update.viewportChanged && !update.geometryChanged) return;
     if (update.docChanged || update.viewportChanged || update.geometryChanged
-        || hasViewportDecorationRefresh(update)) {
+        || hasViewportDecorationRefresh(update) || updateHasPointerSelectionEffect(update)) {
       this.schedule(update.view);
     }
   }
@@ -4678,7 +4687,11 @@ function buildBlockExtraDecoRanges(
   return decos;
 }
 
+let blockExtraFullRebuilds = 0;
+export function blockExtraFullRebuildCount(): number { return blockExtraFullRebuilds; }
+
 function buildBlockExtraDecos(state: EditorState): DecorationSet {
+  blockExtraFullRebuilds++;
   const decos = buildBlockExtraDecoRanges(state);
   return Decoration.set(decos, true);
 }
@@ -4732,7 +4745,7 @@ function markEditedTikzBlocks(state: EditorState, changes: ChangeSet, blocks: re
 }
 
 function activeBlockExtraKey(state: EditorState): string {
-  const sel = state.selection.main;
+  const sel = visualSelection(state).main;
   // A range selection is selecting rendered content, not asking thousands of
   // block widgets between its endpoints to reveal their source. Besides being
   // the same model used by rendered math, this keeps drag/Cmd-A transactions
@@ -4898,9 +4911,23 @@ function scanFrontMatter(doc: Text): { from: number; to: number; body: string } 
 // StateField export
 // ---------------------------------------------------------------------------
 
+const deferredBlockExtraRefresh = StateField.define<boolean>({
+  create: () => false,
+  update(value, tr) {
+    if (tr.effects.some((effect) => effect.is(refreshViewportDecorations))
+        && transactionHasPointerSelection(tr)) return true;
+    if (tr.effects.some((effect) => effect.is(pointerSelectionEffect) && !effect.value)) return false;
+    return value;
+  },
+});
+
 const blockExtrasDecorations = StateField.define<DecorationSet>({
   create: buildBlockExtraDecos,
   update(value, tr) {
+    if (tr.startState.field(deferredBlockExtraRefresh, false)
+        && tr.effects.some((effect) => effect.is(pointerSelectionEffect) && !effect.value)) {
+      return buildBlockExtraDecos(tr.state);
+    }
     if (tr.effects.some((effect) => effect.is(tocFoldEffect))) {
       return patchTocWidgetDecos(tr.state, value);
     }
@@ -4910,6 +4937,7 @@ const blockExtrasDecorations = StateField.define<DecorationSet>({
       return buildBlockExtraDecos(tr.state);
     }
     if (tr.effects.some((effect) => effect.is(refreshViewportDecorations))) {
+      if (transactionHasPointerSelection(tr)) return value;
       // Meta summaries may contain server-backed citation widgets. Rebuilding
       // creates a new MetaWidget bibliography epoch while eq() preserves all
       // unrelated block widgets.
@@ -4941,7 +4969,8 @@ const blockExtrasDecorations = StateField.define<DecorationSet>({
         ? patchBlockExtraDecosForOrgEnvTitleChange(tr.state, value.map(tr.changes), titlePatch.newBlock)
         : buildBlockExtraDecos(tr.state);
     }
-    if (tr.selection != null) {
+    if (tr.selection != null
+        || tr.effects.some((effect) => effect.is(pointerSelectionEffect) && !effect.value)) {
       const oldKey = activeBlockExtraKey(tr.startState);
       const newKey = activeBlockExtraKey(tr.state);
       return rebuildForRevealChange(value, oldKey, newKey, (from, to) => buildBlockExtraDecoRanges(tr.state, from, to));
@@ -5000,6 +5029,7 @@ export const blockExtrasExtension: Extension = [
   fencedCodeRangesExtension,
   persistentVisualStateField(blockExtraRangesField, createBlockExtraRanges),
   persistentVisualStateField(tocFoldField, createTocFoldState),
+  deferredBlockExtraRefresh,
   persistentVisualStateField(blockExtrasDecorations, buildBlockExtraDecos),
   // Org environments, TOC, rules, front matter, cells: whatever the field draws.
   constructSources.of(drawnConstructSource("block-extra", "structure", (state) => state.field(blockExtrasDecorations, false))),

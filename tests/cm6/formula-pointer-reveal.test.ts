@@ -17,6 +17,7 @@ import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import { createEditor } from "../../src/editor-api.ts";
 import { pointerSelectionEffect } from "../../src/cm6/extensions/visual/selection.ts";
 import { formulaSourceRangeAtPosition } from "../../src/cm6/extensions/visual/widgets/math.ts";
+import { refreshViewportDecorations } from "../../src/cm6/viewport-refresh.ts";
 
 const INLINE = "Thus \\(A_e\\) is alternating, and the sentence carries on well past it.\n";
 // The formula occupies [5, 12); its body starts at 7.
@@ -91,6 +92,19 @@ describe("inline formula source and the pointer", () => {
     s.done();
   });
 
+  test("a viewport refresh while dragging keeps the existing formula layout", () => {
+    const s = mount(INLINE);
+    s.editor.setSelection(INLINE_BODY, INLINE_BODY);
+    expect(s.revealed()).toBe(true);
+    s.mouseDown();
+    s.editor.setSelection(40, 52);
+    s.view.dispatch({ effects: refreshViewportDecorations.of([{ from: 0, to: INLINE.length }]) });
+    expect(s.revealed()).toBe(true);
+    s.mouseUp();
+    expect(s.revealed()).toBe(false);
+    s.done();
+  });
+
   test("edits made during the drag keep the held source range mapped", () => {
     const s = mount(INLINE);
     s.editor.setSelection(INLINE_BODY, INLINE_BODY);
@@ -145,5 +159,31 @@ describe("display formula source and the pointer", () => {
 
     editor.destroy();
     host.remove();
+  });
+});
+
+describe("multiline inline formula and the pointer", () => {
+  test("moving selection keeps a newly refreshed formula rendered until release", () => {
+    const text = "before\n\\(x +\ny\\)\nafter";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { initialContent: text });
+    const formulaBody = text.indexOf("x +");
+    const rendered = () => host.querySelector(".cm-math-inline") !== null;
+    try {
+      expect(rendered()).toBe(true);
+      editor.view.dispatch({ effects: pointerSelectionEffect.of(true) });
+      editor.setSelection(0, formulaBody);
+      editor.view.dispatch({ effects: refreshViewportDecorations.of([{ from: 0, to: text.length }]) });
+      expect(rendered()).toBe(true);
+      expect(host.querySelector(".cm-math-inline-source")).toBeNull();
+
+      editor.view.dispatch({ effects: pointerSelectionEffect.of(false) });
+      expect(rendered()).toBe(false);
+      expect(host.querySelector(".cm-math-inline-source")).not.toBeNull();
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
   });
 });

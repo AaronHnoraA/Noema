@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 
 import { createEditor, normalizePastedSourceText, type Editor } from "../src/editor-api.ts";
+import { isPointerSelecting, pointerSelectionEffect } from "../src/cm6/extensions/visual/selection.ts";
 
 function pasteClipboard(editor: Editor, text: string, html = ""): void {
   const event = new Event("paste", { bubbles: true, cancelable: true }) as Event & {
@@ -145,6 +146,33 @@ describe("editor api source preservation", () => {
     try {
       editor.setMarkdownSelection(6, 10);
       expect(received.at(-1)).toEqual({ from: 6, to: 10 });
+    } finally {
+      editor.destroy();
+      mount.remove();
+    }
+  });
+
+  test("reports a final selection when a pointer drag ends without moving its range", () => {
+    const raw: Array<{ from: number; to: number }> = [];
+    const settled: Array<{ from: number; to: number }> = [];
+    const mount = document.createElement("div");
+    document.body.appendChild(mount);
+    let editor!: Editor;
+    editor = createEditor(mount, {
+      initialContent: "Alpha beta gamma",
+      onSelectionChange: (selection) => {
+        raw.push(selection);
+        if (!isPointerSelecting(editor.view.state)) settled.push(selection);
+      },
+    });
+    try {
+      editor.view.dispatch({ effects: pointerSelectionEffect.of(true) });
+      editor.view.dispatch({ selection: { anchor: 0, head: 5 } });
+      editor.view.dispatch({ selection: { anchor: 0, head: 10 } });
+      expect(settled).toEqual([]);
+      editor.view.dispatch({ effects: pointerSelectionEffect.of(false) });
+      expect(raw).toHaveLength(3);
+      expect(settled).toEqual([{ from: 0, to: 10 }]);
     } finally {
       editor.destroy();
       mount.remove();

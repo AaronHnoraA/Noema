@@ -93,7 +93,9 @@ import {
 } from "./utils/tree-operations/change-ranges.ts";
 import {
   isPointerSelecting,
+  pointerSelectionEffect,
   updateHasPointerSelectionEffect,
+  visualSelection,
 } from "./extensions/visual/selection.ts";
 import {
   dispatchConstructEdit,  constructSources,
@@ -608,7 +610,7 @@ function addWikiLinkTokens(
 
 function buildDecorations(view: EditorView, tokens = collectLivePreviewTokens(view)): DecorationSet {
   const decos: Range<Decoration>[] = [];
-  const sel = view.state.selection.main;
+  const sel = visualSelection(view.state).main;
   const doc = view.state.doc;
   const cursorLine = doc.lineAt(sel.from).number;
   // Every delimiter of a link (`[`, `]`, `(`, the URL, `)`) carries the same
@@ -679,7 +681,7 @@ function buildDecorations(view: EditorView, tokens = collectLivePreviewTokens(vi
 }
 
 function selectionAffectingTokenKey(state: EditorState, tokens: readonly LivePreviewToken[]): string {
-  const sel = state.selection.main;
+  const sel = visualSelection(state).main;
   const cursorLine = state.doc.lineAt(sel.from).number;
   const keys: string[] = [];
   for (const token of tokens) {
@@ -888,6 +890,8 @@ class LivePreviewPlugin {
 
     const forceRefresh = hasViewportDecorationRefresh(update);
     const pointerSelectionChanged = updateHasPointerSelectionEffect(update);
+    if (isPointerSelecting(update.state) && !update.docChanged
+        && !update.viewportChanged && !forceRefresh) return;
     const vr = update.view.visibleRanges;
     const newFrom = vr[0]?.from ?? 0;
     const newTo = vr[vr.length - 1]?.to ?? 0;
@@ -2348,8 +2352,9 @@ function buildTableDecoRanges(
 }
 
 function tableSourceActiveColumn(state: EditorState, line: ReturnType<Text["line"]>): number {
-  if (state.doc.lineAt(state.selection.main.head).number !== line.number) return -1;
-  const offset = state.selection.main.head - line.from;
+  const selection = visualSelection(state).main;
+  if (state.doc.lineAt(selection.head).number !== line.number) return -1;
+  const offset = selection.head - line.from;
   return Math.max(0, tableSourceRowParts(line.text).cells.findIndex(({ from, to }) => offset >= from && offset <= to));
 }
 
@@ -2364,7 +2369,7 @@ function tableSourceGridDecos(state: EditorState, table: MarkdownTable): Range<D
   const columns = aligns.length;
   const layoutClass = layoutClasses("table", table.layout);
   const layoutCss = layoutStyle("table", table.layout);
-  const caretLine = doc.lineAt(state.selection.main.head).number;
+  const caretLine = doc.lineAt(visualSelection(state).main.head).number;
   for (let number = first; number <= last; number++) {
     const line = doc.line(number);
     const separator = number === first + 1;
@@ -2454,9 +2459,10 @@ function tableAt(state: EditorState, pos: number): MarkdownTable | null {
 }
 
 function activeTableAttrsKey(state: EditorState): string {
-  const table = tableAt(state, state.selection.main.from);
+  const selection = visualSelection(state).main;
+  const table = tableAt(state, selection.from);
   if (!table || !tableOpened(state, table)) return "";
-  const line = state.doc.lineAt(state.selection.main.head);
+  const line = state.doc.lineAt(selection.head);
   const col = tableSourceActiveColumn(state, line);
   return `${line.number}.${col}:${table.from}:${table.to}`;
 }
@@ -2511,7 +2517,8 @@ const tableDecoField = StateField.define<DecorationSet>({
         ? value.map(tr.changes)
         : patchTableDecosNearChanges(tr.startState, tr.state, value.map(tr.changes), tr.changes);
     }
-    if (tr.selection != null) {
+    if (tr.selection != null
+        || tr.effects.some((effect) => effect.is(pointerSelectionEffect) && !effect.value)) {
       const oldKey = activeTableAttrsKey(tr.startState);
       const newKey = activeTableAttrsKey(tr.state);
       return rebuildForRevealChange(value, oldKey, newKey, (from, to) => buildTableDecoRanges(tr.state, from, to));
@@ -2893,7 +2900,7 @@ function patchHtmlBlockDecosNearChanges(
 }
 
 function activeHtmlBlockKey(state: EditorState): string {
-  const sel = state.selection.main;
+  const sel = visualSelection(state).main;
   // Iterating the syntax tree from range start to range end made a drag or
   // Cmd-A proportional to the selected document. Rich block widgets stay
   // rendered during range selection; a collapsed caret still reveals source.
@@ -2927,7 +2934,8 @@ const htmlBlockDecoField = StateField.define<DecorationSet>({
     if (tr.docChanged) {
       return patchHtmlBlockDecosNearChanges(tr.state, value.map(tr.changes), tr.changes);
     }
-    if (tr.selection != null) {
+    if (tr.selection != null
+        || tr.effects.some((effect) => effect.is(pointerSelectionEffect) && !effect.value)) {
       const oldKey = activeHtmlBlockKey(tr.startState);
       const newKey = activeHtmlBlockKey(tr.state);
       return rebuildForRevealChange(value, oldKey, newKey, (from, to) => collectHtmlBlockDecoRanges(tr.state, from, to));

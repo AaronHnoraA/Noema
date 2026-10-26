@@ -33,6 +33,7 @@
 
 import type { EditorSelection, EditorState, SelectionRange } from "@codemirror/state";
 import { renderedConstructsPinned } from "./mode.ts";
+import { visualSelection } from "../selection.ts";
 
 export type RevealPolicy = "edge" | "interior" | "caret-edge" | "caret-interior" | "never";
 
@@ -81,7 +82,7 @@ export function selectionOpensSource(
   role: ConstructRole,
 ): boolean {
   if (role === "object" && renderedConstructsPinned(state)) return false;
-  return rangeRevealsSource(state.selection.main, from, to, policy);
+  return rangeRevealsSource(visualSelection(state).main, from, to, policy);
 }
 
 /**
@@ -90,7 +91,7 @@ export function selectionOpensSource(
  * policy, so a caller only has to examine the lines holding these offsets.
  */
 export function revealProbeOffsets(state: EditorState): readonly number[] {
-  const { from, to } = state.selection.main;
+  const { from, to } = visualSelection(state).main;
   return from === to ? [from] : [from, to];
 }
 

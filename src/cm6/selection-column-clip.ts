@@ -28,18 +28,29 @@ export const selectionColumnClip = ViewPlugin.fromClass(class {
   private left = -1;
   private right = -1;
   private readonly view: EditorView;
+  private readonly resizeObserver: ResizeObserver | null;
+  private measuredWidth = -1;
+  private measuredContentWidth = -1;
 
   constructor(view: EditorView) {
     this.view = view;
+    this.resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      const width = view.scrollDOM.clientWidth;
+      const contentWidth = view.contentDOM.clientWidth;
+      if (width === this.measuredWidth && contentWidth === this.measuredContentWidth) return;
+      this.schedule();
+    });
+    this.resizeObserver?.observe(view.scrollDOM);
+    this.resizeObserver?.observe(view.contentDOM);
     this.schedule();
   }
 
   update(update: ViewUpdate): void {
-    // The margin follows the page width through CSS, which no update
-    // announces, so measure again whenever a selection is about to be drawn.
-    // A caret has no layer to clip and costs nothing here.
-    const drawn = update.selectionSet && update.state.selection.ranges.some((range) => !range.empty);
-    if (drawn || update.geometryChanged || update.viewportChanged) this.schedule();
+    // Selection motion does not change column width. Measuring its rects on
+    // every drag step forces WebKit to lay out the selection before painting
+    // it. The observer covers CSS/page width changes outside CM6 updates.
+    // Older webviews without ResizeObserver still get CM6's geometry signal.
+    if (!this.resizeObserver && update.geometryChanged) this.schedule();
   }
 
   private schedule(): void {
@@ -47,6 +58,8 @@ export const selectionColumnClip = ViewPlugin.fromClass(class {
       key: this,
       read: measureColumn,
       write: (insets) => {
+        this.measuredWidth = this.view.scrollDOM.clientWidth;
+        this.measuredContentWidth = this.view.contentDOM.clientWidth;
         if (!insets || (insets.left === this.left && insets.right === this.right)) return;
         this.left = insets.left;
         this.right = insets.right;
@@ -59,6 +72,7 @@ export const selectionColumnClip = ViewPlugin.fromClass(class {
   }
 
   destroy(): void {
+    this.resizeObserver?.disconnect();
     this.view.scrollDOM.style.removeProperty("--noema-selection-inset-left");
     this.view.scrollDOM.style.removeProperty("--noema-selection-inset-right");
   }

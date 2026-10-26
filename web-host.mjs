@@ -80,7 +80,7 @@ import {
   configureBibliographyProvider,
   markNotesDirty,
   notesIndexVersionValue,
-  noteSelfWriteRecently,
+  noteSelfWriteState,
   notePathWatchRelevant,
 } from "./server/lib/state.mjs";
 import { drawioExportSVG, drawioExportTag, drawioPlaceholderSVG } from "./server/lib/drawio-export.mjs";
@@ -1437,7 +1437,7 @@ const noteWatcher = hostMode !== "server" && process.env.NOEMA_WATCH !== "0"
         || bibliographyPathWatchRelevant(file)
         || Boolean(researchNotebookWatchDirectory(noteRoot, resolve(noteRoot, file)))
         || (workspaceLayout === "wiki" && Boolean(wikiRepositoryIdForFile(file))),
-      isSelfWrite: (file) => noteSelfWriteRecently(file),
+      isSelfWrite: (file) => noteSelfWriteState(file),
       onBatch(files) {
         agendaIndex.invalidate(files);
         void researchNotebookWatch.filesChanged(files);

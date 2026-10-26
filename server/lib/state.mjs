@@ -11,6 +11,7 @@ export {
   markNotesDirty,
   notesIndexVersionValue,
   noteSelfWriteRecently,
+  noteSelfWriteState,
   notePathWatchRelevant,
   bibliographyPathWatchRelevant,
   bibliographyVersion,

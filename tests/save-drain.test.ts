@@ -3,6 +3,31 @@ import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import { defaultSaveRetryDelayMs, SaveDrain } from "../pages/save-drain.ts";
 
 describe("SaveDrain", () => {
+  test("waits for an active save without starting one for a later draft", async () => {
+    let release!: () => void;
+    const result = new Promise<void>((resolve) => { release = resolve; });
+    let captures = 0;
+    let saved = false;
+    const drain = new SaveDrain({
+      capture: () => {
+        captures += 1;
+        return saved ? null : {};
+      },
+      write: () => result,
+      apply() { saved = true; },
+      fail(error) { throw error; },
+    });
+    await drain.whenIdle();
+    expect(captures).toBe(0);
+    const saving = drain.request();
+    const waiting = drain.whenIdle();
+    expect(captures).toBe(1);
+    release();
+    await Promise.all([saving, waiting]);
+    expect(saved).toBe(true);
+    expect(captures).toBe(2);
+  });
+
   test("coalesces edits made in flight and applies the first mtime before the follow-up write", async () => {
     let revision = 1;
     let savedRevision = 0;
