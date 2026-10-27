@@ -1568,7 +1568,7 @@ describe("xwidget key guard", () => {
     });
   });
 
-  test("forwards M-W (Cmd-Shift-W) to Emacs' kill-buffer", () => {
+  test("forwards M-W (Cmd-Shift-W) to Emacs' buffer picker", () => {
     withForwardedEmacsKeys((forwarded) => {
       const event = new KeyboardEvent("keydown", {
         key: "W",
@@ -1797,7 +1797,7 @@ describe("early Emacs chord claim", () => {
     }
   });
 
-  test("Cmd-W reaches Emacs from a native page input without changing Cmd-Shift-W", () => {
+  test("Cmd-W and Cmd-Shift-W reach Emacs from a native page input", () => {
     withForwardedEmacsKeys((forwarded) => {
       const { editor, native } = editorHost();
       const capture = (event: KeyboardEvent): void => {
@@ -1817,8 +1817,8 @@ describe("early Emacs chord claim", () => {
           bubbles: true, cancelable: true,
         });
         native.dispatchEvent(picker);
-        expect(picker.defaultPrevented).toBe(false);
-        expect(forwarded).toEqual(["M-w"]);
+        expect(picker.defaultPrevented).toBe(true);
+        expect(forwarded).toEqual(["M-w", "M-W"]);
       } finally {
         window.removeEventListener("keydown", capture, true);
         editor.remove();

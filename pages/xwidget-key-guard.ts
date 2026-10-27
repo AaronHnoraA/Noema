@@ -771,8 +771,8 @@ export function shouldForwardToEmacs(event: KeyboardEvent): boolean {
   }
   // M-x, M-w, M-W, M-q, and M-o/M-O (ace-window and window swap).
   if (event.metaKey && !event.ctrlKey && !event.altKey && event.code === "KeyO") return true;
-  // M-W (Cmd-Shift-W) kills the buffer through Perspective; the page has no
-  // Cmd-Shift-W of its own.
+  // M-W (Cmd-Shift-W) opens Perspective's buffer picker. Only the selected
+  // buffer is killed; the page has no Cmd-Shift-W of its own.
   if (event.metaKey && !event.ctrlKey && !event.altKey && event.shiftKey && event.code === "KeyW") return true;
   if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
     return event.code === "KeyX" || event.code === "KeyW" || event.code === "KeyQ";
@@ -835,15 +835,16 @@ export function xwidgetEmacsPrefixPending(): boolean {
  * and Option-l/u/A.  In the bubble phase such a chord has already moved the
  * cursor (or selected a line) by the time it is forwarded, so `C-c C-e` ran
  * both CM6's line-end and the Emacs command, and `H-l`/`H-u` ran twice.  A
- * pending prefix always claims its next key.  Cmd-W closes an Emacs pane from
- * any page control.  Other top-level chords are claimed only from inside the
+ * pending prefix always claims its next key.  Cmd-W closes an Emacs pane and
+ * Cmd-Shift-W opens the buffer picker from any page control. Other top-level
+ * chords are claimed only from inside the
  * CM6 editor (EDITOR), and never from a native widget input or an active
  * visual-math editor, which keep their own key ownership.
  */
 export function claimsXwidgetEmacsKeyEarly(event: KeyboardEvent, editor: HTMLElement): boolean {
   if (pendingPrefix !== null) return true;
   if (!shouldForwardToEmacs(event)) return false;
-  if (event.metaKey && !event.shiftKey && !event.ctrlKey && !event.altKey && event.code === "KeyW") return true;
+  if (event.metaKey && !event.ctrlKey && !event.altKey && event.code === "KeyW") return true;
   const target = targetElement(event.target);
   if (!target || !editor.contains(target)) return false;
   if (target.closest(`${EMBEDDED_SURFACE_SELECTOR}, input, textarea, select`)) return false;
