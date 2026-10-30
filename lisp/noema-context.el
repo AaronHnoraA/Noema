@@ -394,6 +394,30 @@ A region covering the whole buffer is a plain file reference."
 ;;;; ── Commands ─────────────────────────────────────────────────────────────
 
 ;;;###autoload
+(cl-defun noema-context-send-prompt (prompt &key files draft pick)
+  "Send explicit PROMPT and FILES to an existing agent session.
+Reuse normal session selection, queueing and clipboard delivery.  DRAFT
+leaves the task in the session input; PICK forces the session chooser.
+FILES must be readable, saved files reachable by the selected agent.
+Neither read nor clear the shared gptel context."
+  (unless (and (stringp prompt) (not (string-empty-p (string-trim prompt))))
+    (user-error "A task prompt is required"))
+  (let ((files (delete-dups (mapcar #'expand-file-name files)))
+        (noema-context-clear-after-send nil))
+    (dolist (file files)
+      (unless (and (file-regular-p file) (file-readable-p file))
+        (user-error "Task reference is not a readable file: %s" file))
+      (when-let* ((buffer (find-buffer-visiting file)))
+        (when (buffer-modified-p buffer)
+          (user-error "Save task reference first: %s" file))))
+    (noema-context--send
+     :prompt prompt :pick pick :draft draft
+     :references (lambda (root session)
+                   (mapcar (lambda (file)
+                             (noema-context--reference file root nil nil session))
+                           files)))))
+
+;;;###autoload
 (defun noema-context-send (&optional pick)
   "Send the current editor context to an agent session as references.
 The context is the shared gptel selection, the one `gptel-add' builds.  With

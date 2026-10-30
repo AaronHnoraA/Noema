@@ -1,0 +1,8 @@
+{
+  "addonid": "noema.extension.agent",
+  "author": "Noema",
+  "title": "Noema Agent",
+  "version": "1.0.3",
+  "marginnote_version_min": "4.0",
+  "cert_key": ""
+}

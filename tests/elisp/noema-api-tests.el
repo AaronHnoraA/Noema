@@ -90,7 +90,7 @@
                                   (active . ((skills . ["noema-elisp-api"])
                                              (mcps . ["noema"])))))) nil))))
         (noema-capability-list
-         :project root :requested-skills '("noema-elisp-api")
+         :project root :requested-skills '("noema-elisp-api") :requested-packs '("writing")
          :callback (lambda (value error-object)
                      (should-not error-object)
                      (setq resolution value)))
@@ -99,7 +99,27 @@
                        '(:skills ("noema-elisp-api") :mcps ("noema"))))
         (should (equal (car call) "noema:api:research:capability:list"))
         (should (equal (append (cdr (assoc 'requestedSkills (cadr call))) nil)
-                       '("noema-elisp-api")))))))
+                       '("noema-elisp-api")))
+        (should (equal (append (cdr (assoc 'requestedPacks (cadr call))) nil)
+                       '("writing")))))))
+
+(ert-deftest noema-api-pack-selection-does-not-replace-editor-cache ()
+  (let* ((noema-capability--cache (make-hash-table :test #'equal))
+         (entry (list :resolution 'ordinary-library :time 1))
+         request result)
+    (puthash :global entry noema-capability--cache)
+    (cl-letf (((symbol-function 'noema--host-call)
+               (lambda (_ body callback)
+                 (setq request body)
+                 (funcall callback '((capabilities . ((packs . [])))) nil))))
+      (noema-capability-list
+       :scope 'global :requested-packs '("digitize")
+       :callback (lambda (value error-object)
+                   (should-not error-object) (setq result value))))
+    (should result)
+    (should (eq (gethash :global noema-capability--cache) entry))
+    (should (eq (plist-get entry :resolution) 'ordinary-library))
+    (should (equal (append (alist-get 'requestedPacks request) nil) '("digitize")))))
 
 (ert-deftest noema-capability-ui-mutations-call-the-public-api ()
   (with-temp-buffer

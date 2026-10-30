@@ -100,6 +100,9 @@ import {
 import { createKernelRelationshipOverlay } from "./server/lib/kernel-relationships.mjs";
 import { createKernelSupervisor } from "./server/lib/kernel-supervisor.mjs";
 import { writeHostDescriptor } from "./server/lib/host-descriptor.mjs";
+import { createMarginNoteBridge, ensureMarginNoteToken } from "./server/Features/MarginNote/bridge.mjs";
+import { createMarginNoteHttpHandler } from "./server/Features/MarginNote/api.mjs";
+import { startMarginNoteListener } from "./server/Features/MarginNote/listener.mjs";
 import { missingOpenNoteFiles, startNoteWatcher } from "./server/lib/watch.mjs";
 import { workAgendaPlanning } from "./shared/work-agenda.mjs";
 import { validateResearchNotebook } from "./server/lib/research-notebook.mjs";
@@ -332,6 +335,10 @@ const liuGongQuanFontCandidates = [
 mkdirSync(noteRoot, { recursive: true });
 mkdirSync(tmpRoot, { recursive: true });
 const captureToken = hostMode === "server" ? "" : await ensureCaptureToken(stateRoot);
+const marginNoteToken = hostMode === "server" ? "" : await ensureMarginNoteToken(stateRoot);
+const marginNoteBridge = hostMode === "server" ? null : createMarginNoteBridge();
+const handleMarginNote = marginNoteBridge ? createMarginNoteHttpHandler({ bridge: marginNoteBridge, token: marginNoteToken }) : null;
+let marginNoteListener = null;
 
 const serverTheme = serverConfig ? noemaAppTheme(serverConfig.appearance.theme) : null;
 const serverAppConfig = serverConfig ? {
@@ -1663,6 +1670,7 @@ function closeHttpServer() {
 async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3000 } = {}) {
   if (shutdownPromise) return shutdownPromise;
   shuttingDown = true;
+  marginNoteBridge?.close();
   process.stderr.write(`[noema-web] shutting down: ${reason}\n`);
   shutdownPromise = (async () => {
     const deadline = setTimeout(() => {
@@ -1686,6 +1694,7 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
       cancelAllExternalProseChecks("server-shutdown");
       await Promise.allSettled([
         closeHttpServer(),
+        marginNoteListener?.close(),
         Promise.resolve().then(() => rendererBuildWatcher.close()),
         Promise.resolve().then(() => appConfigWatcher.close()),
         Promise.resolve().then(() => noteWatcher.close()),
@@ -3825,6 +3834,8 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (handleMarginNote && await handleMarginNote(req, res)) return;
+
     if (url.pathname.startsWith("/jupyter/nbextensions/")) {
       if (hostMode === "server" || !jupyterCell) {
         sendText(res, 404, "Not found");
@@ -4191,12 +4202,17 @@ if (hostMode !== "server") {
     throw new Error(`Go kernel core failed before host startup: ${initialKernel.reason || initialKernel.state}`);
   }
 }
+if (marginNoteBridge) {
+  try { marginNoteListener = await startMarginNoteListener({ bridge: marginNoteBridge, token: marginNoteToken }); }
+  catch (error) { process.stderr.write(`[noema-web] MarginNote rendezvous unavailable: ${error.message}\n`); }
+}
 server.listen(bindPort, bindHost, () => {
   const port = server.address().port;
   process.stderr.write(`[noema-web] http://${bindHost}:${port}\n`);
   if (hostMode !== "server") {
     try {
-      writeHostDescriptor(stateRoot, { url: `http://${bindHost}:${port}`, noteRoot });
+      writeHostDescriptor(stateRoot, { url: `http://${bindHost}:${port}`, noteRoot,
+        marginnote: { url: marginNoteListener?.url || `http://${bindHost}:${port}/v1/marginnote`, token: marginNoteToken } });
     } catch (error) {
       process.stderr.write(`[noema-web] host descriptor update failed: ${error?.message || error}\n`);
     }

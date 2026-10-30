@@ -344,13 +344,14 @@ Global queries must not consult the current directory or discover a project."
   (cons (if (eq target :global) '(scope . "global") (cons 'cwd target)) fields))
 
 ;;;###autoload
-(cl-defun noema-capability-list (&key project scope requested-skills callback)
-  "Resolve PROJECT's effective Skills and MCPs, then call CALLBACK.
-REQUESTED-SKILLS models per-Run `@@skill' selections.  CALLBACK receives the
+(cl-defun noema-capability-list (&key project scope requested-skills requested-packs callback)
+  "Resolve PROJECT's effective Skills, packs and MCPs, then call CALLBACK.
+REQUESTED-SKILLS and REQUESTED-PACKS model per-task selections without
+persisting them or changing the editor cache.  CALLBACK receives the
 resolution object and an error object.  SCOPE `global' excludes projects."
   (let* ((root (noema-capability--target project scope))
          ;; Run-specific selections must never contaminate editor candidates.
-         (entry (unless requested-skills
+         (entry (unless (or requested-skills requested-packs)
                   (list :pending t :time (float-time) :error nil
                         :resolution (plist-get (gethash root noema-capability--cache) :resolution)))))
     (when entry (puthash root entry noema-capability--cache))
@@ -367,7 +368,8 @@ resolution object and an error object.  SCOPE `global' excludes projects."
          (funcall callback resolution error-object)))))
       (condition-case err
           (noema--host-call "noema:api:research:capability:list"
-                           (noema-capability--body root `((requestedSkills . ,(vconcat requested-skills)))) finish)
+                           (noema-capability--body root `((requestedSkills . ,(vconcat requested-skills))
+                                                         (requestedPacks . ,(vconcat requested-packs)))) finish)
         (error (funcall finish nil `((message . ,(error-message-string err)))))))))
 
 ;;;###autoload

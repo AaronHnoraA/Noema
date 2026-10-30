@@ -22,6 +22,15 @@ Each upstream directory retains its own license, history-facing documentation,
 tests and source layout. Noema-specific code lives in `lisp/`; upstream symbols
 remain intact so mature behavior is reused instead of imperfectly rewritten.
 
+## MarginNote API reference
+
+MarginNote's public API declarations are indexed in
+`plugins/marginnote/api-catalog.json` from `marginnoteapp/Addon`, revision
+`9cae7421a782b68021c004919713476e4fc45309`. Only interface declarations are
+included, not native implementations. The index is reference material for
+agents; runtime support remains the installed host's decision. Regenerate
+with `node scripts/build-marginnote-addon.mjs --refresh-api <checkout>`.
+
 ## Recall and similarity
 
 nanoMuse's memory store was read at `1e08351843052ddcace724e8cac1e4aefbc1101c`
