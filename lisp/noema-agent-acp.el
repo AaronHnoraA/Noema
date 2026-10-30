@@ -117,7 +117,7 @@ and private LaTeX exports."
   (unless (or (eq (bound-and-true-p noema-agent-acp-session-origin)
                   'latex-export)
               (map-nested-elt (agent-shell--state)
-                              '(:agent-config :noema-export-model)))
+                              '(:agent-config :noema-pinned-model)))
     (noema-agent-acp--remember-model identifier model)))
 
 (defun noema-agent-acp--model-config (args)
@@ -127,7 +127,7 @@ and private LaTeX exports."
          (saved (gethash (format "%s" identifier) (noema-agent-acp--read-models)))
          (fallback (map-elt config :default-model-id)))
     (when (and config (stringp saved)
-               (not (map-elt config :noema-export-model)))
+               (not (map-elt config :noema-pinned-model)))
       (setf (alist-get :default-model-id config)
             (lambda ()
               ;; Providers may remove a model. Do not block startup on a stale ID.
@@ -194,16 +194,36 @@ Claude's Sonnet alias may be advertised with a versioned model ID."
                               (string-match-p "sonnet" (downcase id))))
                        available)))))
 
-(defun noema-agent-acp-export-config (config model-id)
-  "Return a private export copy of CONFIG pinned to MODEL-ID.
-Interactive model preferences never override this export-only selection."
+(defun noema-agent-acp-pinned-config (config model-id effort)
+  "Return a copy of CONFIG pinned to MODEL-ID at reasoning EFFORT.
+A task that owns its session (LaTeX export, MarginNote sync) chooses its own
+model; the pin keeps that choice out of the remembered interactive model."
   (let* ((copy (copy-tree config))
-         (identifier (map-elt copy :identifier))
-         (effort-key (pcase identifier
+         (effort-key (pcase (map-elt copy :identifier)
                        ('codex "reasoning_effort")
                        ('claude-code "effort")))
          (default-options (map-elt copy :default-config-options)))
-    (when (eq identifier 'claude-code)
+    (when (and (stringp model-id) (not (string-empty-p model-id)))
+      (setf (alist-get :noema-pinned-model copy) model-id
+            (alist-get :default-model-id copy)
+            (lambda () (noema-agent-acp-export-model-id model-id))))
+    (when (and effort-key (stringp effort) (not (string-empty-p effort)))
+      (setf (alist-get :default-config-options copy)
+            (lambda ()
+              (let ((options (if (functionp default-options)
+                                 (funcall default-options)
+                               default-options)))
+                (cons (cons effort-key effort)
+                      (seq-remove (lambda (entry)
+                                    (equal (car-safe entry) effort-key))
+                                  options))))))
+    copy))
+
+(defun noema-agent-acp-export-config (config model-id)
+  "Return a private export copy of CONFIG pinned to MODEL-ID.
+Interactive model preferences never override this export-only selection."
+  (let ((copy (noema-agent-acp-pinned-config config model-id "medium")))
+    (when (eq (map-elt copy :identifier) 'claude-code)
       ;; Claude's SDK otherwise writes the private export prompt and note text
       ;; under ~/.claude/projects after the temporary workdir is removed.
       (let* ((meta (copy-tree (alist-get :session-meta copy)))
@@ -218,20 +238,6 @@ Interactive model preferences never override this export-only selection."
               (alist-get 'options claude) options
               (alist-get 'claudeCode meta) claude
               (alist-get :session-meta copy) meta)))
-    (when (and (stringp model-id) (not (string-empty-p model-id)))
-      (setf (alist-get :noema-export-model copy) model-id
-            (alist-get :default-model-id copy)
-            (lambda () (noema-agent-acp-export-model-id model-id))))
-    (when effort-key
-      (setf (alist-get :default-config-options copy)
-            (lambda ()
-              (let ((options (if (functionp default-options)
-                                 (funcall default-options)
-                               default-options)))
-                (cons (cons effort-key "medium")
-                      (seq-remove (lambda (entry)
-                                    (equal (car-safe entry) effort-key))
-                                  options))))))
     copy))
 
 (defun noema-agent-acp-set-model (model-id &optional buffer)
@@ -267,8 +273,9 @@ Interactive model preferences never override this export-only selection."
 
 (defvar-local noema-agent-acp-session-origin nil
   "How this agent-shell buffer was started.
-One of `run', `popup', `manual', `foreign', `pi', `takeover', `probe' or
-`side' (an ephemeral side chat, see `noema-agent-acp-ephemeral-origins').
+One of `run', `popup', `manual', `foreign', `pi', `takeover', `probe',
+`marginnote' (a MarginNote sync task), `latex-export' or `side' (an
+ephemeral side chat, see `noema-agent-acp-ephemeral-origins').
 Every entry point records it through `noema-agent-acp-adopt' so one project
 view can list and manage sessions whatever opened them.")
 (put 'noema-agent-acp-session-origin 'permanent-local t)
