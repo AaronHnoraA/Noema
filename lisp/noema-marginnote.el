@@ -1,8 +1,9 @@
 ;;; noema-marginnote.el --- MarginNote digitization tasks -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; This menu hands tasks and managed Skill references to an existing agent.
-;; The digitization workflow and its scripts live with the Skill, not here.
+;; `noema-marginnote-sync' runs a MarginNote task in a pinned agent session
+;; of its own.  The digitization workflow and its scripts live with the
+;; Skill, not here.
 
 ;;; Code:
 
@@ -10,13 +11,8 @@
 (require 'seq)
 (require 'subr-x)
 (require 'json)
-(require 'transient)
 (require 'noema-api)
-(require 'noema-context)
 
-(autoload 'noema-capability-manager "noema-capability-ui" nil t)
-(autoload 'noema-capability-ui-packs "noema-capability-ui" nil t)
-(autoload 'noema-agent-start "noema-agent-acp" nil t)
 (declare-function noema-agent-acp-config-for "noema-agent-acp" (agent))
 (declare-function noema-agent-acp-pinned-config "noema-agent-acp" (config model-id effort))
 (declare-function noema-agent-acp-start "noema-agent-acp" (&rest args))
@@ -27,13 +23,9 @@
 (declare-function noema-agent-acp-draft "noema-agent-acp" (buffer text))
 (declare-function noema-agent-acp-prompt "noema-agent-acp" (&rest args))
 (declare-function noema-agent-acp-show-buffer "noema-agent-acp" (buffer))
-(declare-function noema-agent-acp-sessions "noema-agent-acp" (&optional root))
 
 (defconst noema-marginnote-pack-id "marginnote-digitize"
-  "Managed pack used by the MarginNote task commands.")
-
-(defvar noema-marginnote-source-history nil)
-(defvar noema-marginnote-workdir-history nil)
+  "Managed pack mounted by MarginNote sync sessions.")
 
 (defun noema-marginnote--record (id records)
   "Find ID in JSON RECORDS."
@@ -42,11 +34,11 @@
                   (member id (noema--sequence (noema--value record "aliases")))))
             (noema--sequence records)))
 
-(defun noema-marginnote--pack-context (resolution directory &optional syntax-by-path)
+(defun noema-marginnote--pack-context (resolution directory)
   "Return (GUIDANCE . FILES) for the effective pack in RESOLUTION.
 Resolve source and patch resources against DIRECTORY.  Keep Skill source
-locations so agents can read their relative scripts and references.
-With SYNTAX-BY-PATH, name the Noema syntax document instead of inlining it."
+locations so agents can read their relative scripts and references, and
+name the Noema syntax document rather than inlining it."
   (let* ((pack (noema-marginnote--record
                 noema-marginnote-pack-id (noema--value resolution "packs")))
          (members (copy-sequence (noema--sequence (noema--value pack "members"))))
@@ -89,107 +81,11 @@ With SYNTAX-BY-PATH, name the Noema syntax document instead of inlining it."
       (let ((syntax (expand-file-name "docs/noema/design/syntax.md"
                                       user-emacs-directory)))
         (push syntax files)
-        (push (if syntax-by-path
-                  (format "Before writing, load the current authoritative Noema syntax from %S."
-                          syntax)
-                (format "Current authoritative Noema syntax, loaded from %S:\n\n%s"
-                        syntax
-                        (with-temp-buffer
-                          (insert-file-contents syntax)
-                          (buffer-string))))
+        (push (format "Before writing, load the current authoritative Noema syntax from %S."
+                      syntax)
               guidance)))
     (cons (mapconcat #'identity (nreverse guidance) "\n\n")
           (delete-dups (nreverse files)))))
-
-(defun noema-marginnote--send (task draft &optional files)
-  "Resolve the managed pack and deliver TASK, FILES and DRAFT choice."
-  (let ((origin (current-buffer))
-        (directory default-directory)
-        (project (noema-current-project)))
-    (noema-capability-list
-     :project project :scope (unless project 'global)
-     :requested-packs (list noema-marginnote-pack-id)
-     :callback
-     (lambda (resolution error-object)
-       (if error-object
-           (message "MarginNote: %s" (or (noema--value error-object "message") error-object))
-         (when (buffer-live-p origin)
-           (with-current-buffer origin
-             (let* ((default-directory directory)
-                    (context (noema-marginnote--pack-context
-                              resolution (or project directory))))
-               (noema-context-send-prompt
-                (concat (car context) "\n\n" task)
-                :files (append (cdr context) files) :draft draft)))))))))
-
-(defun noema-marginnote--workdir (directory)
-  "Validate DIRECTORY and return its workflow.json path."
-  (let ((file (expand-file-name "workflow.json" directory)))
-    (unless (file-readable-p file)
-      (user-error "No MarginNote workflow.json in %s" directory))
-    file))
-
-;;;###autoload
-(defun noema-marginnote-digitize (source &optional draft)
-  "Perform smart OCR on native MarginNote SOURCE with the current agent.
-SOURCE is a notebook, study set or document name/id, not a local PDF path.
-With prefix argument DRAFT, prepare the task without sending it."
-  (interactive (list (read-string "MarginNote notebook/document name or id: "
-                                  nil 'noema-marginnote-source-history)
-                     current-prefix-arg))
-  (when (string-empty-p (string-trim source)) (user-error "Name a MarginNote source"))
-  (noema-marginnote--send
-   (format "Perform smart OCR only on the native MarginNote notebook/document identified by %S, writing Markdown to the requested target. Resolve its native identity and requested range first. Preserve the author's content, order, structure, notation and unfinished work; correct only obvious typos. Do not organize, expand or merge notes unless explicitly requested. Keep OCR reasoning and symbol-reading explanations out of the note body. Use the included Noema authoring Skills for math, Mermaid, marmind and TikZ; preserve diagrams as clear source screenshots or faithful TikZ. Prefer PDF source evidence and crops. Preserve manual edits and report the output path and covered range briefly."
-           source) draft))
-
-;;;###autoload
-(defun noema-marginnote-resume (directory &optional draft)
-  "Continue the digitization workflow in DIRECTORY; prefix DRAFT only drafts."
-  (interactive (list (read-directory-name "MarginNote workflow asset directory: "
-                                          (car noema-marginnote-workdir-history) nil t)
-                     current-prefix-arg))
-  (let ((file (noema-marginnote--workdir directory)))
-    (add-to-history 'noema-marginnote-workdir-history (file-name-directory file))
-    (noema-marginnote--send
-     (format "Continue smart OCR only for the MarginNote workflow recorded in %S. Inspect workflow.py status and the current OCR target before resuming. Stay within the requested range, preserve the author's structure and manual edits, and only advance verified ranges. Resuming OCR does not authorize organizing, expanding or merging notes; preserve a conflicting candidate instead. Keep processing explanations out of the note body."
-             file) draft (list file))))
-
-;;;###autoload
-(defun noema-marginnote-merge (current incoming &optional draft)
-  "Merge INCOMING Markdown from another handwritten draft into CURRENT.
-With prefix DRAFT, prepare the task without sending it."
-  (interactive (list (read-file-name "Current Markdown: " nil nil t)
-                     (read-file-name "Incoming Markdown from revised notebook: " nil nil t)
-                     current-prefix-arg))
-  (when (or (equal (expand-file-name current) (expand-file-name incoming))
-            (file-equal-p current incoming))
-    (user-error "Choose two different Markdown files"))
-  (noema-marginnote--send
-   (format "Merge the revised handwritten draft's Markdown %S into the existing Markdown %S. Read both and look for a genuine common base/provenance; use a three-way merge when available. Preserve existing manual edits, links and notation. Without a common base reconcile passages and formulas explicitly. Use local Noema ediff only for conflicts requiring the author's judgement."
-           (expand-file-name incoming) (expand-file-name current))
-   draft (list current incoming)))
-
-;;;###autoload
-(defun noema-marginnote-status (directory &optional draft)
-  "Ask the agent to inspect workflow DIRECTORY without changing notes.
-With prefix DRAFT, prepare the query without sending it."
-  (interactive (list (read-directory-name "MarginNote workflow asset directory: "
-                                          (car noema-marginnote-workdir-history) nil t)
-                     current-prefix-arg))
-  (let ((file (noema-marginnote--workdir directory)))
-    (add-to-history 'noema-marginnote-workdir-history (file-name-directory file))
-    (noema-marginnote--send
-     (format "Inspect the MarginNote workflow in %S using workflow.py status. Report source identity, accepted ranges, remaining pages, pending merge/write state and unresolved recognition. This is a read-only progress query; do not change Markdown, workflow state or native notes."
-             (file-name-directory file)) draft (list file))))
-
-;;;###autoload
-(defun noema-marginnote-manage-pack ()
-  "Open the existing Skill Manager's pack library.
-In agent input buffers retain the manager's normal read-only lookup."
-  (interactive)
-  (noema-capability-manager nil "pack")
-  (when (derived-mode-p 'noema-capability-ui-mode)
-    (noema-capability-ui-packs)))
 
 ;;; Sync: a session of its own
 
@@ -368,51 +264,12 @@ never changes the model of ordinary sessions."
          (condition-case err
              (let* ((default-directory directory)
                     (context (noema-marginnote--pack-context
-                              resolution (or project directory) t)))
+                              resolution (or project directory))))
                (noema-marginnote--sync-start
                 (concat (car context) "\n\n"
                         (noema-marginnote--sync-task prompt target mode))
                 effort))
            (error (message "MarginNote sync: %s" (error-message-string err)))))))))
-
-;;;###autoload
-(defalias 'noema-sync-marginnote #'noema-marginnote-sync)
-
-;;;###autoload
-(defun noema-marginnote-sync-open ()
-  "Open a live MarginNote sync session."
-  (interactive)
-  (require 'noema-agent-acp)
-  (let* ((sessions (seq-filter (lambda (session)
-                                 (eq (plist-get session :origin) 'marginnote))
-                               (noema-agent-acp-sessions)))
-         (table (mapcar (lambda (session)
-                          (cons (format "%s%s" (buffer-name (plist-get session :buffer))
-                                        (if (plist-get session :busy) "  (running)" ""))
-                                (plist-get session :buffer)))
-                        sessions)))
-    (unless table (user-error "No MarginNote sync session is live"))
-    (noema-agent-acp-show-buffer
-     (cdr (assoc (if (cdr table)
-                     (completing-read "MarginNote sync session: " table nil t)
-                   (caar table))
-                 table)))))
-
-;;;###autoload
-(transient-define-prefix noema-marginnote ()
-  "MarginNote handwriting and managed digitization Skills.
-Use C-u on a task command to draft instead of sending."
-  ["Sync (own pinned session)"
-   ("S" "Sync with a prompt" noema-marginnote-sync)
-   ("o" "Open sync session" noema-marginnote-sync-open)]
-  ["MarginNote → Markdown in the current agent (C-u: draft)"
-   ("d" "OCR / update native notes" noema-marginnote-digitize)
-   ("r" "Resume OCR" noema-marginnote-resume)
-   ("m" "Merge Markdown explicitly" noema-marginnote-merge)
-   ("s" "Inspect workflow progress" noema-marginnote-status)]
-  ["Agent / Skills"
-   ("a" "Start agent session" noema-agent-start)
-   ("p" "Manage pack" noema-marginnote-manage-pack)])
 
 (provide 'noema-marginnote)
 ;;; noema-marginnote.el ends here
