@@ -236,20 +236,26 @@ Agenda, configuration and private Wiki/Graph are not standalone Web products, bu
 
 ## Internalized AI implementation
 
-Noema directly carries the complete source of gptel, agent-shell, acp.el,
-shell-maker and Magent under `upstream/`. They are not installed as Noema
-package dependencies, and Noema does not replace them with partial rewrites.
+Noema currently carries complete gptel and Magent source under `upstream/`.
+agent-shell, acp.el and shell-maker are pristine package-vc dependencies,
+pinned together by the Emacs configuration. These implementations are reused
+whole rather than replaced with partial rewrites.
 
 - gptel supplies compose, arbitrary-buffer send, context, transient controls
   and rewrite/diff review;
 - agent-shell + acp.el supply structured processes, sessions, streaming,
   permission and input interaction;
 - Magent supplies the local agent, queue, ledger and gptel adapter;
-- Noema supplies the public entry points and Project/WorkNode/Run/Artifact
-  integration.
+- Emacs owns reusable agent infrastructure, management, editor interaction
+  and notification policy;
+- Noema supplies Markdown/knowledge features and the Research
+  Project/WorkNode/Run/Artifact integration, calling the common agent layer.
 
-Noema-specific Emacs code lives in `lisp/`. `noema-agent-acp.el` is the single
+Noema-specific Emacs code lives in `lisp/`. `+agent-acp.el` is the single
 research/runtime coupling boundary to agent-shell/acp implementation details.
+Generic session, rendering and management code still in Noema is extraction
+debt; the boundary and remaining work are specified in
+`../../docs/design/agent-management.md`.
 Versions and licenses are recorded in [UPSTREAMS.md](UPSTREAMS.md).
 
 ## Architecture
@@ -326,9 +332,9 @@ The repository still contains a read-only server renderer for publishing Markdow
 - `kernel/noema/research/`: Go research/runtime store, indexes, events and CAS.
 - `lisp/noema-research*.el`: JuText, WorkNode model, graph, inspector and synthesis.
 - `lisp/noema-api.el`, `lisp/noema-capability-ui.el`: public semantic API and Emacs capability manager.
-- `lisp/noema-agent*.el`: ACP boundary, AgentSession worker, promotion and takeover paths.
-- `lisp/noema-compose.el`, `lisp/noema-interaction*.el`: gptel UI entry points and migrated interaction/CLI fallback behavior.
-- `upstream/`: complete internalized gptel, Magent and existing CLI compatibility sources. agent-shell, acp.el and shell-maker are pristine package-vc dependencies (see `UPSTREAMS.md`).
+- `lisp/noema-agent*.el`: Research association adapter, AgentSession worker, promotion and takeover paths. Shared ACP/session/UI management lives in Emacs `../../lisp/tools/agent/`.
+- `lisp/noema-context.el`, `lisp/noema-interaction*.el`: knowledge/page context adapters and interaction/CLI fallback behavior; shared gptel composition lives in Emacs `tools/agent/compose`.
+- `upstream/`: existing CLI compatibility sources. Complete gptel/Magent sources are maintained in Emacs `../../site-lisp/`; agent-shell, acp.el and shell-maker are pristine package-vc dependencies (see `UPSTREAMS.md`).
 
 The authoritative product model is maintained in `~/Desktop/]/DESIGN.md`, with decisions in `DECISIONS.md` and the long-running implementation prompt in `BOOTSTRAP.md`.
 

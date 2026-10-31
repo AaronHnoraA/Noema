@@ -17,9 +17,9 @@
 (require 'subr-x)
 (require 'tabulated-list)
 (require 'noema-research)
-(require 'noema-agent-acp)
+(require 'tools/agent/acp)
 (require 'noema-agent-promote)
-(require 'noema-agent-worktree)
+(require 'tools/agent/worktree)
 
 (declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
 (declare-function +noema--api-call-sync "noema/bridge/config" (channel args &optional timeout))
@@ -86,12 +86,12 @@ its project is not a Noema project, so it is listed here beside the rest.")
   (let ((name (noema-sessions--string entry "name"))
         (session-id (noema-sessions--string entry "sessionId")))
     (or (and name
-             (let ((buffer (noema-agent-acp-session-buffer name root)))
+             (let ((buffer (+agent-acp-session-buffer name root)))
                (and (noema-sessions--execution-live-p buffer) buffer)))
         (and session-id
              (seq-find (lambda (buffer)
                          (and (noema-sessions--execution-live-p buffer)
-                              (equal (buffer-local-value 'noema-agent-acp-session-root buffer)
+                              (equal (buffer-local-value '+agent-acp-session-root buffer)
                                      (file-name-as-directory (expand-file-name root)))
                               (local-variable-p 'noema-agent-promote--session-id buffer)
                               (equal (buffer-local-value 'noema-agent-promote--session-id buffer)
@@ -100,8 +100,8 @@ its project is not a Noema project, so it is listed here beside the rest.")
 
 (defun noema-sessions--execution-live-p (buffer)
   "Return non-nil if BUFFER has an ACP client process still running."
-  (and (noema-agent-acp-agent-buffer-p buffer)
-       (let ((process (noema-agent-acp-state-value buffer '(:client :process))))
+  (and (+agent-acp-agent-buffer-p buffer)
+       (let ((process (+agent-acp-state-value buffer '(:client :process))))
          (and (processp process) (process-live-p process)))))
 
 (defun noema-sessions--local-sessions (names root)
@@ -111,7 +111,7 @@ its project is not a Noema project, so it is listed here beside the rest.")
       (when-let* ((buffer (noema-sessions--live-buffer entry root)))
         (puthash buffer t covered)))
     (seq-remove (lambda (session) (gethash (plist-get session :buffer) covered))
-                (noema-agent-acp-sessions root))))
+                (+agent-acp-sessions root))))
 
 (defun noema-sessions--local-label (session)
   "Return the row id and display name of local SESSION."
@@ -122,7 +122,7 @@ its project is not a Noema project, so it is listed here beside the rest.")
   "Return the `tabulated-list-entries' row for local SESSION."
   (let ((name (noema-sessions--local-label session)))
     (list name
-          (vector (or (noema-agent-acp-attention-mark (plist-get session :buffer)) "")
+          (vector (or (+agent-acp-attention-mark (plist-get session :buffer)) "")
                   name
                   (or (plist-get session :agent) "")
                   "local"
@@ -137,11 +137,11 @@ its project is not a Noema project, so it is listed here beside the rest.")
 A running session that has gone quiet is how a stuck agent looks; the list
 says so instead of letting \"running\" hide it.  Adopted from Pisper."
   :type 'natnum
-  :group 'noema-agent-session)
+  :group '+agent-session)
 
 (defun noema-sessions--running-status (buffer)
   "Return \"running\", with how long live BUFFER has been quiet if long."
-  (let* ((last (and buffer (buffer-local-value 'noema-agent-acp-last-used-at buffer)))
+  (let* ((last (and buffer (buffer-local-value '+agent-acp-last-used-at buffer)))
          (idle (and last (- (float-time) last))))
     (if (and idle (>= idle noema-sessions-idle-threshold))
         (format "running, idle %s"
@@ -206,8 +206,8 @@ The kernel keeps the latest usage the agent reported for the bound Session."
 (defun noema-sessions--buffer-cell (buffer)
   "Return the Buffer cell for live agent BUFFER, with its queued prompts."
   (cond ((not buffer) "")
-        ((zerop (noema-agent-acp-pending-prompt-count buffer)) "yes")
-        (t (format "yes +%dq" (noema-agent-acp-pending-prompt-count buffer)))))
+        ((zerop (+agent-acp-pending-prompt-count buffer)) "yes")
+        (t (format "yes +%dq" (+agent-acp-pending-prompt-count buffer)))))
 
 (defun noema-sessions--last-run (run)
   "Return the Last Run cell for RUN: its time, status and failure kind.
@@ -230,7 +230,7 @@ the person first."
     (list name
           (vector (let ((mark (noema-sessions--attention entry)))
                     (if (string-empty-p mark)
-                        (or (noema-agent-acp-attention-mark
+                        (or (+agent-acp-attention-mark
                              (noema-sessions--live-buffer entry root))
                             "")
                       mark))
@@ -345,17 +345,17 @@ the person first."
   "Open ENTRY's recorded conversation in a hidden agent buffer, without a Run."
   (let* ((name (noema-sessions--string entry "name"))
          (agent (noema-sessions--string entry "agent"))
-         (config (or (noema-agent-acp-config-for agent)
+         (config (or (+agent-acp-config-for agent)
                      (user-error "No agent-shell configuration for %s" agent)))
          ;; An agent finds a native conversation by the directory it ran in.
          (target (noema-sessions--string entry "executionTarget"))
          (directory (if (and target (file-directory-p target))
                         target
                       (noema-project-workspace root)))
-         (buffer (noema-agent-acp-start :config config :directory directory :focus t
+         (buffer (+agent-acp-start :config config :directory directory :focus t
                                         :origin 'run
                                         :session-id (noema-sessions--string entry "nativeSessionId"))))
-    (noema-agent-acp-mark-session-buffer buffer name agent root)
+    (+agent-acp-mark-session-buffer buffer name agent root)
     (with-current-buffer buffer
       (setq-local noema-agent-promote--session-id (noema-sessions--string entry "sessionId")))
     buffer))
@@ -380,7 +380,7 @@ the person first."
   "Mark session NAME read.  A failure stays until a later Run succeeds."
   (interactive (list (noema-sessions--name-at-point)))
   (let ((entry (noema-sessions--entry name)))
-    (noema-agent-acp-clear-attention
+    (+agent-acp-clear-attention
      (or (plist-get (noema-sessions--local name) :buffer)
          (and entry (noema-sessions--live-buffer entry noema-sessions--root)))))
   (noema-sessions--durable name)
@@ -407,7 +407,7 @@ Showing it is reading it."
         (name (noema-sessions--string entry "name")))
     (noema-sessions--note-read entry root)
     (cond
-     (live (noema-agent-acp-show-buffer live))
+     (live (+agent-acp-show-buffer live))
      ((equal name "pi") (noema-pi-router-open root))
      ((and (noema-sessions--string entry "nativeSessionId")
            (member (noema-sessions--string entry "sessionState") '("active" "warm")))
@@ -454,9 +454,9 @@ and resume the native conversation into the same project Agent workspace."
 (defun noema-sessions--side-buffer (root parent)
   "Return the live side chat of session PARENT in ROOT, or nil."
   (seq-find (lambda (buffer)
-              (and (noema-agent-acp-agent-buffer-p buffer)
-                   (equal (buffer-local-value 'noema-agent-acp-side-parent buffer) parent)
-                   (equal (buffer-local-value 'noema-agent-acp-session-root buffer) root)))
+              (and (+agent-acp-agent-buffer-p buffer)
+                   (equal (buffer-local-value '+agent-acp-side-parent buffer) parent)
+                   (equal (buffer-local-value '+agent-acp-session-root buffer) root)))
             (buffer-list)))
 
 (defun noema-sessions--open-side-chat (root parent agent directory)
@@ -467,14 +467,14 @@ touched -- and never enters the durable registry.  Once idle and hidden it is
 stopped by the same sweep as a Run's warm session."
   (let ((buffer (noema-sessions--side-buffer root parent)))
     (unless buffer
-      (let ((config (or (noema-agent-acp-config-for agent)
+      (let ((config (or (+agent-acp-config-for agent)
                         (user-error "No agent-shell configuration for %s" agent))))
-        (setq buffer (noema-agent-acp-start :config config :directory directory :origin 'side))
+        (setq buffer (+agent-acp-start :config config :directory directory :origin 'side))
         (with-current-buffer buffer
-          (setq-local noema-agent-acp-side-parent parent))
-        (noema-agent-acp-adopt buffer :agent agent :origin 'side :root root
-                               :name (noema-agent-acp--unique-name (format "side/%s" parent) root))))
-    (noema-agent-acp-show-buffer buffer)
+          (setq-local +agent-acp-side-parent parent))
+        (+agent-acp-adopt buffer :agent agent :origin 'side :root root
+                               :name (+agent-acp--unique-name (format "side/%s" parent) root))))
+    (+agent-acp-show-buffer buffer)
     buffer))
 
 (defun noema-sessions-side-chat (name)
@@ -493,7 +493,7 @@ history, and goes away on its own once idle and hidden."
   (interactive)
   (pcase-let ((`(,buffer ,root ,name) (noema-sessions--agent-target buffer)))
     (noema-sessions--open-side-chat
-     root name (buffer-local-value 'noema-agent-acp-session-agent buffer)
+     root name (buffer-local-value '+agent-acp-session-agent buffer)
      (buffer-local-value 'default-directory buffer))))
 
 (defun noema-sessions-visit ()
@@ -502,7 +502,7 @@ history, and goes away on its own once idle and hidden."
   (let* ((name (noema-sessions--name-at-point))
          (local (noema-sessions--local name)))
     (if local
-        (noema-agent-acp-show-buffer (plist-get local :buffer))
+        (+agent-acp-show-buffer (plist-get local :buffer))
       (noema-sessions--visit-entry (noema-sessions--durable name) noema-sessions--root))))
 
 (defun noema-sessions-conversation-tree ()
@@ -515,26 +515,26 @@ Resume a recorded conversation first when its agent buffer is closed."
                      (plist-get local :buffer)
                    (noema-sessions--entry-buffer
                     (noema-sessions--durable name) noema-sessions--root))))
-    (if (noema-agent-acp-state-value buffer '(:session :id))
-        (noema-agent-acp-conversation-tree buffer)
+    (if (+agent-acp-state-value buffer '(:session :id))
+        (+agent-acp-conversation-tree buffer)
       (let (subscription opened)
         (cl-labels ((open-tree ()
                       (unless opened
                         (setq opened t)
-                        (noema-agent-acp-unsubscribe
+                        (+agent-acp-unsubscribe
                          :buffer buffer :subscription subscription)
                         (when (buffer-live-p buffer)
                           (condition-case err
-                              (noema-agent-acp-conversation-tree buffer)
+                              (+agent-acp-conversation-tree buffer)
                             (error (message "Noema conversation tree: %s"
                                             (error-message-string err))))))))
           (setq subscription
-                (noema-agent-acp-subscribe
+                (+agent-acp-subscribe
                  :buffer buffer :event 'init-finished
                  :callback (lambda (_event) (open-tree))))
           ;; Initialization can finish between the first state check and
           ;; subscription.  Check once more so the tree never waits forever.
-          (when (noema-agent-acp-state-value buffer '(:session :id))
+          (when (+agent-acp-state-value buffer '(:session :id))
             (open-tree))
           (unless opened
             (message "Opening %s's conversation tree after the agent connects" name)))))))
@@ -568,9 +568,9 @@ ordinary, undoable edits.  DONE is called with non-nil on success."
          (dolist (buffer (noema-sessions--project-jutext-buffers root))
            (with-current-buffer buffer
              (setq edited (+ edited (noema-research-rename-session-directives name new-name)))))
-         (when-let* ((agent-buffer (noema-agent-acp-session-buffer name root)))
-           (noema-agent-acp-mark-session-buffer
-            agent-buffer new-name (buffer-local-value 'noema-agent-acp-session-agent agent-buffer) root))
+         (when-let* ((agent-buffer (+agent-acp-session-buffer name root)))
+           (+agent-acp-mark-session-buffer
+            agent-buffer new-name (buffer-local-value '+agent-acp-session-agent agent-buffer) root))
          (message "Renamed %s to %s%s" name new-name
                   (if (> edited 0) (format "; %d @@session line(s) updated (unsaved)" edited) ""))))
      (when done (funcall done (not error-object))))))
@@ -666,9 +666,9 @@ THEN, when non-nil, is called with point on that work block."
        (if error-object
            (message "Noema: %s" (noema-sessions--error error-object))
          ;; Never replace the Agent window's session with the document.
-         (when-let* (((window-parameter (selected-window) 'noema-agent-workspace))
+         (when-let* (((window-parameter (selected-window) 'agent-workspace))
                      (other (seq-find (lambda (window)
-                                        (not (window-parameter window 'noema-agent-workspace)))
+                                        (not (window-parameter window 'agent-workspace)))
                                       (window-list nil 'nomini))))
            (select-window other))
          (find-file (noema-sessions--string result "file"))
@@ -715,20 +715,20 @@ most likely fail the same way."
 (defun noema-sessions-magit-status (name)
   "Open Magit status for the checkout session NAME works in."
   (interactive (list (noema-sessions--name-at-point)))
-  (noema-agent-worktree-magit-status (noema-sessions--checkout-directory name)))
+  (+agent-worktree-magit-status (noema-sessions--checkout-directory name)))
 
 (defun noema-sessions-magit-diff (name)
-  "Show what session NAME changed; see `noema-agent-worktree-magit-diff'."
+  "Show what session NAME changed; see `+agent-worktree-magit-diff'."
   (interactive (list (noema-sessions--name-at-point)))
-  (noema-agent-worktree-magit-diff (noema-sessions--checkout-directory name)))
+  (+agent-worktree-magit-diff (noema-sessions--checkout-directory name)))
 
 ;;; Agent window tab commands
 
 (defun noema-sessions--agent-target (buffer)
   "Return (BUFFER ROOT NAME) for the named session of agent BUFFER."
-  (let* ((buffer (noema-agent-acp-command-buffer buffer))
-         (name (buffer-local-value 'noema-agent-acp-session-name buffer))
-         (root (buffer-local-value 'noema-agent-acp-session-root buffer)))
+  (let* ((buffer (+agent-acp-command-buffer buffer))
+         (name (buffer-local-value '+agent-acp-session-name buffer))
+         (root (buffer-local-value '+agent-acp-session-root buffer)))
     (unless name
       (user-error "This agent buffer was retired by a newer session; close it instead"))
     (list buffer (noema-sessions--project-root root) name)))
@@ -754,7 +754,7 @@ most likely fail the same way."
   (pcase-let* ((`(,buffer ,root ,name) (noema-sessions--agent-target buffer))
                (child (or child (read-string (format "Fork %s as: " name) (concat name "/")))))
     (noema-sessions--fork root name child
-                          (buffer-local-value 'noema-agent-acp-session-agent buffer)
+                          (buffer-local-value '+agent-acp-session-agent buffer)
                           (lambda (_ok) (noema-sessions--refresh-lists root)))))
 
 (defun noema-sessions-agent-archive (&optional buffer)
@@ -762,20 +762,20 @@ most likely fail the same way."
   (interactive)
   (pcase-let ((`(,buffer ,root ,name) (noema-sessions--agent-target buffer)))
     (when (and (yes-or-no-p (format "Archive session %s and close its tab? " name))
-               (noema-agent-acp-confirm-stop buffer "archive"))
+               (+agent-acp-confirm-stop buffer "archive"))
       (noema-sessions--archive
        root name t
        (lambda (ok)
          (when (and ok (buffer-live-p buffer))
-           (noema-agent-acp-kill buffer))
+           (+agent-acp-kill buffer))
          (noema-sessions--refresh-lists root))))))
 
 (defun noema-sessions-agent-restart (&optional buffer)
   "Restart the session of agent BUFFER: stop its process, resume its conversation."
   (interactive)
   (pcase-let ((`(,buffer ,root ,name) (noema-sessions--agent-target buffer)))
-    (when (noema-agent-acp-confirm-stop buffer "restart")
-      (noema-agent-acp-kill buffer)
+    (when (+agent-acp-confirm-stop buffer "restart")
+      (+agent-acp-kill buffer)
       (noema-sessions-open-reference root name))))
 
 (defun noema-sessions-agent-jump (&optional buffer)
@@ -798,8 +798,8 @@ most likely fail the same way."
 (defun noema-sessions-agent-list (&optional buffer)
   "Open the session list of agent BUFFER's project."
   (interactive)
-  (let* ((buffer (noema-agent-acp-command-buffer buffer))
-         (default-directory (buffer-local-value 'noema-agent-acp-session-root buffer)))
+  (let* ((buffer (+agent-acp-command-buffer buffer))
+         (default-directory (buffer-local-value '+agent-acp-session-root buffer)))
     (noema-sessions 'project)))
 
 (defun noema-sessions-toggle-scope ()
@@ -922,10 +922,10 @@ first; a context send must never revive a recorded conversation."
    (if live-only
        (let* ((sessions (seq-filter
                          (lambda (session)
-                           (and (not (noema-agent-acp-export-session-p session))
+                           (and (not (noema-agent-export-session-p session))
                                 (noema-sessions--execution-live-p
                                  (plist-get session :buffer))))
-                         (noema-agent-acp-sessions)))
+                         (+agent-acp-sessions)))
               (local (seq-filter (lambda (session)
                                    (equal (plist-get session :root) root))
                                  sessions))
@@ -969,7 +969,7 @@ first; a context send must never revive a recorded conversation."
                                     (file-name-nondirectory
                                      (directory-file-name (or (plist-get session :root) "/"))))
                             (cons nil (plist-get session :buffer)))))
-                  (noema-agent-acp-sessions)))))))
+                  (+agent-acp-sessions)))))))
 
 (defun noema-sessions--entry-buffer (entry root)
   "Return a live agent buffer for durable ENTRY of ROOT, resuming when needed."
@@ -1009,13 +1009,13 @@ The ACP agent remains the authority for the actual conversation history."
 
 (defun noema-sessions--start-new (root)
   "Start a new agent session in ROOT, register it and return its buffer."
-  (let* ((agent (completing-read "Agent: " (noema-agent-acp-known-agents) nil t))
-         (config (or (noema-agent-acp-config-for agent)
+  (let* ((agent (completing-read "Agent: " (+agent-acp-known-agents) nil t))
+         (config (or (+agent-acp-config-for agent)
                      (user-error "No agent-shell configuration for %s" agent)))
-         (buffer (noema-agent-acp-start :config config
+         (buffer (+agent-acp-start :config config
                                         :directory (noema-project-workspace root)
                                         :origin 'manual)))
-    (noema-agent-acp-adopt buffer :agent agent :origin 'manual :root root)
+    (+agent-acp-adopt buffer :agent agent :origin 'manual :root root)
     buffer))
 
 ;;;###autoload
@@ -1037,7 +1037,7 @@ buffer matches the live choice that owns it and the durable entry it serves."
                    (or (eq (cdr value) default)
                        (and (car value)
                             (when-let* ((name (buffer-local-value
-                                               'noema-agent-acp-session-name default)))
+                                               '+agent-acp-session-name default)))
                               (equal (noema-sessions--string (car value) "name")
                                      name)))))))
           choices)))))
@@ -1102,7 +1102,7 @@ append a clipboard choice after every session and return `clipboard' for it."
 (defun noema-sessions-switch ()
   "Switch to any live agent session, named by its project or by this one."
   (interactive)
-  (noema-agent-acp-show-buffer (noema-sessions-read)))
+  (+agent-acp-show-buffer (noema-sessions-read)))
 
 (provide 'noema-sessions)
 ;;; noema-sessions.el ends here

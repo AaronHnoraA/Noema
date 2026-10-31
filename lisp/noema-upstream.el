@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'tools/agent/upstream)
 
 (defconst noema-upstream-root
   (file-name-directory
@@ -16,16 +17,14 @@
   "Absolute root of the embedded Noema source tree.")
 
 (defconst noema-upstream-load-paths
-  '("upstream/gptel"
-    "upstream/magent/lisp"
-    "upstream/codex-cli"
+  '("upstream/codex-cli"
     "upstream/claude-code-ide")
   "Complete upstream source trees internalized by Noema.")
 
 (defun noema-upstream-activate ()
   "Put Noema's embedded upstream source trees before external packages."
   ;; Also remove obsolete paths on config reload; do not unload live sessions.
-  (dolist (name '("acp" "shell-maker" "agent-shell"))
+  (dolist (name '("acp" "shell-maker" "agent-shell" "gptel" "magent"))
     (let ((retired (expand-file-name (concat "upstream/" name) noema-upstream-root)))
       (setq load-path
             (cl-remove-if (lambda (path)

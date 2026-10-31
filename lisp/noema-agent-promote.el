@@ -10,7 +10,7 @@
 
 (require 'map)
 (require 'subr-x)
-(require 'noema-agent-acp)
+(require 'tools/agent/acp)
 
 (declare-function noema-project-client-path "noema-research" (path))
 (declare-function noema-project-host-file "noema-research" (file))
@@ -34,18 +34,18 @@
   "Return the promotion payload for agent-shell BUFFER.
 TITLE and GOAL describe the Workstream created when this is the first
 promotion.  ROOT overrides the working directory the Session is recorded
-under, which is how a session registered by `noema-agent-acp-adopt' lands in
+under, which is how a session registered by `+agent-acp-adopt' lands in
 its project rather than in whatever directory its process runs in.  The ACP
 session id remains the native id; Noema assigns its own logical Session id on
 the host."
   (with-current-buffer (or buffer (current-buffer))
-    (unless (noema-agent-acp-agent-buffer-p (current-buffer))
+    (unless (+agent-acp-agent-buffer-p (current-buffer))
       (user-error "Current buffer is not an agent-shell session"))
     (let* ((buffer (current-buffer))
-           (native-id (noema-agent-acp-state-value buffer '(:session :id)))
-           (config (noema-agent-acp-state-value buffer '(:agent-config)))
+           (native-id (+agent-acp-state-value buffer '(:session :id)))
+           (config (+agent-acp-state-value buffer '(:agent-config)))
            (identifier (map-elt config :identifier))
-           (session-title (noema-agent-acp-state-value buffer '(:session :title)))
+           (session-title (+agent-acp-state-value buffer '(:session :title)))
            (client (lambda (directory)
                      (let ((directory (file-name-as-directory (expand-file-name directory))))
                        (or (and (fboundp 'noema-project-client-path)
@@ -68,12 +68,12 @@ the host."
                       (buffer-name)))
         (goal . ,(or goal ""))
         (capabilities
-         . ((sessionList . ,(and (noema-agent-acp-state-value buffer '(:supports-session-list)) t))
-            (sessionLoad . ,(and (noema-agent-acp-state-value buffer '(:supports-session-load)) t))
-            (sessionResume . ,(and (noema-agent-acp-state-value buffer '(:supports-session-resume)) t))
-            (sessionFork . ,(and (noema-agent-acp-state-value buffer '(:supports-session-fork)) t))
-            (modelId . ,(or (noema-agent-acp-state-value buffer '(:session :model-id)) ""))
-            (modeId . ,(or (noema-agent-acp-state-value buffer '(:session :mode-id)) ""))))))))
+         . ((sessionList . ,(and (+agent-acp-state-value buffer '(:supports-session-list)) t))
+            (sessionLoad . ,(and (+agent-acp-state-value buffer '(:supports-session-load)) t))
+            (sessionResume . ,(and (+agent-acp-state-value buffer '(:supports-session-resume)) t))
+            (sessionFork . ,(and (+agent-acp-state-value buffer '(:supports-session-fork)) t))
+            (modelId . ,(or (+agent-acp-state-value buffer '(:session :model-id)) ""))
+            (modeId . ,(or (+agent-acp-state-value buffer '(:session :mode-id)) ""))))))))
 
 ;;;###autoload
 (defun noema-agent-promote-current-session (&optional title goal)
@@ -139,8 +139,8 @@ CALLBACK, when given, receives the Session id or nil."
                   (fboundp '+noema-api-call)
                   (bound-and-true-p +noema--ready)))
         (funcall done nil)
-      (let* ((root (buffer-local-value 'noema-agent-acp-session-root buffer))
-             (agent (or (buffer-local-value 'noema-agent-acp-session-agent buffer) ""))
+      (let* ((root (buffer-local-value '+agent-acp-session-root buffer))
+             (agent (or (buffer-local-value '+agent-acp-session-agent buffer) ""))
              (payload (ignore-errors
                         (noema-agent-promote--session-spec buffer name nil root))))
         (if (not payload)

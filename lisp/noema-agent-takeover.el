@@ -12,7 +12,7 @@
 (require 'map)
 (require 'seq)
 (require 'subr-x)
-(require 'noema-agent-acp)
+(require 'tools/agent/acp)
 
 (declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
 (declare-function +portal-create "term/portal/config" (&rest args))
@@ -75,7 +75,7 @@ REASON is stored in the durable handback event."
                (when (and restart config native-id)
                  (let* ((default-directory directory)
 		 (resumed
-			 (noema-agent-acp-start
+			 (+agent-acp-start
                           :config config :directory directory :session-id native-id
                           :origin 'takeover)))
 		   (when (buffer-live-p resumed)
@@ -125,7 +125,7 @@ REASON is stored in the durable handback event."
 	 (session-id (noema-agent-takeover--value session "id"))
          (native-id (noema-agent-takeover--value session "nativeSessionId"))
          (config (and (buffer-live-p origin)
-                      (copy-tree (noema-agent-acp-state-value origin '(:agent-config))))))
+                      (copy-tree (+agent-acp-state-value origin '(:agent-config))))))
     (unless (and id version root session-id native-id config command
                  (seq-every-p (lambda (part) (and (stringp part) (not (string-empty-p part)))) command))
       (error "Noema takeover response is incomplete"))
@@ -133,7 +133,7 @@ REASON is stored in the durable handback event."
       (user-error "Native TUI executable not found: %s" (car command)))
     (require 'term/portal/config)
     (when (buffer-live-p origin)
-      (noema-agent-acp-shutdown origin))
+      (+agent-acp-shutdown origin))
     (let* ((default-directory directory)
            (buffer (+portal-create
                     :directory directory
@@ -164,7 +164,7 @@ REASON is stored in the durable handback event."
   (let ((origin (current-buffer))
         ;; The Session belongs to the Project the buffer was registered under;
         ;; the agent's own directory may be a workspace outside it.
-        (root (or (bound-and-true-p noema-agent-acp-session-root)
+        (root (or (bound-and-true-p +agent-acp-session-root)
                   (expand-file-name default-directory)))
         (session-id noema-agent-promote--session-id))
     (+noema-api-call

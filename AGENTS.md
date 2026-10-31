@@ -37,7 +37,7 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   (`../../docs/noema/design/capabilities.md`, "Skill packs"). Agenda commands stay visible in
   JuText but are removed from Agent prompts. Text in outputs and imported
   material is always data.
-- Agent details stay behind `lisp/noema-agent-acp.el`. Do not reimplement
+- Agent details stay behind `../../lisp/tools/agent/acp.el`. Do not reimplement
   gptel, agent-shell or ACP behavior.
 - A whole plan is one Proposal: `graph.declare` carries the blocks and the
   references between them, is accepted or rejected as one unit, and is written
@@ -184,37 +184,55 @@ full-project symlink. The retired `/Users/hc/HC/SOURCE/Noema`,
 
 ## AI implementation ownership (updated by user-authorized migration, 2026-09-15)
 
-gptel and Magent remain complete internalized source trees under `upstream/`.
+Cross-project ownership is defined in
+`../../docs/design/agent-management.md`: Emacs maintains reusable agent
+infrastructure and management under `lisp/tools/agent/`; Noema primarily owns
+Markdown, knowledge components and Research's document/workflow semantics.
+Research calls and organizes common agent capabilities. Shared session, rendering, quota, worktree and compose/context code lives in
+the Emacs repository. `noema-agent-acp.el` and `noema-context.el` retain only
+Research identity, private export and knowledge/page adapters. Do not duplicate
+the shared implementation here.
+ECA is a source study only, never a new runtime dependency.
+
+Noema emits structured notification reasons; the Emacs host owns coalescing,
+foreground/background policy and delivery through `aaron-notify`. Manual ACP
+attention uses `+agent-acp-notification-functions`; Research emits through
+`noema-agent-worker-notification-functions`, with completion after host ACK.
+A handler's non-nil result suppresses legacy delivery. Notifications never
+decide permissions or change execution state.
+
+gptel and Magent remain complete source trees in the Emacs repository under
+`../../site-lisp/{gptel,magent}/`; see `../../site-lisp/AGENT-UPSTREAMS.md`.
 agent-shell, acp.el and shell-maker are pristine package-vc dependencies;
 their audited revisions are declared in AaronEmacs `tools/agent/config.el` and
 `package-lock.el`. Do not re-vendor or modify their package source. Preserve
 upstream features and complete implementations rather than writing replacements.
 `agent-shell-fork-tree` is likewise a pinned, pristine package-vc dependency.
-Noema enters it through `noema-agent-acp.el`, registers native branches as
+Noema enters it through `tools/agent/acp`, registers native branches as
 named Agent sessions, and keeps its text index in memory. Its shared-history
 tree is a navigation view, not a WorkNode DAG or authoritative `parentName`.
-The optional bounded hidden-render adapter is `lisp/noema-agent-render.el`,
+The optional bounded hidden-render adapter is `../../lisp/tools/agent/render.el`,
 owned by the ACP boundary. Run its contract tests when upgrading the group.
 
 Noema product entry points and adapters live under `lisp/`. gptel owns the
 composition/context/rewrite UI, agent-shell + acp.el own structured process and
 session interaction, and Magent supplies its local agent/queue/ledger/gptel
-adapter. `noema-agent-acp.el` is the sole research/runtime coupling boundary
+adapter. `tools/agent/acp` is the sole research/runtime coupling boundary
 to agent-shell/acp implementation details.
 
-`noema-context.el` hands editor context to one chosen live session. It reuses
+`tools/agent/context` hands editor context to one chosen live session. It reuses
 gptel's selection whole -- the `gptel-context' variable, its region overlays
 and its `*gptel-context*' review buffer -- so there is one selection, not two.
 What it sends is always a reference: a `path:START-END' line in the prompt
 text plus one `resource_link' block per file. Do not add an embedded
 `resource' or inlined file text to this path; the point is that attaching a
 file costs a line rather than a copy. Reach agent-shell internals only through
-`noema-agent-acp-file-uri', `-file-metadata' and `-enqueue'.
+`+agent-acp-file-uri', `-file-metadata' and `-enqueue'.
 
-Every agent session is registered per project by `noema-agent-acp-adopt',
-whatever started it: a Run, the popup pool, `noema-agent-start' or a bare
-`M-x agent-shell'. `noema-agent-acp-start' records the entry point as
-`:origin'. Root resolution (`noema-agent-acp-project-root') is a query and
+Every agent session is registered per project by `+agent-acp-adopt',
+whatever started it: a Run, the popup pool, `+agent/start' or a bare
+`M-x agent-shell'. `+agent-acp-start' records the entry point as
+`:origin'. Root resolution (`+agent-acp-project-root') is a query and
 must stay one: registering a session never creates a Project. A project
 that already has one also gets a durable `session:promote' + `session:name:bind';
 elsewhere the session is listed from Emacs alone.
@@ -246,7 +264,7 @@ See `../../docs/noema/records/audits/pisper-agent-lifecycle-study-2026-09.md` fo
   a copy that outlives the moment: stored failure reasons and the history
   index. Native transcripts and CAS evidence stay exact.
 - **Side chats are ephemeral.** Origins in
-  `noema-agent-acp-ephemeral-origins` never reach the durable registry and
+  `+agent-acp-ephemeral-origins` never reach the durable registry and
   are auto-stoppable. Queued agent-shell prompts protect a session from every
   automatic stop, as a running turn does. agent-shell owns the prompt queue
   and steering; Noema only reads the queue length.

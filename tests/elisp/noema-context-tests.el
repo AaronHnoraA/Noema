@@ -1,31 +1,33 @@
-;;; noema-context-tests.el --- Tests for referenced editor context -*- lexical-binding: t; -*-
+;;; +agent-context-tests.el --- Tests for referenced editor context -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;;
-;; These cover the two promises of `noema-context': a selection becomes a
+;; These cover the two promises of `+agent-context': a selection becomes a
 ;; reference with the right line range, and what is sent never contains the
 ;; text itself.  Nothing here starts an agent or reaches the Noema host.
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'noema-sessions)
 (require 'ert)
+(require 'tools/agent/context)
 (require 'noema-context)
 (require 'gptel-context)
 
-(defvar noema-context-tests--body
+(defvar +agent-context-tests--body
   "alpha\nbravo\ncharlie\ndelta\necho\n"
   "Five distinct lines, so a wrong line range is visible in the failure.")
 
-(defmacro noema-context-tests--with-project (spec &rest body)
+(defmacro +agent-context-tests--with-project (spec &rest body)
   "Run BODY with a temporary project bound to `root'.
 SPEC is a list of (NAME . CONTENT) files created in it and bound to
 `files' as an alist of NAME to absolute path."
   (declare (indent 1) (debug t))
-  `(let* ((root (file-name-as-directory (make-temp-file "noema-context-" t)))
+  `(let* ((root (file-name-as-directory (make-temp-file "+agent-context-" t)))
           (gptel-context nil)
           (gptel-context-restrict-to-project-files nil)
-          (noema-context-save-before-send nil)
+          (+agent-context-save-before-send nil)
           (files (mapcar (lambda (entry)
                            (let ((path (expand-file-name (car entry) root)))
                              (with-temp-file path (insert (cdr entry)))
@@ -40,7 +42,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
            (kill-buffer buffer)))
        (delete-directory root t))))
 
-(defun noema-context-tests--line-pos (buffer line)
+(defun +agent-context-tests--line-pos (buffer line)
   "Return the beginning of LINE in BUFFER."
   (with-current-buffer buffer
     (save-excursion
@@ -48,17 +50,17 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
       (forward-line (1- line))
       (point))))
 
-(ert-deftest noema-context-xwidget-region-asks-its-page-for-selection ()
+(ert-deftest +agent-context-xwidget-region-asks-its-page-for-selection ()
   "The Emacs region command targets the Noema page when it has focus."
   (with-temp-buffer
-    (setq-local +noema-buffer-file-name "/tmp/noema-context-selection.md")
+    (setq-local +noema-buffer-file-name "/tmp/+agent-context-selection.md")
     (let (sent)
       (cl-letf (((symbol-function 'noema--xwidget-buffer-p) (lambda (&optional _) t))
                 ((symbol-function '+noema/command)
                  (lambda (command &optional detail) (setq sent (list command detail)))))
         (unwind-protect
             (progn
-              (noema-context-send-region)
+              (+agent-context-send-region)
               (should (equal (car sent) "emacs-selection"))
               (should (equal (alist-get 'action (cadr sent)) "agent"))
               (should (equal (alist-get 'scope (cadr sent)) "selection"))
@@ -69,7 +71,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
 (ert-deftest noema-md-bridge-silent-page-is-reported ()
   "A request the page never answers ends in a message, not silence."
   (with-temp-buffer
-    (setq-local +noema-buffer-file-name "/tmp/noema-context-timeout.md")
+    (setq-local +noema-buffer-file-name "/tmp/+agent-context-timeout.md")
     (let ((noema-md-bridge-answer-timeout 0.01)
           (messages nil))
       (cl-letf (((symbol-function 'noema--xwidget-buffer-p) (lambda (&optional _) t))
@@ -85,7 +87,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
 (ert-deftest noema-md-bridge-page-failure-is-shown-and-settles ()
   "The page's reason for having no range reaches the person."
   (with-temp-buffer
-    (setq-local +noema-buffer-file-name "/tmp/noema-context-failure.md")
+    (setq-local +noema-buffer-file-name "/tmp/+agent-context-failure.md")
     (let ((noema-md-bridge-answer-timeout 60))
       (cl-letf (((symbol-function 'noema--xwidget-buffer-p) (lambda (&optional _) t))
                 ((symbol-function '+noema/command) #'ignore))
@@ -99,7 +101,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
 
 (ert-deftest noema-md-bridge-whole-note-waits-for-the-page-save ()
   "Sending the whole note runs after its saved-range reply."
-  (noema-context-tests--with-project '(("a.md" . "one\ntwo\n"))
+  (+agent-context-tests--with-project '(("a.md" . "one\ntwo\n"))
     (let ((file (alist-get "a.md" files nil nil #'equal))
           commands ran detail)
       (with-temp-buffer
@@ -116,7 +118,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
                        (push buffer opened)
                        (setq ran (list action (with-current-buffer buffer
                                                 (buffer-substring-no-properties begin end)))))))
-            (noema-context-send-buffer)
+            (+agent-context-send-buffer)
             (should (equal commands '("emacs-selection")))
             (should (equal (alist-get 'scope detail) "document"))
             (should-not ran)
@@ -129,36 +131,36 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
             (sleep-for 0.05)
             (should (equal ran '("agent" "one\ntwo\n")))))))))
 
-(ert-deftest noema-context-region-send-carries-only-the-region ()
+(ert-deftest +agent-context-region-send-carries-only-the-region ()
   "Sending a region never drags along context gathered earlier."
-  (noema-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\n")
+  (+agent-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\n")
                                        ("b.txt" . "other\n"))
     (let ((buffer (find-file-noselect (alist-get "a.txt" files nil nil #'equal)))
           sent)
       (push buffer opened)
       ;; Something already gathered in the shared selection.
       (setq gptel-context (list (list (alist-get "b.txt" files nil nil #'equal))))
-      (cl-letf (((symbol-function 'noema-context--send)
+      (cl-letf (((symbol-function '+agent-context--send)
                  (lambda (&rest arguments)
                    (setq sent (funcall (plist-get arguments :references) root nil)))))
         (with-current-buffer buffer
           (transient-mark-mode 1)
-          (goto-char (noema-context-tests--line-pos buffer 2))
-          (push-mark (noema-context-tests--line-pos buffer 4) t t)
-          (noema-context-send-region)))
-      (should (equal (mapcar #'noema-context--reference-line sent) '("a.txt:2-3")))
+          (goto-char (+agent-context-tests--line-pos buffer 2))
+          (push-mark (+agent-context-tests--line-pos buffer 4) t t)
+          (+agent-context-send-region)))
+      (should (equal (mapcar #'+agent-context--reference-line sent) '("a.txt:2-3")))
       (should (= (length gptel-context) 1)))))
 
-(ert-deftest noema-context-always-asks-with-last-session-preselected ()
+(ert-deftest +agent-context-always-asks-with-last-session-preselected ()
   "Every send asks for the session; the project's last one is the default."
-  (let* ((noema-context-always-ask-session t)
-         (noema-context--last-session (make-hash-table :test #'equal))
-         (previous (generate-new-buffer " *noema-context-previous*"))
+  (let* ((+agent-context-always-ask-session t)
+         (+agent-context--last-session (make-hash-table :test #'equal))
+         (previous (generate-new-buffer " *+agent-context-previous*"))
          asked (reads 0))
     (unwind-protect
-        (cl-letf (((symbol-function 'noema-agent-acp-project-root) (lambda () "/p/"))
-                  ((symbol-function 'noema-sessions--execution-live-p) (lambda (_) t))
-                  ((symbol-function 'noema-sessions-read)
+        (cl-letf (((symbol-function '+agent-acp-project-root) (lambda () "/p/"))
+                  ((symbol-function '+agent-session-live-p) (lambda (_) t))
+                  ((symbol-function '+agent-session-read)
                    (lambda (&rest arguments)
                      (push (plist-get arguments :default) asked)
                      (should (plist-get arguments :live-only))
@@ -166,16 +168,16 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
                      (should-not (plist-get arguments :allow-new))
                      (if (= (cl-incf reads) 3) 'clipboard previous))))
           (with-current-buffer previous
-            (setq-local noema-agent-acp-session-root "/p/"))
-          (puthash "/p/" previous noema-context--last-session)
-          (should (eq (noema-context--session) previous))
-          (should (eq (noema-context--session) previous))
-          (should (eq (noema-context--session) 'clipboard))
-          (should (eq (gethash "/p/" noema-context--last-session) previous))
+            (setq-local +agent-acp-session-root "/p/"))
+          (puthash "/p/" previous +agent-context--last-session)
+          (should (eq (+agent-context--session) previous))
+          (should (eq (+agent-context--session) previous))
+          (should (eq (+agent-context--session) 'clipboard))
+          (should (eq (gethash "/p/" +agent-context--last-session) previous))
           (should (equal asked (list previous previous previous))))
       (kill-buffer previous))))
 
-(ert-deftest noema-context-picker-offers-clipboard-last-without-sessions ()
+(ert-deftest +agent-context-picker-offers-clipboard-last-without-sessions ()
   "The copy choice works even when there is no ACP process to send to."
   (let ((noema-sessions-last-label "previous session")
         choices labels)
@@ -200,51 +202,51 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
                               "Copy prompt to clipboard")))
       (should (equal noema-sessions-last-label "previous session")))))
 
-(ert-deftest noema-context-copy-preserves-selection-and-last-session ()
+(ert-deftest +agent-context-copy-preserves-selection-and-last-session ()
   "A terminal prompt contains the same references without sending to ACP."
-  (noema-context-tests--with-project '(("a.md" . "one\ntwo\n"))
+  (+agent-context-tests--with-project '(("a.md" . "one\ntwo\n"))
     (let* ((file (alist-get "a.md" files nil nil #'equal))
-           (noema-context-clear-after-send t)
-           (noema-context--last-session (make-hash-table :test #'equal))
+           (+agent-context-clear-after-send t)
+           (+agent-context--last-session (make-hash-table :test #'equal))
            copied)
       (setq gptel-context (list (list file)))
-      (cl-letf (((symbol-function 'noema-context--session)
+      (cl-letf (((symbol-function '+agent-context--session)
                  (lambda (&optional _) 'clipboard))
-                ((symbol-function 'noema-agent-acp-project-root)
+                ((symbol-function '+agent-acp-project-root)
                  (lambda (&optional _) root))
                 ((symbol-function 'read-string)
                  (lambda (&rest _) "Review this"))
                 ((symbol-function 'kill-new)
                  (lambda (text &rest _) (setq copied text)))
-                ((symbol-function 'noema-context--deliver)
+                ((symbol-function '+agent-context--deliver)
                  (lambda (&rest _) (ert-fail "Sent to ACP"))))
-        (should-not (noema-context-send)))
+        (should-not (+agent-context-send)))
       (should (string-match-p "Review this" copied))
       (should (string-match-p "- a.md" copied))
       (should (= (length gptel-context) 1))
-      (should-not (gethash root noema-context--last-session)))))
+      (should-not (gethash root +agent-context--last-session)))))
 
-(ert-deftest noema-context-copy-at-point-includes-location ()
+(ert-deftest +agent-context-copy-at-point-includes-location ()
   "The point command copies its file, line and column for a terminal."
-  (noema-context-tests--with-project '(("a.md" . "one\ntwo\n"))
+  (+agent-context-tests--with-project '(("a.md" . "one\ntwo\n"))
     (let* ((buffer (find-file-noselect (alist-get "a.md" files nil nil #'equal)))
            copied)
       (push buffer opened)
-      (cl-letf (((symbol-function 'noema-context--session)
+      (cl-letf (((symbol-function '+agent-context--session)
                  (lambda (&optional _) 'clipboard))
-                ((symbol-function 'noema-agent-acp-project-root)
+                ((symbol-function '+agent-acp-project-root)
                  (lambda (&optional _) root))
                 ((symbol-function 'read-string)
                  (lambda (&rest _) "Explain this"))
                 ((symbol-function 'kill-new)
                  (lambda (text &rest _) (setq copied text))))
         (with-current-buffer buffer
-          (goto-char (noema-context-tests--line-pos buffer 2))
-          (noema-context-send-at-point)))
+          (goto-char (+agent-context-tests--line-pos buffer 2))
+          (+agent-context-send-at-point)))
       (should (string-match-p "Explain this" copied))
       (should (string-match-p "Point is at a.md:2:0" copied)))))
 
-(ert-deftest noema-context-picker-lists-only-open-sessions-current-project-first ()
+(ert-deftest +agent-context-picker-lists-only-open-sessions-current-project-first ()
   "Recorded sessions and dead ACP buffers never appear in context sends."
   (let ((local (generate-new-buffer " *context-local*"))
         (other (generate-new-buffer " *context-other*"))
@@ -262,7 +264,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
                                     :origin 'side :root "/tmp/latex-export--note-123/")
                               (list :buffer local :name "current" :agent "codex"
                                     :root "/project/"))))
-          (cl-letf (((symbol-function 'noema-agent-acp-sessions)
+          (cl-letf (((symbol-function '+agent-acp-sessions)
                      (lambda (&optional _) sessions))
                     ((symbol-function 'noema-sessions--execution-live-p)
                      (lambda (buffer) (not (eq buffer dead)))))
@@ -300,25 +302,25 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
       (should (equal visited (cons entry "/project/")))
       (should-not (noema-sessions-resume-native-id "different" "/project/")))))
 
-(ert-deftest noema-context-browser-lines-send-only-that-range ()
+(ert-deftest +agent-context-browser-lines-send-only-that-range ()
   "Browser line numbers become exactly one region reference."
-  (noema-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\n"))
+  (+agent-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\n"))
     (let ((file (alist-get "a.txt" files nil nil #'equal))
           (sent nil))
-      (cl-letf (((symbol-function 'noema-context--send)
+      (cl-letf (((symbol-function '+agent-context--send)
                  (lambda (&rest arguments)
                    (setq sent (funcall (plist-get arguments :references) root nil)))))
         (noema-context-send-noema-selection file 2 3))
       (push (find-buffer-visiting file) opened)
       (should (= (length sent) 1))
-      (should (equal (noema-context--reference-line (car sent)) "a.txt:2-3")))))
+      (should (equal (+agent-context--reference-line (car sent)) "a.txt:2-3")))))
 
 
 ;;;; ── Noema pane bridge ────────────────────────────────────────────────────
 
 (ert-deftest noema-md-bridge-exact-columns-select-characters ()
   "A page range with columns maps to exactly those characters, CJK included."
-  (noema-context-tests--with-project '(("a.md" . "# 标题\nalpha 数学 beta\n"))
+  (+agent-context-tests--with-project '(("a.md" . "# 标题\nalpha 数学 beta\n"))
     (let ((file (alist-get "a.md" files nil nil #'equal)))
       (pcase-let ((`(,buffer ,begin . ,end)
                    (noema-md-bridge-region
@@ -330,7 +332,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
 
 (ert-deftest noema-md-bridge-refuses-unsaved-emacs-edits ()
   "The page's range is never applied over Emacs edits it cannot see."
-  (noema-context-tests--with-project '(("a.md" . "one\ntwo\n"))
+  (+agent-context-tests--with-project '(("a.md" . "one\ntwo\n"))
     (let* ((file (alist-get "a.md" files nil nil #'equal))
            (buffer (find-file-noselect file)))
       (push buffer opened)
@@ -340,23 +342,23 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
 
 (ert-deftest noema-md-bridge-context-action-adds-region ()
   "The context action adds exactly the reported range to gptel's selection."
-  (noema-context-tests--with-project '(("a.md" . "one\ntwo\nthree\n"))
+  (+agent-context-tests--with-project '(("a.md" . "one\ntwo\nthree\n"))
     (let ((file (alist-get "a.md" files nil nil #'equal)))
       (pcase-let ((`(,buffer ,begin . ,end)
                    (noema-md-bridge-region file '(:line-start 2 :line-end 2))))
         (push buffer opened)
         (noema-md-bridge-run "context" buffer begin end)
-        (should (equal (mapcar #'noema-context--reference-line
-                               (noema-context-references nil root))
+        (should (equal (mapcar #'+agent-context--reference-line
+                               (+agent-context-references nil root))
                        '("a.md:2-2")))))))
 
 
 (ert-deftest noema-md-bridge-agent-send-leaves-no-note-buffer ()
   "Reading a note for an agent send must not leave a buffer that captures
 the next open of the note (which would then show raw Markdown)."
-  (noema-context-tests--with-project '(("a.md" . "one\ntwo\n"))
+  (+agent-context-tests--with-project '(("a.md" . "one\ntwo\n"))
     (let ((file (alist-get "a.md" files nil nil #'equal)))
-      (cl-letf (((symbol-function 'noema-context--send)
+      (cl-letf (((symbol-function '+agent-context--send)
                  (lambda (&rest arguments)
                    (funcall (plist-get arguments :references) root nil)
                    nil)))
@@ -368,12 +370,12 @@ the next open of the note (which would then show raw Markdown)."
 
 (ert-deftest noema-md-bridge-agent-choice-can-copy-to-clipboard ()
   "A Markdown pane's agent action can copy its line reference for vterm."
-  (noema-context-tests--with-project '(("a.md" . "one\ntwo\n"))
+  (+agent-context-tests--with-project '(("a.md" . "one\ntwo\n"))
     (let ((file (alist-get "a.md" files nil nil #'equal))
           copied)
-      (cl-letf (((symbol-function 'noema-context--session)
+      (cl-letf (((symbol-function '+agent-context--session)
                  (lambda (&optional _) 'clipboard))
-                ((symbol-function 'noema-agent-acp-project-root)
+                ((symbol-function '+agent-acp-project-root)
                  (lambda (&optional _) root))
                 ((symbol-function 'read-string)
                  (lambda (&rest _) "Review this line"))
@@ -388,7 +390,7 @@ the next open of the note (which would then show raw Markdown)."
 
 (ert-deftest noema-md-bridge-hidden-copy-hands-a-later-open-to-noema ()
   "A kept hidden copy (it holds gptel context) sends a later open to Noema."
-  (noema-context-tests--with-project '(("a.md" . "one\ntwo\n"))
+  (+agent-context-tests--with-project '(("a.md" . "one\ntwo\n"))
     (let ((file (alist-get "a.md" files nil nil #'equal))
           handed)
       (pcase-let ((`(,buffer ,begin . ,end)
@@ -411,59 +413,59 @@ the next open of the note (which would then show raw Markdown)."
 
 ;;;; ── References ───────────────────────────────────────────────────────────
 
-(ert-deftest noema-context-region-becomes-a-line-range ()
+(ert-deftest +agent-context-region-becomes-a-line-range ()
   "A selected region is referenced as `path:START-END', not copied."
-  (noema-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\necho\n"))
+  (+agent-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\necho\n"))
     (let ((buffer (find-file-noselect (alist-get "a.txt" files nil nil #'equal))))
       (push buffer opened)
       (gptel-context--add-region buffer
-                                 (noema-context-tests--line-pos buffer 2)
-                                 (1- (noema-context-tests--line-pos buffer 4)))
-      (let ((references (noema-context-references nil root)))
+                                 (+agent-context-tests--line-pos buffer 2)
+                                 (1- (+agent-context-tests--line-pos buffer 4)))
+      (let ((references (+agent-context-references nil root)))
         (should (= (length references) 1))
         (should (eq (plist-get (car references) :kind) 'region))
         (should (equal (plist-get (car references) :relative) "a.txt"))
         (should (= (plist-get (car references) :line-start) 2))
         (should (= (plist-get (car references) :line-end) 3))
-        (should (equal (noema-context--reference-line (car references)) "a.txt:2-3"))))))
+        (should (equal (+agent-context--reference-line (car references)) "a.txt:2-3"))))))
 
-(ert-deftest noema-context-region-ending-at-bol-excludes-that-line ()
+(ert-deftest +agent-context-region-ending-at-bol-excludes-that-line ()
   "A region stopping at the start of line 4 covers lines 2 and 3 only."
-  (noema-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\necho\n"))
+  (+agent-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\necho\n"))
     (let ((buffer (find-file-noselect (alist-get "a.txt" files nil nil #'equal))))
       (push buffer opened)
       (gptel-context--add-region buffer
-                                 (noema-context-tests--line-pos buffer 2)
-                                 (noema-context-tests--line-pos buffer 4))
-      (let ((reference (car (noema-context-references nil root))))
+                                 (+agent-context-tests--line-pos buffer 2)
+                                 (+agent-context-tests--line-pos buffer 4))
+      (let ((reference (car (+agent-context-references nil root))))
         (should (= (plist-get reference :line-start) 2))
         (should (= (plist-get reference :line-end) 3))))))
 
-(ert-deftest noema-context-whole-buffer-is-a-plain-file-reference ()
+(ert-deftest +agent-context-whole-buffer-is-a-plain-file-reference ()
   "Selecting a whole buffer references the file, not lines 1 to N."
-  (noema-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\necho\n"))
+  (+agent-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\necho\n"))
     (let ((buffer (find-file-noselect (alist-get "a.txt" files nil nil #'equal))))
       (push buffer opened)
       (gptel-context--add-buffer buffer)
-      (let ((reference (car (noema-context-references nil root))))
+      (let ((reference (car (+agent-context-references nil root))))
         (should (eq (plist-get reference :kind) 'file))
         (should-not (plist-get reference :line-start))
-        (should (equal (noema-context--reference-line reference) "a.txt"))))))
+        (should (equal (+agent-context--reference-line reference) "a.txt"))))))
 
-(ert-deftest noema-context-file-outside-the-session-root-stays-absolute ()
+(ert-deftest +agent-context-file-outside-the-session-root-stays-absolute ()
   "A reference is relative only inside the session root, as agent-shell does."
-  (noema-context-tests--with-project '(("a.txt" . "alpha\n"))
+  (+agent-context-tests--with-project '(("a.txt" . "alpha\n"))
     (let* ((path (alist-get "a.txt" files nil nil #'equal))
            (gptel-context (list (list path)))
-           (outside (noema-context-references nil "/definitely/not/here/"))
-           (inside (noema-context-references nil root)))
+           (outside (+agent-context-references nil "/definitely/not/here/"))
+           (inside (+agent-context-references nil root)))
       (should (equal (plist-get (car outside) :relative) path))
       (should (equal (plist-get (car inside) :relative) "a.txt")))))
 
-(ert-deftest noema-context-skips-what-cannot-be-referenced ()
+(ert-deftest +agent-context-skips-what-cannot-be-referenced ()
   "A buffer with no file, and one left unsaved, are reported, never copied."
-  (noema-context-tests--with-project '(("a.txt" . "alpha\nbravo\n"))
-    (let ((scratch (generate-new-buffer " *noema-context-scratch*"))
+  (+agent-context-tests--with-project '(("a.txt" . "alpha\nbravo\n"))
+    (let ((scratch (generate-new-buffer " *+agent-context-scratch*"))
           (visiting (find-file-noselect (alist-get "a.txt" files nil nil #'equal))))
       (push scratch opened)
       (push visiting opened)
@@ -473,7 +475,7 @@ the next open of the note (which would then show raw Markdown)."
         (insert "unsaved edit\n"))
       (gptel-context--add-buffer scratch)
       (gptel-context--add-buffer visiting)
-      (let ((resolved (noema-context--resolve nil root)))
+      (let ((resolved (+agent-context--resolve nil root)))
         (should (null (car resolved)))
         (should (= (length (cdr resolved)) 2))
         (should (seq-some (lambda (note) (string-match-p "not visiting a file" note))
@@ -484,22 +486,22 @@ the next open of the note (which would then show raw Markdown)."
 
 ;;;; ── Content blocks ───────────────────────────────────────────────────────
 
-(ert-deftest noema-context-paths-are-the-session-agents-own ()
+(ert-deftest +agent-context-paths-are-the-session-agents-own ()
   "A session's agent receives the path its own machine uses for a file.
-The host maps files through `noema-agent-acp-agent-file-function'; a file
+The host maps files through `+agent-acp-agent-file-function'; a file
 that machine cannot reach is refused rather than sent as a dead path."
-  (noema-context-tests--with-project '(("a.txt" . "alpha\n"))
+  (+agent-context-tests--with-project '(("a.txt" . "alpha\n"))
     (let* ((path (alist-get "a.txt" files nil nil #'equal))
-           (session (generate-new-buffer " *noema-context-session*"))
+           (session (generate-new-buffer " *+agent-context-session*"))
            (gptel-context (list (list path)))
-           (noema-agent-acp-agent-file-function
+           (+agent-acp-agent-file-function
             (lambda (file agent)
               (and (eq agent session)
                    (concat "/srv/agent" file)))))
       (unwind-protect
-          (let* ((inside (car (noema-context-references nil root session)))
-                 (outside (car (noema-context-references nil "/elsewhere/" session)))
-                 (link (cadr (noema-context-content-blocks "Q" (list inside)))))
+          (let* ((inside (car (+agent-context-references nil root session)))
+                 (outside (car (+agent-context-references nil "/elsewhere/" session)))
+                 (link (cadr (+agent-context-content-blocks "Q" (list inside)))))
             (should (equal (plist-get inside :file) path))
             (should (equal (plist-get inside :agent-file) (concat "/srv/agent" path)))
             (should (equal (plist-get inside :relative) "a.txt"))
@@ -508,25 +510,25 @@ that machine cannot reach is refused rather than sent as a dead path."
             (should (equal (map-elt link 'uri) (concat "file:///srv/agent" path)))
             ;; Size still comes from the file through Emacs.
             (should (integerp (map-elt link 'size)))
-            (should-error (noema-context-references nil root nil) :type 'user-error))
+            (should-error (+agent-context-references nil root nil) :type 'user-error))
         (kill-buffer session)))))
 
-(ert-deftest noema-context-blocks-link-instead-of-copying ()
+(ert-deftest +agent-context-blocks-link-instead-of-copying ()
   "Two regions of one file and a second file produce links and no content."
-  (noema-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\necho\n")
+  (+agent-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\necho\n")
                                        ("b.txt" . "secret-marker\n"))
     (let ((buffer (find-file-noselect (alist-get "a.txt" files nil nil #'equal))))
       (push buffer opened)
       (gptel-context--add-region buffer
-                                 (noema-context-tests--line-pos buffer 1)
-                                 (1- (noema-context-tests--line-pos buffer 2)))
+                                 (+agent-context-tests--line-pos buffer 1)
+                                 (1- (+agent-context-tests--line-pos buffer 2)))
       (gptel-context--add-region buffer
-                                 (noema-context-tests--line-pos buffer 4)
-                                 (1- (noema-context-tests--line-pos buffer 5)))
+                                 (+agent-context-tests--line-pos buffer 4)
+                                 (1- (+agent-context-tests--line-pos buffer 5)))
       (setq gptel-context
             (append gptel-context (list (list (alist-get "b.txt" files nil nil #'equal)))))
-      (let* ((references (noema-context-references nil root))
-             (blocks (noema-context-content-blocks "Why does this differ?" references))
+      (let* ((references (+agent-context-references nil root))
+             (blocks (+agent-context-content-blocks "Why does this differ?" references))
              (types (mapcar (lambda (block) (map-elt block 'type)) blocks))
              (printed (format "%S" blocks)))
         ;; One text block, then exactly one link per distinct file.
@@ -545,9 +547,9 @@ that machine cannot reach is refused rather than sent as a dead path."
           (should (member (map-elt link 'name) '("a.txt" "b.txt")))
           (should (integerp (map-elt link 'size))))))))
 
-(ert-deftest noema-context-blocks-without-references-are-just-the-prompt ()
+(ert-deftest +agent-context-blocks-without-references-are-just-the-prompt ()
   "With nothing selected the turn is the question alone."
-  (let ((blocks (noema-context-content-blocks "Plain question" nil)))
+  (let ((blocks (+agent-context-content-blocks "Plain question" nil)))
     (should (= (length blocks) 1))
     (should (equal (map-elt (car blocks) 'type) "text"))
     (should (equal (map-elt (car blocks) 'text) "Plain question"))))
@@ -555,99 +557,99 @@ that machine cannot reach is refused rather than sent as a dead path."
 
 ;;;; ── Session registration ─────────────────────────────────────────────────
 
-(ert-deftest noema-agent-acp-project-root-never-creates-a-project ()
+(ert-deftest +agent-acp-project-root-never-creates-a-project ()
   "Root resolution is a query: a plain directory stays a plain directory."
   (let* ((root (file-name-as-directory (make-temp-file "noema-plain-" t))))
     (unwind-protect
         (progn
-          (should (equal (noema-agent-acp-project-root root)
-                         (noema-agent-acp--workspace-root root)))
+          (should (equal (+agent-acp-project-root root)
+                         (+agent-acp--workspace-root root)))
           (should-not (file-exists-p (expand-file-name "noema.toml" root)))
           (with-temp-file (expand-file-name "noema.toml" root) (insert "[project]\nid = \"t\"\n"))
           (let ((nested (expand-file-name "deep/deeper/" root)))
             (make-directory nested t)
-            (should (equal (noema-agent-acp-project-root nested)
-                           (noema-agent-acp--workspace-root root)))))
+            (should (equal (+agent-acp-project-root nested)
+                           (+agent-acp--workspace-root root)))))
       (delete-directory root t))))
 
-(ert-deftest noema-agent-acp-generated-names-are-unique-and-spare-pi ()
+(ert-deftest +agent-acp-generated-names-are-unique-and-spare-pi ()
   "Generated local names never collide and never claim the coordinator name."
   (let ((root "/tmp/noema-name-test/"))
-    (cl-letf (((symbol-function 'noema-agent-acp--claimed-names)
+    (cl-letf (((symbol-function '+agent-acp--claimed-names)
                (lambda (_root) '("popup/claude" "popup/claude-2"))))
-      (should (equal (noema-agent-acp--unique-name "popup/claude" root)
+      (should (equal (+agent-acp--unique-name "popup/claude" root)
                      "popup/claude-3"))
-      (should (equal (noema-agent-acp--unique-name "popup/codex" root)
+      (should (equal (+agent-acp--unique-name "popup/codex" root)
                      "popup/codex"))
-      (should (equal (noema-agent-acp--unique-name "pi" root) "pi-2")))))
+      (should (equal (+agent-acp--unique-name "pi" root) "pi-2")))))
 
-(ert-deftest noema-agent-acp-adopt-registers-without-touching-the-host ()
+(ert-deftest +agent-acp-adopt-registers-without-touching-the-host ()
   "Adopting in a plain directory names the session and asks the host nothing."
   (let* ((root (file-name-as-directory (make-temp-file "noema-adopt-" t)))
          (buffer (generate-new-buffer " *noema-adopt-test*"))
          (called nil))
     (unwind-protect
-        (cl-letf (((symbol-function 'noema-agent-acp-agent-buffer-p)
+        (cl-letf (((symbol-function '+agent-acp-agent-buffer-p)
                    (lambda (candidate) (buffer-live-p candidate)))
                   ((symbol-function '+noema-api-call)
                    (lambda (&rest _) (setq called t))))
           (with-current-buffer buffer (setq-local default-directory root))
-          (noema-agent-acp-adopt buffer :agent 'claude :origin 'popup)
-          (should (equal (buffer-local-value 'noema-agent-acp-session-name buffer)
+          (+agent-acp-adopt buffer :agent 'claude :origin 'popup)
+          (should (equal (buffer-local-value '+agent-acp-session-name buffer)
                          "popup/claude"))
-          (should (equal (buffer-local-value 'noema-agent-acp-session-agent buffer)
+          (should (equal (buffer-local-value '+agent-acp-session-agent buffer)
                          "claude"))
-          (should (eq (buffer-local-value 'noema-agent-acp-session-origin buffer) 'popup))
-          (should (equal (buffer-local-value 'noema-agent-acp-session-root buffer)
-                         (noema-agent-acp--workspace-root root)))
+          (should (eq (buffer-local-value '+agent-acp-session-origin buffer) 'popup))
+          (should (equal (buffer-local-value '+agent-acp-session-root buffer)
+                         (+agent-acp--workspace-root root)))
           ;; No durable registry exists here, so nothing was promoted or bound
           ;; and no project was created behind the person's back.
           (should-not called)
           (should-not (file-exists-p (expand-file-name "noema.toml" root)))
           ;; The merged view lists it like any Run's session.
-          (let ((session (car (noema-agent-acp-sessions root))))
+          (let ((session (car (+agent-acp-sessions root))))
             (should (eq (plist-get session :buffer) buffer))
             (should (equal (plist-get session :name) "popup/claude"))
             (should (eq (plist-get session :origin) 'popup))))
       (kill-buffer buffer)
       (delete-directory root t))))
 
-(ert-deftest noema-context-explicit-task-does-not-consume-shared-selection ()
-  (let ((noema-context-clear-after-send t)
+(ert-deftest +agent-context-explicit-task-does-not-consume-shared-selection ()
+  (let ((+agent-context-clear-after-send t)
         resolved references prompt)
-    (cl-letf (((symbol-function 'noema-context--session) (lambda (_) 'clipboard))
-              ((symbol-function 'noema-agent-acp-project-root) (lambda () "/tmp/"))
-              ((symbol-function 'noema-context--resolve)
+    (cl-letf (((symbol-function '+agent-context--session) (lambda (_) 'clipboard))
+              ((symbol-function '+agent-acp-project-root) (lambda () "/tmp/"))
+              ((symbol-function '+agent-context--resolve)
                (lambda (&rest _) (setq resolved t) (error "Unexpected shared context")))
-              ((symbol-function 'noema-context--prompt-text)
+              ((symbol-function '+agent-context--prompt-text)
                (lambda (text refs) (setq references refs prompt text) text)))
-      (noema-context-send-prompt "Read native notebook"))
+      (+agent-context-send-prompt "Read native notebook"))
     (should-not resolved)
     (should-not references)
     (should (equal prompt "Read native notebook"))))
 
-(ert-deftest noema-context-explicit-task-validates-files-and-agent-reachability ()
-  (noema-context-tests--with-project '(("skill.md" . "read these instructions"))
+(ert-deftest +agent-context-explicit-task-validates-files-and-agent-reachability ()
+  (+agent-context-tests--with-project '(("skill.md" . "read these instructions"))
     (let ((file (cdar files)) references)
-      (cl-letf (((symbol-function 'noema-context--session) (lambda (_) 'clipboard))
-                ((symbol-function 'noema-agent-acp-project-root) (lambda () root))
-                ((symbol-function 'noema-agent-acp-agent-file) (lambda (path _) path))
-                ((symbol-function 'noema-context--prompt-text)
+      (cl-letf (((symbol-function '+agent-context--session) (lambda (_) 'clipboard))
+                ((symbol-function '+agent-acp-project-root) (lambda () root))
+                ((symbol-function '+agent-acp-agent-file) (lambda (path _) path))
+                ((symbol-function '+agent-context--prompt-text)
                  (lambda (_ refs) (setq references refs) "task")))
-        (noema-context-send-prompt "Inspect" :files (list file file))
+        (+agent-context-send-prompt "Inspect" :files (list file file))
         (should (= (length references) 1))
         (should (equal (plist-get (car references) :file) file))
         (let ((buffer (find-file-noselect file)))
           (push buffer opened)
           (with-current-buffer buffer (goto-char (point-max)) (insert "unsaved"))
-          (should-error (noema-context-send-prompt "Inspect" :files (list file))
+          (should-error (+agent-context-send-prompt "Inspect" :files (list file))
                         :type 'user-error)
           (with-current-buffer buffer (set-buffer-modified-p nil)))
-        (should-error (noema-context-send-prompt "Inspect" :files (list "/missing/skill.md"))
+        (should-error (+agent-context-send-prompt "Inspect" :files (list "/missing/skill.md"))
                       :type 'user-error)
-        (cl-letf (((symbol-function 'noema-agent-acp-agent-file) (lambda (&rest _) nil)))
-          (should-error (noema-context-send-prompt "Inspect" :files (list file))
+        (cl-letf (((symbol-function '+agent-acp-agent-file) (lambda (&rest _) nil)))
+          (should-error (+agent-context-send-prompt "Inspect" :files (list file))
                         :type 'user-error))))))
 
-(provide 'noema-context-tests)
-;;; noema-context-tests.el ends here
+(provide '+agent-context-tests)
+;;; +agent-context-tests.el ends here

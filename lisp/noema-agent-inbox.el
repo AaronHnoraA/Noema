@@ -14,7 +14,7 @@
 (require 'tabulated-list)
 (require 'noema-research)
 (require 'noema-sessions)
-(require 'noema-agent-worktree)
+(require 'tools/agent/worktree)
 
 (declare-function +noema-workspace-root "noema/bridge/config" ())
 (declare-function remote-file-name-target "remote-fs" (file-name))
@@ -83,7 +83,7 @@ not descend into Noema's disposable worktrees or generated directories."
     (dolist (buffer (buffer-list))
       (when-let* ((file (buffer-local-value 'buffer-file-name buffer)))
         (push file candidates)))
-    (dolist (session (noema-agent-acp-sessions))
+    (dolist (session (+agent-acp-sessions))
       (push (plist-get session :root) candidates))
     (push default-directory candidates)
     (sort (delete-dups (delq nil (mapcar #'noema-agent-inbox--project-root candidates)))
@@ -107,7 +107,7 @@ not descend into Noema's disposable worktrees or generated directories."
 (defun noema-agent-inbox--local-rank (buffer)
   "Rank live BUFFER by its Emacs-side attention, as the host ranks a Session's."
   (pcase (and (buffer-live-p buffer)
-              (buffer-local-value 'noema-agent-acp-attention buffer))
+              (buffer-local-value '+agent-acp-attention buffer))
     ('permission 0)
     ('done 2)
     (_ 4)))
@@ -118,7 +118,7 @@ The host's mark comes from Runs; a turn taken outside a Run only marks the
 live buffer."
   (let ((mark (noema-sessions--attention entry)))
     (if (string-empty-p mark)
-        (or (noema-agent-acp-attention-mark buffer) "")
+        (or (+agent-acp-attention-mark buffer) "")
       mark)))
 
 (defun noema-agent-inbox--project-label (root)
@@ -134,12 +134,12 @@ live buffer."
          (target (noema-agent-inbox--target
                   (if buffer (buffer-local-value 'default-directory buffer)
                     (noema-sessions--string entry "executionTarget"))))
-         (rank (if (and buffer (noema-agent-acp-busy-p buffer))
+         (rank (if (and buffer (+agent-acp-busy-p buffer))
                    (min 3 (noema-agent-inbox--attention-rank entry))
                  (noema-agent-inbox--attention-rank entry)))
          (id (list 'durable root (or session-id name))))
     (list (if (and (string-empty-p (noema-sessions--attention entry))
-                   (noema-agent-acp-attention-mark buffer))
+                   (+agent-acp-attention-mark buffer))
               (min rank (noema-agent-inbox--local-rank buffer))
             rank)
           id
@@ -149,7 +149,7 @@ live buffer."
                   (or name "")
                   (or (noema-sessions--string entry "agent") "")
                   (if (and buffer (not (noema-sessions--get entry "openRun")))
-                      (if (noema-agent-acp-busy-p buffer) "working" "live")
+                      (if (+agent-acp-busy-p buffer) "working" "live")
                     (noema-sessions--status entry root))
                   (if run (noema-sessions--last-run run) ""))
           (list :kind 'durable :root root :name name :session-id session-id
@@ -162,7 +162,7 @@ live buffer."
          (busy (plist-get session :busy))
          (id (list 'local buffer)))
     (list (min (if busy 3 4) (noema-agent-inbox--local-rank buffer)) id
-          (vector (or (noema-agent-acp-attention-mark buffer) "")
+          (vector (or (+agent-acp-attention-mark buffer) "")
                   (noema-agent-inbox--project-label root)
                   (noema-agent-inbox--target
                    (buffer-local-value 'default-directory buffer))
@@ -188,7 +188,7 @@ live buffer."
         (when-let* ((buffer (noema-sessions--live-buffer entry root)))
           (puthash buffer t bound))
         (push (noema-agent-inbox--durable-row root entry) rows)))
-    (dolist (session (noema-agent-acp-sessions))
+    (dolist (session (+agent-acp-sessions))
       (unless (gethash (plist-get session :buffer) bound)
         (push (noema-agent-inbox--local-row session) rows)))
     (sort rows (lambda (a b)
@@ -269,7 +269,7 @@ live buffer."
 
 (defun noema-agent-inbox--unsubscribe ()
   "Stop listening while the Inbox is hidden or closed."
-  (remove-hook 'noema-agent-acp-changed-functions
+  (remove-hook '+agent-acp-changed-functions
                #'noema-agent-inbox--session-changed)
   (remove-hook 'noema-agent-worker-run-finished-functions
                #'noema-agent-inbox--worker-changed)
@@ -278,7 +278,7 @@ live buffer."
 
 (defun noema-agent-inbox--subscribe ()
   "Listen for changes to live agents and recorded Runs."
-  (add-hook 'noema-agent-acp-changed-functions
+  (add-hook '+agent-acp-changed-functions
             #'noema-agent-inbox--session-changed)
   (add-hook 'noema-agent-worker-run-finished-functions
             #'noema-agent-inbox--worker-changed)
@@ -337,7 +337,7 @@ live buffer."
   "Catch up on agent and host changes when the Inbox becomes visible."
   (when (and (noema-agent-inbox--visible-window (current-buffer))
              (not (memq #'noema-agent-inbox--session-changed
-                        noema-agent-acp-changed-functions)))
+                        +agent-acp-changed-functions)))
     (noema-agent-inbox--subscribe)
     (noema-agent-inbox--queue-update t)))
 
@@ -360,7 +360,7 @@ live buffer."
   (let ((row (noema-agent-inbox--selected)))
     (pcase (plist-get row :kind)
       ('local (if (buffer-live-p (plist-get row :buffer))
-                  (noema-agent-acp-show-buffer (plist-get row :buffer))
+                  (+agent-acp-show-buffer (plist-get row :buffer))
                 (user-error "Agent buffer has closed; press g to refresh")))
       ('durable (noema-sessions-open-reference
                  (plist-get row :root) (plist-get row :name)
@@ -399,7 +399,7 @@ Project record has only that."
     (let ((live (or (plist-get row :buffer)
                     (and (plist-get row :entry)
                          (noema-sessions--live-buffer (plist-get row :entry) root)))))
-      (noema-agent-acp-clear-attention live))
+      (+agent-acp-clear-attention live))
     (if (not (eq (plist-get row :kind) 'durable))
         (noema-agent-inbox--render)
       (noema-sessions--mark-read
@@ -450,12 +450,12 @@ Project record has only that."
 (defun noema-agent-inbox-magit-status ()
   "Open Magit status for the checkout the selected session works in."
   (interactive)
-  (noema-agent-worktree-magit-status (noema-agent-inbox--checkout-directory)))
+  (+agent-worktree-magit-status (noema-agent-inbox--checkout-directory)))
 
 (defun noema-agent-inbox-magit-diff ()
-  "Show what the selected session changed; see `noema-agent-worktree-magit-diff'."
+  "Show what the selected session changed; see `+agent-worktree-magit-diff'."
   (interactive)
-  (noema-agent-worktree-magit-diff (noema-agent-inbox--checkout-directory)))
+  (+agent-worktree-magit-diff (noema-agent-inbox--checkout-directory)))
 
 (defvar noema-agent-inbox-mode-map
   (let ((map (make-sparse-keymap)))

@@ -73,7 +73,7 @@
 (declare-function file-notify-rm-watch "filenotify" (descriptor))
 (autoload 'noema-agent-worker-cancel-run "noema-agent-worker" nil t)
 (autoload 'noema-agent-worker-cancel-cell "noema-agent-worker")
-(autoload 'noema-agent-acp-known-agents "noema-agent-acp" nil nil)
+(autoload '+agent-acp-known-agents "tools/agent/acp" nil nil)
 
 (defgroup noema-research nil
   "Noema research notebooks."
@@ -1724,7 +1724,7 @@ SNAPSHOT is ignored; the `.noema' file is the sole durable authority."
   "Set the current work document's default AGENT."
   (interactive
    (list (completing-read "Default agent (empty clears): "
-                          (noema-agent-acp-known-agents) nil nil nil nil
+                          (+agent-acp-known-agents) nil nil nil nil
                           (noema-research-default-agent noema-research--document))))
   (noema-research-mode--sync)
   (noema-research-set-default-agent noema-research--document agent)
@@ -2891,7 +2891,7 @@ Return ID."
 (defun noema-research--context-menu-function (menu click)
   "Add JuText block actions to `context-menu-mode' MENU for CLICK."
   (mouse-set-point click)
-  (define-key-after menu [noema-context-separator] menu-bar-separator)
+  (define-key-after menu [+agent-context-separator] menu-bar-separator)
   (map-keymap (lambda (key binding) (define-key-after menu (vector key) binding))
               (noema-research--context-menu-map))
   menu)

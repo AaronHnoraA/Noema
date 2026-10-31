@@ -26,7 +26,7 @@
 ;;   `noema-pi-stop-delay' seconds, or `noema-pi-close-project' runs, Pi and
 ;;   the project's idle agent processes stop; an agent still running a Run
 ;;   stops once the Run ends.  The automatic close spares every session
-;;   `noema-agent-acp-auto-stoppable-p' refuses (one a person opened, one on
+;;   `+agent-acp-auto-stoppable-p' refuses (one a person opened, one on
 ;;   screen, one mid-turn).  Session names and native ids stay, so the next
 ;;   visit resumes them.
 
@@ -36,7 +36,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'noema-research)
-(require 'noema-agent-acp)
+(require 'tools/agent/acp)
 (require 'noema-agent-promote)
 
 (declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
@@ -214,7 +214,7 @@ export default function (pi: any) {
 (defun noema-pi-router--available-pool ()
   "Return Pi pool entries the current ACP session advertises."
   (seq-filter (lambda (model)
-                (member model (noema-agent-acp-available-model-ids)))
+                (member model (+agent-acp-available-model-ids)))
               (noema-pi-router--pool)))
 
 ;;;###autoload
@@ -222,28 +222,28 @@ export default function (pi: any) {
   "Quickly choose an available model from the Noema Pi pool."
   (interactive)
   (unless (and (bound-and-true-p noema-pi-router-model-mode)
-               (equal noema-agent-acp-session-agent "pi"))
+               (equal +agent-acp-session-agent "pi"))
     (user-error "Select a Noema Pi session first"))
   (let ((available (noema-pi-router--available-pool)))
     (unless available
       (user-error "No Pi pool models are available; check Pi provider logins"))
-    (noema-agent-acp-set-model
+    (+agent-acp-set-model
      (completing-read "Pi model: " available nil t nil nil
-                      (and (member (noema-agent-acp-current-model-id) available)
-                           (noema-agent-acp-current-model-id))))))
+                      (and (member (+agent-acp-current-model-id) available)
+                           (+agent-acp-current-model-id))))))
 
 ;;;###autoload
 (defun noema-pi-cycle-model ()
   "Select the next available model in the Noema Pi pool."
   (interactive)
   (unless (and (bound-and-true-p noema-pi-router-model-mode)
-               (equal noema-agent-acp-session-agent "pi"))
+               (equal +agent-acp-session-agent "pi"))
     (user-error "Select a Noema Pi session first"))
   (let* ((available (noema-pi-router--available-pool))
-         (position (cl-position (noema-agent-acp-current-model-id) available :test #'equal)))
+         (position (cl-position (+agent-acp-current-model-id) available :test #'equal)))
     (unless available
       (user-error "No Pi pool models are available; check Pi provider logins"))
-    (noema-agent-acp-set-model
+    (+agent-acp-set-model
      (nth (mod (1+ (or position -1)) (length available)) available))))
 
 (defun noema-pi-router--root (directory)
@@ -449,7 +449,7 @@ not rewritten and settings Noema does not own are kept."
 Never starts one; use `noema-pi-router-open' for that."
   (let* ((root (noema-pi-router--root (or directory default-directory)))
          (buffer (or (gethash root noema-pi-router--buffers)
-                     (noema-agent-acp-session-buffer noema-pi-router-session-name root))))
+                     (+agent-acp-session-buffer noema-pi-router-session-name root))))
     (and (buffer-live-p buffer) buffer)))
 
 (defun noema-pi-router--mcp-servers (endpoint)
@@ -515,13 +515,13 @@ description Pi carries costs tokens on every turn."
 ENDPOINT carries the coordinator URL.  Display the buffer when FOCUS."
   (let* ((servers (or (noema-pi-router--mcp-servers endpoint)
                       (user-error "The Noema coordinator endpoint is unavailable")))
-         (config (or (noema-agent-acp-pi-config (noema-pi-deploy))
+         (config (or (+agent-acp-pi-config (noema-pi-deploy))
                      (user-error "Pi (pi-acp) is not configured; run M-x noema-pi-doctor"))))
     (setf (alist-get :mcp-servers config) servers)
-    (let ((buffer (noema-agent-acp-start :config config :directory root
+    (let ((buffer (+agent-acp-start :config config :directory root
                                          :session-id native :focus focus
                                          :origin 'pi)))
-      (noema-agent-acp-mark-session-buffer buffer noema-pi-router-session-name "pi" root)
+      (+agent-acp-mark-session-buffer buffer noema-pi-router-session-name "pi" root)
       (with-current-buffer buffer (noema-pi-router-model-mode 1))
       (puthash root buffer noema-pi-router--buffers)
       (with-current-buffer buffer
@@ -530,13 +530,13 @@ ENDPOINT carries the coordinator URL.  Display the buffer when FOCUS."
                     (when (eq (gethash root noema-pi-router--buffers) buffer)
                       (remhash root noema-pi-router--buffers)))
                   nil t))
-      (noema-agent-acp-subscribe
+      (+agent-acp-subscribe
        :buffer buffer :event 'init-finished
        :callback (lambda (_event)
                    (noema-pi-router--adopt root buffer)
                    ;; Requests queued while no Pi was running are not lost.
                    (noema-pi-router-claim root)))
-      (noema-agent-acp-subscribe
+      (+agent-acp-subscribe
        :buffer buffer :event 'tool-call-update
        :callback (lambda (_event) (noema-pi-router--schedule-claim root buffer)))
       buffer)))
@@ -597,7 +597,7 @@ under the project's `pi' session name, or starts a fresh one."
          (live (noema-pi-router-buffer root)))
     (remhash root noema-pi-router--closing)
     (if live
-        (noema-agent-acp-show-buffer live)
+        (+agent-acp-show-buffer live)
       (noema-pi-router--launch root t))))
 
 ;;;; Lifecycle
@@ -620,8 +620,8 @@ under the project's `pi' session name, or starts a fresh one."
 (defun noema-pi-router--project-agents (root)
   "Return live agent buffers, Pi included, that belong to project ROOT."
   (seq-filter (lambda (buffer)
-                (and (noema-agent-acp-agent-buffer-p buffer)
-                     (equal (buffer-local-value 'noema-agent-acp-session-root buffer) root)))
+                (and (+agent-acp-agent-buffer-p buffer)
+                     (equal (buffer-local-value '+agent-acp-session-root buffer) root)))
               (buffer-list)))
 
 (defun noema-pi-router--busy-agents (root)
@@ -677,7 +677,7 @@ number of agent buffers stopped now.
 
 Called from Lisp -- the delayed close after the last `.noema' document goes,
 or a perspective being killed -- this is an automatic stop: agents that
-`noema-agent-acp-auto-stoppable-p' refuses, such as a session a person opened
+`+agent-acp-auto-stoppable-p' refuses, such as a session a person opened
 or one still on screen, keep running."
   (interactive
    (let* ((root (noema-pi-router--root default-directory))
@@ -701,7 +701,7 @@ or one still on screen, keep running."
          ((noema-agent-worker-buffer-busy-p buffer)
           (when interrupt
             (noema-agent-worker-cancel-buffer buffer)))
-         ((and automatic (not (noema-agent-acp-auto-stoppable-p buffer))))
+         ((and automatic (not (+agent-acp-auto-stoppable-p buffer))))
          ((noema-agent-worker-stop-buffer buffer)
           (cl-incf stopped)))))
     (unless (buffer-live-p (gethash root noema-pi-router--buffers))
@@ -715,11 +715,11 @@ or one still on screen, keep running."
   "Stop WORKER's agent once its Run ends in a project that was closed meanwhile."
   (when-let* ((buffer (noema-agent-worker-buffer worker))
               ((buffer-live-p buffer))
-              (root (buffer-local-value 'noema-agent-acp-session-root buffer))
+              (root (buffer-local-value '+agent-acp-session-root buffer))
               ((gethash root noema-pi-router--closing))
               ((not (noema-pi-router--project-documents root))))
     (run-at-time 0 nil (lambda ()
-                         (when (noema-agent-acp-auto-stoppable-p buffer)
+                         (when (+agent-acp-auto-stoppable-p buffer)
                            (noema-agent-worker-stop-buffer buffer))))))
 
 (with-eval-after-load 'noema-agent-worker
@@ -729,7 +729,7 @@ or one still on screen, keep running."
   "Close every Pi session when Emacs exits, so pi-acp can clean up."
   (maphash (lambda (_root buffer)
              (when (buffer-live-p buffer)
-               (ignore-errors (noema-agent-acp-shutdown buffer))))
+               (ignore-errors (+agent-acp-shutdown buffer))))
            noema-pi-router--buffers))
 
 (add-hook 'kill-emacs-hook #'noema-pi-router--shutdown-all)
@@ -790,7 +790,7 @@ An `auth.json' that holds no provider entry does not count."
          (node-version (and node (noema-pi-router--program-version node "--version")))
          (credentials (noema-pi-router--credentials))
          (extension (expand-file-name "extensions/noema-manager/index.ts" noema-pi-agent-directory))
-         (config (noema-agent-acp-config-for "pi")))
+         (config (+agent-acp-config-for "pi")))
     (list
      (list (and acp t) "pi-acp on PATH"
            (or acp "missing: npm install -g @automatalabs/pi-acp@0.8.0"))

@@ -53,7 +53,7 @@
 
 (ert-deftest noema-hy-memory-run-uses-the-run-bridge-once ()
   (with-temp-buffer
-    (setq-local noema-agent-acp-session-origin 'run)
+    (setq-local +agent-acp-session-origin 'run)
     (let ((sent nil)
           (memory-called nil))
       (cl-letf (((symbol-function 'noema-hy-memory--ready-p) (lambda () t))

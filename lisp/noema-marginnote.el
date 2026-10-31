@@ -13,16 +13,16 @@
 (require 'json)
 (require 'noema-api)
 
-(declare-function noema-agent-acp-config-for "noema-agent-acp" (agent))
-(declare-function noema-agent-acp-pinned-config "noema-agent-acp" (config model-id effort))
-(declare-function noema-agent-acp-start "noema-agent-acp" (&rest args))
-(declare-function noema-agent-acp-subscribe "noema-agent-acp" (&rest args))
-(declare-function noema-agent-acp-unsubscribe "noema-agent-acp" (&rest args))
-(declare-function noema-agent-acp-export-model-id "noema-agent-acp" (model-id &optional buffer))
-(declare-function noema-agent-acp-current-model-id "noema-agent-acp" (&optional buffer))
-(declare-function noema-agent-acp-draft "noema-agent-acp" (buffer text))
-(declare-function noema-agent-acp-prompt "noema-agent-acp" (&rest args))
-(declare-function noema-agent-acp-show-buffer "noema-agent-acp" (buffer))
+(declare-function +agent-acp-config-for "tools/agent/acp" (agent))
+(declare-function +agent-acp-pinned-config "tools/agent/acp" (config model-id effort))
+(declare-function +agent-acp-start "tools/agent/acp" (&rest args))
+(declare-function +agent-acp-subscribe "tools/agent/acp" (&rest args))
+(declare-function +agent-acp-unsubscribe "tools/agent/acp" (&rest args))
+(declare-function +agent-acp-export-model-id "tools/agent/acp" (model-id &optional buffer))
+(declare-function +agent-acp-current-model-id "tools/agent/acp" (&optional buffer))
+(declare-function +agent-acp-draft "tools/agent/acp" (buffer text))
+(declare-function +agent-acp-prompt "tools/agent/acp" (&rest args))
+(declare-function +agent-acp-show-buffer "tools/agent/acp" (buffer))
 
 (defconst noema-marginnote-pack-id "marginnote-digitize"
   "Managed pack mounted by MarginNote sync sessions.")
@@ -159,7 +159,7 @@ the images it shows to the note's own images/<note stem>/ folder."
             (if (display-graphic-p)
                 (let ((frame (make-frame '((name . "Noema MarginNote sync")
                                            (width . 110) (height . 40)))))
-                  (set-frame-parameter frame 'noema-agent-standalone t)
+                  (set-frame-parameter frame 'agent-standalone t)
                   (set-frame-parameter frame 'noema-marginnote-sync-buffer buffer)
                   (with-current-buffer buffer
                     (add-hook 'kill-buffer-hook #'noema-marginnote--sync-delete-frames-h
@@ -174,40 +174,40 @@ the images it shows to the note's own images/<note stem>/ folder."
 (defun noema-marginnote--sync-start (text &optional effort)
   "Start a pinned sync session at EFFORT and send it TEXT once it is ready.
 EFFORT defaults to `noema-marginnote-sync-effort'."
-  (require 'noema-agent-acp)
-  (let* ((base (or (noema-agent-acp-config-for noema-marginnote-sync-agent)
+  (require 'tools/agent/acp)
+  (let* ((base (or (+agent-acp-config-for noema-marginnote-sync-agent)
                    (user-error "Agent %s is not available" noema-marginnote-sync-agent)))
-         (config (noema-agent-acp-pinned-config
+         (config (+agent-acp-pinned-config
                   base noema-marginnote-sync-model
                   (or effort noema-marginnote-sync-effort)))
          (directory (file-name-as-directory (expand-file-name noema-marginnote-work-root)))
          (model noema-marginnote-sync-model)
          buffer subscription)
     (make-directory directory t)
-    (setq buffer (noema-agent-acp-start :config config :directory directory
+    (setq buffer (+agent-acp-start :config config :directory directory
                                         :origin 'marginnote
                                         :display-function #'noema-marginnote--sync-display))
     (setq subscription
-          (noema-agent-acp-subscribe
+          (+agent-acp-subscribe
            :buffer buffer :event 'init-finished
            :callback
            (lambda (_event)
-             (noema-agent-acp-unsubscribe :buffer buffer :subscription subscription)
+             (+agent-acp-unsubscribe :buffer buffer :subscription subscription)
              (when (buffer-live-p buffer)
                (let ((selected (and (stringp model) (not (string-empty-p model))
-                                    (noema-agent-acp-export-model-id model buffer))))
+                                    (+agent-acp-export-model-id model buffer))))
                  (if (and (stringp model) (not (string-empty-p model))
                           (not (and selected
-                                    (equal selected (noema-agent-acp-current-model-id buffer)))))
+                                    (equal selected (+agent-acp-current-model-id buffer)))))
                      ;; Never run the task on a model the person did not pick.
                      (progn
-                       (noema-agent-acp-draft buffer text)
+                       (+agent-acp-draft buffer text)
                        (message "MarginNote sync: model %s unavailable; task left as a draft"
                                 model))
-                   (noema-agent-acp-prompt
+                   (+agent-acp-prompt
                     :buffer buffer
                     :content (list `((type . "text") (text . ,text))))))))))
-    (noema-agent-acp-show-buffer buffer)
+    (+agent-acp-show-buffer buffer)
     buffer))
 
 (defun noema-marginnote--read-sync-args ()

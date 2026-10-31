@@ -21,11 +21,11 @@ notification bodies sent."
           (callbacks '())
           (notified '())
           (visible nil) (focused t)
-          (noema-agent-acp-notify-function
+          (+agent-acp-notify-function
            (lambda (_title body) (push body notified))))
      (ignore visible focused)
      (unwind-protect
-         (cl-letf (((symbol-function 'noema-agent-acp-subscribe)
+         (cl-letf (((symbol-function '+agent-acp-subscribe)
                     (cl-function
                      (lambda (&key buffer event callback)
                        (push (list buffer event callback) callbacks))))
@@ -34,9 +34,9 @@ notification bodies sent."
                    ((symbol-function 'frame-focus-state)
                     (lambda (&rest _) ,(cadr spec))))
            (with-current-buffer session
-             (setq-local noema-agent-acp-session-name "worktree/fix")
-             (setq-local noema-agent-acp-session-origin 'manual))
-           (noema-agent-acp--subscribe-attention session)
+             (setq-local +agent-acp-session-name "worktree/fix")
+             (setq-local +agent-acp-session-origin 'manual))
+           (+agent-acp--subscribe-attention session)
            (cl-flet ((fire (event &optional data)
                        (dolist (callback callbacks)
                          (when (and (eq (car callback) session)
@@ -49,19 +49,19 @@ notification bodies sent."
 (ert-deftest noema-agent-attention-marks-hidden-session ()
   (noema-agent-attention-tests--with-session (visible focused)
     (fire 'permission-request)
-    (should (eq (buffer-local-value 'noema-agent-acp-attention session) 'permission))
-    (should (equal (noema-agent-acp-attention-mark session) "!approve"))
+    (should (eq (buffer-local-value '+agent-acp-attention session) 'permission))
+    (should (equal (+agent-acp-attention-mark session) "!approve"))
     ;; Emacs had focus, so no system notification.
     (should-not notified)
     (fire 'turn-complete '((:stop-reason . "end_turn")))
-    (should (equal (noema-agent-acp-attention-mark session) "done"))
+    (should (equal (+agent-acp-attention-mark session) "done"))
     ;; Watching twice does not subscribe twice.
     (let ((count (length callbacks)))
-      (noema-agent-acp--subscribe-attention session)
+      (+agent-acp--subscribe-attention session)
       (should (= count (length callbacks))))
     ;; Showing the buffer clears it.
-    (with-current-buffer session (noema-agent-acp--attention-shown nil))
-    (should-not (noema-agent-acp-attention-mark session))))
+    (with-current-buffer session (+agent-acp--attention-shown nil))
+    (should-not (+agent-acp-attention-mark session))))
 
 (ert-deftest noema-agent-attention-notifies-only-when-emacs-is-unfocused ()
   (noema-agent-attention-tests--with-session (visible focused)
@@ -76,19 +76,19 @@ notification bodies sent."
     ;; On screen: seen when Emacs has focus again, so no mark.
     (setq visible t)
     (fire 'permission-request)
-    (should-not (noema-agent-acp-attention-mark session))
+    (should-not (+agent-acp-attention-mark session))
     (setq visible nil)
     ;; The person's own interrupt is not news.
     (fire 'turn-complete '((:stop-reason . "cancelled")))
-    (should-not (noema-agent-acp-attention-mark session))
+    (should-not (+agent-acp-attention-mark session))
     ;; A Run reports its own attention through the host.
-    (let ((noema-agent-acp-run-owned-functions (list (lambda (buffer) (eq buffer session)))))
+    (let ((+agent-acp-run-owned-functions (list (lambda (buffer) (eq buffer session)))))
       (fire 'permission-request)
-      (should-not (noema-agent-acp-attention-mark session)))
+      (should-not (+agent-acp-attention-mark session)))
     ;; An ephemeral side chat never asks for attention.
-    (with-current-buffer session (setq-local noema-agent-acp-session-origin 'side))
+    (with-current-buffer session (setq-local +agent-acp-session-origin 'side))
     (fire 'turn-complete '((:stop-reason . "end_turn")))
-    (should-not (noema-agent-acp-attention-mark session))))
+    (should-not (+agent-acp-attention-mark session))))
 
 (ert-deftest noema-agent-attention-worker-owns-its-run-buffer ()
   (let ((noema-agent-worker--runs (make-hash-table :test #'equal))
@@ -96,11 +96,11 @@ notification bodies sent."
     (unwind-protect
         (progn
           (should-not (run-hook-with-args-until-success
-                       'noema-agent-acp-run-owned-functions buffer))
+                       '+agent-acp-run-owned-functions buffer))
           (puthash "run-1" (noema-agent-worker--create :run-id "run-1" :buffer buffer)
                    noema-agent-worker--runs)
           (should (run-hook-with-args-until-success
-                   'noema-agent-acp-run-owned-functions buffer)))
+                   '+agent-acp-run-owned-functions buffer)))
       (kill-buffer buffer))))
 
 (ert-deftest noema-agent-attention-inbox-ranks-navigates-and-reads ()
@@ -114,11 +114,11 @@ notification bodies sent."
                  (noema-agent-inbox--roots (list root))
                  (noema-agent-inbox--results (make-hash-table :test #'equal))
                  read)
-            (with-current-buffer waiting (setq-local noema-agent-acp-attention 'permission))
-            (with-current-buffer promoted (setq-local noema-agent-acp-attention 'done))
+            (with-current-buffer waiting (setq-local +agent-acp-attention 'permission))
+            (with-current-buffer promoted (setq-local +agent-acp-attention 'done))
             (puthash root '((names . [((name . "recorded") (sessionId . "sid-1"))]))
                      noema-agent-inbox--results)
-            (cl-letf (((symbol-function 'noema-agent-acp-sessions)
+            (cl-letf (((symbol-function '+agent-acp-sessions)
                        (lambda (&optional _root)
                          (list (list :buffer quiet :name "quiet" :root root)
                                (list :buffer waiting :name "waiting" :root root))))
@@ -143,14 +143,14 @@ notification bodies sent."
               (should (eq (plist-get (noema-agent-inbox--selected) :buffer) waiting))
               ;; `u' clears a local mark without asking the host.
               (noema-agent-inbox-mark-read)
-              (should-not (noema-agent-acp-attention-mark waiting))
+              (should-not (+agent-acp-attention-mark waiting))
               (should-not read)
               ;; On a recorded Session it clears the live mark and reads it.
               (goto-char (point-min))
               (while (not (equal (plist-get (noema-agent-inbox--selected) :name) "recorded"))
                 (forward-line 1))
               (noema-agent-inbox-mark-read)
-              (should-not (noema-agent-acp-attention-mark promoted))
+              (should-not (+agent-acp-attention-mark promoted))
               (should (equal read "recorded")))))
       (mapc #'kill-buffer (list waiting quiet promoted)))))
 

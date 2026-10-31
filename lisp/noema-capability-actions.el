@@ -4,9 +4,9 @@
 (require 'wid-edit)
 (require 'json)
 (require 'transient)
-(declare-function noema-agent-acp-config-for "noema-agent-acp" (agent))
-(declare-function noema-agent-acp-start "noema-agent-acp" (&rest args))
-(declare-function noema-agent-acp-draft "noema-agent-acp" (buffer text))
+(declare-function +agent-acp-config-for "tools/agent/acp" (agent))
+(declare-function +agent-acp-start "tools/agent/acp" (&rest args))
+(declare-function +agent-acp-draft "tools/agent/acp" (buffer text))
 (declare-function noema-capability-ui--switch "noema-capability-ui" (view))
 (defvar noema-capability-ui--project)
 (defvar noema-capability-ui--resolution)
@@ -310,12 +310,12 @@ No request is sent until the user reviews the draft and presses RET."
       (user-error "Select a unified-diff Patch or Local Skill; convert legacy overrides with Patch → Project"))
     (setq agent (completing-read "Edit with agent: " '("codex" "claude" "opencode") nil t)
           request (read-string "Skill refinement: "))
-    (require 'noema-agent-acp)
-    (let ((buffer (noema-agent-acp-start :config (noema-agent-acp-config-for agent)
+    (require 'tools/agent/acp)
+    (let ((buffer (+agent-acp-start :config (+agent-acp-config-for agent)
                                        :directory (file-name-directory path) :focus t
                                        :origin 'probe)))
-      (noema-agent-acp-adopt buffer :agent agent :origin 'probe)
-      (noema-agent-acp-draft
+      (+agent-acp-adopt buffer :agent agent :origin 'probe)
+      (+agent-acp-draft
        buffer (concat
                (if (string-suffix-p ".patch" path)
                    (format "Micro-refine this Skill by editing ONLY the unified diff file %S using your apply_patch/file-patch tool.\nRead PATCH-BASE.md in this directory as the immutable baseline; read the existing diff first and preserve its changes.\nThe diff must have exactly these headers: --- SKILL.md and +++ SKILL.md, followed by unified @@ hunks. Save the cumulative minimal delta against PATCH-BASE.md, NOT a full replacement Markdown file.\nValidate using the system patch command on a temporary copy of PATCH-BASE.md, with -t -N -F 0; never apply it to the baseline or global original.\nDo not change PATCH-BASE.md, the frontmatter name, or capability config.\n" path)
@@ -649,8 +649,8 @@ TYPE is the manager's filter, or nil when all kinds are offered."
 (defun noema-capability-lookup--draft (buffer text)
   "Draft TEXT in BUFFER's agent input; never submit it."
   (if (with-current-buffer buffer (derived-mode-p 'agent-shell-mode))
-      (progn (require 'noema-agent-acp)
-             (noema-agent-acp-draft buffer text))
+      (progn (require 'tools/agent/acp)
+             (+agent-acp-draft buffer text))
     (with-current-buffer buffer
       (if (derived-mode-p 'portal-terminal-mode)
           (portal--terminal-paste portal-view--target text)

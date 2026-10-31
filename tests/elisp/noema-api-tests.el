@@ -174,7 +174,7 @@
     (should (equal (alist-get 'command (cadr servers)) "node"))
     (should (equal (alist-get 'args (cadr servers)) ["server.mjs"]))))
 
-(ert-deftest noema-agent-workspace-shows-real-session-buffers-as-tabs ()
+(ert-deftest agent-workspace-shows-real-session-buffers-as-tabs ()
   (noema-api-test--with-project root
     (let ((main (generate-new-buffer " noema-agent-main"))
           (branch (generate-new-buffer " noema-agent-branch")))
@@ -185,36 +185,36 @@
             (dolist (buffer (list main branch))
               (with-current-buffer buffer
                 (setq major-mode 'agent-shell-mode)))
-            (noema-agent-acp-mark-session-buffer main "main" "opencode" root)
-            (noema-agent-acp-mark-session-buffer branch "branch" "opencode" root)
-            (cl-letf (((symbol-function 'noema-agent-render-flush) #'ignore))
-              (noema-agent-acp-show-buffer main)
-              (let ((window (noema-agent-acp--workspace-window)))
+            (+agent-acp-mark-session-buffer main "main" "opencode" root)
+            (+agent-acp-mark-session-buffer branch "branch" "opencode" root)
+            (cl-letf (((symbol-function '+agent-render-flush) #'ignore))
+              (+agent-acp-show-buffer main)
+              (let ((window (+agent-acp--workspace-window)))
                 (should (eq main (window-buffer window)))
-                (noema-agent-acp-show-buffer branch)
+                (+agent-acp-show-buffer branch)
                 ;; One Agent window, showing the real interactive session.
-                (should (eq window (noema-agent-acp--workspace-window)))
+                (should (eq window (+agent-acp--workspace-window)))
                 (should (eq branch (window-buffer window)))
                 (should (eq window (selected-window)))
                 (should (= 1 (seq-count (lambda (other)
-                                          (noema-agent-acp-agent-buffer-p (window-buffer other)))
+                                          (+agent-acp-agent-buffer-p (window-buffer other)))
                                         (window-list nil 'nomini))))
                 (with-current-buffer branch
-                  (should noema-agent-acp-tabs-mode)
+                  (should +agent-acp-tabs-mode)
                   (should tab-line-exclude)
-                  (let ((tabs (noema-agent-acp--tab-line)))
+                  (let ((tabs (+agent-acp--tab-line)))
                     (should (string-match-p "main · opencode" tabs))
                     (should (string-match-p "branch · opencode" tabs))
                     (should (eq 'tab-line-tab-current
                                 (get-text-property (string-match "branch" tabs) 'face tabs)))
                     (should (eq 'tab-line-tab-inactive
                                 (get-text-property (string-match "main" tabs) 'face tabs))))
-                  (noema-agent-acp-next-session))
+                  (+agent-acp-next-session))
                 (should (eq main (window-buffer window)))
                 (let ((edges (window-edges window)))
                   (should (>= (car edges) (/ (frame-width) 2)))
                   (should (> (cadr edges) 0)))
-                (should (eq main (noema-agent-acp-session-buffer "main" root))))))
+                (should (eq main (+agent-acp-session-buffer "main" root))))))
         (when (buffer-live-p main) (kill-buffer main))
         (when (buffer-live-p branch) (kill-buffer branch))))))
 
@@ -232,17 +232,17 @@
               (setq-local agent-shell--state
                           `((:client . ((:process . ,process))))))
             (cl-letf (((symbol-function 'noema-agent-worker--config) #'ignore)
-                      ((symbol-function 'noema-agent-acp-start) (lambda (&rest _) shell))
-                      ((symbol-function 'noema-agent-acp-subscribe) (lambda (&rest _) 'subscription)))
+                      ((symbol-function '+agent-acp-start) (lambda (&rest _) shell))
+                      ((symbol-function '+agent-acp-subscribe) (lambda (&rest _) 'subscription)))
               (noema-agent-worker--start-shell worker "native-test"))
             ;; The next Run of the same logical Session finds this live buffer.
             (should (eq shell (noema-agent-worker--existing-buffer "ses_test" root)))
-            (should (equal (noema-agent-acp--tab-label shell) "test · opencode"))
+            (should (equal (+agent-acp--tab-label shell) "test · opencode"))
             ;; A buffer retired by a newer physical Session keeps a readable tab.
             (with-current-buffer shell
-              (setq-local noema-agent-acp-session-name nil)
+              (setq-local +agent-acp-session-name nil)
               (rename-buffer " *Noema Agent · test · opencode @ demo* (retired)" t))
-            (should (equal (noema-agent-acp--tab-label shell) "test · opencode (retired)")))
+            (should (equal (+agent-acp--tab-label shell) "test · opencode (retired)")))
         (when (process-live-p process) (delete-process process))
         (when (buffer-live-p shell) (kill-buffer shell))))))
 
@@ -254,7 +254,7 @@
                  (contentBase64 . ,(base64-encode-string (encode-coding-string text 'utf-8) t))))
          (worker (noema-agent-worker--create :spec '((prompt . "通读文件")) :context-items (list item))))
     (dolist (embedded '(t nil))
-      (cl-letf (((symbol-function 'noema-agent-acp-state-value) (lambda (&rest _) embedded)))
+      (cl-letf (((symbol-function '+agent-acp-state-value) (lambda (&rest _) embedded)))
         (let ((json (decode-coding-string
                      (json-serialize (vconcat (noema-agent-worker--content-blocks worker))) 'utf-8)))
           (should (string-match-p "阅读背景" json)))))))
@@ -519,9 +519,9 @@
           (progn
             (with-current-buffer buffer
               (setq major-mode 'agent-shell-mode)
-              (setq-local noema-agent-acp-session-root root
-                          noema-agent-acp-session-name "main"
-                          noema-agent-acp-session-agent "opencode"))
+              (setq-local +agent-acp-session-root root
+                          +agent-acp-session-name "main"
+                          +agent-acp-session-agent "opencode"))
             (cl-letf (((symbol-function 'noema-sessions--api)
                        (lambda (channel body _callback) (push (cons channel body) calls))))
               (noema-sessions-agent-rename buffer "main-2")
@@ -533,7 +533,7 @@
               (should (equal (alist-get 'agent declared) "opencode")))
             ;; A retired buffer no longer owns a name to manage.
             (with-current-buffer buffer
-              (setq-local noema-agent-acp-session-name nil))
+              (setq-local +agent-acp-session-name nil))
             (should-error (noema-sessions-agent-rename buffer "x") :type 'user-error))
         (kill-buffer buffer)))))
 

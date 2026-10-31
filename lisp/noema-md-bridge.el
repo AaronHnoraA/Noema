@@ -44,14 +44,14 @@
 (declare-function gptel-context--add-region "gptel-context"
                   (buffer region-beginning region-end &optional advance))
 (declare-function gptel-rewrite "gptel-rewrite" ())
-(declare-function noema-compose "noema-compose" (&optional name))
-(declare-function noema-context--send "noema-context" (&rest arguments))
-(declare-function noema-context--region-references "noema-context" (buffer begin end))
+(declare-function +agent/compose "tools/agent/compose" (&optional name))
+(declare-function +agent-context--send "tools/agent/context" (&rest arguments))
+(declare-function +agent-context--region-references "tools/agent/context" (buffer begin end))
 (defvar noema-context-related-prompt)
 
 (defgroup noema-md-bridge nil
   "Running Emacs tools on the text of a Noema Markdown pane."
-  :group 'noema-context)
+  :group '+agent-context)
 
 (defcustom noema-md-bridge-autosave-delay 1.0
   "Idle seconds before a bridged source buffer saves its edits.
@@ -351,10 +351,10 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
   "Run ACTION on BEGIN..END of note BUFFER."
   (pcase action
     ("agent"
-     (require 'noema-context)
+     (require 'tools/agent/context)
      (let ((session (with-current-buffer buffer
-                      (noema-context--send
-                       :references (noema-context--region-references
+                      (+agent-context--send
+                       :references (+agent-context--region-references
                                     buffer begin end)))))
        ;; Asked from a Noema page: continue in the session, not the page.
        (when-let* ((window (and (buffer-live-p session)
@@ -366,11 +366,11 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
        ;; References name the file; the agent needs no Emacs buffer.
        (noema-md-bridge--drop-hidden buffer)))
     ("related"
-     (require 'noema-context)
+     (require 'tools/agent/context)
      (let ((session (with-current-buffer buffer
-                      (noema-context--send
+                      (+agent-context--send
                        :prompt noema-context-related-prompt
-                       :references (noema-context--region-references buffer begin end)))))
+                       :references (+agent-context--region-references buffer begin end)))))
        (when-let* ((window (and (buffer-live-p session)
                                 (get-buffer-window session 'visible))))
          (if (fboundp 'noema--select-emacs-window)
@@ -381,8 +381,8 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
      (noema-md-bridge--add-context buffer begin end))
     ("compose"
      (noema-md-bridge--add-context buffer begin end)
-     (require 'noema-compose)
-     (noema-compose))
+     (require 'tools/agent/compose)
+     (+agent/compose))
     ("rewrite"
      (require 'gptel-rewrite)
      (noema-md-bridge--show-region buffer begin end)

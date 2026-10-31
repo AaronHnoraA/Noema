@@ -49,8 +49,8 @@
   "Return BUFFER's local project root, or nil for a remote workspace."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (let ((root (or (and (boundp 'noema-agent-acp-session-root)
-                           noema-agent-acp-session-root)
+      (let ((root (or (and (boundp '+agent-acp-session-root)
+                           +agent-acp-session-root)
                       default-directory)))
         (when (and (stringp root) (file-name-absolute-p root)
                    (not (file-remote-p root))
@@ -62,8 +62,8 @@
 Noema Runs recall at RunSpec freeze and write on completion; handling their
 ACP turns here would duplicate the same memory in one workflow."
   (and (buffer-live-p buffer)
-       (or (not (boundp 'noema-agent-acp-session-origin))
-           (not (memq (buffer-local-value 'noema-agent-acp-session-origin buffer)
+       (or (not (boundp '+agent-acp-session-origin))
+           (not (memq (buffer-local-value '+agent-acp-session-origin buffer)
                       '(run probe side))))))
 
 (defun noema-hy-memory--request (operation body callback)

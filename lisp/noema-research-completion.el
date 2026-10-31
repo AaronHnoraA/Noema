@@ -7,7 +7,7 @@
 (defvar noema-research--session-names)
 (defvar noema-research-session-keywords)
 (declare-function noema-research--parse-header "noema-research-mode" (text))
-(declare-function noema-agent-acp-known-agents "noema-agent-acp" ())
+(declare-function +agent-acp-known-agents "tools/agent/acp" ())
 (defvar-local noema-research-completion--timer nil)
 (defvar-local noema-research-completion--project nil)
 (defvar-local noema-research-completion--file-directory nil)
@@ -211,7 +211,7 @@ an `@@skill' id, including while its asynchronous candidate list is empty."
         (let ((value (buffer-substring-no-properties beg (point))))
           (setq pairs
                 (pcase name
-                  ("agent" (mapcar (lambda (id) (cons id "Agent")) (noema-agent-acp-known-agents)))
+                  ("agent" (mapcar (lambda (id) (cons id "Agent")) (+agent-acp-known-agents)))
                   ("session"
                    (let ((parent (and (string-match "\\`\\(.*:\\)[^:]*\\'" value)
                                       (match-string 1 value))))

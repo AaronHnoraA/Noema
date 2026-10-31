@@ -9,8 +9,8 @@
 ;;; Code:
 
 (require 'noema-upstream)
-(require 'noema-compose)
-(require 'noema-agent-acp)
+(require 'tools/agent/compose)
+(require 'tools/agent/acp)
 (require 'noema-api)
 (require 'noema-capability-ui)
 
@@ -18,7 +18,7 @@
 (defun noema ()
   "Open the primary Noema structured-agent surface."
   (interactive)
-  (noema-agent-start 'magent))
+  (+agent/start 'magent))
 
 (provide 'noema)
 ;;; noema.el ends here

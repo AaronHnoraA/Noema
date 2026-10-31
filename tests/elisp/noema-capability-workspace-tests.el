@@ -95,7 +95,7 @@
       (should (equal (seq-take called 2) '("proof" "copy"))))))
 
 (ert-deftest noema-capability-agent-refinement-is-a-reviewable-draft ()
-  (require 'noema-agent-acp)
+  (require 'tools/agent/acp)
   (with-temp-buffer
     (noema-capability-ui-mode)
     (setq noema-capability-ui--project "/project/" noema-capability-ui--view 'patches)
@@ -105,10 +105,10 @@
     (let (draft)
       (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "codex"))
                 ((symbol-function 'read-string) (lambda (&rest _) "Make the proof checks stricter"))
-                ((symbol-function 'noema-agent-acp-config-for) #'identity)
-                ((symbol-function 'noema-agent-acp-start) (lambda (&rest _) (current-buffer)))
-                ((symbol-function 'noema-agent-acp-draft) (lambda (_buffer text) (setq draft text)))
-                ((symbol-function 'noema-agent-acp-prompt) (lambda (&rest _) (ert-fail "Auto-submitted draft"))))
+                ((symbol-function '+agent-acp-config-for) #'identity)
+                ((symbol-function '+agent-acp-start) (lambda (&rest _) (current-buffer)))
+                ((symbol-function '+agent-acp-draft) (lambda (_buffer text) (setq draft text)))
+                ((symbol-function '+agent-acp-prompt) (lambda (&rest _) (ert-fail "Auto-submitted draft"))))
         (noema-capability-ui-edit-with-agent))
       (should (string-match-p (regexp-quote "/project/.agents/skill-patches/proof/skill.patch") draft))
       (should (string-match-p "Do not modify global Skills" draft)))))
