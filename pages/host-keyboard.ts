@@ -25,6 +25,7 @@ import {
   releaseHostInputFocus,
 } from "./host-input-focus.ts";
 import { hostCommandTargetsClient } from "./host-command-target.ts";
+import { installFileDropGuard } from "./host-file-drop.ts";
 
 export type HostKeyboardOptions = {
   /** This page's Emacs client id, from its URL. */
@@ -93,6 +94,7 @@ export function installHostKeyboardBridge(options: HostKeyboardOptions): () => v
   // Emacs keys typed inside a sandboxed output frame.
   const removeFrameRelay = installFrameKeyRelay(forward);
   signal.addEventListener("abort", removeFrameRelay);
+  signal.addEventListener("abort", installFileDropGuard());
   // Capture phase: a page's own shortcuts (arrows, Escape, Cmd-Enter...) must
   // not run for a key that belongs to Emacs.
   window.addEventListener("keydown", (event) => {

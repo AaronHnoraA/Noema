@@ -241,7 +241,7 @@ import { knowledgeSearchResponse } from "./server/lib/knowledge-search.mjs";
 import { virtualReferencesPayload } from "./server/lib/virtual-references.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
 import { readJson, readText } from "./server/infrastructure/http-body.mjs";
-import { localClientRequest } from "./server/infrastructure/local-boundary.mjs";
+import { foreignPage } from "./server/infrastructure/local-boundary.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
 import { createEmacsApiHandlers } from "./server/Features/Emacs/api.mjs";
 import { createFilesystemApiHandlers } from "./server/Features/Filesystem/api.mjs";
@@ -2893,6 +2893,13 @@ async function katexMacrosPayload() {
 }
 
 async function readSystemClipboard(body) {
+  // Text first: a spreadsheet or a Finder copy also carries a picture, and
+  // only a real image has no text beside it.
+  try {
+    const { stdout } = await execFileAsync("pbpaste");
+    if (stdout) return { kind: "text", text: stdout };
+  } catch (_) {}
+
   const file = String(body.file || "");
   let tempDir = "";
   try {
@@ -2915,13 +2922,7 @@ async function readSystemClipboard(body) {
       try { await rm(tempDir, { recursive: true, force: true }); } catch {}
     }
   }
-
-  try {
-    const { stdout } = await execFileAsync("pbpaste");
-    return stdout ? { kind: "text", text: stdout } : { kind: "empty" };
-  } catch (_) {
-    return { kind: "empty" };
-  }
+  return { kind: "empty" };
 }
 
 async function callApi(channel, args = []) {
@@ -3825,12 +3826,6 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
     const origin = `http://${bindHost}:${server.address()?.port}`;
 
-    if (hostMode !== "server"
-        && !localClientRequest(req.headers, { bearerRoute: url.pathname.startsWith("/v1/") })) {
-      sendText(res, 403, "Not a local client");
-      return;
-    }
-
     if (shuttingDown && url.pathname !== "/events") {
       sendJson(res, 503, { ok: false, message: "Noema host is shutting down" });
       return;
@@ -3955,18 +3950,11 @@ const server = createServer(async (req, res) => {
         sendText(res, 404, "Not found");
         return;
       }
-      if (req.method === "GET") {
-        try {
-          const { stdout } = await execFileAsync("pbpaste");
-          res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-          res.end(stdout);
-        } catch (_) {
-          res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-          res.end("");
-        }
-        return;
-      }
       if (req.method === "POST") {
+        if (foreignPage(req)) {
+          sendText(res, 403, "Not a local client");
+          return;
+        }
         try {
           const text = await readText(req);
           await new Promise((resolve) => {
@@ -3984,6 +3972,10 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api" && req.method === "POST") {
+      if (hostMode !== "server" && foreignPage(req)) {
+        sendText(res, 403, "Not a local client");
+        return;
+      }
       const body = await readJson(req);
       const result = await callApi(String(body.channel || ""), body.args);
       sendJson(res, 200, result ?? { ok: true });
@@ -3993,6 +3985,10 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/emacs/event" && req.method === "POST") {
       if (hostMode === "server") {
         sendText(res, 404, "Not found");
+        return;
+      }
+      if (foreignPage(req)) {
+        sendText(res, 403, "Not a local client");
         return;
       }
       const body = await readJson(req, 1024 * 1024);

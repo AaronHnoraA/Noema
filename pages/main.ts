@@ -114,6 +114,7 @@ import {
   reclaimHostInputFocus,
   releaseHostInputFocus,
 } from "./host-input-focus.ts";
+import { installFileDropGuard } from "./host-file-drop.ts";
 import {
   ProseCheckLifecycle,
   type ProseCheckContext,
@@ -301,6 +302,7 @@ import { EMBEDDED_SURFACE_ATTRIBUTE, EMBEDDED_SURFACE_SELECTOR, EMBEDDED_SURFACE
 // Before every other key listener: a key offered to this page while it lacks
 // native focus is Emacs' (see host-input-focus.ts).
 installNativeKeyboardYield();
+installFileDropGuard();
 const removeNoemaThemeRuntime = installNoemaThemeRuntime();
 const root = document.querySelector<HTMLElement>("#app");
 if (!root) throw new Error("Missing #app");

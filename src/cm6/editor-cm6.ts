@@ -1441,19 +1441,18 @@ function buildExtensions(
 }
 
 /**
- * Dropped files that are not plain text become attachments at the drop point.
+ * Dropped files become attachments linked at the drop point, as in Obsidian.
  *
- * CodeMirror's own drop reads every dropped file as text and silently ignores
- * one that looks binary, so dragging an image or PDF in did nothing. As in
- * MarkText's `dragDropImage`, the files go through the same asset store a
- * pasted file does and land as Markdown image/attachment links where they were
- * dropped. A drop of only text files keeps CodeMirror's behaviour.
+ * CodeMirror's own drop pours a text file's content into the note and ignores
+ * one that looks binary. Here every file goes through the asset store a pasted
+ * file does and lands as a Markdown link. A folder has no bytes to store, so it
+ * is skipped. Text dragged from elsewhere carries no files and stays with
+ * CodeMirror.
  */
 export function dropAttachmentFiles(view: EditorView, event: DragEvent, options: EditorOptions): boolean {
   const data = event.dataTransfer;
   if (!data || options.readOnly || !options.pasteAssets?.uploadBlobAsset) return false;
-  const files = Array.from(data.files ?? []);
-  if (files.length === 0 || files.every((file) => file.type.startsWith("text/"))) return false;
+  if (Array.from(data.files ?? []).length === 0) return false;
   const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
   if (pos == null) return false;
   event.preventDefault();

@@ -13,7 +13,7 @@
 
 import WebSocketClient, { WebSocketServer } from "ws";
 import * as jlabSerialize from "@jupyterlab/services/lib/kernel/serialize.js";
-import { localClientRequest } from "../infrastructure/local-boundary.mjs";
+import { foreignPage } from "../infrastructure/local-boundary.mjs";
 import { RawSocket } from "../jupyter/raw-socket.mjs";
 import { noop, makeLogger } from "../jupyter/util.mjs";
 
@@ -85,7 +85,7 @@ export function installJupyterKernelWebSocket({
   };
 
   const onUpgrade = async (req, socket, head) => {
-    if (!localClientRequest(req.headers)) {
+    if (foreignPage(req)) {
       socket.destroy();
       return;
     }

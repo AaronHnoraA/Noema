@@ -151,6 +151,11 @@ function filesFromDataTransfer(data: DataTransfer): File[] {
     .filter((file): file is File => Boolean(file));
 }
 
+/** Spreadsheets put a picture of the cells next to the table itself. */
+function holdsTable(html: string): boolean {
+  return /<table[\s>]/i.test(html);
+}
+
 export function pastePlainText(
   text: string,
   context: EditorPasteContext,
@@ -165,7 +170,7 @@ export async function pasteDataTransfer(
   context: EditorPasteContext,
   options?: EditorPasteOptions,
 ): Promise<boolean> {
-  const files = filesFromDataTransfer(data);
+  const files = holdsTable(data.getData("text/html")) ? [] : filesFromDataTransfer(data);
   if (files.length > 0 && await pasteFiles(files, context, options)) return true;
   const plainText = normalizePastedSourceText(data.getData("text/plain"));
   const markdown = markdownFromClipboard(data);
@@ -191,6 +196,8 @@ async function pasteClipboardItems(
   for (const item of items) {
     const imageType = item.types.find((type) => type.startsWith("image/"));
     if (!imageType) continue;
+    if (item.types.includes("text/html")
+        && holdsTable(await (await item.getType("text/html")).text())) continue;
     const blob = await item.getType(imageType);
     const asset = await uploadBlob(context, blob, clipboardFileName(imageType));
     if (asset) stored.push(asset);

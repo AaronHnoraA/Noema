@@ -8290,10 +8290,7 @@ async function moveToTrash(file) {
   }
   if (process.platform === "darwin") {
     try {
-      await execFileAsync("osascript", [
-        "-e",
-        `tell application "Finder" to delete POSIX file ${JSON.stringify(file)}`,
-      ]);
+      await execFileAsync("/usr/bin/trash", [file]);
       return "system-trash";
     } catch {}
   }

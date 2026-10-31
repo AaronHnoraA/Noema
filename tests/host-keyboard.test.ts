@@ -48,6 +48,7 @@ describe("shared Noema host keyboard bridge", () => {
         const yieldAt = source.indexOf("installNativeKeyboardYield();");
         expect(yieldAt).toBeGreaterThan(0);
         expect(source.indexOf("addEventListener(\"keydown\"")).toBeGreaterThan(yieldAt);
+        expect(source).toContain("installFileDropGuard();");
       } else {
         expect(source, entry).toMatch(/installHostKeyboardBridge\(/);
       }
