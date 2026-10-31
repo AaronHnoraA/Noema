@@ -241,6 +241,7 @@ import { knowledgeSearchResponse } from "./server/lib/knowledge-search.mjs";
 import { virtualReferencesPayload } from "./server/lib/virtual-references.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
 import { readJson, readText } from "./server/infrastructure/http-body.mjs";
+import { localClientRequest } from "./server/infrastructure/local-boundary.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
 import { createEmacsApiHandlers } from "./server/Features/Emacs/api.mjs";
 import { createFilesystemApiHandlers } from "./server/Features/Filesystem/api.mjs";
@@ -3823,6 +3824,12 @@ const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://localhost");
     const origin = `http://${bindHost}:${server.address()?.port}`;
+
+    if (hostMode !== "server"
+        && !localClientRequest(req.headers, { bearerRoute: url.pathname.startsWith("/v1/") })) {
+      sendText(res, 403, "Not a local client");
+      return;
+    }
 
     if (shuttingDown && url.pathname !== "/events") {
       sendJson(res, 503, { ok: false, message: "Noema host is shutting down" });
