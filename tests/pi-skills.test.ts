@@ -206,3 +206,18 @@ test("what Pi carries on every turn stays small", async () => {
   const prompt = await readFile(join(process.cwd(), "resources/pi/SYSTEM.md"), "utf8");
   expect(prompt.length).toBeLessThanOrEqual(4_300);
 });
+
+test("the catalog stays small: descriptions and preambles have budgets", async () => {
+  const { readFile, readdir } = await import("node:fs/promises");
+  const skills = join(process.cwd(), "resources/skills");
+  for (const id of await readdir(skills)) {
+    const text = await readFile(join(skills, id, "SKILL.md"), "utf8").catch(() => "");
+    const description = /^description: (.*)$/m.exec(text)?.[1] ?? "";
+    expect([id, description.length <= 260]).toEqual([id, true]);
+  }
+  const config = await readFile(join(process.cwd(), "../../etc/noema/capabilities.json"), "utf8").catch(() => null);
+  if (config === null) return;
+  const packs = Object.entries(JSON.parse(config).packs.definitions) as Array<[string, any]>;
+  const carried = packs.filter(([, pack]) => pack.agent_catalog).map(([id, pack]) => [id, (pack.preamble ?? "").length]);
+  for (const [id, length] of carried) expect([id, length <= 320]).toEqual([id, true]);
+});
