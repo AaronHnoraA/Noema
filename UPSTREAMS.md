@@ -142,3 +142,7 @@ export/publish HTML under happy-dom, and from 3.4.8 DOMPurify no longer
 sanitizes correctly there (allowed tags are dropped while `<script>` survives;
 upstream declares happy-dom unsupported).  Unpin only after that path runs on
 a supported DOM.
+
+PlanWeave and Trace Canvas were studied for the project task graph; no code was
+copied. Adopted and rejected ideas are in
+`../../docs/noema/records/audits/planweave-trace-canvas-audit-2026-11.md`.

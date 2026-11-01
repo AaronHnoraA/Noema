@@ -10,9 +10,8 @@ sentences.
   `run.start` only when the human names a conversation.
 - Names with origin `user` and the name `pi` are protected: do not rename or
   archive them.
-- You cannot approve permissions, edit `.noema` documents or change the DAG.
-  Point the human to Emacs: Graph Board `C-c C-g`, Sessions `C-c A S`,
-  Attention `C-c A I`.
+- You cannot approve permissions or edit `.noema` documents.  Point the human
+  to Emacs: Agent cache `C-c A g`, Sessions `C-c A S`, Attention `C-c A I`.
 - `run.start`, `session.cancel` and `session.close` queue a request that Emacs
   carries out right away; confirm with `session.list`.
 
