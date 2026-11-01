@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { scanEdiffBlocks, ediffSide } from "../../../shared/ediff-source.mjs";
 import { listAgentSkills, readAgentSkill } from "../../lib/agent-skills.mjs";
 import { agentMemorySearch, agentProjectMaintain, agentProjectStatus } from "../../lib/agent-project.mjs";
+import { projectGraph } from "../../lib/project-graph.mjs";
 
 const bad = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
 const humanDecisions = new Set([
@@ -115,6 +116,10 @@ export function createAgentApiHandlers({ router, call }) {
     "noema:api:agent:project:maintain": documented((body) => agentProjectMaintain(body, { call }), {
       description: "Run the Project cache's conservative maintenance now: expired stream rows, old unregistered objects, WAL checkpoint. Registered artifacts and Session state are never deleted. Check status first; maintenance also runs after Runs.",
       parameters: [{ root: "absolute path in the Project" }],
+    }),
+    "noema:api:agent:project:graph": documented((body) => projectGraph(body), {
+      description: "Read or maintain the Project's task graph in `.agent/tasks/`: task definitions plus an append-only journal. Reads: status, next, check, graph, timeline, show. Writes: plan, claim, release, submit, review, note, state. The noema-project-graph pack is how to use it; agents with a shell can run scripts/project-graph.mjs with no host.",
+      parameters: [{ root: "absolute path in the Project", op: "operation, default status", id: "task id", agent: "who is acting; required by claim, release, submit, review, note and state", session: "optional native Session id", tasks: "plan: task definitions", dryRun: "plan: vet only", evidence: "submit: what proves it", verdict: "review: passed or needs_changes", text: "note, review, release or state text", kind: "note: note, decision or commit", refs: "note: commit shas or paths", state: "state: todo, blocked or dropped", take: "claim: take over an expired claim", requestId: "optional key that makes a retried write a no-op", limit: "timeline length" }],
     }),
     "noema:api:agent:memory:search": documented((body) => agentMemorySearch(body), {
       description: "Search Hy Memory in the Project's scope with a query of your own; ordinary turns already recall by their prompt. `state` other than ok means unknown, not empty. Results are unverified background.",
