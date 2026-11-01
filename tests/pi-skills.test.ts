@@ -200,3 +200,9 @@ test("C19 dependency aliases use canonical ids even when already globally enable
     expect(result.diagnostics).toEqual([]);
   });
 });
+
+test("what Pi carries on every turn stays small", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const prompt = await readFile(join(process.cwd(), "resources/pi/SYSTEM.md"), "utf8");
+  expect(prompt.length).toBeLessThanOrEqual(4_300);
+});

@@ -124,4 +124,14 @@
         (noema-project-graph-tests--answer call '((running . :json-false)))
         (should (string-match-p "waits" (car calls)))))))
 
+(ert-deftest noema-project-graph-w3-watch-is-the-input-slash-command ()
+  (require 'tools/agent/actions)
+  (should (eq (cadr (assoc "watch" (+agent-actions-slash-commands))) 'noema-project-graph-add-watch))
+  (noema-project-graph-tests--with-page calls
+    (let ((answers '("20m" "Check CI")))
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) (pop answers)))
+                ((symbol-function 'noema-current-project) (lambda (_) "/tmp/demo/")))
+        (call-interactively #'noema-project-graph-add-watch)
+        (should (equal (alist-get 'after (alist-get 'when (aref (nth 1 (car calls)) 0))) "20m"))))))
+
 ;;; noema-project-graph-tests.el ends here
