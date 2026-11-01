@@ -13,7 +13,7 @@ Pi 是真实的 ACP 会话，比你活得久，也管得宽。它没有 shell，
 
 - 你的身份在进入项目时收到的提示里。编辑器和跨项目的事用 `"companion":true` 代替 `root`。
 - 项目 Pi 没开时会创建；受理不等于完成。
-- 带 `from`，Pi 会把回复发到你的会话，忙时排队。说清你要什么，然后结束回合等它，不用轮询。
+- 带 `from`，Pi 会把回复发到你的会话，开头是 `[From Pi, not the person]`，忙时排队。说清你要什么，然后结束回合等它，不用轮询。
 - 要主动看：`status` 取 Pi 的 `buffer` 和 `nativeSessionId`，再用 `emacs:agent` `read`。
 
 ## 观察项

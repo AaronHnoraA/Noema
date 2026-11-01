@@ -281,7 +281,7 @@ An Agent cannot be answered, or told from a person, without this."
              (json-serialize
               (vector `((action . "send") (buffer . ,(buffer-name (plist-get session :buffer)))
                         (nativeSessionId . ,(plist-get session :native-session-id))
-                        (prompt . "<your reply>"))))
+                        (prompt . "[From Pi, not the person] <your reply>"))))
              'utf-8))))
 
 (defun noema-pi-send (directory prompt &optional companion focus)
