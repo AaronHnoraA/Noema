@@ -7,11 +7,10 @@ function read(file: string): string {
 }
 
 describe("research deep-link surfaces", () => {
-  test("resolves notebook ids through the research authority before focusing a cell", () => {
+  test("keeps retired work-document navigation out of ordinary Jupyter", () => {
     const jupyter = read("pages/jupyter-main.ts");
     const runtime = read("server/lib/research-runtime.mjs");
-    expect(jupyter).toContain("api.research.resolveCell({ notebookId, cellId })");
-    expect(jupyter).toContain("openDocument({ scriptFile, sourceFile: scriptFile, cellId })");
+    expect(jupyter).not.toContain("api.research.resolveCell(");
     expect(runtime).toContain("provider().resolveCell({ root, notebookId, cellId })");
     expect(runtime).toContain("The indexed research cell is no longer present");
   });

@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 ;;
-;; One Pi accompanies Emacs; each explicitly activated local project has a
-;; child Pi. Native ACP identities and provider history remain authoritative.
+;; One Pi accompanies Emacs; each local project gets its own Pi on first use.
+;; Native ACP identities and provider history remain authoritative.
 ;; Pi gets the progressively disclosed Noema API, with coordinator access for
 ;; retained Research projects. It never grants human approvals itself.
 ;; noema-pi-sessions owns durable references; tools/agent/acp owns clients.
@@ -17,6 +17,13 @@
 (require 'json)
 (require 'noema-pi-sessions)
 (require 'tools/agent/acp)
+
+(defconst noema-pi-router--resource-directory
+  (expand-file-name "../resources/pi/" (file-name-directory (or load-file-name buffer-file-name))))
+(defconst noema-pi-router--profile
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name "profile.json" noema-pi-router--resource-directory))
+    (json-parse-buffer :object-type 'hash-table :array-type 'list)))
 
 (declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
 (declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
@@ -32,34 +39,30 @@
 ;;;; Companion and project routing
 
 (defcustom noema-pi-auto-start t
-  "Start the Emacs companion and project Pi lifecycle at interactive startup."
+  "Start the Emacs companion at interactive startup; project Pi is on demand."
   :type 'boolean :group 'noema-pi-router)
 
 (defcustom noema-pi-idle-delay 0.5
-  "Idle seconds before automatic companion and latest project prewarming.
+  "Idle seconds before automatic companion prewarming.
 Explicit open/send commands do not wait for this timer."
   :type 'number :group 'noema-pi-router)
 (defvar noema-pi-router--startup-timer nil)
-(defvar noema-pi-router--pending-project nil)
 
 (defun noema-pi-router--cancel-startup ()
   (when (timerp noema-pi-router--startup-timer)
     (cancel-timer noema-pi-router--startup-timer))
-  (setq noema-pi-router--startup-timer nil noema-pi-router--pending-project nil))
+  (setq noema-pi-router--startup-timer nil))
 
 (defun noema-pi-router--warmup ()
   "Run one idle prewarm, never a model task or a display action."
-  (let ((root noema-pi-router--pending-project))
-    (setq noema-pi-router--startup-timer nil noema-pi-router--pending-project nil)
-    (when (and noema-pi-assistant-mode (not noninteractive))
-      (condition-case err
-          (progn (noema-pi-emacs-ensure)
-                 (when root (noema-pi-project-ensure root)))
-        (error (noema-pi-router--warn "%s" (error-message-string err)))))))
+  (setq noema-pi-router--startup-timer nil)
+  (when (and noema-pi-assistant-mode (not noninteractive))
+    (condition-case err
+        (noema-pi-emacs-ensure)
+      (error (noema-pi-router--warn "%s" (error-message-string err))))))
 
-(defun noema-pi-router--schedule-startup (&optional root)
-  "Merge automatic work into one owned idle timer, keeping the latest ROOT."
-  (when root (setq noema-pi-router--pending-project root))
+(defun noema-pi-router--schedule-startup ()
+  "Own one idle timer for the Emacs companion only."
   (unless (timerp noema-pi-router--startup-timer)
     (setq noema-pi-router--startup-timer
           (run-with-idle-timer (max 0 noema-pi-idle-delay) nil #'noema-pi-router--warmup))))
@@ -69,6 +72,10 @@ Explicit open/send commands do not wait for this timer."
   "Enable the companion lifecycle according to `noema-pi-auto-start'."
   (when (and noema-pi-auto-start (not noninteractive))
     (noema-pi-assistant-mode 1)))
+
+(defun noema-pi-router--auto-start-changed (&optional _name _value)
+  "Apply the unified configuration switch to automatic work immediately."
+  (noema-pi-assistant-mode (if (and noema-pi-auto-start (not noninteractive)) 1 -1)))
 
 (defconst noema-pi-router-session-name "pi"
   "Display name of a project Pi in the shared Agent runtime.")
@@ -192,8 +199,10 @@ Explicit open/send commands do not wait for this timer."
   "Show BUFFER, explicitly reconnecting its actual conversation if needed."
   (if (memq (plist-get (+agent-session-snapshot buffer) :process-state) '(dead disconnected))
       (+agent-acp-restart-native buffer
-                                 (noema-pi-router--remembered
-                                  (buffer-local-value 'noema-pi-router--scope buffer)))
+                                 (or (+agent-acp-state-value buffer '(:session :id))
+                                     (+agent-acp-state-value buffer '(:resume-session-id))
+                                     (noema-pi-router--remembered
+                                      (buffer-local-value 'noema-pi-router--scope buffer))))
     (+agent-acp-show-buffer buffer)
     buffer))
 
@@ -222,6 +231,32 @@ With prefix PROJECT, open the editor source's project Pi instead."
          (eq (window-buffer (selected-window)) noema-pi-router--emacs-buffer))
     (+agent-acp-hide noema-pi-router--emacs-buffer))
    (t (noema-pi-emacs-ensure t))))
+
+(defun noema-pi-router--source-scope ()
+  "Resolve the editor's project without creating a Pi or a Research project."
+  (remote-require-on-client 'tools/agent/context)
+  (let* ((context (+agent-context-state))
+         (root (or (and (or (alist-get 'file context)
+                            (equal (alist-get 'mode context) "dired-mode"))
+                        (alist-get 'root context))
+                   (alist-get 'activeProject context))))
+    (cond (root (noema-pi-project-root root))
+          ((and (eq (+agent-session-kind (current-buffer)) 'pi)
+                (not (equal noema-pi-router--scope "emacs"))) noema-pi-router--scope)
+          (t "emacs"))))
+
+;;;###autoload
+(defun noema-pi-open (&optional companion)
+  "Toggle this project's own Pi, creating it on first use.
+Outside a project, or with prefix COMPANION, toggle the Emacs companion."
+  (interactive "P")
+  (let* ((scope (if companion "emacs" (noema-pi-router--source-scope)))
+         (buffer (if (equal scope "emacs") noema-pi-router--emacs-buffer
+                   (gethash scope noema-pi-router--buffers))))
+    (if (and (buffer-live-p buffer) (eq (window-buffer (selected-window)) buffer))
+        (+agent-acp-hide buffer)
+      (if (equal scope "emacs") (noema-pi-emacs-ensure t)
+        (noema-pi-router--show-or-resume (noema-pi-project-ensure scope))))))
 
 (defun noema-pi-project-ensure (directory)
   "Return DIRECTORY's child Pi without selecting its window."
@@ -319,36 +354,40 @@ SOURCE and SELECTION are references, never copied into a new Compose UI."
   (interactive)
   (let* ((directory (or directory default-directory))
          (purpose (read-string "Prompt document purpose: "))
-         (skill (expand-file-name "~/Documents/Noema/public/README/Skills/skills/noema-prompt-document/SKILL.md"))
-         (request (format "Use the noema-prompt-document Skill at %s (read it through the document API). Create and open an ordinary Noema Markdown prompt document for project %s. Purpose: %s.%s%s"
-                          skill directory purpose
+         (request (format "Read the noema-prompt-document Skill with agent:skill:read. Create and open an ordinary Noema Markdown prompt document for project %s. Purpose: %s.%s%s"
+                          directory purpose
                           (if source (format " Source reference: %s." source) "")
                           (if selection (concat "\n" selection) ""))))
     (unless (fboundp '+noema--ensure-server) (user-error "Noema host integration is unavailable"))
     (+noema--ensure-server (lambda () (noema-pi-send directory request nil t)))))
 
 (defun noema-pi-router--project-activated (root)
-  "Prewarm the latest explicitly activated ROOT when Emacs next becomes idle."
-  (when (and noema-pi-assistant-mode root (not (file-remote-p root)))
-    (noema-pi-router--schedule-startup root)))
+  "Withdraw a previous project's Pi view; never create a client on entry."
+  (dolist (window (window-list (selected-frame) 'nomini))
+    (when (window-live-p window)
+      (let* ((buffer (window-buffer window))
+             (scope (buffer-local-value 'noema-pi-router--scope buffer)))
+        (when (and scope (not (equal scope "emacs"))
+                   (not (equal scope (and root (noema-pi-project-root root)))))
+          (save-selected-window
+            (with-selected-window window (+agent-acp-hide buffer))))))))
+(add-hook '+project-activated-hook #'noema-pi-router--project-activated)
 
 (defun noema-pi-router--startup ()
   "Schedule the companion after interactive startup; issue no model prompt."
   (when (and noema-pi-assistant-mode (not noninteractive))
-    (noema-pi-router--schedule-startup (bound-and-true-p +project-active-root))))
+    (noema-pi-router--schedule-startup)))
 
 ;;;###autoload
 (define-minor-mode noema-pi-assistant-mode
-  "Keep an Emacs companion Pi and one child per explicitly entered project.
+  "Prewarm the Emacs companion; project Pi clients are created on demand.
 Disabling stops automatic launches; existing conversations remain available."
   :global t :group 'noema-pi-router
   (if noema-pi-assistant-mode
       (progn
         (add-hook 'emacs-startup-hook #'noema-pi-router--startup)
-        (add-hook '+project-activated-hook #'noema-pi-router--project-activated)
         (when after-init-time (noema-pi-router--startup)))
     (remove-hook 'emacs-startup-hook #'noema-pi-router--startup)
-    (remove-hook '+project-activated-hook #'noema-pi-router--project-activated)
     (noema-pi-router--cancel-startup)))
 
 (defcustom noema-pi-companion-directory (file-name-as-directory (expand-file-name "~"))
@@ -362,11 +401,18 @@ Noema owns its manager keys in `settings.json', `SYSTEM.md' and the
   :type 'directory
   :group 'noema-pi-router)
 
-(defcustom noema-pi-credentials-file "~/.pi/agent/auth.json"
-  "Pi credential store shared with `noema-pi-agent-directory' when possible.
-When Noema bridges a Codex login, it makes a private copy so the person's
-Pi credential store is never changed."
-  :type 'file
+(defcustom noema-pi-config-directory (locate-user-emacs-file "etc/noema/pi/")
+  "Private local Pi settings and authentication, linked into its runtime directory."
+  :type 'directory :group 'noema-pi-router)
+
+(defcustom noema-pi-runtime-directory (locate-user-emacs-file "var/agent/pi/runtime/")
+  "Emacs-owned pinned npm runtime installed by make pi-setup."
+  :type 'directory :group 'noema-pi-router)
+
+(defcustom noema-pi-credentials-file nil
+  "Optional credential import source; nil uses Emacs's own private Pi auth.
+An explicit source is imported once without changing it."
+  :type '(choice (const nil) file)
   :group 'noema-pi-router)
 
 (defcustom noema-pi-codex-auth-file "~/.codex/auth.json"
@@ -376,7 +422,7 @@ token or refresh token into Pi's credential store."
   :type 'file
   :group 'noema-pi-router)
 
-(defcustom noema-pi-model ""
+(defcustom noema-pi-model (gethash "defaultModel" noema-pi-router--profile)
   "Model the Pi manager uses, as \"provider/model-id\".
 Session management needs little reasoning, so a small, cheap model is right.
 Empty uses the first pool model on initial deployment, then keeps Pi's saved
@@ -384,12 +430,7 @@ choice."
   :type 'string
   :group 'noema-pi-router)
 
-(defcustom noema-pi-model-pool
-  '("openai-codex/gpt-5.6-luna"
-    "deepseek/deepseek-v4-flash"
-    "openai-codex/gpt-5.6-sol"
-    "openai-codex/gpt-6-astra"
-    "anthropic/claude-sonnet-5")
+(defcustom noema-pi-model-pool (gethash "modelPool" noema-pi-router--profile)
   "Ordered model choices for Noema's Pi manager.
 Pi uses this list for native model cycling, and Noema uses it for its quick
 model picker.  A model appears in the live ACP picker only when Pi advertises
@@ -397,34 +438,33 @@ it and its provider is authenticated."
   :type '(repeat string)
   :group 'noema-pi-router)
 
-(defcustom noema-pi-thinking-level "off"
+(defcustom noema-pi-thinking-level (gethash "thinkingLevel" noema-pi-router--profile "medium")
   "Thinking level of the Pi manager."
   :type '(choice (const "off") (const "minimal") (const "low") (const "medium") (const "high"))
   :group 'noema-pi-router)
 
+(defcustom noema-pi-permission-policy
+  (intern (gethash "permissionPolicy" noema-pi-router--profile "allow"))
+  "Tool permission policy for Emacs companion and project Pi sessions."
+  :type '(choice (const allow) (const ask)) :group 'noema-pi-router)
+
+(defun noema-pi-router--apply-permissions (buffer)
+  "Apply Pi's configured tool permissions through the shared ACP owner."
+  (+agent-acp-set-permission-responder
+   buffer (and (eq noema-pi-permission-policy 'allow) #'agent-shell-permission-allow-always) t))
+
+(defun noema-pi-router--permission-policy-changed (&optional _name _value)
+  "Apply a Config change to existing Pi clients and pending requests."
+  (dolist (session (+agent-acp-sessions))
+    (when (eq (+agent-session-kind session) 'pi)
+      (noema-pi-router--apply-permissions (plist-get session :buffer)))))
+
 (defcustom noema-pi-system-prompt
-  "You are Pi, the Emacs companion and project assistant. Use the progressively
- disclosed Noema API: search names, describe only the needed operation, then
- call it. You are the user's global butler in Emacs: help organize editing,
- projects, knowledge and delegated work. For 'here', 'current file' or 'this
- project', query emacs:pi action=context afresh; do not infer the user's
- location from your own cwd. Context contains references only; modified files
- may differ on disk, and page-owned selections are unknown unless queried
- through the page API. Use emacs:pi to find and coordinate project children,
- and emacs:agent to list/create/send/read/stop existing execution Agents.
- Delegate explicit tasks with scope and file references; inspect status and
- bounded output before reporting results. Accepted or queued is not completed.
- Keep background work in the background; show a view only when requested.
- Do not send tasks merely because Emacs starts or a project becomes active.
- Follow the user's
- project instructions and preserve native session identities. For Markdown
- revisions use document:read and document:propose; the person accepts review
- cards and decides permissions. Do not impersonate human approvals. For prompt
- documents read the noema-prompt-document Skill on demand; create and open an
- ordinary Noema Markdown document, without a separate compose frontend."
-  "System prompt for the Emacs companion and project Pi assistants."
-  :type 'string
-  :group 'noema-pi-router)
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name "SYSTEM.md" noema-pi-router--resource-directory))
+    (buffer-string))
+  "System prompt; the versioned default is linked, local overrides stay private."
+  :type 'string :group 'noema-pi-router)
 
 (defcustom noema-pi-router-minimum-pi-acp "0.8.0"
   "Oldest pi-acp version validated with Noema's ACP, MCP and permission flow."
@@ -441,36 +481,11 @@ it and its provider is authenticated."
     "GEMINI_API_KEY" "XAI_API_KEY" "OPENROUTER_API_KEY")
   "Provider keys pi-acp reads from its environment.")
 
-(defconst noema-pi-router--extension
-  "// Generated by Noema (noema-pi-router.el).  Do not edit: redeployed on start.
-// The Noema Pi uses progressively disclosed API and coordinator tools.
-const ALLOWED = /^mcp__noema-(?:api|coordinator)__/;
-
-export default function (pi: any) {
-  const restrict = () => {
-    const wanted = pi.getAllTools().map((tool: any) => tool.name)
-      .filter((name: string) => ALLOWED.test(name));
-    const active = pi.getActiveTools();
-    if (wanted.length !== active.length || wanted.some((name: string) => !active.includes(name))) {
-      pi.setActiveTools(wanted);
-    }
-  };
-  pi.on(\"session_start\", restrict);
-  pi.on(\"before_agent_start\", () => {
-    restrict();
-    return undefined;
-  });
-  pi.on(\"tool_call\", (event: any) =>
-    ALLOWED.test(event.toolName) ? undefined : { block: true, reason: \"Use the Noema API or coordinator tools.\" });
-}
-"
-  "Extension selecting Noema API and coordinator tools without duplicate built-ins.")
-
 (defvar noema-pi-router--buffers (make-hash-table :test #'equal)
   "Project root to live Pi agent-shell buffer, for this Emacs session.")
 
 (defvar noema-pi-router--starting (make-hash-table :test #'equal)
-  "Project roots whose Pi is being started.")
+  "Global or project Pi scopes whose client is being started.")
 
 (defvar-local noema-pi-router--claim-timer nil
   "Debounce timer for claiming coordinator requests after Pi tool calls.")
@@ -606,6 +621,41 @@ export default function (pi: any) {
   (let ((json (json-serialize object :null-object :null :false-object :false)))
     (concat (if (multibyte-string-p json) json (decode-coding-string json 'utf-8)) "\n")))
 
+(defun noema-pi-router--runtime-command ()
+  "Return the exact Emacs-owned ACP command; never fall back to system Pi."
+  (list (or (executable-find "node") "node")
+        (expand-file-name "node_modules/@automatalabs/pi-acp/dist/index.js" noema-pi-runtime-directory)))
+
+(defun noema-pi-router--link-file (source link)
+  "Link owned runtime LINK to SOURCE, retaining any old regular file."
+  (unless (and (file-symlink-p link) (equal (file-truename link) (file-truename source)))
+    (make-directory (file-name-directory link) t)
+    (cond ((file-symlink-p link) (delete-file link))
+          ((file-exists-p link)
+           (let ((archive (expand-file-name "legacy/" noema-pi-agent-directory)))
+             (make-directory archive t)
+             (rename-file link (make-temp-name (expand-file-name (concat (file-name-nondirectory link) "-") archive))))))
+    (make-symbolic-link (expand-file-name source) link)))
+
+(defun noema-pi-router--private-file (directory name)
+  "Migrate NAME once into private etc, then link DIRECTORY's native entry."
+  (let ((file (expand-file-name name noema-pi-config-directory))
+        (old (expand-file-name name directory)))
+    (make-directory noema-pi-config-directory t)
+    (unless (= (file-modes noema-pi-config-directory) #o700)
+      (set-file-modes noema-pi-config-directory #o700))
+    (unless (file-exists-p file)
+      (cond ((file-exists-p old)
+             (if (file-symlink-p old) (copy-file old file)
+               (rename-file old file)))
+            ((and (equal name "auth.json") noema-pi-credentials-file
+                  (file-readable-p (expand-file-name noema-pi-credentials-file)))
+             (copy-file (expand-file-name noema-pi-credentials-file) file))
+            (t (noema-pi-router--write-file file "{}\n"))))
+    (unless (= (file-modes file) #o600) (set-file-modes file #o600))
+    (noema-pi-router--link-file file old)
+    file))
+
 (defun noema-pi-router--settings (file)
   "Return FILE's Pi settings with Noema's manager keys applied.
 Keys Noema does not own are kept, so choices made inside Pi survive."
@@ -630,17 +680,6 @@ Keys Noema does not own are kept, so choices made inside Pi survive."
         (puthash "defaultModel" model settings)))
     settings))
 
-(defun noema-pi-router--link-credentials (directory)
-  "Link `noema-pi-credentials-file' into Pi agent DIRECTORY when it has none."
-  (let ((source (expand-file-name noema-pi-credentials-file))
-        (target (expand-file-name "auth.json" directory)))
-    (when (and (file-exists-p source)
-               (not (file-exists-p target))
-               (not (file-symlink-p target))
-               (not (equal (file-truename (file-name-directory source))
-                           (file-truename directory))))
-      (make-symbolic-link source target))))
-
 (defun noema-pi-router--codex-login-p ()
   "Return non-nil when the configured Codex CLI has an access token."
   (when-let* ((content (noema-pi-router--read-file
@@ -662,12 +701,12 @@ Keys Noema does not own are kept, so choices made inside Pi survive."
             (shell-quote-argument (expand-file-name noema-pi-codex-auth-file)))))
 
 (defun noema-pi-router--private-credentials (directory)
-  "Give DIRECTORY its own Pi auth store when using the Codex CLI login.
-Existing provider entries are preserved.  Never write through the shared
-credential symlink or store the Codex access token in Pi's auth file."
+  "Remove an earlier token-command entry from the owned private auth store.
+Provider entries and an explicit import source are preserved. The Codex
+access token is read by reference and never stored in Pi's auth file."
   (when-let* ((_ (noema-pi-router--codex-login-p))
               (command (noema-pi-router--codex-token-command)))
-    (let* ((target (expand-file-name "auth.json" directory))
+    (let* ((target (file-truename (expand-file-name "auth.json" directory)))
            (auth (or (ignore-errors
                        (let ((parsed (noema-pi-router--parse-json
                                       (noema-pi-router--read-file target))))
@@ -676,10 +715,10 @@ credential symlink or store the Codex access token in Pi's auth file."
            (entry (gethash "openai-codex" auth))
            (old-bridge (and (equal (noema-pi-router--string entry "type") "api_key")
                             (equal (noema-pi-router--string entry "key") command))))
-      (when (or (file-symlink-p target) old-bridge)
+      (when old-bridge
         (when old-bridge
           (remhash "openai-codex" auth))
-        (let ((temporary (make-temp-file (expand-file-name ".auth-" directory))))
+        (let ((temporary (make-temp-file (expand-file-name ".auth-" (file-name-directory target)))))
           (unwind-protect
               (progn
                 (set-file-modes temporary #o600)
@@ -718,19 +757,28 @@ Return the environment Pi runs with.  It is idempotent: unchanged files are
 not rewritten and settings Noema does not own are kept."
   (interactive)
   (let* ((directory (file-name-as-directory (expand-file-name noema-pi-agent-directory)))
-         (settings (expand-file-name "settings.json" directory)))
+         (settings (noema-pi-router--private-file directory "settings.json"))
+         (source (file-name-directory (directory-file-name noema-pi-router--resource-directory)))
+         (builtin-prompt (expand-file-name "SYSTEM.md" noema-pi-router--resource-directory)))
     (make-directory directory t)
+    (make-directory noema-pi-companion-directory t)
+    (noema-pi-router--private-file directory "auth.json")
+    (noema-pi-router--private-file directory "models.json")
     (noema-pi-router--write-file settings (noema-pi-router--json (noema-pi-router--settings settings)))
-    (noema-pi-router--write-file (expand-file-name "SYSTEM.md" directory)
-                                 (concat (string-trim noema-pi-system-prompt) "\n"))
-    (noema-pi-router--write-file (expand-file-name "extensions/noema-manager/index.ts" directory)
-                                 noema-pi-router--extension)
-    (noema-pi-router--link-credentials directory)
+    (if (equal (string-trim noema-pi-system-prompt) (string-trim (noema-pi-router--read-file builtin-prompt)))
+        (noema-pi-router--link-file builtin-prompt (expand-file-name "SYSTEM.md" directory))
+      (let ((private (expand-file-name "SYSTEM.md" noema-pi-config-directory)))
+        (noema-pi-router--write-file private (concat (string-trim noema-pi-system-prompt) "\n"))
+        (noema-pi-router--link-file private (expand-file-name "SYSTEM.md" directory))))
+    (noema-pi-router--link-file
+     (expand-file-name "extensions/noema-manager/index.ts" noema-pi-router--resource-directory)
+     (expand-file-name "extensions/noema-manager/index.ts" directory))
     (noema-pi-router--private-credentials directory)
     (noema-pi-router--configure-codex-model-auth directory)
     (when (called-interactively-p 'interactive)
       (message "Noema Pi manager deployed in %s" (abbreviate-file-name directory)))
     (list (concat "PI_CODING_AGENT_DIR=" (directory-file-name directory))
+          (concat "NOEMA_PI_SOURCE=" (file-name-directory (directory-file-name source)))
           "PI_SKIP_VERSION_CHECK=1")))
 
 ;;;; Physical runtime attachment
@@ -849,6 +897,7 @@ Never starts one; use `noema-pi-router-open' for that."
     (puthash scope buffer noema-pi-router--buffers))
   (with-current-buffer buffer
     (setq-local +agent-acp-strict-restore t)
+    (noema-pi-router--apply-permissions buffer)
     (unless (and (equal noema-pi-router--scope scope) noema-pi-router--subscriptions
                  (eq noema-pi-router--attached-state (+agent-acp-state-value buffer nil)))
       (noema-pi-router--release buffer)
@@ -895,27 +944,35 @@ Never starts one; use `noema-pi-router-open' for that."
 
 (defun noema-pi-router--start-scope (scope directory native focus &optional endpoint)
   "Start or resume exactly one Pi conversation through the shared runtime."
-  (let ((config (or (+agent-acp-pi-config (noema-pi-deploy))
-                    (user-error "Pi is unavailable; run M-x noema-pi-doctor"))))
-    (setf (alist-get :mcp-servers config) (noema-pi-router--mcp-servers endpoint))
-    (let ((buffer (+agent-acp-start :config config :directory directory :session-id native :strict-restore t
-                                    :focus focus :origin (if (equal scope "emacs") 'pi-emacs 'pi-project))))
-      (+agent-acp-mark-session-buffer buffer
-                                     (if (equal scope "emacs") "pi/emacs" noema-pi-router-session-name)
-                                     "pi" directory)
-      (noema-pi-router--attach scope buffer))))
+  (when (gethash scope noema-pi-router--starting)
+    (user-error "Pi is already starting for %s" scope))
+  (puthash scope t noema-pi-router--starting)
+  (unwind-protect
+      (let ((config (or (+agent-acp-pi-config (cons (concat "NOEMA_PI_SCOPE=" scope) (noema-pi-deploy))
+                                             (noema-pi-router--runtime-command))
+                        (user-error "Pi is unavailable; run M-x noema-pi-doctor")))
+            buffer attached)
+        (setq config (+agent-acp-pinned-config config nil (lambda () noema-pi-thinking-level)))
+        (setf (alist-get :mcp-servers config) (noema-pi-router--mcp-servers endpoint))
+        (unwind-protect
+            (progn
+              (setq buffer (+agent-acp-start :config config :directory directory :session-id native :strict-restore t
+                                            :focus focus :origin (if (equal scope "emacs") 'pi-emacs 'pi-project)))
+              (+agent-acp-mark-session-buffer buffer
+                                             (if (equal scope "emacs") "pi/emacs" noema-pi-router-session-name)
+                                             "pi" directory)
+              (prog1 (noema-pi-router--attach scope buffer) (setq attached t)))
+          (when (and (not attached) (buffer-live-p buffer))
+            ;; A mode hook can fail before the normal kill hooks are installed.
+            (unwind-protect
+                (with-current-buffer buffer (noema-pi-router--killed-h))
+              (+agent-acp-kill buffer)))))
+    (remhash scope noema-pi-router--starting)))
 
 (defun noema-pi-router--launch (root focus)
   "Start ROOT's child Pi without requiring a Research Project or a live host."
   (or (noema-pi-router-buffer root)
-      (when (gethash root noema-pi-router--starting)
-        (user-error "Pi is already starting for %s" root))
-      (progn
-        (puthash root t noema-pi-router--starting)
-        (unwind-protect
-            (noema-pi-router--start-scope
-             root root (noema-pi-router--remembered root) focus)
-          (remhash root noema-pi-router--starting)))))
+      (noema-pi-router--start-scope root root (noema-pi-router--remembered root) focus)))
 
 ;;;###autoload
 (defun noema-pi-router-open (&optional directory)
@@ -983,14 +1040,13 @@ An `auth.json' that holds no provider entry does not count."
                          (> (hash-table-count parsed) 0)
                          (abbreviate-file-name file))))
                 (list (expand-file-name "auth.json" noema-pi-agent-directory)
-                      (expand-file-name noema-pi-credentials-file)))))
+                      (and noema-pi-credentials-file (expand-file-name noema-pi-credentials-file))))))
 
 (defun noema-pi-router--login-command ()
   "Return a shell command that runs the Pi CLI bundled with pi-acp, or nil."
-  (when-let* ((acp (executable-find "pi-acp"))
-              (cli (expand-file-name
-                    "../node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
-                    (file-name-directory (file-truename acp))))
+  (when-let* ((cli (expand-file-name
+                    "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
+                    noema-pi-runtime-directory))
               ((file-readable-p cli)))
     (format "PI_CODING_AGENT_DIR=%s node %s"
             (shell-quote-argument (directory-file-name (expand-file-name noema-pi-agent-directory)))
@@ -998,16 +1054,17 @@ An `auth.json' that holds no provider entry does not count."
 
 (defun noema-pi-router-checks ()
   "Return Pi deployment checks as (OK LABEL DETAIL) lists."
-  (let* ((acp (executable-find "pi-acp"))
-         (acp-version (and acp (noema-pi-router--program-version acp "--version")))
+  (let* ((command (noema-pi-router--runtime-command))
+         (acp (and (file-readable-p (cadr command)) (cadr command)))
+         (acp-version (and acp (apply #'noema-pi-router--program-version (append command '("--version")))))
          (node (executable-find "node"))
          (node-version (and node (noema-pi-router--program-version node "--version")))
          (credentials (noema-pi-router--credentials))
          (extension (expand-file-name "extensions/noema-manager/index.ts" noema-pi-agent-directory))
          (config (+agent-acp-config-for "pi")))
     (list
-     (list (and acp t) "pi-acp on PATH"
-           (or acp "missing: npm install -g @automatalabs/pi-acp@0.8.0"))
+     (list (and acp t) "Emacs-owned pi-acp"
+           (or acp "missing: run make pi-setup in the Emacs configuration"))
      (list (noema-pi-router--version-at-least-p noema-pi-router-minimum-pi-acp acp-version)
            (format "pi-acp >= %s" noema-pi-router-minimum-pi-acp)
            (or acp-version "unknown"))

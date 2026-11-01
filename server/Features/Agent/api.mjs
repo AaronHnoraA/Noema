@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { scanEdiffBlocks, ediffSide } from "../../../shared/ediff-source.mjs";
+import { listAgentSkills, readAgentSkill } from "../../lib/agent-skills.mjs";
+import { agentMemorySearch, agentProjectMaintain, agentProjectStatus } from "../../lib/agent-project.mjs";
 
 const bad = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
 const humanDecisions = new Set([
@@ -98,14 +100,33 @@ export function proposeMarkdown(source, edits) {
 export function createAgentApiHandlers({ router, call }) {
   const documented = (handler, apiDoc) => Object.assign(handler, { apiDoc });
   return {
+    "noema:api:agent:skill:list": documented((body) => listAgentSkills(body), {
+      description: "Read the existing Skill/Packs manager's effective catalog. Packs marked agent_catalog there are the default; no Skill body is returned.",
+      parameters: [{ root: "optional absolute project root", scope: "global or project", requestedSkills: "optional explicit ids", requestedPacks: "optional existing pack ids" }],
+    }),
+    "noema:api:agent:skill:read": documented((body) => readAgentSkill(body), {
+      description: "Read one effective Skill with project patches and dependencies; explicit disables remain authoritative. No task is executed.",
+      parameters: [{ id: "Skill id", root: "optional absolute project root", scope: "global or project" }],
+    }),
+    "noema:api:agent:project:status": documented((body) => agentProjectStatus(body, { call }), {
+      description: "Read a Project's shared resources: root, workspace, the `.agent/` cache's size and pressure, and Hy Memory's state. Starts nothing and creates no Project or store.",
+      parameters: [{ root: "absolute path in the Project" }],
+    }),
+    "noema:api:agent:project:maintain": documented((body) => agentProjectMaintain(body, { call }), {
+      description: "Run the Project cache's conservative maintenance now: expired stream rows, old unregistered objects, WAL checkpoint. Registered artifacts and Session state are never deleted. Check status first; maintenance also runs after Runs.",
+      parameters: [{ root: "absolute path in the Project" }],
+    }),
+    "noema:api:agent:memory:search": documented((body) => agentMemorySearch(body), {
+      description: "Search Hy Memory in the Project's scope with a query of your own; ordinary turns already recall by their prompt. `state` other than ok means unknown, not empty. Results are unverified background.",
+      parameters: [{ root: "absolute path in the Project", query: "what to recall" }],
+    }),
     "noema:api:agent:discover": documented(({ query = "", offset = 0, limit = 12 } = {}) => {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50)
         bad("offset >= 0; limit 1..50");
-      const terms = String(query).toLowerCase().split(/\s+/).filter(Boolean);
-      const channels = router.channels().sort().filter((channel) => terms.every((term) => channel.toLowerCase().includes(term)));
+      const channels = router.search(query);
       return { total: channels.length, channels: channels.slice(offset, offset + limit),
         nextOffset: offset + limit < channels.length ? offset + limit : null };
-    }, { description: "Search live registered APIs; returns only matching names, never all schemas.", parameters: [{ query: "optional words", offset: "optional integer", limit: "optional 1..50" }] }),
+    }, { description: "Search live API names, descriptions and aliases; returns only matching names, never all schemas or implementations. Name matches rank first.", parameters: [{ query: "optional words, e.g. emacs open file or 打开文件", offset: "optional integer", limit: "optional 1..50" }] }),
     "noema:api:agent:describe": documented(({ channel } = {}) => ({ ...router.describe(channel),
       agentCallable: !humanDecisions.has(channel),
       ...(humanDecisions.has(channel) ? { audience: "human", reason: "Human permission/answer/review decision" } : {}),
@@ -118,6 +139,15 @@ export function createAgentApiHandlers({ router, call }) {
         bad("A registered channel and positional args array are required");
       if (channel === "noema:api:agent:call") bad("Nested Agent API dispatch is not supported");
       if (humanDecisions.has(channel)) throw Object.assign(new Error("This operation records a human decision; Agent access is descriptive only"), { statusCode: 403 });
+      // Agent file visits preserve their chat. Direct page calls keep their
+      // own placement and native Markdown clone semantics.
+      if (channel === "noema:api:emacs:open") {
+        const body = typeof args[0] === "string" ? { file: args[0] } : args[0];
+        if (!body || typeof body.file !== "string" || !body.file.trim())
+          bad("emacs:open requires a file path");
+        if (body.placement === undefined && body.newWindow !== true)
+          args = [{ ...body, placement: "other" }, ...args.slice(1)];
+      }
       return call(channel, args);
     }, { description: "Dispatch an Agent call to the existing backend. Human permission, answer and review decisions remain human-only.",
       parameters: [{ channel: "registered channel", args: "positional JSON array" }] }),

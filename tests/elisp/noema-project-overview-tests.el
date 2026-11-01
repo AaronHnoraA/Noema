@@ -84,5 +84,25 @@
       (should (string-match-p "1 open, 1 blocked" (buffer-string)))
       (should (string-match-p "1 failed/interrupted" (buffer-string))))))
 
+(ert-deftest noema-project-overview-reports-cache-and-its-pressure ()
+  (let ((responses (make-hash-table :test 'eq)))
+    (should-not (noema-project-overview--cache-line responses))
+    (puthash 'cache '((cache . ((totalBytes . 2097152) (objectCount . 3) (pressure . :false)))) responses)
+    (should (equal (noema-project-overview--cache-line responses) "Cache 2.0 MiB, 3 objects\n"))
+    (puthash 'cache '((cache . ((totalBytes . 2097152) (objectCount . 3) (pressure . t)))) responses)
+    (should (string-match-p "protected or recent data" (noema-project-overview--cache-line responses)))))
+
+(ert-deftest noema-capability-pack-edit-keeps-every-field ()
+  (require 'noema-capability-actions)
+  (let* ((definition '(("description" . "D") ("members" . ["a"]) ("agent_catalog" . t)
+                       ("extension" . "preserve")))
+         (edited (noema-capability-ui--pack-definition definition '((preamble . "P"))))
+         (cleared (noema-capability-ui--pack-definition definition '((agent_catalog . nil)))))
+    (should (eq (alist-get 'agent_catalog edited) t))
+    (should (equal (alist-get 'members edited) ["a"]))
+    (should (equal (alist-get 'extension edited) "preserve"))
+    (should (equal (alist-get 'preamble edited) "P"))
+    (should-not (assq 'agent_catalog cleared))))
+
 (provide 'noema-project-overview-tests)
 ;;; noema-project-overview-tests.el ends here

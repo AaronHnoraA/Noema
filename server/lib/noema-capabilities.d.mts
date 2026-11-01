@@ -29,6 +29,7 @@ export type ResolvedCapability = {
   diagnostics: CapabilityDiagnostic[];
   /** Packs only: the resolved link list with each member Skill's state. */
   members?: Array<{ id: string; reference: string; state: "available" | "disabled" | "invalid" | "missing"; description: string }>;
+  agentCatalog?: boolean;
   runtime?: {
     state: string;
     availability: "available" | "unavailable" | "unknown";
@@ -60,6 +61,7 @@ export function resolveProjectCapabilities(options: {
   scope?: "global" | "project";
   requestedSkills?: string[];
   requestedPacks?: string[];
+  includeAgentCatalog?: boolean;
   runtimeDescriptor?: Record<string, any>;
   environment?: Record<string, string | undefined>;
   userHome?: string;

@@ -1,0 +1,12 @@
+{
+  "defaultModel": "openai-codex/gpt-5.6-luna",
+  "permissionPolicy": "allow",
+  "thinkingLevel": "medium",
+  "modelPool": [
+    "openai-codex/gpt-5.6-luna",
+    "deepseek/deepseek-v4-flash",
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-6-astra",
+    "anthropic/claude-sonnet-5"
+  ]
+}

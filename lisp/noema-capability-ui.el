@@ -185,7 +185,8 @@ A pack member row stands for its flat Skill record."
 (defun noema-capability-ui--runtime (record)
   "Return RECORD's runtime-state label, or a pack's member count."
   (if (equal (noema--value record "type") "pack")
-      (format "%d skills" (length (noema--sequence (noema--value record "members"))))
+      (concat (format "%d skills" (length (noema--sequence (noema--value record "members"))))
+              (if (noema-capability-ui--truth-p (noema--value record "agentCatalog")) " · agent" ""))
   (if (equal (noema--value record "type") "mcp")
       (let* ((runtime (noema--value record "runtime"))
              (state (or (noema--value runtime "state") "unknown"))

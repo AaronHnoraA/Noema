@@ -21,6 +21,8 @@
 (defvar noema-hy-memory-config
   (expand-file-name "~/.config/noema/hy-memory.env")
   "Private model and embedding configuration for Hy Memory.")
+(declare-function noema-project-client-path "noema-research" (path))
+(declare-function noema-project-scope "noema-research" (path))
 (defvar noema-hy-memory--injection nil)
 (defvar noema-hy-memory--disabled-until 0
   "Do not attempt memory calls until this epoch time after a backend failure.")
@@ -46,25 +48,41 @@
     (error nil)))
 
 (defun noema-hy-memory--local-root (buffer)
-  "Return BUFFER's local project root, or nil for a remote workspace."
+  "Return the memory scope of BUFFER, or nil when it has none on this machine.
+The scope is `noema-project-scope', the key a Run recalls under, so a session
+started in a subdirectory of a Project shares that Project's memory."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (let ((root (or (and (boundp '+agent-acp-session-root)
-                           +agent-acp-session-root)
-                      default-directory)))
-        (when (and (stringp root) (file-name-absolute-p root)
-                   (not (file-remote-p root))
-                   (not (string-prefix-p "/fs:" root)))
-          (expand-file-name root))))))
+      (let* ((root (or (and (boundp '+agent-acp-session-root)
+                            +agent-acp-session-root)
+                       default-directory))
+             (native (and (stringp root) (file-name-absolute-p root)
+                          (if (fboundp 'noema-project-client-path)
+                              (noema-project-client-path root)
+                            (and (not (file-remote-p root))
+                                 (not (string-prefix-p "/fs:" root)) root)))))
+        (when native
+          (if (fboundp 'noema-project-scope)
+              (noema-project-scope native)
+            (expand-file-name native)))))))
+
+(defconst noema-hy-memory--owned-origins '(run probe side marginnote latex-export)
+  "Session origins whose context belongs to their own owner.
+A Run recalls at RunSpec freeze and writes on completion; the others are tools
+whose turns are mechanical, not conversation worth recalling.")
 
 (defun noema-hy-memory--ordinary-session-p (buffer)
-  "Return non-nil when BUFFER is an ordinary ACP conversation.
-Noema Runs recall at RunSpec freeze and write on completion; handling their
-ACP turns here would duplicate the same memory in one workflow."
+  "Return non-nil when BUFFER is an ordinary ACP conversation."
   (and (buffer-live-p buffer)
        (or (not (boundp '+agent-acp-session-origin))
            (not (memq (buffer-local-value '+agent-acp-session-origin buffer)
-                      '(run probe side))))))
+                      noema-hy-memory--owned-origins)))))
+
+(defun noema-hy-memory--conversation-p (prompt)
+  "Return non-nil when PROMPT is said to the model, not a command to the Agent.
+A slash command is the whole message for its adapter, so nothing may be added
+to it, and it holds nothing worth recalling or remembering."
+  (and (stringp prompt) (not (string-prefix-p "/" (string-trim-left prompt)))))
 
 (defun noema-hy-memory--request (operation body callback)
   "Run memory OPERATION with JSON BODY, then call CALLBACK with parsed data.
@@ -134,7 +152,7 @@ the Emacs message log."
          (prompt (plist-get args :prompt))
          (root (condition-case nil (noema-hy-memory--local-root buffer)
                  (error nil))))
-    (if (not (and (noema-hy-memory--ready-p) root (stringp prompt)
+    (if (not (and (noema-hy-memory--ready-p) root (noema-hy-memory--conversation-p prompt)
                   (>= (length (string-trim prompt)) 8)
                   (noema-hy-memory--ordinary-session-p buffer)))
         (apply original args)
@@ -176,7 +194,7 @@ the Emacs message log."
            (setq noema-hy-memory--prompt nil noema-hy-memory--answer nil)
            (when (and (equal reason "end_turn") root
                       (noema-hy-memory--ordinary-session-p buffer)
-                      (stringp prompt) (stringp answer)
+                      (noema-hy-memory--conversation-p prompt) (stringp answer)
                       (not (string-empty-p answer)) (noema-hy-memory--ready-p))
              (noema-hy-memory--request
               "remember" `((root . ,root) (prompt . ,prompt) (answer . ,answer)

@@ -22,13 +22,9 @@ setInterval(() => {
 function piPackage() {
   const override = process.env.NOEMA_PI_CODING_AGENT_PACKAGE;
   if (override) return override;
-  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
-    const command = path.join(dir, "pi-acp");
-    if (!existsSync(command)) continue;
-    const acpRoot = path.dirname(path.dirname(realpathSync(command)));
-    const candidate = path.join(acpRoot, "node_modules/@earendil-works/pi-coding-agent/dist/index.js");
-    if (existsSync(candidate)) return candidate;
-  }
+  const candidate = path.resolve(import.meta.dirname,
+    "../../../var/agent/pi/runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js");
+  if (existsSync(candidate)) return candidate;
   throw new Error("Noema Pi runtime is unavailable");
 }
 

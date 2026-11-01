@@ -3,6 +3,7 @@
 (require 'noema-api)
 (require 'wid-edit)
 (require 'json)
+(require 'map)
 (require 'transient)
 (declare-function +agent-acp-config-for "tools/agent/acp" (agent))
 (declare-function +agent-acp-start "tools/agent/acp" (&rest args))
@@ -230,10 +231,54 @@ manager; do not steal an unrelated work, DAG or output window."
                 (preamble (read-string "Preamble: " (or (noema--value definition "preamble") ""))))
            (unless members (user-error "A pack needs at least one member; remove the pack instead"))
            (noema-pack-define
-            id `((description . ,(or (noema--value definition "description") ""))
-                 ,@(when-let* ((title (noema--value definition "title"))) `((title . ,title)))
-                 (members . ,(vconcat members))
-                 ,@(unless (string-empty-p (string-trim preamble)) `((preamble . ,preamble))))
+            id (noema-capability-ui--pack-definition
+                definition `((members . ,(vconcat members))
+                             (preamble . ,(unless (string-empty-p (string-trim preamble)) preamble))))
+            :scope 'global
+            :callback (apply-partially #'noema-capability-ui--after-mutation manager))))))))
+
+(defun noema-capability-ui--pack-definition (definition changes)
+  "Return pack DEFINITION as an alist with CHANGES applied.
+Every field is carried over, so one edit never drops another's setting.  A
+change to nil removes its field."
+  (let ((fields (mapcar
+                 (lambda (entry)
+                   (let ((key (if (symbolp (car entry)) (car entry) (intern (car entry))))
+                         (value (cdr entry)))
+                     (cons key (cond ((eq key 'members) (vconcat (noema--sequence value)))
+                                     ((eq value :false) :json-false)
+                                     ((eq value :null) nil)
+                                     (t value)))))
+                 (map-pairs definition))))
+    (dolist (change changes)
+      (setf (alist-get (car change) fields nil 'remove) (cdr change)))
+    fields))
+
+(defun noema-capability-ui-toggle-agent-catalog ()
+  "Toggle whether the selected pack is disclosed to Agents by default.
+Pi's automatic Skill catalog is these packs, their dependencies and project
+selections; a pack outside it stays available by id and to Runs."
+  (interactive)
+  (unless (eq noema-capability-ui--view 'packs)
+    (user-error "The Agent catalog is set on the Packs page (C-c 4)"))
+  (let* ((manager (current-buffer))
+         (record (noema-capability-ui--pack-at-point))
+         (id (noema--value record "id")))
+    (unless (equal (noema--value (noema--value record "source") "scope") "global")
+      (user-error "Pack %s is not defined in the global library" id))
+    (noema-capability-config
+     :scope 'global
+     :callback
+     (lambda (result error-object)
+       (if error-object (noema-capability-ui--show-error error-object)
+         (let* ((packs (noema--value (noema--value result "config") "packs"))
+                (definition (noema--value (noema--value packs "definitions") id)))
+           (noema-pack-define
+            id (noema-capability-ui--pack-definition
+                definition `((agent_catalog
+                              . ,(unless (noema-capability-ui--truth-p
+                                          (noema--value definition "agent_catalog"))
+                                   t))))
             :scope 'global
             :callback (apply-partially #'noema-capability-ui--after-mutation manager))))))))
 
@@ -338,7 +383,8 @@ No request is sent until the user reviews the draft and presses RET."
     ("s" "Edit with agent-shell" noema-capability-ui-edit-with-agent)
     ("I" "Import directory" noema-capability-ui-import-skill)
     ("N" "New pack" noema-capability-ui-create-pack)
-    ("m" "Pack members" noema-capability-ui-edit-pack-members)]
+    ("m" "Pack members" noema-capability-ui-edit-pack-members)
+    ("a" "Agent catalog" noema-capability-ui-toggle-agent-catalog)]
    ["Edit / inspect"
     ("f" "Edit file" noema-capability-ui-open-source)
     ("o" "Open directory" noema-capability-ui-open-directory)

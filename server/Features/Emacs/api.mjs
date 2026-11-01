@@ -14,15 +14,36 @@ export function createEmacsApiHandlers({
   apiEmacsZotero,
   apiChooseNotePath,
 }) {
+  const documented = (handler, apiDoc) => Object.assign(handler, { apiDoc });
   return {
-    "noema:api:emacs:open": (body) => apiOpenInEmacs(body?.file ?? body, body?.line, body?.col, body?.tag, body),
-    "noema:api:emacs:surface": (body) => apiOpenSurface(body),
+    "noema:api:emacs:open": documented((body) => apiOpenInEmacs(body?.file ?? body, body?.line, body?.col, body?.tag, body), {
+      description: "Open a file in Emacs through the emacsopen placement owner. Agent calls default to another window, preserving the chat; reuse an existing view of the file. Placed visits return the actual buffer/window/frame and positioning result. Does not require a Pi session or project root.",
+      keywords: ["emacs-open", "emacsopen", "visit file", "打开文件", "打开文档", "其他窗口", "buffer window"],
+      parameters: [{ file: "file path; prefer absolute", placement: "other (Agent default) | here | left | right | above | below | frame",
+        line: "optional 1-based line, default 1", col: "optional 0-based column, default 0",
+        noFocus: "optional boolean; true keeps the current window/frame focused",
+        newWindow: "legacy Markdown clone request; omit with placement", tag: "legacy source tag; omit with placement" }],
+    }),
+    "noema:api:emacs:surface": documented((body) => apiOpenSurface(body), {
+      description: "Open an existing Emacs-hosted Noema surface: Wiki, Agenda or configuration. Check queued/ok; a queued notification does not prove the view is displayed.",
+      keywords: ["打开知识库", "打开日程", "配置界面"],
+      parameters: [{ path: "/wiki | /agenda | /config, with optional query parameters", client: "optional source pane client id" }],
+    }),
     "noema:api:emacs:jupyter-cell": (body) => apiSelectJupyterCell(body),
     "noema:api:emacs:research-session": (body) => apiOpenResearchSession(body),
-    "noema:api:emacs:current-file": (file) => apiCurrentFile(file),
+    "noema:api:emacs:current-file": documented((file) => apiCurrentFile(file), {
+      description: "Renderer notification reporting its current file to Emacs. This is a write, not a context query. Agents query emacs:pi action=context for current file/project/selection references.",
+      parameters: [{ file: "renderer file path", client: "optional renderer client id" }],
+    }),
     "noema:api:emacs:input-focus": (body) => apiEmacsInputFocus(body),
-    "noema:api:emacs:ui-state": (body) => apiEmacsUiState(body),
-    "noema:api:emacs:key": (key) => apiEmacsKey(key),
+    "noema:api:emacs:ui-state": documented((body) => apiEmacsUiState(body), {
+      description: "Renderer notification updating Emacs's page UI state. This is not an editor inspection API; Agents query emacs:pi action=context for source references.",
+      parameters: ["renderer UI state object"],
+    }),
+    "noema:api:emacs:key": documented((key) => apiEmacsKey(key), {
+      description: "Forward a renderer keyboard handoff to Emacs. Prefer semantic emacs:open, emacs:surface and emacs:pi/agent operations for Agent actions. This event acknowledgement does not prove an editor action completed.",
+      parameters: [{ key: "renderer key name", client: "optional source pane client id", hostOwned: "true only for a key received after Emacs took keyboard ownership" }],
+    }),
     "noema:api:emacs:selection": (body) => apiEmacsSelection(body),
     "noema:api:emacs:pi": Object.assign((body) => apiPi(body), { apiDoc: {
       description: "Query the current editor context as references, or manage global/project Pi sessions. Context needs no root and starts nothing. List paginates history (total/nextOffset) and project children (childrenTotal/childrenNextOffset) independently at the same offset/limit. Submission is asynchronous; inspect status or native history for completion.",
@@ -32,11 +53,13 @@ export function createEmacsApiHandlers({
         focus: "optional true for ensure/send; default preserves focus", offset: "list pagination, default 0", limit: "list page size 1..100, default 20" }],
     } }),
     "noema:api:emacs:agent": Object.assign((body) => apiAgent(body), { apiDoc: {
-      description: "Use Emacs's shared Agent runtime. List is read-only metadata, create initializes without a prompt, send queues without showing UI, read returns bounded output excluding drafts, stop requests cancellation, show explicitly selects the chat. Accepted/queued does not mean complete. No permission decisions or implicit reconnects.",
+      description: "Use Emacs's shared Agent runtime. List is read-only metadata; status adds provider-reported capabilities (list, load, resume, fork, steer) and usage (null until reported, including cached reads and writes); create initializes without a prompt, send queues without showing UI, read returns bounded output excluding drafts, stop requests cancellation, show explicitly selects the chat. Accepted/queued does not mean complete. No permission decisions or implicit reconnects.",
       parameters: [{ action: "list | status | create | send | read | stop | show",
         buffer: "required except list/create: exact buffer name", nativeSessionId: "required except list/create: exact native ID from list/status",
         root: "optional absolute project fence; required for create", target: "optional target fence; explicit /fs: paths retain target",
         agent: "required for create: registered ACP provider identifier, e.g. codex, claude-code, pi",
+        worktree: "create: optional name; starts the Agent in its own Git worktree of the Project workspace, returned with its branch and path",
+        group: "create with worktree: optional slug recording one attempt of a parallel group",
         prompt: "required for send: explicit task", files: "send: optional array of absolute saved file references; no embedded content",
         offset: "list item or read character offset, default 0", limit: "list: 1..100 (default 20); read: 1..32000 characters (default 12000)" }],
     } }),

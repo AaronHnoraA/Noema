@@ -29,6 +29,18 @@ export class ApiRouter {
     return [...this.#handlers.keys()];
   }
 
+  search(query = "") {
+    const terms = String(query).toLowerCase().split(/[\s:/_.-]+/).filter(Boolean);
+    return [...this.#handlers.entries()].flatMap(([channel, handler]) => {
+      const name = channel.toLowerCase();
+      const doc = handler.apiDoc || {};
+      const searchable = `${name} ${doc.description || ""} ${(doc.keywords || []).join(" ")}`.toLowerCase();
+      return terms.every((term) => searchable.includes(term))
+        ? [{ channel, score: terms.filter((term) => name.includes(term)).length }] : [];
+    }).sort((a, b) => b.score - a.score || a.channel.localeCompare(b.channel))
+      .map(({ channel }) => channel);
+  }
+
   describe(channel) {
     const handler = this.#handlers.get(String(channel || ""));
     if (!handler) throw Object.assign(new Error(`Unknown API channel: ${channel}`), { statusCode: 404 });

@@ -27,6 +27,7 @@ CONFIG_FILE = Path(os.environ.get("NOEMA_HY_MEMORY_CONFIG", "~/.config/noema/hy-
 DATA_DIR = Path(os.environ.get("NOEMA_HY_MEMORY_DATA_DIR", "~/.local/share/noema/hy-memory")).expanduser()
 PI_GATEWAY = Path(__file__).with_name("noema-pi-memory-gateway.mjs")
 PI_AGENT_DIR = Path(__file__).resolve().parents[3] / "var/noema/pi"
+PI_RUNTIME = Path(__file__).resolve().parents[3] / "var/agent/pi/runtime/node_modules/@automatalabs/pi-acp/dist/index.js"
 MAX_INPUT = 65536
 
 
@@ -54,7 +55,7 @@ def load_config() -> bool:
     embed_url = os.environ.get("MEMORY_EMBEDDER_BASE_URL")
     embed_model = os.environ.get("MEMORY_EMBEDDER_MODEL")
     pi_ready = (backend == "noema-pi" and PI_GATEWAY.is_file()
-                and shutil.which("node") and shutil.which("pi-acp")
+                and shutil.which("node") and PI_RUNTIME.is_file()
                 and (PI_AGENT_DIR / "models.json").is_file())
     return bool(pi_ready and embed_key and embed_url and embed_model)
 
@@ -207,7 +208,7 @@ def main() -> int:
         print(json.dumps({"configured": configured}))
         return 0
     if not configured:
-        print(json.dumps({"items": []} if sys.argv[1] == "search" else {"stored": False}))
+        print(json.dumps({"items": [], "configured": False} if sys.argv[1] == "search" else {"stored": False}))
         return 0
     raw = sys.stdin.buffer.read(MAX_INPUT + 1)
     if len(raw) > MAX_INPUT:

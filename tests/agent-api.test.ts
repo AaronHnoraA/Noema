@@ -16,6 +16,40 @@ import { callAgentApi } from "../server/lib/agent-api-client.mjs";
 import { createEmacsApiHandlers } from "../server/Features/Emacs/api.mjs";
 
 describe("Pi global butler API", () => {
+  test("discovers file opening by purpose and alias, describes it, then preserves the chat by default", async () => {
+    const opened: any[] = [];
+    const router = new ApiRouter().register(createEmacsApiHandlers({
+      apiOpenInEmacs: (...args: any[]) => { opened.push(args); return { ok: true, buffer: "document" }; },
+    } as any));
+    const call = async (channel: string, args: any[] = []): Promise<any> => router.call(channel, args);
+    router.register(createAgentApiHandlers({ router, call }));
+    for (const query of ["emacs open file", "emacs-open", "emacsopen", "emacs visit", "打开文件"]) {
+      const names = await call("noema:api:agent:discover", [{ query }]);
+      expect(names.channels[0]).toBe("noema:api:emacs:open");
+      expect(JSON.stringify(names)).not.toContain("implementation");
+    }
+    expect(opened).toEqual([]);
+    const doc = await call("noema:api:agent:describe", [{ channel: "noema:api:emacs:open" }]);
+    expect(doc.parameters[0].placement).toContain("other");
+    const body = { file: "/project/design.md" };
+    await call("noema:api:agent:call", [{ channel: "noema:api:emacs:open", args: [body] }]);
+    expect(opened.at(-1)[4]).toEqual({ ...body, placement: "other" });
+    expect(body).toEqual({ file: "/project/design.md" });
+    await call("noema:api:agent:call", [{ channel: "noema:api:emacs:open", args: [{ ...body, placement: "here" }] }]);
+    expect(opened.at(-1)[4].placement).toBe("here");
+    await call("noema:api:agent:call", [{ channel: "noema:api:emacs:open", args: [body.file] }]);
+    expect(opened.at(-1)[4].placement).toBe("other");
+    await call("noema:api:agent:call", [{ channel: "noema:api:emacs:open", args: [{ ...body, newWindow: true }] }]);
+    expect(opened.at(-1)[4].placement).toBeUndefined();
+    // Direct page callers keep their existing visit/clone behavior.
+    await call("noema:api:emacs:open", [body]);
+    expect(opened.at(-1)[4].placement).toBeUndefined();
+    const count = opened.length;
+    await expect(call("noema:api:agent:call", [{ channel: "noema:api:emacs:open", args: [] }]))
+      .rejects.toMatchObject({ statusCode: 400 });
+    expect(opened).toHaveLength(count);
+  });
+
   test("discovers and describes shared Agent operations, then forwards exact identity", async () => {
     const requests: unknown[] = [];
     const unused = () => { throw new Error("Unrelated editor operation"); };

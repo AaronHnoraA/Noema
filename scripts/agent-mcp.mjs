@@ -17,7 +17,7 @@ export function createAgentMcp(invoke = callAgentApi) {
     } catch (error) { return { isError: true, content: [{ type: "text", text: String(error.message || error) }] }; }
   };
   server.registerTool("noema_api", {
-    description: "Search live Noema API names, or describe one channel. Parameters and implementation are disclosed on demand.",
+    description: "Search live Noema API names, purposes and aliases (e.g. emacs open file, emacs-open, 打开文件), or describe one known channel. Parameters and implementation are disclosed on demand. Describe before guessing arguments; an empty search does not prove an API is absent.",
     inputSchema: { query: z.string().optional(), channel: z.string().optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(50).optional() },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   }, wrap(({ channel, ...search }) => channel

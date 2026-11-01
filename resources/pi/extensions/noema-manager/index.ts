@@ -1,0 +1,34 @@
+// Emacs-owned Pi integration. Source is versioned; deployment links this file.
+import { pathToFileURL } from "node:url";
+import { join } from "node:path";
+
+const ALLOWED = /^mcp__noema-(?:api|coordinator)__/;
+
+export default function (pi: any) {
+  const restrict = () => {
+    const wanted = pi.getAllTools().map((tool: any) => tool.name)
+      .filter((name: string) => ALLOWED.test(name));
+    const active = pi.getActiveTools();
+    if (wanted.length !== active.length || wanted.some((name: string) => !active.includes(name)))
+      pi.setActiveTools(wanted);
+  };
+  pi.on("session_start", restrict);
+  pi.on("before_agent_start", async (event: any, context: any) => {
+    restrict();
+    try {
+      const source = process.env.NOEMA_PI_SOURCE;
+      if (!source) throw new Error("No Emacs-owned Noema source");
+      const { callAgentApi } = await import(pathToFileURL(join(source, "server/lib/agent-api-client.mjs")).href);
+      const scope = process.env.NOEMA_PI_SCOPE;
+      const catalog = await callAgentApi("noema:api:agent:skill:list", [{
+        ...(scope === "emacs" ? { scope: "global" } : { root: scope || context.cwd }),
+      }], { fetcher: (url: string, options: any) => fetch(url, { ...options, signal: AbortSignal.timeout(3000) }) });
+      return { systemPrompt: event.systemPrompt + "\n\nAvailable Noema Skills (read one through agent:skill:read):\n"
+        + JSON.stringify(catalog) };
+    } catch {
+      return { systemPrompt: event.systemPrompt + "\n\nSkill catalog is currently unavailable. Query agent:skill:list when the Noema host is ready; do not assume that no Skills exist." };
+    }
+  });
+  pi.on("tool_call", (event: any) =>
+    ALLOWED.test(event.toolName) ? undefined : { block: true, reason: "Use the Noema API or coordinator tools." });
+}

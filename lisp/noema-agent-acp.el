@@ -163,5 +163,6 @@ leaves the session registered on the Emacs side alone."
       (copy-file old new))))
 
 (require 'noema-hy-memory)
+(require 'noema-agent-entry)
 (provide 'noema-agent-acp)
 ;;; noema-agent-acp.el ends here

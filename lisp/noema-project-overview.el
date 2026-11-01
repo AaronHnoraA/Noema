@@ -39,7 +39,8 @@
 
 (defconst noema-project-overview--queries
   '((tasks . "task:list") (runs . "run:list") (sessions . "session:names")
-    (attention . "attention:list") (capabilities . "capability:list")))
+    (attention . "attention:list") (capabilities . "capability:list")
+    (cache . "cache:status")))
 
 (defun noema-project-overview--list (value)
   "Return VALUE as a list of records."
@@ -74,6 +75,17 @@
          (when-let* ((file (noema-project-overview--field result "file")))
            (find-file file)))))))
 
+(defun noema-project-overview--cache-line (responses)
+  "Return the `.agent/' storage line from RESPONSES, or nil before it is known."
+  (when-let* ((cache (noema-project-overview--field (gethash 'cache responses) "cache"))
+              (total (noema-project-overview--field cache "totalBytes")))
+    (format "Cache %.1f MiB, %s objects%s\n" (/ total 1048576.0)
+            (noema-project-overview--field cache "objectCount" 0)
+            (if (memq (noema-project-overview--field cache "pressure") '(nil :false :json-false))
+                "" (concat "; above the limit; "
+                           (noema-project-overview--field
+                            cache "limitedReason" "protected or recent data remains"))))))
+
 (defun noema-project-overview--render-summary (responses)
   "Insert the project summary from RESPONSES."
   (let* ((tasks (noema-project-overview--list
@@ -97,7 +109,9 @@
                               (member (noema-project-overview--field run "status")
                                       '("failed" "interrupted"))) runs)))
     (insert (format "Tasks %d (%d open, %d blocked)   Runs %d (%d failed/interrupted)   Sessions %d   Attention %d\n\n"
-                    (length tasks) open blocked (length runs) failed (length sessions) waiting))))
+                    (length tasks) open blocked (length runs) failed (length sessions) waiting))
+    (when-let* ((line (noema-project-overview--cache-line responses)))
+      (insert line))))
 
 (defun noema-project-overview--render ()
   "Draw the current project snapshot in this buffer."

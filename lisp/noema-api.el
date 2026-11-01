@@ -379,7 +379,8 @@ OPERATION is `patch' or `copy'.  Never writes the global source."
 (cl-defun noema-pack-define (id definition &key project scope callback)
   "Define Skill pack ID with DEFINITION in SCOPE; nil DEFINITION removes it.
 DEFINITION is an alist with `members' (a vector of Skill ids) and optional
-`description', `title' and `preamble'.  A pack only links Skills by id."
+`description', `title', `preamble' and `agent_catalog'.  A pack only links
+Skills by id."
   (let ((root (noema-capability--target project scope)))
     (noema--host-call
      "noema:api:research:capability:mutate"

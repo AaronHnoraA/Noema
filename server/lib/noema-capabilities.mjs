@@ -305,6 +305,9 @@ function validatePackDefinition(definition, path, field) {
   for (const key of ["title", "description", "preamble"]) {
     if (definition[key] !== undefined && typeof definition[key] !== "string") fail(`field ${key} must be a string`);
   }
+  if (definition.agent_catalog !== undefined && typeof definition.agent_catalog !== "boolean") {
+    fail("field agent_catalog must be a boolean");
+  }
 }
 
 function validatePackSection(section, path) {
@@ -341,6 +344,10 @@ function validatePackSection(section, path) {
           throw capabilityError(`Patch packs.${id}.${key} in ${path} must be an array of Skill ids`,
             "ERR_NOEMA_CAPABILITY_PATCH", { source: path, field: `packs.patches.${id}.${key}`, value: item[key] });
         }
+      }
+      if (item.agent_catalog !== undefined && item.agent_catalog !== null && typeof item.agent_catalog !== "boolean") {
+        throw capabilityError(`Patch packs.${id}.agent_catalog in ${path} must be a boolean or null`,
+          "ERR_NOEMA_CAPABILITY_PATCH", { source: path, field: `packs.patches.${id}.agent_catalog`, value: item.agent_catalog });
       }
     }
   }
@@ -707,6 +714,11 @@ function applySkillDependencies(skills, definitions) {
   for (const definition of definitions.filter((item) => item.type === "skill")) {
     for (const alias of values(definition.aliases)) aliases.set(alias, definition.id);
   }
+  // Consumers of the dependency graph must see the same canonical identities
+  // as the resolver, even when frontmatter referred to a directory alias.
+  for (const skill of skills) {
+    skill.effective.requires = values(skill.effective?.requires).map((id) => canonicalID(id, aliases));
+  }
   const visited = new Set();
   const visiting = new Set();
   const report = (skill, code, message) => {
@@ -763,7 +775,7 @@ function skillMemberState(skill) {
  * preamble only, never member content, so one Skill id always has one
  * effective content regardless of which pack selected it.
  */
-function resolvePacks(scopes, skills, definitions, requestedPacks = []) {
+function resolvePacks(scopes, skills, definitions, requestedPacks = [], includeAgentCatalog = false) {
   const skillAliases = new Map();
   for (const definition of definitions.filter((item) => item.type === "skill")) {
     for (const alias of values(definition.aliases)) skillAliases.set(alias, definition.id);
@@ -834,13 +846,18 @@ function resolvePacks(scopes, skills, definitions, requestedPacks = []) {
         selectedBy.push({ scope: scope.name, scopeId: scope.id, enabled: selected, reason: "pack selection" });
       }
     }
-    if (requestedByRun) {
+    // Automatic disclosure follows the effective definition, including patches.
+    // It is a default, so an explicit disable quietly wins over it.
+    const requestedByCatalog = includeAgentCatalog && effective.agent_catalog === true && explicitEnabled !== false;
+    if (requestedByRun || requestedByCatalog) {
       if (explicitEnabled === false) {
         diagnostics.push({ severity: "error", code: "disabled-capability-requested", message: `Pack ${id} is requested by @@pack but disabled by effective project configuration` });
         selectedBy.push({ scope: "run", scopeId: "directive", enabled: false, reason: "@@pack blocked by explicit disable" });
       } else {
         enabled = true;
-        selectedBy.push({ scope: "run", scopeId: "directive", enabled: true, reason: "@@pack directive" });
+        selectedBy.push(requestedByRun
+          ? { scope: "run", scopeId: "directive", enabled: true, reason: "@@pack directive" }
+          : { scope: "catalog", scopeId: "agent", enabled: true, reason: "Agent catalog default" });
       }
     }
     if (!base && !requestedByRun) enabled = false;
@@ -873,6 +890,7 @@ function resolvePacks(scopes, skills, definitions, requestedPacks = []) {
     }
     resolved.push({
       id, type: "pack", title: effective.title || id, description: effective.description || "", enabled,
+      agentCatalog: effective.agent_catalog === true,
       selectable: valid && explicitEnabled !== false,
       source: clone(base?.source || null), effective, members, patches: appliedPatches, selectedBy,
       shadowedDefinitions: candidates.slice(0, -1).map((item) => clone(item.source)),
@@ -959,6 +977,7 @@ async function scopeFromConfig({ name, id, rank, path, config, projectRoot, defa
       description: String(definition.description || ""),
       members: strings(definition.members),
       preamble: String(definition.preamble || ""),
+      agent_catalog: definition.agent_catalog === true,
     },
   }));
   return scope;
@@ -1066,6 +1085,7 @@ export async function resolveProjectCapabilities({
   scope = "project",
   requestedSkills = [],
   requestedPacks = [],
+  includeAgentCatalog = false,
   runtimeDescriptor = {},
   environment = process.env,
   userHome = homedir(),
@@ -1082,7 +1102,7 @@ export async function resolveProjectCapabilities({
   const skills = await resolveType("skill", scopes, definitions, strings(requestedSkills));
   // Packs enable their members before the dependency closure is taken, so
   // a member's `requires` is selected exactly as for a direct @@skill.
-  const packs = resolvePacks(scopes, skills, definitions, strings(requestedPacks));
+  const packs = resolvePacks(scopes, skills, definitions, strings(requestedPacks), includeAgentCatalog);
   applySkillDependencies(skills, definitions);
   const mcps = await resolveType("mcp", scopes, definitions);
   for (const mcp of mcps) {

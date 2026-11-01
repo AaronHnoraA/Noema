@@ -3,6 +3,8 @@
 import importlib.util
 import pathlib
 import unittest
+import tempfile
+from unittest.mock import patch
 
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "noema-hy-memory.py"
@@ -28,6 +30,24 @@ class FakeClient:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_private_pi_runtime_does_not_require_a_system_pi(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            config, runtime, gateway = (root / name for name in ("memory.env", "runtime.js", "gateway.mjs"))
+            config.write_text("MEMORY_LLM_BACKEND=noema-pi\nMEMORY_EMBEDDER_BASE_URL=https://fixture.test\n"
+                              "MEMORY_EMBEDDER_MODEL=fixture\nMEMORY_EMBEDDER_API_KEY=fixture-only\n")
+            config.chmod(0o600)
+            runtime.write_text("fixture")
+            gateway.write_text("fixture")
+            (root / "models.json").write_text("{}")
+            with patch.dict(bridge.os.environ, {}, clear=True), \
+                 patch.object(bridge, "CONFIG_FILE", config), patch.object(bridge, "PI_RUNTIME", runtime), \
+                 patch.object(bridge, "PI_GATEWAY", gateway), patch.object(bridge, "PI_AGENT_DIR", root), \
+                 patch.object(bridge.shutil, "which", side_effect=lambda name: "/fixture/node" if name == "node" else None):
+                self.assertTrue(bridge.load_config())
+                runtime.unlink()
+                self.assertFalse(bridge.load_config())
+
     def test_project_identity_is_stable_and_isolated(self):
         self.assertEqual(bridge.project_user("/tmp/a"), bridge.project_user("/tmp/a/"))
         self.assertNotEqual(bridge.project_user("/tmp/a"), bridge.project_user("/tmp/b"))

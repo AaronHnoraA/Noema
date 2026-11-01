@@ -1,8 +1,34 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 
 import { createEmacsApiHandlers } from "../server/Features/Emacs/api.mjs";
+import { openPlacedFile } from "../server/lib/emacs-open.mjs";
 
 describe("Emacs host API", () => {
+  test("placed visits await the shared Emacs owner and return its actual result", async () => {
+    const requests: unknown[][] = [];
+    const result = { ok: true, file: "/project/a.md", window: "window-2", buffer: "a", positioned: true };
+    const reply = await openPlacedFile({ file: "a.md", placement: "other", line: 3, col: 2, noFocus: true }, {
+      resolveFile: (file: string) => `/project/${file}`,
+      request: async (...args: unknown[]) => { requests.push(args); return result; },
+    });
+    expect(reply).toBe(result);
+    expect(requests).toEqual([["noema.open-file", {
+      file: "/project/a.md", placement: "other", line: 3, col: 2, noFocus: true,
+    }]]);
+    await expect(openPlacedFile({ file: "a.md", placement: "other" }, {
+      resolveFile: (file: string) => file,
+      request: async () => { throw new Error("gateway disconnected"); },
+    })).rejects.toThrow("gateway disconnected");
+  });
+
+  test.each([{ placement: "sideways" }, { line: 0 }, { col: -1 }, { noFocus: "yes" },
+    { newWindow: true }, { tag: "legacy-tag" }, { file: "" }])("rejects invalid placed visits before opening: %j", async (fields) => {
+    await expect(openPlacedFile({ file: "/a.md", placement: "other", ...fields }, {
+      resolveFile: () => { throw new Error("invalid input reached path resolution"); },
+      request: () => { throw new Error("invalid input opened a file"); },
+    })).rejects.toMatchObject({ statusCode: 400 });
+  });
+
   test("forwards a note window request with its source pane and anchor", () => {
     const calls: unknown[][] = [];
     const handlers = createEmacsApiHandlers({

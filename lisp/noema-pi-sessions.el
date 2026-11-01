@@ -47,8 +47,13 @@
   (when-let* ((view (get-buffer "*Pi Sessions*")))
     (with-current-buffer view
       (when (and root noema-pi-sessions--scope (not (equal noema-pi-sessions--scope "emacs")))
-        (setq noema-pi-sessions--scope (noema-pi-project-root root))
-        (noema-pi-sessions--refresh-visible)))))
+        (let ((scope (noema-pi-project-root root)))
+          (unless (equal scope noema-pi-sessions--scope)
+            (setq noema-pi-sessions--scope scope tabulated-list-entries nil)
+            ;; Row properties are actionable even before the next redraw timer.
+            ;; Invalidate them now; metadata reads still use the coalesced path.
+            (tabulated-list-print nil)
+            (noema-pi-sessions--refresh-visible)))))))
 
 (defun noema-pi-sessions--cancel-refresh ()
   (when (timerp noema-pi-sessions--refresh-timer)

@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import WebSocket from "ws";
 import { claudeExportDnsError } from "./server/lib/latex-agent-connectivity.mjs";
+import { openPlacedFile } from "./server/lib/emacs-open.mjs";
 
 import {
   bootstrapNote,
@@ -2055,6 +2056,10 @@ async function openDirectory(body) {
 }
 
 async function apiOpenInEmacs(file, line = 1, col = 0, tag = "", options = {}) {
+  if (options?.placement !== undefined)
+    return openPlacedFile({ ...options, file, line, col, tag }, {
+      resolveFile: resolveShellPath, request: gatewayRequest,
+    });
   const target = resolveShellPath(file);
   const payload = { file: target, line, col };
   if (tag) payload.tag = String(tag);
