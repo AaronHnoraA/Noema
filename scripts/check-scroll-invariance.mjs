@@ -38,7 +38,7 @@ const wrapTables = ["left", "right"].map((side) =>
   `| wrap ${side} | formula |\n|---|---|\n| label | \\(z+1\\) |\n{align=${side} wrap=true width=40%}`);
 const markdown = [prose(40), ...constructs.flatMap((c) => [c, prose(6)]),
   ...wrapTables.flatMap((c) => [c, prose(6)]), prose(40), "[^1]: The note.",
-  "#+begin ediff Scroll review\n-Old intro\n+New intro\n#+end ediff"].join("\n\n");
+  "#+begin ediff Scroll review\n-Old intro\n+New intro\n#+end ediff", prose(40)].join("\n\n");
 
 const server = await createServer({
   configFile: repo + "vite.pages.config.ts", root: repo + "pages",
@@ -346,6 +346,20 @@ try {
             wrapLeavePath.every((top) => Math.abs(top - wrapProse.scrollTop) <= TOLERANCE)
               && wrapProseAfter != null && Math.abs(wrapProseAfter - wrapProse.top) <= TOLERANCE,
             { before: wrapProse, path: [...new Set(wrapLeavePath.map(Math.round))], wrapProseAfter });
+        }
+      }
+
+      if (targets.some(({ family }) => family === "ediff")) {
+        const from = markdown.indexOf("#+begin ediff");
+        for (const label of ["Diff", "Preview", "Details", "Comment", "Cancel"]) {
+          await scrollTo(from, "unfocused start");
+          if (label === "Cancel") await page.getByRole("button", { name: "Comment", exact: true }).click();
+          const before = await page.evaluate(() => host.scrollTop);
+          await page.getByRole("button", { name: label, exact: true }).click();
+          const path = await sample(400);
+          record(`ediff ${label} control keeps the viewport`,
+            path.every((top) => Math.abs(top - before) <= TOLERANCE),
+            { before, path: [...new Set(path.map(Math.round))] });
         }
       }
 

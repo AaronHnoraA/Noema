@@ -60,7 +60,8 @@ turn must be removed after its ACP buffer closes."
 Only a directory that already is a Noema project has one.  The work waits for
 ACP initialization and then runs asynchronously; failing to reach the host
 leaves the session registered on the Emacs side alone."
-  (when (and (fboundp 'noema-project-root)
+  (when (and (not (memq (buffer-local-value '+agent-acp-session-origin buffer) '(pi pi-emacs pi-project)))
+             (fboundp 'noema-project-root)
              (noema-project-root root)
              (require 'noema-agent-promote nil t))
     (if (+agent-acp-state-value buffer '(:session :id))
@@ -91,7 +92,16 @@ leaves the session registered on the Emacs side alone."
 
 (defun noema-agent--session-id (buffer)
   (when (buffer-live-p buffer)
-    (with-current-buffer buffer (bound-and-true-p noema-agent-promote--session-id))))
+    (with-current-buffer buffer
+      (unless (memq +agent-acp-session-origin '(pi pi-emacs pi-project))
+        (bound-and-true-p noema-agent-promote--session-id)))))
+
+(defun noema-agent--group (buffer)
+  "Expose Research affiliation to Emacs without consulting the host."
+  (when (and (buffer-live-p buffer)
+             (or (noema-agent--session-id buffer)
+                 (eq (buffer-local-value '+agent-acp-session-origin buffer) 'run)))
+    '(:key noema :label "Noema Research")))
 
 (defun noema-agent--forget (buffer)
   (with-current-buffer buffer (setq-local noema-agent-promote--session-id nil)))
@@ -143,6 +153,7 @@ leaves the session registered on the Emacs side alone."
 (add-hook '+agent-session-adopt-functions #'noema-agent-register-session)
 (add-hook '+agent-session-forget-functions #'noema-agent--forget)
 (add-hook '+agent-session-id-functions #'noema-agent--session-id)
+(add-hook '+agent-session-group-functions #'noema-agent--group)
 (add-hook '+agent-session-close-functions #'noema-agent--close)
 (add-hook '+agent-session-operation-functions #'noema-agent--operation-supported-p)
 (add-hook '+agent-session-action-functions #'noema-agent--action)

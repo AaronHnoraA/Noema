@@ -4,7 +4,7 @@
 ;;
 ;; A Noema Markdown pane is an inert Portal or xwidget shell: the live document,
 ;; selection and history belong to the CM6 renderer.  Emacs commands that work
-;; on "the region" or "this buffer" -- gptel context, gptel rewrite with its
+;; on "the region" or "this buffer" -- Agent context, API proposals with their
 ;; diff review, agent references, the compose buffer -- therefore cannot run in
 ;; the pane itself.  This module is the one bridge between them:
 ;;
@@ -25,7 +25,7 @@
 (require 'subr-x)
 
 (defvar +noema-buffer-file-name)
-(defvar gptel-context)
+(defvar +agent-selection)
 (defvar noema-md-bridge-source-mode)
 (defvar +programmatic-file-visit)
 (defvar +noema--inhibit-redirect)
@@ -41,9 +41,8 @@
 (declare-function noema--focus-minibuffer-if-active "noema-xwidget-keys" ())
 (declare-function +noema/command "noema/bridge/config" (command &optional detail))
 (declare-function +noema/open-file "noema/bridge/config" (file))
-(declare-function gptel-context--add-region "gptel-context"
+(declare-function +agent-selection-add-region "tools/agent/selection"
                   (buffer region-beginning region-end &optional advance))
-(declare-function gptel-rewrite "gptel-rewrite" ())
 (declare-function +agent/compose "tools/agent/compose" (&optional name))
 (declare-function +agent-context--send "tools/agent/context" (&rest arguments))
 (declare-function +agent-context--region-references "tools/agent/context" (buffer begin end))
@@ -60,7 +59,7 @@ and leaves saving to you."
   :type '(choice (number :tag "Seconds") (const :tag "Never" nil))
   :group 'noema-md-bridge)
 
-(defconst noema-md-bridge-actions '("agent" "related" "context" "rewrite" "compose" "source")
+(defconst noema-md-bridge-actions '("agent" "related" "context" "rewrite" "compose" "source" "task")
   "Actions a pane may report a range for.")
 
 (defconst noema-md-bridge-scopes '("selection" "line" "any" "document")
@@ -165,7 +164,7 @@ DOC is its documentation."
 
 ;;;###autoload (autoload 'noema-md-bridge-rewrite "noema-md-bridge" nil t)
 (noema-md-bridge-define-pane-command noema-md-bridge-rewrite "rewrite" "line"
-  "Rewrite the pane's selection (else its cursor line) with gptel.")
+  "Rewrite the pane's selection (else its cursor line) through the selected Agent.")
 
 ;;;###autoload (autoload 'noema-md-bridge-add-context "noema-md-bridge" nil t)
 (noema-md-bridge-define-pane-command noema-md-bridge-add-context "context" "any"
@@ -173,7 +172,7 @@ DOC is its documentation."
 
 ;;;###autoload (autoload 'noema-md-bridge-compose "noema-md-bridge" nil t)
 (noema-md-bridge-define-pane-command noema-md-bridge-compose "compose" "any"
-  "Open a gptel compose buffer with the pane's selection (else note) as context.")
+  "Ask the project Pi for a Markdown prompt document for this selection.")
 
 
 ;;;; ── The source buffer and its range ──────────────────────────────────────
@@ -253,6 +252,7 @@ visit is marked programmatic.  A leftover redirect placeholder is replaced."
   (when (and (buffer-live-p buffer)
              (buffer-local-value 'noema-md-bridge--hidden buffer)
              (not (buffer-modified-p buffer))
+             (not (assq buffer (bound-and-true-p +agent-selection)))
              (not (get-buffer-window buffer t)))
     (kill-buffer buffer)))
 
@@ -271,12 +271,16 @@ unsaved Emacs edits is refused rather than overwritten."
     buffer))
 
 (defun noema-md-bridge--position (line column)
-  "Return the position of 1-based LINE and character COLUMN, clamped."
+  "Return the position of 1-based LINE and UTF-16 COLUMN, clamped."
   (save-excursion
     (goto-char (point-min))
     (if (> (forward-line (1- line)) 0)
         (point-max)
-      (min (+ (point) column) (line-end-position)))))
+      (let ((units 0) (end (line-end-position)))
+        (while (and (< (point) end) (< units column))
+          (setq units (+ units (if (> (char-after) #xffff) 2 1)))
+          (forward-char))
+        (point)))))
 
 (defun noema-md-bridge-region (file range)
   "Return (BUFFER BEGIN . END) for RANGE of FILE.
@@ -336,16 +340,45 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
 ;;;; ── Actions ──────────────────────────────────────────────────────────────
 
 (defun noema-md-bridge--add-context (buffer begin end)
-  "Add BEGIN..END of BUFFER to the shared gptel context."
-  (require 'gptel-context)
-  (gptel-context--add-region buffer begin end t)
+  "Add BEGIN..END of BUFFER to the shared editor context."
+  (require 'tools/agent/selection)
+  (+agent-selection-add-region buffer begin end t)
   (message "Noema: added %s to AI context (%d item%s)"
            (with-current-buffer buffer
              (format "%s:%d-%d" (file-name-nondirectory buffer-file-name)
                      (line-number-at-pos begin t)
                      (line-number-at-pos (max begin (1- end)) t)))
-           (length gptel-context)
-           (if (= (length gptel-context) 1) "" "s")))
+           (length +agent-selection)
+           (if (= (length +agent-selection) 1) "" "s")))
+
+(defun noema-md-bridge--review-bootstrap ()
+  "Return a small, progressively disclosed capability entry for an Agent."
+  (cons 'noema-api-review-v1
+        (format
+         "Noema review: answer questions normally. For requested Markdown revisions, use the Noema API document:read then document:propose; the person reviews the cards. Discover/describe only the operation needed. Use noema_api/noema_call when available; otherwise run `node %s help` for the live API client. Keep edits inside the supplied selection; an empty request with saved review feedback means revise that proposal."
+         (shell-quote-argument
+          (expand-file-name "../scripts/agent-api.mjs"
+                            (file-name-directory (locate-library "noema-md-bridge")))))))
+
+(defun noema-md-bridge--column (position)
+  "Return POSITION's zero-based UTF-16 column."
+  (save-excursion
+    (goto-char position)
+    (cl-loop for character across (buffer-substring-no-properties (line-beginning-position) position)
+             sum (if (> character #xffff) 2 1))))
+
+(defun noema-md-bridge--review-instructions (buffer begin end)
+  "Describe only this Markdown request's saved selection and API file."
+  (with-current-buffer buffer
+    (when (and buffer-file-name
+               (string-match-p "\\.\\(?:md\\|markdown\\)\\'"
+                               (downcase buffer-file-name)))
+      (format "Noema Markdown selection: %d:%d to %d:%d (1-based lines, UTF-16 columns; end exclusive).\nAPI file: %s"
+              (line-number-at-pos begin t)
+              (noema-md-bridge--column begin)
+              (line-number-at-pos end t)
+              (noema-md-bridge--column end)
+              buffer-file-name))))
 
 (defun noema-md-bridge-run (action buffer begin end)
   "Run ACTION on BEGIN..END of note BUFFER."
@@ -354,6 +387,9 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
      (require 'tools/agent/context)
      (let ((session (with-current-buffer buffer
                       (+agent-context--send
+                       :instructions (noema-md-bridge--review-instructions
+                                      buffer begin end)
+                       :session-instructions (noema-md-bridge--review-bootstrap)
                        :references (+agent-context--region-references
                                     buffer begin end)))))
        ;; Asked from a Noema page: continue in the session, not the page.
@@ -379,14 +415,22 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
        (noema-md-bridge--drop-hidden buffer)))
     ("context"
      (noema-md-bridge--add-context buffer begin end))
+    ("task"
+     (require 'tools/agent/context)
+     (with-current-buffer buffer
+       (+agent-context--send
+        :prompt "Carry out the task in this Markdown document, using its referenced project context."
+        :session-instructions (noema-md-bridge--review-bootstrap)
+        :references (+agent-context--file-references buffer-file-name)))
+     (noema-md-bridge--drop-hidden buffer))
     ("compose"
-     (noema-md-bridge--add-context buffer begin end)
-     (require 'tools/agent/compose)
-     (+agent/compose))
+     (require 'noema-pi-router)
+     (with-current-buffer buffer
+       (noema-pi-request-prompt-document (or (bound-and-true-p +project-active-root) default-directory) buffer-file-name
+                                         (noema-md-bridge--review-instructions buffer begin end)))
+     (noema-md-bridge--drop-hidden buffer))
     ("rewrite"
-     (require 'gptel-rewrite)
-     (noema-md-bridge--show-region buffer begin end)
-     (call-interactively #'gptel-rewrite))
+     (noema-md-bridge-run "agent" buffer begin end))
     ("source"
      (noema-md-bridge--show-region buffer begin end))
     (_ (user-error "Unknown Noema bridge action: %s" action))))

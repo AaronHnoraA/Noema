@@ -384,12 +384,12 @@ export function createJupyterCellService({
   ];
   function researchDocumentRequest(body = {}) {
     return [body?.scriptFile, body?.sourceFile, body?.file]
-      .some((value) => /\.noema$/i.test(String(value || "").trim()));
+      .some((value) => /\.noema(?:\.ipynb)?$/i.test(String(value || "").trim()));
   }
 
   function rejectResearchKernel(body, operation = "operate a Jupyter kernel") {
     if (researchDocumentRequest(body)) {
-      throw error(`Cannot ${operation} for a .noema work document; run its work block through an agent`, 400);
+      throw error(`Cannot ${operation} for a legacy .noema document; its special adapter is retired`, 400);
     }
   }
   const kernelspecCache = new Map();
@@ -621,7 +621,7 @@ export function createJupyterCellService({
     const file = jupyterLogicalPath(value);
     const ext = extname(file).toLowerCase();
     const markdownLike = ext === ".md" || ext === ".markdown" || ext === ".mdown" || ext === ".mkd";
-	const projectDocument = (ext === ".noema" || ext === ".ipynb") && validatedProjectRoot(body, file);
+	const projectDocument = ext === ".ipynb" && validatedProjectRoot(body, file);
     if (!remoteLogicalPath(file)
         && !inside(notes, file) && !inside(workspace, file)
         && !markdownLike && !projectDocument) {
@@ -1770,29 +1770,7 @@ export function createJupyterCellService({
   }
 
   async function saveScriptCellOutputUi(body) {
-    if (researchDocumentRequest(body)) {
-      const context = await managedDocument(body || {});
-      const cellId = markerId(body?.cellId || body?.id);
-      if (!cellId) throw error("Missing Noema work cell id", 400);
-      if (!(context.notebook.cells || []).some((cell) => cell?.id === cellId)) {
-        throw error(`Unknown Noema work cell: ${cellId}`, 404);
-      }
-      const viewFile = researchViewFile(context);
-      return await withMirrorLock(viewFile, async () => {
-        const view = await readResearchView(context);
-        const cells = view.cells && typeof view.cells === "object" && !Array.isArray(view.cells)
-          ? { ...view.cells } : {};
-        const current = cells[cellId] && typeof cells[cellId] === "object" ? cells[cellId] : {};
-        cells[cellId] = {
-          ...current,
-          outputFolded: body?.outputFolded === true,
-          outputExpanded: body?.outputExpanded === true,
-          liveOutput: body?.liveOutput === true,
-        };
-        await writeResearchView(context, { ...view, cells });
-        return { ok: true, file: viewFile, cellId, ui: cells[cellId] };
-      });
-    }
+    rejectResearchKernel(body, "save Jupyter output settings");
     const noteFile = safeNoteFile(body?.file, body);
     const kernel = cleanToken(body?.kernel, "python3");
     const session = cleanToken(body?.session, "default");
@@ -2148,11 +2126,12 @@ export function createJupyterCellService({
   }
 
   function managedScriptFile(body = {}) {
+    rejectResearchKernel(body, "open Jupyter output");
     const raw = String(body?.scriptFile || "").trim();
     if (!raw) throw error("Missing Jupyter scriptFile", 400);
     const scriptFile = jupyterLogicalPath(raw);
-    if (!/(?:\.ipynb|\.noema)$/i.test(scriptFile)) {
-      throw error(`Invalid Jupyter/Noema work document: ${scriptFile}`, 400);
+    if (!/\.ipynb$/i.test(scriptFile)) {
+      throw error(`Invalid Jupyter notebook: ${scriptFile}`, 400);
     }
 	const projectRoot = validatedProjectRoot(body, scriptFile);
     if (!remoteLogicalPath(scriptFile)
@@ -2168,32 +2147,11 @@ export function createJupyterCellService({
     return metadata.noema && typeof metadata.noema === "object" ? metadata.noema : {};
   }
 
-  function researchViewFile(context) {
-    if (!context?.researchDocument || !context.projectRoot) return "";
-    const metadata = context.notebook?.metadata?.noema_research;
-    const rawId = String(metadata?.notebook_id || "notebook");
-    const id = rawId.replace(/[^A-Za-z0-9_-]/g, "-") || "notebook";
-    return join(context.projectRoot, ".agent", "views", `${id}.json`);
-  }
 
-  async function readResearchView(context) {
-    const file = researchViewFile(context);
-    if (!file) return {};
-    try {
-      const parsed = JSON.parse(await files.readFile(file, "utf8"));
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    } catch (errorObject) {
-      if (errorObject?.code !== "ENOENT" && !(errorObject instanceof SyntaxError)) throw errorObject;
-      return {};
-    }
-  }
 
-  async function writeResearchView(context, view) {
-    const file = researchViewFile(context);
-    if (!file) throw error("A .noema view requires an initialized project", 400);
-    await writeNotebookFile(file, `${JSON.stringify(view, null, 2)}\n`, files);
-    return file;
-  }
+
+
+
 
   async function managedDocument(body = {}) {
     const scriptFile = managedScriptFile(body);
@@ -2201,34 +2159,8 @@ export function createJupyterCellService({
     const existing = await readExistingHiddenScript(scriptFile, "", files);
     if (!existing.notebook) throw error(`Jupyter notebook not found: ${scriptFile}`, 404);
     const notebook = existing.notebook;
-    const researchDocument = /\.noema$/i.test(scriptFile);
-    if (researchDocument) {
-      documentSessions.set(scriptFile, {
-        scriptFile,
-        sourceFile: scriptFile,
-        kernel: "",
-        session: "",
-        language: "",
-        sessionId: "",
-        projectRoot,
-        detached: true,
-        researchDocument: true,
-      });
-      return {
-        scriptFile,
-        noteFile: scriptFile,
-        notebook,
-        text: existing.text,
-        kernel: "",
-        portableKernel: "",
-        session: "",
-        language: "",
-        sessionId: "",
-        projectRoot,
-        detached: true,
-        researchDocument: true,
-      };
-    }
+
+
     const noema = notebookPrivateMetadata(notebook);
     const kernelspec = notebook.metadata?.kernelspec || {};
     const languageInfo = notebook.metadata?.language_info || {};
@@ -2279,55 +2211,7 @@ export function createJupyterCellService({
 
   async function documentSnapshot(body = {}) {
     const context = await managedDocument(body);
-    if (context.researchDocument) {
-      const view = await readResearchView(context);
-      const cellViews = view.cells && typeof view.cells === "object" && !Array.isArray(view.cells)
-        ? view.cells : {};
-      let line = 1;
-      const cells = [];
-      for (const cell of context.notebook.cells || []) {
-        const source = notebookSource(cell?.source);
-        if (cell?.cell_type === "code") {
-          const run = [...(Array.isArray(cell.outputs) ? cell.outputs : [])].reverse()
-            .map((output) => output?.data?.["application/vnd.noema.run+json"])
-            .find((value) => value && typeof value === "object") || {};
-          cells.push({
-            id: cell.id,
-            index: cells.length,
-            line,
-            revision: codeRevision(source),
-            code: source,
-            stale: false,
-            status: String(run.status || "idle"),
-            executionCount: null,
-            outputs: Array.isArray(cell.outputs) ? cell.outputs : [],
-            widgetMessages: [],
-            widgetOutputs: {},
-            outputUi: cellViews[cell.id] && typeof cellViews[cell.id] === "object"
-              ? cellViews[cell.id] : {},
-          });
-        }
-        line += source.split("\n").length + 2;
-      }
-      return {
-        ok: true,
-        documentRevision: codeRevision(context.text),
-        document: {
-          scriptFile: context.scriptFile,
-          sourceFile: context.scriptFile,
-          ...(context.projectRoot ? { projectRoot: context.projectRoot } : {}),
-          language: "",
-          kernel: "",
-          session: "",
-          kernelSpecName: "",
-          kernelId: "",
-          sessionName: "",
-          sessionId: "",
-        },
-        kernelStatus: "not-applicable",
-        cells,
-      };
-    }
+
     const registry = await getRegistry();
     const key = kernelKey({ file: context.scriptFile, kernel: context.kernel });
     const record = context.detached ? undefined : registry.get(key);
@@ -2454,9 +2338,7 @@ export function createJupyterCellService({
 
   async function sessionSelect(body = {}) {
     const context = await managedDocument(body);
-    if (context.researchDocument) {
-      throw error("Cannot select a Jupyter session for a .noema work document", 400);
-    }
+
     const kind = String(body?.kind || "none");
     if (kind === "none") {
       documentSessions.set(context.scriptFile, {
@@ -2649,14 +2531,8 @@ export function createJupyterCellService({
     try {
       const action = String(body?.action || "");
       const cellId = markerId(body?.cellId || body?.id);
-      if (context.researchDocument) {
-        throw error(`Cannot perform Jupyter action ${action || "(missing)"} for a .noema work document`, 400);
-      }
+
       if (["insertAbove", "insertBelow", "duplicate", "moveUp", "moveDown", "delete", "split", "mergeAbove", "mergeBelow"].includes(action)) {
-        // A `.noema` file is edited through the Emacs-native JuText surface.
-        // The browser document page is retained only as the rich Jupyter
-        // output renderer; letting it mutate cells would create a second UI
-        // authority and bypass WorkNode/dependency invariants.
         return await mutateManagedDocument(context, cellId, action, body);
       }
       const request = managedBody(context, { cellId });
@@ -2707,7 +2583,7 @@ export function createJupyterCellService({
   async function debugStart(body = {}) {
     rejectResearchKernel(body, "debug a notebook");
     const context = await managedDocument(body);
-    if (context.researchDocument) throw error("Work documents cannot use a Jupyter debugger", 400);
+
     const cellId = String(body.cellId || "");
     const codeCells = context.notebook.cells.filter(cell => cell.cell_type === "code");
     const projection = Array.isArray(body.projection) ? body.projection : [];
@@ -2771,9 +2647,7 @@ export function createJupyterCellService({
 
   async function managedVariables(body = {}) {
     const context = body?.scriptFile ? await managedDocument(body) : null;
-    if (context?.researchDocument) {
-      throw error("Cannot inspect kernel variables for a .noema work document", 400);
-    }
+
     return await variables(context ? managedBody(context) : body);
   }
 

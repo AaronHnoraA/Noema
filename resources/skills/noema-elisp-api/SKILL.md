@@ -1,68 +1,66 @@
 ---
 name: noema-elisp-api
-description: Use Noema's public semantic Emacs Lisp API to inspect or update a Noema project, DAG, work cells, agent runs, Skills, and MCP configuration. Use when an agent can evaluate Elisp inside the user's Noema Emacs host; prefer this API over editing `.noema` JSON, buffer text, properties, or overlays directly.
+description: Use Noema's supported Emacs Lisp API for project identity, Skill/MCP configuration and durable Run cancellation. Use when evaluating Elisp in an existing Noema Emacs host; this is an operational API guide, not Markdown syntax or a work-document editor.
 ---
 
-# Noema Elisp API
+# Noema project API in Emacs
 
-Evaluate small programs against the public functions in `noema-api.el`. Start
-with context queries and keep stable WorkNode ids rather than buffer positions.
+`noema-api.el` exposes project queries, capability resolution and mutations,
+and cancellation through the existing worker. Read the relevant section of
+`~/.config/emacs/docs/noema/design/elisp-api.md` before an unfamiliar call.
+
+## Project queries
+
+`noema-current-project`, `noema-project-root`, `noema-project-scope`,
+`noema-project-workspace` and `noema-project-client-path` do not create a
+Project. A durable Noema Project has `[project]` in its nearest `noema.toml`;
+ordinary Agent sessions can exist outside that model. Use the existing
+`noema-project-ensure` interaction only when the requested operation needs it.
 
 ```elisp
-(let* ((project (noema-current-project))
-       (node (noema-current-node))
-       (children (and node (noema-node-children node))))
-  (list :project project
-        :node (and node (noema-node-id node))
-        :children (mapcar #'noema-node-id children)))
+(list :project (noema-current-project)
+      :scope (noema-project-scope default-directory))
 ```
 
-Queries have no external effects:
+## Skills, packs and MCP
 
-- `noema-current-project`, `noema-current-document`, `noema-current-cell`,
-  `noema-current-node`, `noema-node-id`
-- `noema-node-parents`, `noema-node-children`
-- async `noema-capability-list`, `noema-skill-list`, `noema-mcp-list`,
-  `noema-capability-config`, `noema-capability-resolve`; use
-  `noema-capability-active` on a returned resolution
-
-Async callbacks receive `(result error-object)`. Always inspect the error:
+Resolve with `noema-capability-list`, `noema-skill-list`, `noema-mcp-list`,
+`noema-capability-config` or `noema-capability-resolve`. Async callbacks receive
+`(result error-object)`; inspect the error before using the result.
+`noema-capability-active` extracts selected ids from a resolution.
+`:requested-skills` and `:requested-packs` select for a task without changing
+persistent settings. `:scope 'global` avoids project discovery.
 
 ```elisp
 (noema-capability-list
- :project (noema-current-project)
- :callback
- (lambda (environment error-object)
-   (if error-object
-       (message "Capability query failed: %S" error-object)
-     (message "Effective capabilities: %S"
-              (noema-capability-active environment)))))
+ :scope 'global :requested-packs '("noema-project")
+ :callback (lambda (resolution error-object)
+             (if error-object
+                 (message "Noema capability lookup failed")
+               (message "%S" (noema-capability-active resolution)))))
 ```
 
-Semantic mutations update the current JuText document as validated undoable
-operations: `noema-create-work`, `noema-create-checkpoint`, `noema-link`,
-`noema-unlink`, and `noema-set-node-state`. For example:
+`noema-capability-set-enabled`, `noema-capability-set-patch`,
+`noema-mcp-register`, `noema-pack-define` and `noema-skill-install` write through
+the existing scoped service, then re-resolve. Querying is not authorization
+to change the configuration or connect an MCP.
 
-```elisp
-(let* ((parent (noema-current-node))
-       (child-id (noema-create-work
-                  "Verify the boundary case"
-                  (list (noema-node-id parent)))))
-  (noema-set-node-state child-id "open")
-  child-id)
-```
+## Runtime and management
 
-Persistent capability mutations are async and change the project's
-`noema-capabilities.json`: `noema-capability-set-enabled`,
-`noema-capability-set-patch`, and `noema-mcp-register`. A Skill patch is a JSON
-Merge Patch; `content_append` is the supported additive instruction field.
+Pi has its own history and active pointers. Open `noema-pi-sessions` for the
+Emacs companion and project conversations; do not promote or bind them into
+Research. Use the progressively disclosed `emacs:pi` API when coordinating
+children. Read `docs/design/pi-sessions.md` for lifecycle details, including
+unsaved empty conversations and strict native restore. Prompt documents use
+the `noema-prompt-document` Skill and ordinary Markdown.
 
-Runtime effects may start processes or execute work: `noema-run-cell`,
-`noema-agent-run`, `noema-agent-resume`, `noema-agent-cancel`, and
-`noema-run-project-file` for supported Jupyter/Python project files. Confirm
-that the intended work cell and project are current before invoking them.
+Use `noema-agent-cancel` with an actual Run id for requested cancellation.
+Agent processes and Session operations use Emacs's shared `tools/agent/`
+commands; look them up in `docs/design/agent-management.md` relative to the
+Emacs configuration. Project Sessions, history, Attention and Findings keep
+their existing entry points.
 
-Do not insert raw `.noema` JSON, parse JuText with regular expressions, or
-change overlays/text properties to perform domain operations. Use raw Emacs
-buffer manipulation only when no semantic API exists, and report that boundary
-instead of presenting the edit as a supported Noema operation.
+The retired JuText/Graph Board mutations, at-point Cell execution and
+work-document editor commands are not part of this API. Existing model files,
+RunSpecs and artifacts remain usable through their services; do not recreate
+an editor or invent Cell identities to use a project capability.

@@ -65,7 +65,7 @@ import { buildMacroPanel, LIVE_TEX_MACRO_CATEGORY, macroPaletteItems, validateMa
 import { renderJupyterVariablesTable } from "../src/jupyter-variables-view.ts";
 import { formatCitationLabel } from "../src/render-html.ts";
 import { hrefProtocol, safeHref } from "../src/url-safety.ts";
-import { approvedEdiffMarkdown, ediffActionEdit, scanEdiffBlocks, type EdiffAction } from "../src/ediff.ts";
+import { approvedEdiffMarkdown, ediffActionEdit, scanEdiffBlocks, EDIFF_FEEDBACK_EVENT, type EdiffAction, type EdiffFeedbackDetail } from "../src/ediff.ts";
 import {
   api,
   type NoemaAppConfigMsg,
@@ -971,12 +971,12 @@ selectionTool.innerHTML = `
   <span aria-hidden="true"></span>
   <button type="button" data-selection-command="copy" title="Copy">Copy</button>
   <button type="button" data-selection-command="send-to-agent" data-emacs-only title="Ask an agent session about the selection (C-c A v)">Agent</button>
-  <button type="button" data-selection-command="ai-rewrite" data-emacs-only title="Rewrite the selection with gptel in Emacs, reviewed as a diff (C-c A r)">Rewrite</button>
+  <button type="button" data-selection-command="ai-rewrite" data-emacs-only title="Ask an Agent to propose changes in Noema (C-c A r)">Rewrite</button>
   <button type="button" data-selection-command="more" title="More actions">...</button>
   <div class="noema-selection-more" data-selection-more hidden>
     <button type="button" data-selection-command="ai-context" data-emacs-only>Add to AI context (C-c A .)</button>
     <button type="button" data-selection-command="ai-related" data-emacs-only>Find related notes with Emacs Agent</button>
-    <button type="button" data-selection-command="ai-compose" data-emacs-only>Ask in a gptel compose buffer (C-c A c)</button>
+    <button type="button" data-selection-command="ai-compose" data-emacs-only>Ask project Pi for a Markdown prompt document (C-c A c)</button>
     <button type="button" data-selection-command="emacs-source" data-emacs-only>Select in the Emacs source buffer (C-c A e)</button>
     <button type="button" data-selection-command="insert-roam-idlink">Insert roam idlink...</button>
   </div>
@@ -11150,6 +11150,11 @@ function renderEdiffPanel(): void {
       item.append(form);
       input.focus({ preventScroll: true });
     }, currentReadOnly);
+    if (block.comments.length || block.rejected) {
+      action("Send feedback", () => void sendEdiffFeedback({
+        from: block.from, to: block.end, source: source.slice(block.from, block.end),
+      }), currentReadOnly);
+    }
     item.append(title, summary, controls);
     list.append(item);
   }
@@ -12941,9 +12946,9 @@ function markActiveSelectionFormats(): void {
   }
 }
 
-type EmacsSelectionAction = "agent" | "related" | "context" | "rewrite" | "compose" | "source";
+type EmacsSelectionAction = "agent" | "related" | "context" | "rewrite" | "compose" | "source" | "task";
 type EmacsSelectionScope = "selection" | "line" | "any" | "document";
-const EMACS_SELECTION_ACTIONS = new Set<EmacsSelectionAction>(["agent", "related", "context", "rewrite", "compose", "source"]);
+const EMACS_SELECTION_ACTIONS = new Set<EmacsSelectionAction>(["agent", "related", "context", "rewrite", "compose", "source", "task"]);
 const EMACS_SELECTION_SCOPES = new Set<EmacsSelectionScope>(["selection", "line", "any", "document"]);
 
 /** Source range of the current selection, including a native DOM selection. */
@@ -12977,7 +12982,7 @@ function emacsSourcePosition(pos: number): { line: number; column: number } {
  * Save, then hand the current selection (or line, or whole note) to Emacs.
  *
  * The page owns the live document and selection, so Emacs-side tools -- the
- * agent session picker, gptel context and rewrite, the source buffer -- work on
+ * agent session picker, editor context and API proposals, the source buffer -- work on
  * the saved file at the exact range reported here.  Emacs never has to wait for
  * the page inside a command.
  */
@@ -12985,6 +12990,7 @@ async function sendSelectionToEmacs(
   action: EmacsSelectionAction = "agent",
   scope: EmacsSelectionScope = "selection",
   requestId = "",
+  range?: { from: number; to: number },
 ): Promise<void> {
   // An Emacs command is waiting on this answer, and page statuses only reach
   // its echo area as errors.  Every way out therefore answers Emacs: with the
@@ -13003,7 +13009,7 @@ async function sendSelectionToEmacs(
     }).catch(() => {});
   };
   const doc = editor.view.state.doc;
-  let { from, to } = editorSourceSelectionRange();
+  let { from, to } = range ?? editorSourceSelectionRange();
   if (scope === "document" || (scope === "any" && from === to)) {
     scope = "document";
     from = 0;
@@ -13031,9 +13037,11 @@ async function sendSelectionToEmacs(
   try {
     lastSaveProblem = null;
     await save();
-    if (file !== currentFile || revision !== savedRevision) {
+    if (file !== currentFile || doc !== editor.view.state.doc || revision !== savedRevision) {
       await fail(file !== currentFile
         ? "The note changed before its selection could be sent"
+        : doc !== editor.view.state.doc
+        ? "The text changed before its selection could be sent; select it again"
         : `${lastSaveProblem?.message || "The note could not be saved"}; its selection was not sent`);
       return;
     }
@@ -13061,6 +13069,22 @@ async function sendSelectionToEmacs(
 async function sendSelectionToAgent(): Promise<void> {
   await sendSelectionToEmacs("agent", "selection");
 }
+
+async function sendEdiffFeedback(detail: EdiffFeedbackDetail): Promise<void> {
+  if (rejectReadOnlyAction("Read-only pane")) return;
+  const source = editor.getMarkdown();
+  const block = scanEdiffBlocks(source).find((item) => item.from === detail.from && item.end === detail.to);
+  if (!block || source.slice(detail.from, detail.to) !== detail.source) {
+    setStatus("This proposal changed. Review its current feedback before sending.");
+    return;
+  }
+  await sendSelectionToEmacs("agent", "selection", "", detail);
+}
+
+editor.view.dom.addEventListener(EDIFF_FEEDBACK_EVENT, (event) => {
+  event.preventDefault();
+  void sendEdiffFeedback((event as CustomEvent<EdiffFeedbackDetail>).detail);
+});
 
 function runSelectionCommand(command: string): void {
   if (command === "send-to-agent") {

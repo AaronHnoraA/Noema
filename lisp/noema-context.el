@@ -43,7 +43,8 @@ Markdown pane reports its selection through the saved-range bridge."
   "Let a Noema pane supply its saved selection to shared editor actions."
   (when (noema-md-bridge-pane-p)
     (pcase operation
-      ((or 'compose 'compose-send) (noema-md-bridge-compose) t)
+      ('compose (noema-md-bridge-compose) t)
+      ('compose-send (noema-md-bridge-request "task" "document") t)
       ('add-context (noema-md-bridge-add-context) t)
       ('rewrite (noema-md-bridge-rewrite) t)
       ('send-region (noema-md-bridge-request "agent" "selection") t)

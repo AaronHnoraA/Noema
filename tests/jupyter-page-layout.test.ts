@@ -55,19 +55,12 @@ describe("Noema Jupyter Emacs-owned output surface", () => {
     expect(main).toContain("scriptSnapshot(documentParams(tab))");
   });
 
-  test("renders .noema as status-first Work Output with opt-in live streaming", () => {
-    expect(main).toContain('surfaceTitleEl.textContent = research ? "Work Output" : "Jupyter Output"');
-    expect(main).toContain("kernelStatusEl.hidden = research");
-    expect(main).toContain('new EventSource(`/api/noema/research/run/stream?${params}`)');
-    expect(main).toContain('runCell(tab)?.outputUi?.liveOutput === true ? "full" : "status"');
-    expect(main).toContain("cell.id === (tab.runCellId || tab.activeCellId)");
-    expect(main).toContain('Remember This Cell · Live Output');
-    expect(main).toContain('button("Open Agent"');
-    expect(main).toContain('button("Cancel Run"');
-    expect(main).toContain('eventType(item) === "run.content.segment"');
-    expect(main).toContain('eventType(item).includes("permission")');
-    expect(main).toContain('"text/markdown": content');
-    expect(main).toContain("after: String(tab.runSeq || 0)");
+  test("keeps the Jupyter page free of work-document controls", () => {
+    expect(main).not.toContain("api.research");
+    expect(main).not.toContain("Work Output");
+    expect(main).not.toContain("run/stream");
+    expect(main).toContain('surfaceTitleEl.textContent = "Jupyter Output"');
+    expect(main).toContain("renderJupyterOutputs(output, cell.outputs, outputRenderOptions(cell))");
   });
 
   test("isolates page, board, panel, and long-output scrolling", () => {

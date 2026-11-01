@@ -4,7 +4,6 @@ import "../src/styles/theme-loader.ts";
 import { installB3ComponentSystem } from "../src/b3-component-system.ts";
 import "./jupyter-page.css";
 import { api } from "./api-client.ts";
-import { appendRunEvents, mergeRunRef, runSnapshotMatches } from "./research-run-state.ts";
 import { renderJupyterOutputs } from "../src/jupyter-rendermime.ts";
 import type { JupyterMarkdownParser, JupyterOutputView, WidgetMountFn } from "../src/jupyter-rendermime.ts";
 import type { JupyterWidgetKernelMessage } from "../src/jupyter-widget-runtime.ts";
@@ -34,8 +33,6 @@ type DocumentRef = {
   kernelId?: string;
   sessionName?: string;
   sessionId?: string;
-  runId?: string;
-  agent?: string;
 };
 
 type CellSnapshot = {
@@ -51,7 +48,7 @@ type CellSnapshot = {
   widgetMessages?: unknown[];
   widgetOutputs?: Record<string, unknown[]>;
   widgetRuntime?: { id: string; name: string; generation?: number };
-  outputUi?: { outputFolded?: boolean; outputExpanded?: boolean; liveOutput?: boolean };
+  outputUi?: { outputFolded?: boolean; outputExpanded?: boolean };
   stdin?: { runId: string; prompt: string; password: boolean };
 };
 
@@ -69,25 +66,16 @@ type TabState = {
   ref: DocumentRef;
   snapshot?: DocumentSnapshot;
   activeCellId: string;
-  runCellId?: string;
   loading: boolean;
   error: string;
   kernelView?: JupyterKernelView;
   lastSnapshotRetryAt?: number;
-  runSeq?: number;
-  runEvents?: Array<Record<string, unknown>>;
-  runTerminal?: boolean;
-  persistedOutputRetries?: number;
-  writebackPending?: boolean;
-  runSnapshot?: Record<string, unknown>;
-  runStartedAt?: number;
-  runStreamDetail?: "status" | "full";
   loadGeneration?: number;
 };
 
 declare global {
   interface Window {
-    noemaJupyterOpenDocument?: (payload: Partial<DocumentRef> & { cellId?: string; runId?: string }) => void;
+    noemaJupyterOpenDocument?: (payload: Partial<DocumentRef> & { cellId?: string }) => void;
     noemaJupyterOpenView?: (view: "outputs" | "variables" | "manage") => void;
   }
 }
@@ -99,8 +87,6 @@ const removeB3ComponentSystem = installB3ComponentSystem(document.body);
 void loadNoemaAppConfig().catch(() => {});
 
 let currentDocument: TabState | undefined;
-/** Elapsed-time ticker for a visible research run; null while idle. */
-let runClock: number | null = null;
 let statusTimer = 0;
 let refreshTimer = 0;
 let kernelStatusTimer = 0;
@@ -111,8 +97,6 @@ const outputFoldObservers = new WeakMap<HTMLElement, ResizeObserver>();
 const outputFoldDisposalRegistered = new WeakSet<HTMLElement>();
 let dialogOutputDispose: (() => void) | null = null;
 let dialogReturnFocus: HTMLElement | null = null;
-let researchRunSource: EventSource | null = null;
-let researchRunRetry = 0;
 
 const mountWidget: WidgetMountFn = (host, modelId, runtime, messages, widgetOutputs) => {
   (window as Window & { __jupyter_widgets_assets_path__?: string }).__jupyter_widgets_assets_path__ ??=
@@ -182,10 +166,7 @@ function documentParams(tab: TabState, extra: Record<string, unknown> = {}): Rec
   return { ...tab.ref, ...extra };
 }
 
-function isResearchDocument(value: DocumentRef | string | undefined): boolean {
-  const file = typeof value === "string" ? value : value?.scriptFile;
-  return /\.noema$/i.test(text(file));
-}
+
 
 function activeTab(): TabState | undefined {
   return currentDocument;
@@ -196,21 +177,9 @@ function activeCell(tab = activeTab()): CellSnapshot | undefined {
   return tab.snapshot.cells.find((cell) => cell.id === tab.activeCellId) || tab.snapshot.cells[0];
 }
 
-function runCell(tab: TabState): CellSnapshot | undefined {
-  if (tab.runCellId) return tab.snapshot?.cells.find((cell) => cell.id === tab.runCellId);
-  return activeCell(tab);
-}
 
-function persistedOutputRunId(cell: CellSnapshot | undefined): string {
-  for (const output of cell?.outputs || []) {
-    if (!output || typeof output !== "object") continue;
-    const data = (output as { data?: unknown }).data;
-    if (!data || typeof data !== "object") continue;
-    const run = (data as Record<string, unknown>)["application/vnd.noema.run+json"];
-    if (run && typeof run === "object") return text((run as Record<string, unknown>).run_id);
-  }
-  return "";
-}
+
+
 
 function disposeOutputs(): void {
   for (const dispose of outputDisposers) {
@@ -276,57 +245,21 @@ function selectCell(tab: TabState, cellId: string, focus = false): void {
 
 async function loadTab(tab: TabState, reveal = true): Promise<void> {
   const generation = tab.loadGeneration = (tab.loadGeneration || 0) + 1;
-  const requestedRun = tab.ref.runId;
-  const current = () => tab === currentDocument && tab.loadGeneration === generation && tab.ref.runId === requestedRun;
+  const current = () => tab === currentDocument && tab.loadGeneration === generation;
   const previousError = tab.error;
   tab.loading = true;
   tab.error = "";
   if (!tab.snapshot) renderWorkspace();
   try {
-    const liveCell = isResearchDocument(tab.ref) ? runCell(tab) : activeCell(tab);
-    const liveOutputs = liveCell?.outputs;
-    const liveStatus = liveCell?.status;
     const raw = await api.jupyterCell.scriptSnapshot(documentParams(tab));
     if (!current()) return;
     const snapshot = raw as unknown as DocumentSnapshot;
     tab.snapshot = snapshot;
     tab.kernelView = { id: snapshot.document.kernelId, status: snapshot.kernelStatus, stateLost: snapshot.kernelStateLost, lastError: snapshot.kernelError };
     tab.lastSnapshotRetryAt = 0;
-    tab.ref = mergeRunRef(tab.ref, snapshot.document);
+    tab.ref = { ...tab.ref, ...snapshot.document };
     if (!snapshot.cells.some((cell) => cell.id === tab.activeCellId)) {
       tab.activeCellId = snapshot.cells[0]?.id || "";
-    }
-    if (isResearchDocument(tab.ref) && tab.ref.runId) {
-      const cell = runCell(tab);
-      if (tab.runTerminal && persistedOutputRunId(cell) !== tab.ref.runId) {
-        // The terminal Run event is durable before the notebook output write.
-        // Preserve the completed live view while polling the canonical file.
-        if (cell && liveOutputs) {
-          cell.outputs = liveOutputs;
-          cell.status = liveStatus || cell.status;
-        }
-        tab.writebackPending = true;
-        const attempt = tab.persistedOutputRetries || 0;
-        const retryDelays = [250, 500, 1_000, 2_000, 5_000, 10_000, 30_000, 60_000, 300_000];
-        tab.persistedOutputRetries = attempt + 1;
-        window.clearTimeout(refreshTimer);
-        refreshTimer = window.setTimeout(
-          () => void loadTab(tab, false),
-          retryDelays[Math.min(attempt, retryDelays.length - 1)],
-        );
-      } else {
-        tab.persistedOutputRetries = 0;
-        tab.writebackPending = false;
-        if (tab.runTerminal) {
-          // The canonical .noema output now owns the completed view. Drop the
-          // provisional Run projection so rendering matches an ordinary Jupyter
-          // cell after execution finishes.
-          tab.runSnapshot = undefined;
-          tab.runEvents = [];
-        } else {
-          startResearchRunStream(tab);
-        }
-      }
     }
   } catch (error) {
     if (current()) {
@@ -337,8 +270,7 @@ async function loadTab(tab: TabState, reveal = true): Promise<void> {
     if (!current()) return;
     tab.loading = false;
     if (tab.error && tab.snapshot) {
-      // A failed Remote refresh must not replace already visible outputs or
-      // remount widget comms. Keep the last snapshot until a later retry works.
+      // Preserve mounted OutputAreas and widget comms after a Remote failure.
       renderKernelBadge();
       if (tab.error !== previousError) setStatus(`Output refresh unavailable: ${tab.error}`, true);
       return;
@@ -355,21 +287,18 @@ async function loadTab(tab: TabState, reveal = true): Promise<void> {
 
 function normalizeRef(payload: Partial<DocumentRef>): DocumentRef | null {
   const scriptFile = text(payload.scriptFile);
-  if (!scriptFile) return null;
-  const research = isResearchDocument(scriptFile);
+  if (!scriptFile || /\.noema(?:\.ipynb)?$/i.test(scriptFile)) return null;
   return {
     scriptFile,
     sourceFile: text(payload.sourceFile),
     projectRoot: text(payload.projectRoot),
-    language: research ? "" : text(payload.language) || "python",
-    kernel: research ? "" : text(payload.kernel) || "python3",
-    session: research ? "" : text(payload.session) || "default",
-    kernelSpecName: research ? "" : text(payload.kernelSpecName || payload.kernel) || "python3",
+    language: text(payload.language) || "python",
+    kernel: text(payload.kernel) || "python3",
+    session: text(payload.session) || "default",
+    kernelSpecName: text(payload.kernelSpecName || payload.kernel) || "python3",
     kernelId: text(payload.kernelId),
-    sessionName: research ? text(payload.sessionName) : text(payload.sessionName || payload.session) || "default",
+    sessionName: text(payload.sessionName || payload.session) || "default",
     sessionId: text(payload.sessionId),
-    runId: text(payload.runId),
-    agent: text(payload.agent),
   };
 }
 
@@ -379,39 +308,14 @@ function openDocument(payload: Partial<DocumentRef> & { cellId?: string }): void
   window.clearTimeout(refreshTimer);
   let tab = currentDocument?.ref.scriptFile === ref.scriptFile ? currentDocument : undefined;
   if (!tab) {
-    // The output page is a projection of the Emacs-selected document, not a
-    // browser-owned multi-document workspace.
-    stopResearchRunStream();
-    tab = {
-      ref,
-      activeCellId: text(payload.cellId),
-      runCellId: text(payload.cellId),
-      loading: false,
-      error: "",
-      runSeq: 0,
-      runEvents: [],
-    };
+    tab = { ref, activeCellId: text(payload.cellId), loading: false, error: "" };
   } else {
     if (tab.ref.kernel !== ref.kernel || tab.ref.session !== ref.session) {
-      // One document can be rebound to another kernel. Never present the old
-      // runtime's outputs under the newly selected kernel badge.
       tab.snapshot = undefined;
       tab.kernelView = undefined;
       tab.error = "";
     }
-    if (ref.runId && ref.runId !== tab.ref.runId) {
-      stopResearchRunStream();
-      tab.runSeq = 0;
-      tab.runEvents = [];
-      tab.runTerminal = false;
-      tab.persistedOutputRetries = 0;
-      tab.writebackPending = false;
-      tab.runSnapshot = undefined;
-      tab.runStartedAt = undefined;
-      tab.runStreamDetail = undefined;
-      tab.runCellId = text(payload.cellId) || tab.activeCellId;
-    }
-    tab.ref = mergeRunRef(tab.ref, ref);
+    tab.ref = { ...tab.ref, ...ref };
     if (payload.cellId) tab.activeCellId = text(payload.cellId);
   }
   currentDocument = tab;
@@ -423,7 +327,7 @@ function openDocument(payload: Partial<DocumentRef> & { cellId?: string }): void
 async function pollKernelStatus(): Promise<void> {
   const tab = currentDocument;
   if (kernelStatusInFlight || document.hidden || !tab?.snapshot || tab.loading
-      || isResearchDocument(tab.ref) || tab.snapshot.kernelStatus === "no-kernel") return;
+      || tab.snapshot.kernelStatus === "no-kernel") return;
   const { scriptFile, sourceFile, projectRoot, kernel, session } = tab.ref;
   kernelStatusInFlight = true;
   try {
@@ -464,179 +368,25 @@ async function pollKernelStatus(): Promise<void> {
 }
 
 function ensureKernelStatusPolling(): void {
-  if (isResearchDocument(currentDocument?.ref)) {
-    window.clearInterval(kernelStatusTimer);
-    kernelStatusTimer = 0;
-    return;
-  }
   if (kernelStatusTimer) return;
   kernelStatusTimer = window.setInterval(() => void pollKernelStatus(), 5_000);
 }
 
-function stopResearchRunStream(): void {
-  window.clearTimeout(researchRunRetry);
-  researchRunRetry = 0;
-  researchRunSource?.close();
-  researchRunSource = null;
-}
 
-function eventType(event: Record<string, unknown>): string {
-  return text(event.type);
-}
 
-function eventPayload(event: Record<string, unknown>): Record<string, unknown> {
-  return event.payload && typeof event.payload === "object" ? event.payload as Record<string, unknown> : {};
-}
 
-function terminalRunStatus(status: string): boolean {
-  return ["completed", "cancelled", "failed", "interrupted"].includes(status);
-}
 
-function runValue(tab: TabState, key: string): string {
-  const run = tab.runSnapshot?.run;
-  const value = run && typeof run === "object" ? (run as Record<string, unknown>)[key] : undefined;
-  return text(value);
-}
 
-function renderResearchRunStatus(tab: TabState, cell: CellSnapshot, target?: HTMLElement): void {
-  const output = target || cellCard(cell)?.querySelector<HTMLElement>(".noema-jupyter-output");
-  if (!output || !tab.runSnapshot || cell.outputUi?.liveOutput === true) return;
-  output.hidden = false;
-  const status = runValue(tab, "status") || cell.status || "running";
-  const started = Date.parse(runValue(tab, "startedAt")) || tab.runStartedAt || Date.now();
-  tab.runStartedAt ||= started;
-  if (!tab.runTerminal) ensureRunClock();
-  const elapsed = Math.max(0, Math.floor((Date.now() - started) / 1000));
-  const panel = document.createElement("section");
-  panel.className = "noema-research-run-status";
-  const line = document.createElement("div");
-  line.className = "noema-research-run-summary";
-  const spinner = document.createElement("span");
-  spinner.className = "noema-research-run-spinner";
-  spinner.textContent = terminalRunStatus(status) ? "●" : "◌";
-  const summary = document.createElement("strong");
-  summary.textContent = terminalRunStatus(status)
-    ? `${status}${tab.writebackPending ? " · saving output…" : ""}`
-    : `${status} · ${elapsed}s`;
-  line.append(spinner, summary);
-  const meta = document.createElement("div");
-  meta.className = "noema-research-run-meta";
-  meta.textContent = [
-    tab.ref.agent || runValue(tab, "agent"),
-    tab.ref.sessionName || runValue(tab, "sessionName"),
-    tab.ref.sessionId || runValue(tab, "sessionId"),
-  ].filter(Boolean).join(" · ");
-  const actions = document.createElement("div");
-  actions.className = "noema-research-run-actions";
-  actions.append(
-    button("Open Agent", "Open this Session's interactive agent buffer", () => api.emacs.openResearchSession({
-      root: tab.ref.projectRoot || "",
-      runId: tab.ref.runId || runValue(tab, "id"),
-      sessionId: tab.ref.sessionId || runValue(tab, "sessionId"),
-      name: tab.ref.sessionName || runValue(tab, "sessionName"),
-    })),
-    button("Open Source", "Jump to this work cell in Emacs", () => openSource(cell)),
-  );
-  if (!terminalRunStatus(status)) {
-    actions.append(button("Cancel Run", "Cancel this exact durable Run", async () => {
-      const requestedRun = tab.ref.runId;
-      const result = await api.research.cancelRun({
-        root: tab.ref.projectRoot || "",
-        runId: tab.ref.runId || runValue(tab, "id"),
-      });
-      if (tab !== currentDocument || tab.ref.runId !== requestedRun) return;
-      const run = result.run as Record<string, unknown> | undefined;
-      if (run && terminalRunStatus(text(run.status))) {
-        applyResearchRunSnapshot(tab, { run, events: [], seq: tab.runSeq || 0 });
-        setStatus(`Run ${text(run.status)}`);
-      } else {
-        setStatus(result.delivered === false ? "Cancel could not reach the worker; recheck completion" : "Cancelling… checking worker completion", result.delivered === false);
-        window.setTimeout(() => {
-          if (tab === currentDocument && tab.ref.runId === requestedRun && !tab.runTerminal) {
-            void checkResearchCompletion(tab, cell).catch((error) => setStatus(String(error), true));
-          }
-        }, 3500);
-      }
-    }, "is-danger"));
-  }
-  panel.append(line, meta, actions);
-  output.replaceChildren(panel);
-}
 
-function applyResearchRunSnapshot(tab: TabState, snapshot: Record<string, unknown>): void {
-  if (tab !== currentDocument || !runSnapshotMatches(tab.ref.runId, snapshot)) return;
-  tab.runSnapshot = snapshot;
-  const run = snapshot.run && typeof snapshot.run === "object" ? snapshot.run as Record<string, unknown> : {};
-  const incoming = Array.isArray(snapshot.events) ? snapshot.events.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")) : [];
-  if (runCell(tab)?.outputUi?.liveOutput === true) {
-    tab.runEvents = appendRunEvents(tab.runEvents || [], incoming);
-  }
-  tab.runSeq = Math.max(Number(snapshot.seq) || 0, tab.runSeq || 0);
-  const cell = runCell(tab);
-  if (!cell) return;
-  cell.status = text(run.status) || "running";
-  updateCellChrome(cell);
-  if (cell.outputUi?.liveOutput === true) {
-    const content = (tab.runEvents || [])
-      .filter((item) => eventType(item) === "run.content.segment")
-      .map((item) => typeof eventPayload(item).text === "string" ? eventPayload(item).text : "").join("");
-    const activity = (tab.runEvents || []).filter((item) => (
-      eventType(item) === "run.action.updated" || eventType(item).includes("permission")
-    ));
-    const outputs: unknown[] = [];
-    if (content) outputs.push({
-      output_type: "display_data",
-      data: { "text/markdown": content, "text/plain": content },
-      metadata: {},
-    });
-    if (activity.length || !content) outputs.push({
-      output_type: "display_data",
-      data: { "application/vnd.noema.run+json": { ...snapshot, events: tab.runEvents } },
-      metadata: {},
-    });
-    cell.outputs = outputs;
-    const view = ensureCellOutputView(tab, cell);
-    view?.clear();
-    outputs.forEach((output, index) => view?.setOutput(index, output));
-  } else {
-    renderResearchRunStatus(tab, cell);
-  }
-  const terminal = terminalRunStatus(cell.status) && snapshot.hasMore !== true;
-  tab.runTerminal = terminal;
-  if (terminal) {
-    stopResearchRunStream();
-    window.clearTimeout(refreshTimer);
-    refreshTimer = window.setTimeout(() => void loadTab(tab, false), 90);
-  }
-}
 
-function startResearchRunStream(tab: TabState): void {
-  if (tab !== currentDocument || !tab.ref.runId || tab.runTerminal || researchRunSource) return;
-  const detail = runCell(tab)?.outputUi?.liveOutput === true ? "full" : "status";
-  tab.runStreamDetail = detail;
-  const params = new URLSearchParams({
-    root: tab.ref.projectRoot || "",
-    run: tab.ref.runId,
-    after: String(tab.runSeq || 0),
-    detail,
-  });
-  const source = new EventSource(`/api/noema/research/run/stream?${params}`);
-  researchRunSource = source;
-  source.addEventListener("snapshot", (event) => {
-    if (researchRunSource !== source) return;
-    try { applyResearchRunSnapshot(tab, JSON.parse((event as MessageEvent<string>).data)); }
-    catch (error) { setStatus(error instanceof Error ? error.message : "Invalid Run stream snapshot", true); }
-  });
-  source.addEventListener("error", () => {
-    source.close();
-    if (researchRunSource !== source) return;
-    researchRunSource = null;
-    if (tab === currentDocument && !tab.runTerminal) {
-      window.clearTimeout(researchRunRetry);
-      researchRunRetry = window.setTimeout(() => startResearchRunStream(tab), 500);
-    }
-  });
-}
+
+
+
+
+
+
+
+
 
 window.noemaJupyterOpenDocument = openDocument;
 window.noemaJupyterOpenView = () => {
@@ -699,26 +449,11 @@ async function saveOutputUi(tab: TabState, cell: CellSnapshot): Promise<void> {
       cellId: cell.id,
       outputFolded: cell.outputUi?.outputFolded === true,
       outputExpanded: cell.outputUi?.outputExpanded === true,
-      liveOutput: cell.outputUi?.liveOutput === true,
     }));
   } catch {}
 }
 
-async function toggleResearchLiveOutput(tab: TabState, cell: CellSnapshot): Promise<void> {
-  cell.outputUi = { ...cell.outputUi, liveOutput: cell.outputUi?.liveOutput !== true };
-  await saveOutputUi(tab, cell);
-  if (tab.ref.runId && !tab.runTerminal && cell.id === tab.runCellId) {
-    stopResearchRunStream();
-    tab.runSeq = 0;
-    tab.runEvents = [];
-    tab.runSnapshot = undefined;
-    startResearchRunStream(tab);
-  }
-  renderWorkspace();
-  setStatus(cell.outputUi.liveOutput
-    ? "Live output remembered for this cell"
-    : "Live output disabled; showing lightweight Run status");
-}
+
 
 function outputRenderOptions(cell: CellSnapshot) {
   return {
@@ -800,29 +535,7 @@ function closeCellMenu(): void {
   contextMenuEl.replaceChildren();
 }
 
-async function checkResearchCompletion(tab: TabState, cell: CellSnapshot): Promise<void> {
-  const expectedRunId = tab.ref.runId;
-  setStatus("Checking protocol completion and saved output…");
-  const result = await api.research.checkRunCompletion({
-    root: tab.ref.projectRoot || "", file: tab.ref.scriptFile, cellId: cell.id,
-    runId: cell.id === (tab.runCellId || tab.activeCellId) ? tab.ref.runId : undefined,
-  });
-  if (tab !== currentDocument || tab.ref.runId !== expectedRunId) return;
-  const run = result.run as Record<string, unknown> | undefined;
-  if (run && text(run.id)) {
-    if (text(run.id) !== tab.ref.runId) {
-      openDocument({ ...tab.ref, cellId: cell.id, runId: text(run.id), sessionId: text(run.sessionId) });
-    }
-    applyResearchRunSnapshot(tab, { run, events: [], seq: tab.runSeq || 0 });
-  }
-  const writeback = result.result as { error?: string; skipped?: string } | undefined;
-  if (writeback?.error) setStatus(`Run ended; output save failed: ${writeback.error}`, true);
-  else if (writeback?.skipped) setStatus("Run ended; newer Run output preserved");
-  else if (result.detection === "terminal") setStatus(`Run ${text(run?.status)} · output reconciled`);
-  else if (result.detection === "no-run") setStatus("This work cell has no Run to check");
-  else if (result.detection === "worker-unavailable") setStatus("Worker unavailable; cannot confirm completion. Expired leases are marked interrupted, never completed.", true);
-  else setStatus("Completion check sent to worker; waiting for protocol confirmation");
-}
+
 
 /** The page's current non-empty text selection, if any. */
 function pageSelectionText(): string {
@@ -910,14 +623,6 @@ function openCellMenu(tab: TabState, cell: CellSnapshot, x: number, y: number): 
       setStatus(copied ? "Output copied" : text ? "Copy failed" : "No output to copy", !copied && Boolean(text));
     }),
     menuItem("Open Source in Emacs", "Jump to source", () => openSource(cell)),
-    ...(isResearchDocument(tab.ref) ? [
-      menuItem("Recheck Completion", "重新检测结束：核对 ACP 完成回执、Run 状态和输出回写，不重新执行任务", () => checkResearchCompletion(tab, cell)),
-      menuItem(
-        cell.outputUi?.liveOutput ? "Stop Remembering Live Output" : "Remember This Cell · Live Output",
-        "Persist whether this work cell streams provisional output",
-        () => toggleResearchLiveOutput(tab, cell),
-      ),
-    ] : []),
     menuItem("Pop Out Output", "Open full output in a larger window", () => popoutCellOutput(cell)),
     menuItem(cell.outputUi?.outputFolded ? "Show Output" : "Fold Output", "Toggle output visibility (Tab)", () => toggleCellOutput(tab, cell)),
     menuItem(cell.outputUi?.outputExpanded ? "Use Compact Output" : "Show Full Output",
@@ -995,9 +700,7 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
   head.className = "noema-jupyter-cell-header";
   const prompt = document.createElement("span");
   prompt.className = "noema-jupyter-prompt";
-  prompt.textContent = isResearchDocument(tab.ref)
-    ? "Work"
-    : cell.executionCount == null ? "[ ]" : `[${cell.executionCount}]`;
+  prompt.textContent = cell.executionCount == null ? "[ ]" : `[${cell.executionCount}]`;
   const identity = document.createElement("span");
   identity.className = "noema-jupyter-cell-id";
   identity.textContent = cell.id;
@@ -1028,23 +731,16 @@ function renderCell(tab: TabState, cell: CellSnapshot): HTMLElement {
     output.append(empty);
   }
   appendStdinForm(output, cell);
-  if (isResearchDocument(tab.ref) && tab.runSnapshot && cell.id === (tab.runCellId || tab.activeCellId)) {
-    renderResearchRunStatus(tab, cell, output);
-  }
   card.append(head, output);
   return card;
 }
 
 function renderKernelBadge(): void {
   const tab = activeTab();
-  const research = isResearchDocument(tab?.ref);
-  kernelStatusEl.hidden = research;
   const view = tab?.kernelView || (tab?.snapshot
     ? { id: tab.snapshot.document.kernelId, status: tab.snapshot.kernelStatus, stateLost: tab.snapshot.kernelStateLost, lastError: tab.snapshot.kernelError }
     : undefined);
-  const label = research ? "" : tab && view
-    ? jupyterKernelLabel(tab.ref.kernel, tab.ref.session, view)
-    : "No kernel";
+  const label = tab && view ? jupyterKernelLabel(tab.ref.kernel, tab.ref.session, view) : "No kernel";
   if (kernelStatusEl.textContent !== label) kernelStatusEl.textContent = label;
   kernelStatusEl.dataset.status = view?.status || "";
   kernelStatusEl.title = view?.lastError || "";
@@ -1053,11 +749,10 @@ function renderKernelBadge(): void {
 function renderWorkspace(): void {
   disposeOutputs();
   const tab = activeTab();
-  const research = isResearchDocument(tab?.ref);
-  surfaceTitleEl.textContent = research ? "Work Output" : "Jupyter Output";
+  surfaceTitleEl.textContent = "Jupyter Output";
   renderKernelBadge();
   if (!tab) {
-    workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>No output selected</strong><span>Open a work block in Emacs and run it with C-c C-c.</span></div>`;
+    workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>No output selected</strong><span>Run a Jupyter cell in Emacs.</span></div>`;
     return;
   }
   if (tab.loading && !tab.snapshot) {
@@ -1071,7 +766,7 @@ function renderWorkspace(): void {
   }
   const cells = tab.snapshot?.cells || [];
   if (cells.length === 0) {
-    workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>No output yet</strong><span>Run a work block from Emacs.</span></div>`;
+    workspaceEl.innerHTML = `<div class="noema-jupyter-empty"><strong>No output yet</strong><span>Run a Jupyter cell from Emacs.</span></div>`;
     return;
   }
   workspaceEl.replaceChildren(...cells.map((cell) => renderCell(tab, cell)));
@@ -1153,8 +848,7 @@ window.addEventListener("noema:jupyter-cell", (event) => {
     scriptFile?: string;
     file?: string;
     cellId?: string;
-    runId?: string;
-    phase?: string;
+      phase?: string;
     status?: string;
     prompt?: string;
     password?: boolean;
@@ -1232,7 +926,7 @@ window.addEventListener("noema:jupyter-session", (event) => {
   refreshTimer = 0;
   tab.snapshot = snapshot;
   tab.kernelView = { id: snapshot.document.kernelId, status: snapshot.kernelStatus, stateLost: snapshot.kernelStateLost, lastError: snapshot.kernelError };
-  tab.ref = mergeRunRef(tab.ref, snapshot.document);
+  tab.ref = { ...tab.ref, ...snapshot.document };
   if (!snapshot.cells.some((cell) => cell.id === tab.activeCellId)) {
     tab.activeCellId = snapshot.cells[0]?.id || "";
   }
@@ -1260,7 +954,6 @@ const initial = normalizeRef({
   language: query.get("language") || "python",
   kernel: query.get("kernel") || "python3",
   session: query.get("session") || "default",
-  runId: query.get("runId") || "",
 });
 if (initial) {
   openDocument({ ...initial, cellId: query.get("cellId") || "" });
@@ -1269,46 +962,10 @@ if (initial) {
   const tab = activeTab();
   if (tab) {
     void loadTab(tab, false);
-  } else {
-    const notebookId = text(query.get("notebookId"));
-    const cellId = text(query.get("cellId"));
-    if (notebookId && cellId) {
-      setStatus("Resolving research cell…");
-      void api.research.resolveCell({ notebookId, cellId }).then((resolved) => {
-        const scriptFile = text(resolved.file);
-        if (!scriptFile) throw new Error("Research cell resolver returned no notebook file");
-        openDocument({ scriptFile, sourceFile: scriptFile, cellId });
-        setStatus("Research cell opened");
-      }).catch((error) => {
-        setStatus(error instanceof Error ? error.message : "Research cell link failed", true);
-      });
-    }
   }
 }
-// Elapsed time is a local display concern; unchanged server snapshots need
-// neither network traffic nor a replacement output panel.
-// The clock ticks only while a run's status panel is showing, so an idle page
-// takes no timer wake-ups.
-function stopRunClock(): void {
-  if (runClock != null) window.clearInterval(runClock);
-  runClock = null;
-}
-function ensureRunClock(): void {
-  if (runClock != null) return;
-  runClock = window.setInterval(() => {
-    const tab = currentDocument;
-    if (!tab?.runSnapshot || tab.runTerminal || !tab.runStartedAt) { stopRunClock(); return; }
-    const cell = runCell(tab);
-    if (!cell || cell.outputUi?.liveOutput === true) return;
-    const summary = cellCard(cell)?.querySelector(".noema-research-run-summary strong");
-    if (summary) summary.textContent = `${runValue(tab, "status") || cell.status} · ${Math.max(0, Math.floor((Date.now() - tab.runStartedAt) / 1000))}s`;
-  }, 1000);
-}
-
 window.addEventListener("beforeunload", () => {
   window.clearInterval(kernelStatusTimer);
-  stopRunClock();
-  stopResearchRunStream();
   dialogOutputDispose?.();
   disposeOutputs();
   removeB3ComponentSystem();

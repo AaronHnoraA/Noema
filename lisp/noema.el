@@ -2,23 +2,18 @@
 
 ;;; Commentary:
 ;;
-;; Emacs is Noema's product host.  Embedded gptel supplies composition UX;
-;; package-managed agent-shell/acp supplies structured agent sessions; embedded Magent
-;; supplies the local runtime, queue, ledger and optional gptel-backed agent.
+;; Emacs hosts Markdown and real ACP sessions. Pi accompanies Emacs and keeps
+;; one child per project; context and document review do not require gptel.
 
 ;;; Code:
 
-(require 'noema-upstream)
-(require 'tools/agent/compose)
-(require 'tools/agent/acp)
-(require 'noema-api)
-(require 'noema-capability-ui)
+(require 'noema-pi-router)
 
 ;;;###autoload
 (defun noema ()
   "Open the primary Noema structured-agent surface."
   (interactive)
-  (+agent/start 'magent))
+  (noema-pi-router-open default-directory))
 
 (provide 'noema)
 ;;; noema.el ends here

@@ -5,7 +5,8 @@ import { MeasuredWidget } from "./measured-widget.ts";
 import { shortHash } from "./measured-observer.ts";
 import { markEmbeddedSurface } from "../../../embedded-surface.ts";
 import { dispatchConstructEdit } from "../constructs/index.ts";
-import { approvedEdiffMarkdown, ediffActionEdit, scanEdiffBlocks, type EdiffAction, type EdiffBlock } from "../../../../ediff.ts";
+import { approvedEdiffMarkdown, ediffActionEdit, ediffSide, scanEdiffBlocks, EDIFF_FEEDBACK_EVENT, type EdiffAction, type EdiffBlock, type EdiffFeedbackDetail } from "../../../../ediff.ts";
+import { renderMarkdownHTML } from "../../../../render-html.ts";
 
 function button(label: string, title: string, action: () => void): HTMLButtonElement {
   const el = document.createElement("button");
@@ -45,7 +46,7 @@ export class EdiffWidget extends MeasuredWidget {
   protected measureKey(): string { return `ediff:${shortHash(this.source)}`; }
   protected estimatedHeightFallback(): number {
     const changed = this.source.split("\n").filter((line) => /^[+-]/.test(line)).length;
-    return 50 + (changed <= 4 ? changed : 2) * 34;
+    return 105 + Math.min(changed, 4) * 26;
   }
   eq(other: EdiffWidget): boolean {
     return this.from === other.from && this.to === other.to && this.source === other.source;
@@ -76,11 +77,9 @@ export class EdiffWidget extends MeasuredWidget {
     const detailsLabel = hiddenChanges ? `Details (${hiddenChanges} more)` : "Details";
     const counts = document.createElement("small");
     counts.textContent = block
-      ? `−${deletions} +${additions}${block.comments.length ? ` · ${block.comments.length} comments` : ""}`
+      ? `−${deletions} +${additions}${block.comments.length ? ` · ${block.comments.length} comment${block.comments.length === 1 ? "" : "s"}` : ""}`
       : "";
     heading.append(title, counts);
-    const actions = document.createElement("div");
-    actions.className = "noema-ediff-actions";
     const details = button(detailsLabel, "Show line numbers and full context", () => {
       const expanded = root.classList.toggle("noema-ediff-expanded");
       details.textContent = expanded ? "Less" : detailsLabel;
@@ -88,11 +87,12 @@ export class EdiffWidget extends MeasuredWidget {
     });
     details.className = "noema-ediff-details-toggle";
     details.setAttribute("aria-expanded", "false");
-    header.append(heading, details, actions);
+    header.append(heading);
     root.append(header);
 
     const status = document.createElement("div");
     status.className = "noema-ediff-status";
+    status.setAttribute("role", "status");
     root.append(status);
     const report = (message: string): void => {
       status.textContent = message;
@@ -122,11 +122,14 @@ export class EdiffWidget extends MeasuredWidget {
 
     if (block?.rejected) root.classList.add("noema-ediff-rejected");
     if (block?.error) root.classList.add("noema-ediff-invalid");
-    report(block?.error || (block?.rejected ? "Rejected. The original remains in the note for follow-up." : ""));
+    report(block?.error || "");
+
+    const actions = document.createElement("div");
+    actions.className = "noema-ediff-actions";
 
     const accept = button("Accept", "Replace these lines with the proposed lines", () => act("accept"));
     accept.disabled = !!block?.error || view.state.readOnly;
-    const reject = button("Reject", "Keep the original lines and mark this proposal rejected", () => act("reject"));
+    const reject = button(block?.rejected ? "Rejected" : "Reject", "Keep the original lines and mark this proposal rejected", () => act("reject"));
     reject.disabled = !!block?.rejected || view.state.readOnly;
     const comment = button("Comment", "Leave a message on this proposal", () => {
       form.hidden = false;
@@ -138,6 +141,26 @@ export class EdiffWidget extends MeasuredWidget {
       view.focus();
     });
     actions.append(accept, reject, comment, edit);
+
+    const preview = document.createElement("div");
+    preview.className = "noema-ediff-preview";
+    if (block && !block.error) {
+      for (const [side, label] of [["old", "Current"], ["new", "Proposed"]] as const) {
+        const pane = document.createElement("div");
+        pane.className = `noema-ediff-preview-side noema-ediff-preview-${side}`;
+        const caption = document.createElement("div");
+        caption.className = "noema-ediff-preview-label";
+        caption.textContent = label;
+        const body = document.createElement("div");
+        body.className = "noema-ediff-preview-body";
+        const markdown = ediffSide(block, side);
+        if (markdown.trim()) body.innerHTML = renderMarkdownHTML(markdown);
+        else { body.textContent = "No content"; body.classList.add("noema-ediff-empty"); }
+        pane.append(caption, body);
+        preview.append(pane);
+      }
+    }
+    root.append(preview);
 
     const diff = document.createElement("div");
     diff.className = "noema-ediff-diff";
@@ -168,6 +191,26 @@ export class EdiffWidget extends MeasuredWidget {
     }
     root.append(diff);
 
+    const modes = document.createElement("div");
+    modes.className = "noema-ediff-modes";
+    modes.setAttribute("role", "group");
+    modes.setAttribute("aria-label", "Review display");
+    const setMode = (rendered: boolean): void => {
+      preview.hidden = !rendered;
+      diff.hidden = rendered;
+      previewMode.setAttribute("aria-pressed", String(rendered));
+      diffMode.setAttribute("aria-pressed", String(!rendered));
+    };
+    const previewMode = button("Preview", "Compare the rendered Markdown fragments", () => setMode(true));
+    previewMode.disabled = !block || !!block.error;
+    const diffMode = button("Diff", "Inspect exact Markdown lines", () => setMode(false));
+    modes.append(previewMode, diffMode);
+    const display = document.createElement("div");
+    display.className = "noema-ediff-display";
+    display.append(modes, details);
+    header.append(display);
+    setMode(!!block && !block.error);
+
     if (block?.comments.length) {
       const comments = document.createElement("div");
       comments.className = "noema-ediff-comments";
@@ -178,6 +221,29 @@ export class EdiffWidget extends MeasuredWidget {
       }
       root.append(comments);
     }
+
+    if (block && (block.comments.length || block.rejected)) {
+      const feedback = button("Send feedback", "Send this proposal and its saved feedback to an Emacs agent session", () => {
+        const fresh = current();
+        if (!fresh) return;
+        const { from, end: to } = fresh.block;
+        const detail: EdiffFeedbackDetail = { from, to, source: fresh.source.slice(from, to) };
+        const unhandled = root.dispatchEvent(new CustomEvent<EdiffFeedbackDetail>(EDIFF_FEEDBACK_EVENT, {
+          bubbles: true, cancelable: true, detail,
+        }));
+        if (unhandled) report("Open this note in Noema to send its feedback to an agent.");
+      });
+      feedback.disabled = view.state.readOnly;
+      actions.append(feedback);
+    }
+
+    const footer = document.createElement("div");
+    footer.className = "noema-ediff-footer";
+    const state = document.createElement("span");
+    state.className = "noema-ediff-state";
+    state.textContent = block?.rejected ? "Original kept" : "Awaiting review";
+    footer.append(state, actions);
+    root.append(footer);
 
     const form = document.createElement("div");
     form.className = "noema-ediff-comment-form";

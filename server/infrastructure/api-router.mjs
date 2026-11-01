@@ -29,6 +29,13 @@ export class ApiRouter {
     return [...this.#handlers.keys()];
   }
 
+  describe(channel) {
+    const handler = this.#handlers.get(String(channel || ""));
+    if (!handler) throw Object.assign(new Error(`Unknown API channel: ${channel}`), { statusCode: 404 });
+    return { channel, arguments: "Positional JSON array, in the handler's parameter order.",
+      ...handler.apiDoc, implementation: handler.apiDoc?.implementation || handler.toString() };
+  }
+
   async call(channel, args = []) {
     const name = String(channel || "");
     const handler = this.#handlers.get(name);

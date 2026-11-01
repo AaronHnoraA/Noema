@@ -11,6 +11,9 @@ import { ediffSide, scanEdiffBlocks } from "../shared/ediff-source.mjs";
 
 export type EdiffAction = "accept" | "reject" | "comment";
 
+export const EDIFF_FEEDBACK_EVENT = "noema:ediff-feedback";
+export interface EdiffFeedbackDetail { from: number; to: number; source: string }
+
 /** Compute one exact source edit; both editor surfaces can apply it atomically. */
 export function ediffActionEdit(
   source: string, from: number, action: EdiffAction, message = "",

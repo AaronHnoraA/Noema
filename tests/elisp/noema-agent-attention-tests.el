@@ -29,8 +29,8 @@ notification bodies sent."
                     (cl-function
                      (lambda (&key buffer event callback)
                        (push (list buffer event callback) callbacks))))
-                   ((symbol-function 'get-buffer-window)
-                    (lambda (&rest _) (and (funcall (lambda () ,(car spec))) 'window)))
+                   ((symbol-function 'get-buffer-window-list)
+                    (lambda (&rest _) (and (funcall (lambda () ,(car spec))) (list (selected-window)))))
                    ((symbol-function 'frame-focus-state)
                     (lambda (&rest _) ,(cadr spec))))
            (with-current-buffer session

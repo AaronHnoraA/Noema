@@ -13,6 +13,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'noema-research)
+(require 'noema-api)
 
 (declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
 (declare-function magent-llm-request-create "magent-llm" (&rest args))
@@ -20,12 +21,10 @@
 (declare-function magent-llm-event-text "magent-llm" (event))
 (declare-function magent-llm-event-message "magent-llm" (event))
 (declare-function magent-llm-gptel-sample "magent-llm-gptel" (request))
-(declare-function noema-research-mode--sync "noema-research-mode" ())
-(declare-function noema-research--cell-at-point "noema-research-mode" ())
-(declare-function noema-research--graph-anchor "noema-research-mode" (cell))
-(declare-function noema-research--scan "noema-research-mode" ())
-(defvar noema-research--document)
-(defvar noema-research--revision)
+
+
+
+
 
 (defconst noema-research-synthesis-kinds
   '("cell.create" "finding.create" "research_ir.create" "problem_model.create" "task.create")
@@ -163,32 +162,9 @@ CLIENT-REQUEST-ID makes retries idempotent.  PARENT-ID anchors cell lineage."
       (proposedBy . "agent:magent:curator")
       (sourceAdapter . "magent/gptel"))))
 
-(defun noema-research-synthesis--context-at-point ()
-  "Return the active region or current research cell source as plain text."
-  (if (use-region-p)
-      (buffer-substring-no-properties (region-beginning) (region-end))
-    (let ((cell (noema-research--cell-at-point)))
-      (if cell (noema-research-cell-source cell) ""))))
 
-(defun noema-research-synthesis--local-context-p (document)
-  "Return non-nil when the selected context in DOCUMENT is local-only."
-  (if (use-region-p)
-      (let ((begin (region-beginning))
-            (end (region-end)))
-        (seq-some
-         (lambda (entry)
-           (and (< (plist-get entry :header-beg) end)
-                (> (plist-get entry :block-end) begin)
-                (equal (noema-research-work-node-field
-                        (noema-research-work-node-for-cell
-                         document (noema-research-find-cell document (plist-get entry :id)))
-                        "disclosure")
-                       "local_only")))
-         (noema-research--scan)))
-    (when-let* ((cell (noema-research--cell-at-point)))
-      (equal (noema-research-work-node-field
-              (noema-research-work-node-for-cell document cell) "disclosure")
-             "local_only"))))
+
+
 
 (defun noema-research-synthesis--prompt (kind context)
   "Return the user prompt for Proposal KIND and untrusted CONTEXT."
@@ -197,90 +173,7 @@ CLIENT-REQUEST-ID makes retries idempotent.  PARENT-ID anchors cell lineage."
                   "<UNTRUSTED_RESEARCH_DATA>\n%s\n</UNTRUSTED_RESEARCH_DATA>")
           kind (noema-research-synthesis--bounded-context context)))
 
-;;;###autoload
-(defun noema-research-propose-with-magent (kind)
-  "Ask Magent for one tool-free pending Proposal of KIND.
-The current notebook must be saved.  This command never accepts a Proposal or
-writes a notebook cell."
-  (interactive (list (completing-read "Proposal kind: "
-                                      noema-research-synthesis-kinds nil t nil nil
-                                      "cell.create")))
-  (unless (derived-mode-p 'noema-research-mode)
-    (user-error "Not in a research notebook"))
-  (unless (and buffer-file-name noema-research--revision (not (buffer-modified-p)))
-    (user-error "Save the research notebook before requesting a Proposal"))
-  (unless (fboundp '+noema-api-call)
-    (user-error "Noema web-host integration is unavailable"))
-  (require 'magent-llm)
-  (require 'magent-llm-gptel)
-  (let* ((source-buffer (current-buffer))
-         (document (noema-research-mode--sync))
-         (file (expand-file-name buffer-file-name))
-         (revision noema-research--revision)
-         (cell (noema-research--cell-at-point))
-         (parent-id (and cell (noema-research--graph-anchor cell)))
-         (context (noema-research-synthesis--context-at-point))
-         (client-request-id
-          (concat "magent:" (secure-hash 'sha256
-                                          (format "%s:%s:%s:%s" kind file revision
-                                                  (noema-research--uuidv7)))))
-         chunks terminal)
-    (when (noema-research-synthesis--local-context-p document)
-      (user-error "local_only research text cannot be sent to a model adapter"))
-    (message "Magent is drafting a pending %s Proposal…" kind)
-    (magent-llm-gptel-sample
-     (magent-llm-request-create
-      :prompt (noema-research-synthesis--prompt kind context)
-      :system noema-research-synthesis--system
-      :tools nil
-      :stream t
-      :metadata '(:disable-provider-tools t :temperature 0)
-      :callback
-      (lambda (event)
-        (pcase (magent-llm-event-type event)
-          ('text-delta
-           (push (or (magent-llm-event-text event) "") chunks))
-          ('tool-call
-           (unless terminal
-             (setq terminal t)
-             (message "Magent Proposal rejected: tool calls are not permitted")))
-          ('error
-           (unless terminal
-             (setq terminal t)
-             (message "Magent Proposal failed: %s"
-                      (or (magent-llm-event-message event) "sampling failed"))))
-          ('completed
-           (unless terminal
-             (setq terminal t)
-             (condition-case error-object
-                 (progn
-                   (unless (and (buffer-live-p source-buffer)
-                                (with-current-buffer source-buffer
-                                  (and (equal (expand-file-name buffer-file-name) file)
-                                       (equal noema-research--revision revision)
-                                       (not (buffer-modified-p)))))
-                     (user-error "Notebook changed while Magent was drafting; Proposal discarded"))
-                   (let* ((text (or (noema-research--string
-                                     (magent-llm-event-text event))
-                                    (apply #'concat (nreverse chunks))))
-                          (model (noema-research-synthesis--parse-model-json text))
-                          (body (noema-research-synthesis--build-request
-                                 kind model document file revision client-request-id parent-id)))
-                     (+noema-api-call
-                      "noema:api:research:proposal:create"
-                      (vector body)
-                      (lambda (result error-response)
-                        (if error-response
-                            (message "Noema Proposal creation failed: %s"
-                                     (or (and (hash-table-p error-response)
-                                              (gethash "message" error-response))
-                                         error-response))
-                          (let ((proposal (noema-research--get result "proposal")))
-                            (message "Pending Proposal created: %s"
-                                     (or (noema-research--get proposal "id") "unknown"))))))))
-               (error
-                (message "Magent Proposal discarded: %s"
-                         (error-message-string error-object))))))))))))
+
 
 (provide 'noema-research-synthesis)
 ;;; noema-research-synthesis.el ends here

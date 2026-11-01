@@ -29,12 +29,6 @@ describe("Noema Jupyter MIME stack", () => {
     expect(source).toContain("addJsonMimeFactory(rendermime, mimeType, 125)");
   });
 
-  test("gives Noema Run snapshots a safe read-only renderer", () => {
-    expect(source).toContain('NOEMA_RUN_MIMETYPE = "application/vnd.noema.run+json"');
-    expect(source).toContain("class NoemaRunRenderer");
-    expect(source).toContain('this.node.setAttribute("aria-readonly", "true")');
-    expect(source).toContain("event?.type === \"run.content.segment\"");
-  });
 
   test("exposes an incremental OutputArea model instead of recreating its DOM", () => {
     expect(source).toContain("export type JupyterOutputView");

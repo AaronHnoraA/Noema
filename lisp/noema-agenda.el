@@ -9,10 +9,10 @@
 
 (declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
 (declare-function +noema--ensure-server "noema/bridge/config" (callback))
-(declare-function noema-open-node "noema-api" (node))
-(declare-function noema-research-graph-buffer "noema-research-graph" (&optional source))
-(declare-function noema-research-graph-pop-buffer "noema-research-graph" (graph))
-(declare-function noema-research-graph-select "noema-research-graph" (id))
+
+
+
+
 (defvar org-time-was-given) ; dynamically scoped output of org-read-date
 (defvar org-read-date-minibuffer-local-map)
 (autoload 'noema-agenda-capture-menu "noema-agenda-capture" nil t)
@@ -788,14 +788,7 @@ With a prefix argument, choose a target file; otherwise use the scope inbox.md."
   (let ((request (cl-incf noema-agenda--visit-request)))
     (pop-to-buffer (find-file-noselect (noema-agenda--get record 'file)))
     (if (equal (noema-agenda--get record 'sourceKind) "work-node")
-        (if (noema-agenda--list (noema-agenda--get record 'cellIds))
-            (progn (require 'noema-api)
-                   (noema-open-node (noema-agenda--get record 'workNodeId)))
-          (require 'noema-research-graph)
-          (let ((graph (noema-research-graph-buffer (current-buffer))))
-            (noema-research-graph-pop-buffer graph)
-            (with-current-buffer graph
-              (noema-research-graph-select (noema-agenda--get record 'workNodeId)))))
+        (message "Opened the legacy work document as source")
       (let ((buffer (current-buffer)) (window (selected-window))
             (file buffer-file-name) (tick (buffer-chars-modified-tick))
             (content (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max)))))

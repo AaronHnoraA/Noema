@@ -126,13 +126,17 @@ const METHODS = Object.freeze({
 export function createResearchApiHandlers(service) {
   return Object.fromEntries(Object.entries(METHODS).map(([channel, method]) => [
     `${PREFIX}:${channel}`,
-    async (body) => ({
+    Object.assign(async (body) => ({
       type: "research",
       ok: true,
       ...(await service[method]({
         ...(body && typeof body === "object" && !Array.isArray(body) ? body : {}),
         ...(channel.startsWith("capability:global:") ? { scope: "global" } : {}),
       })),
-    }),
+    }), { apiDoc: {
+      description: `Research ${channel}; delegates to ${method}. Existing Project, workstream, lease and permission checks apply.`,
+      parameters: ["body: JSON object"],
+      implementation: service[method]?.toString(),
+    } }),
   ]));
 }

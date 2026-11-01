@@ -22,12 +22,11 @@
 (declare-function noema-research-attention "noema-research-inspector" (&optional origin))
 (declare-function +noema/agenda "noema/bridge/config" (&optional query))
 (declare-function +noema/workspace-graph "noema/bridge/config" ())
-(declare-function noema-research-goto-cell "noema-research-mode" (id))
-(declare-function noema-research-workflow-preview "noema-research-workflow" (kind file title))
+
+
 (declare-function noema-history-search "noema-history-search" (&optional directory query))
 (declare-function noema-findings "noema-findings" (&optional directory))
 
-(autoload 'noema-research-workflow-preview "noema-research-workflow" nil t)
 (autoload 'noema-history-search "noema-history-search" nil t)
 (autoload 'noema-findings "noema-findings" nil t)
 
@@ -73,8 +72,7 @@
        (if error-object
            (message "Noema: %s" (noema-project-overview--field error-object "message" "Unable to resolve Run"))
          (when-let* ((file (noema-project-overview--field result "file")))
-           (find-file file)
-           (noema-research-goto-cell cell-id)))))))
+           (find-file file)))))))
 
 (defun noema-project-overview--render-summary (responses)
   "Insert the project summary from RESPONSES."
@@ -132,11 +130,6 @@
     (insert "   ")
     (noema-project-overview--button "Agenda" (lambda () (noema-project-overview--open
                                                             (lambda () (+noema/agenda)))))
-    (insert "   ")
-    (noema-project-overview--button "New workflow" (lambda ()
-                                                        (noema-project-overview--open
-                                                         (lambda () (call-interactively
-                                                                     #'noema-research-workflow-preview)))))
     (insert "   ")
     (noema-project-overview--button "History search" (lambda ()
                                                           (noema-project-overview--open

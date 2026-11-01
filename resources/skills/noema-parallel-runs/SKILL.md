@@ -1,6 +1,6 @@
 ---
 name: noema-parallel-runs
-description: Work safely while other Noema Runs execute in the same workspace — stay inside the files your work block is about, never undo edits you did not make, stop a failing loop early, and hand back a report the person can act on. Use whenever a Noema Run may overlap with other Runs.
+description: "Coordinate overlapping Noema Agent Runs in one project workspace: define write ownership, preserve other edits, handle contested paths and report verifiable results. Use when project Runs share files; it does not require a .noema work document."
 ---
 
 # Parallel Runs in one workspace
@@ -24,9 +24,9 @@ left a broken tree, reverts that destroyed another agent's work.
 
 ## What remains yours
 
-**Keep to your block's files.** Before editing, name the files the work
-block is about. Reading anything is fine; writing outside that set needs a
-reason you state in the conversation. A multi-file restructuring is one unit:
+**Keep to your assigned files.** Before editing, name the task's write scope.
+Read the necessary shared inputs; coordinate a scope change with the managing
+Agent when another task owns the destination. A multi-file restructuring is one unit:
 do all of it or none of it, never leave an import pointing at a file you
 have not created yet.
 
@@ -45,9 +45,11 @@ happens.
 **Report so the person can act.** End with: the files you changed, the
 commands you ran and their results, what is unfinished, and anything you
 needed but did not touch. "Tests pass" is not a report; `go test ./x/...: ok`
-is. When you report the WorkNode you own, the `noema-work-dag` rules apply.
+is. Return results to the managing Agent for integration and verification.
 
 ## Boundaries
 
-This Skill is about sharing a workspace. It gives no authority: approvals,
-structure changes and WorkNode state keep their own paths.
+This Skill is about sharing a workspace. The installed runtime owns leases,
+permissions and Session state; these instructions do not simulate those
+mechanisms when they are unavailable. For project context and handoffs, use
+`project-agent-management` when installed.

@@ -240,6 +240,7 @@ import { openWikiGitUi, stopAllWikiGitUis } from "./server/lib/wiki-git-ui.mjs";
 import { knowledgeSearchResponse } from "./server/lib/knowledge-search.mjs";
 import { virtualReferencesPayload } from "./server/lib/virtual-references.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
+import { createAgentApiHandlers } from "./server/Features/Agent/api.mjs";
 import { readJson, readText } from "./server/infrastructure/http-body.mjs";
 import { foreignPage } from "./server/infrastructure/local-boundary.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
@@ -2835,6 +2836,8 @@ const apiRouter = new ApiRouter().register({
     apiEmacsUiState,
     apiEmacsKey,
     apiEmacsSelection,
+    apiPi: (body) => gatewayRequest("noema.pi", body || {}, 30_000),
+    apiAgent: (body) => gatewayRequest("noema.agent", body || {}, 30_000),
     apiSystemOpen,
     apiEmacsZotero,
     apiChooseNotePath,
@@ -2933,6 +2936,10 @@ async function callApi(channel, args = []) {
   }
   return await apiRouter.call(channel, args);
 }
+
+// The local Agent surface discovers the live registry and reuses the same
+// dispatch/save/notification path as pages. Server mode retains its allowlist.
+if (hostMode !== "server") apiRouter.register(createAgentApiHandlers({ router: apiRouter, call: callApi }), "Agent");
 
 async function handleEmacsCommand(body = {}) {
   if (body.type === "command" || body.command) {

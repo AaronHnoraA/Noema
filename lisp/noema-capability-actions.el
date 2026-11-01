@@ -25,8 +25,8 @@
 (declare-function noema-capability-ui-refresh "noema-capability-ui" ())
 (declare-function noema-capability-ui--show-error "noema-capability-ui" (error-object))
 (declare-function noema-capability-ui--after-mutation "noema-capability-ui" (buffer result error-object))
-(declare-function noema-research--entry-at-point "noema-research-mode" (&optional entries))
-(declare-function noema-research--require-cell "noema-research-mode" ())
+
+
 (declare-function portal--terminal-paste "portal-terminal" (target text &optional enter))
 (defvar portal-view--target)
 
@@ -349,7 +349,6 @@ No request is sent until the user reviews the draft and presses RET."
    ["Selection / MCP"
     ("e" "Enable" noema-capability-ui-enable)
     ("d" "Disable" noema-capability-ui-disable)
-    ("u" "Use @@skill / @@pack" noema-capability-ui-insert-skill)
     ("E" "Edit MCP" noema-capability-ui-edit-mcp)
     ("t" "Test MCP" noema-capability-ui-probe-mcp)
     ("l" "Test details" noema-capability-ui-probe-details)]]
@@ -361,42 +360,7 @@ No request is sent until the user reviews the draft and presses RET."
     ("L" "Linked libraries" noema-capability-ui-libraries)
     ("U" "Upstream versions" noema-skill-upstream)]] )
 
-(defun noema-capability-ui-insert-skill ()
-  "Insert the selected Skill into the work block that opened this manager."
-  (interactive)
-  (let* ((record (noema-capability-ui--record-at-point))
-         (origin noema-capability-ui--origin)
-         (manager-window (get-buffer-window (current-buffer) (selected-frame)))
-         (id (noema--value record "id")))
-    (unless (member (noema--value record "type") '("skill" "pack")) (user-error "Select a Skill or pack"))
-    (unless (eq t (noema--value record "selectable"))
-      (user-error "This %s is disabled or invalid; inspect or enable it first" (noema--value record "type")))
-    (unless (and (markerp origin) (marker-buffer origin))
-      (user-error "Open the manager from the destination JuText work block"))
-    (with-current-buffer (marker-buffer origin)
-      (goto-char origin)
-      (let* ((cell (noema-research--require-cell))
-             (entry (noema-research--entry-at-point))
-             (directive (format "@@%s(%s)" (noema--value record "type") id)))
-	(unless (equal (noema-research-cell-kind cell (noema-current-document)) "work")
-          (user-error "Skills can only be inserted into a work block"))
-	(goto-char (1+ (plist-get entry :header-end)))
-	(let ((start (point)) found seen)
-          (while (and (< (point) (plist-get entry :block-end))
-                      (or (looking-at "@@\\(?:agent\\|session\\|ctx\\|skill\\|pack\\)([^)\n]+)[ \t]*$")
-                          (and seen (looking-at "[ \t]*$"))))
-            (when (looking-at (concat (regexp-quote directive) "[ \t]*$")) (setq found t))
-            (setq seen t)
-            (forward-line 1))
-          (unless found
-            (goto-char start)
-            (atomic-change-group (insert directive "\n")))
-          (message "Noema: %s %s" (if found "Already uses" "Inserted") id))))
-    ;; Finish the temporary manager display before returning to JuText.
-    ;; `pop-to-buffer' alone leaves the manager covering its previous buffer.
-    (when (window-live-p manager-window)
-      (quit-window nil manager-window))
-    (pop-to-buffer (marker-buffer origin))))
+
 
 (defun noema-capability-ui-add ()
   "Add a Skill or MCP in the current manager view."

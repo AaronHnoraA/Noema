@@ -19,12 +19,17 @@ Skills for developing this code (`noema-development`, `rendered-construct`)
 live beside those docs in `../../.agents/skills/`; `.claude/skills` here links
 to that directory.
 
-The design authority is `/Users/hc/Desktop/]/DESIGN.md` v1.8, interpreted with
-`AI-Docs/assignment-walkthrough.md` as the primary `.noema` workflow.
-`DECISIONS.md` D-023 supersedes the former `.noema` Jupyter/code/Result model;
+The Markdown-first workflow is documented in `../../docs/noema/` and
+`../../docs/design/pi-sessions.md`. The former design authority
+`/Users/hc/Desktop/]/DESIGN.md` v1.8 and `AI-Docs/assignment-walkthrough.md`
+describe retained `.noema` data contracts, not an active authoring interface.
+`DECISIONS.md` D-023 supersedes the older `.noema` Jupyter/code/Result model;
 D-016/D-021/D-022 still govern hosting and the AI integration boundary.
 
 ## D-023 work documents
+
+These are compatibility and service contracts for existing data. The dedicated
+editor is retired; new tasks use Markdown, AGENTS.md and `.agent/` guidance.
 
 - `.noema` is an AI prompt and workflow document stored as nbformat 4.5 JSON.
   It has no kernel metadata and must never enter a Jupyter kernel path.
@@ -45,27 +50,24 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   plan must never reach the document, so do not materialize its cells one
   call at a time. `cell.create` remains the single-block form.
 - A Run may report the state of the WorkNode it owns, and nothing else. The
-  `research_state` MCP tool does not apply that report: it records a durable
-  `worknode.state` coordinator request, and Emacs claims it and applies it
-  through the same validated, undoable structure transaction a person's edit
-  uses. Keep it that way — the document has exactly one authority, and the
-  kernel is not it. Structure changes (new nodes, new edges) remain
-  Proposals. Agent tool activity schedules the claim, so a Run's bookkeeping
-  does not wait for Pi.
+  `research_state` MCP tool records a durable `worknode.state` coordinator
+  request. The former JuText editor consumer is retired: Emacs acknowledges
+  these requests as not applied rather than silently reporting success. The
+  kernel does not become a replacement document writer. Structure proposals,
+  validation, records and evidence remain available to explicit clients.
 - **Refuse, warn, or leave to judgement.** Structural corruption is refused:
   cycles, unknown states, duplicate ids, a Run reporting on a node it does not
   own, a plan materialized in halves. An unsupported *claim* is a different
   thing and is only warned about — `done` with no Run and no outcome, a `done`
   node whose last Run failed, a `done` node above a `regressed` one, an
   `active` node with no Run. Warnings go through the `:warnings` channel of
-  `noema-research-validate`, which `noema-research-structure-edit` never
-  diffs, so a notice can never become a gate. Modelling judgement — whether a
+  `noema-research-validate`, and remain advisory, so a notice never becomes an edit gate. Modelling judgement — whether a
   block is a unit of work, whether an edge really means "uses" — is neither,
   and belongs in a Skill. When adding a check, decide which of the three it is
   first; a timing rule enforced as a refusal teaches people to lie to the
   system.
 - **Two projections, two meanings of focus.** `noema-research-projection'
-  (Emacs, drives the Graph Board) keeps only the focus and its descendants;
+  (retained pure Emacs projection) keeps only the focus and its descendants;
   `researchGraphProjection` (Node, rides on every notebook snapshot for the
   web surface) also keeps the focus's ancestors and siblings. Both are
   asserted by tests. This is a product decision nobody has made, not a bug to
@@ -121,14 +123,11 @@ D-016/D-021/D-022 still govern hosting and the AI integration boundary.
   reported to the person (`similarFindings`, `reports.similar`); the only
   identity the system acts on stays exact (`semantic_sha256`, the canonical
   title). Do not turn a similarity score into a refusal or an automatic merge.
-- **Recorded is not applied.** `research_state` writes a durable request; the
-  editor applies it. Say so in the result and give the agent
-  `{action: "status"}` to find out, rather than letting it assume the document
-  changed.
-- `regressed` is never a lone node property. Every path that sets it goes
-  through `noema-research-op-set-state`, which delegates to
-  `noema-research-op-set-regressed` so the state always carries to the `done`
-  work below it. Do not add a second way to set it.
+- **Recorded is not applied.** `research_state` writes a durable request.
+  The former editor consumer is retired; it now reports failure without
+  claiming to have changed source. Explicit API clients retain model operations.
+- `regressed` carries evidence and propagates through completed downstream work
+  in the retained model; do not add a separate prompt-only state mechanism.
 - Ordinary `.ipynb` and Markdown `@@cell` sidecars keep full Jupyter support.
 
 
@@ -214,28 +213,33 @@ tree is a navigation view, not a WorkNode DAG or authoritative `parentName`.
 The optional bounded hidden-render adapter is `../../lisp/tools/agent/render.el`,
 owned by the ACP boundary. Run its contract tests when upgrading the group.
 
-Noema product entry points and adapters live under `lisp/`. gptel owns the
-composition/context/rewrite UI, agent-shell + acp.el own structured process and
-session interaction, and Magent supplies its local agent/queue/ledger/gptel
-adapter. `tools/agent/acp` is the sole research/runtime coupling boundary
-to agent-shell/acp implementation details.
+Noema product entry points and adapters live under `lisp/`. Emacs Agent owns
+selection, reference delivery, session interaction and management. Noema's
+context, prompt-document and review actions do not depend on gptel. The separate
+Magent sampling adapter retains its own backend. `tools/agent/acp` is the sole
+runtime boundary to agent-shell/acp implementation details.
 
-`tools/agent/context` hands editor context to one chosen live session. It reuses
-gptel's selection whole -- the `gptel-context' variable, its region overlays
-and its `*gptel-context*' review buffer -- so there is one selection, not two.
-What it sends is always a reference: a `path:START-END' line in the prompt
-text plus one `resource_link' block per file. Do not add an embedded
-`resource' or inlined file text to this path; the point is that attaching a
-file costs a line rather than a copy. Reach agent-shell internals only through
-`+agent-acp-file-uri', `-file-metadata' and `-enqueue'.
+`tools/agent/selection` tracks editor files and regions; `tools/agent/context`
+sends references to a live session. Send `path:START-END` and one resource_link
+per file, not embedded file text. Noema review uses the versioned document API.
+Initialize only a short capability entry once per native Session, then disclose
+API names, one operation's contract and relevant Skills on demand.
+The Emacs companion Pi manages one project child per explicitly entered local
+project. Pi owns its session metadata/history pointers and must not be promoted
+into Research sessions. Shared ACP still owns the physical clients. Native
+initialization does not imply saved history; only provider-confirmed history
+becomes a persistent reference. A failed restore never creates a new session.
+Prompt authoring reuses ordinary Markdown through a Skill; do not build another
+Compose frontend. Provider history and human decisions retain authority.
 
-Every agent session is registered per project by `+agent-acp-adopt',
+Every physical agent session is registered per project by `+agent-acp-adopt',
 whatever started it: a Run, the popup pool, `+agent/start' or a bare
 `M-x agent-shell'. `+agent-acp-start' records the entry point as
 `:origin'. Root resolution (`+agent-acp-project-root') is a query and
 must stay one: registering a session never creates a Project. A project
-that already has one also gets a durable `session:promote' + `session:name:bind';
-elsewhere the session is listed from Emacs alone.
+that already has one also gets a durable `session:promote' + `session:name:bind'
+for ordinary task Agents; Pi is explicitly excluded. Elsewhere the session is
+listed from Emacs alone.
 
 ## Agent lifecycle and attention (adopted from Pisper, 2026-09-28)
 
@@ -274,7 +278,7 @@ See `../../docs/noema/records/audits/pisper-agent-lifecycle-study-2026-09.md` fo
 Skills live in two places, and the split is about versioning, not taste:
 
 - `resources/skills/` — Skills that describe **Noema's own mechanisms**
-  (`noema-work-dag`, `noema-elisp-api`). They ship with the code because they
+  (`noema-elisp-api`, `noema-parallel-runs`). They ship with the code because they
   are only correct for the code they ship with.
 - `<NOEMA_ROOT>/public/README/Skills/skills/` — the growable library, wired
   through `NOEMA_GLOBAL_SKILLS` (defaulted by `+noema-skills-directory` in
@@ -293,12 +297,14 @@ taxes every Run, and over ~8 KiB the resolver says so. Keep the rules a
 mechanism now carries *out* of the Skill; a Skill that repeats what the system
 enforces gives two sources of truth for one rule.
 
-JuText `@@skill` candidates come only from the project's effective selectable
-Skill records. Its Company backend keeps directive completion separate from
-prose and manual Yasnippet templates, including while the capability request
-is pending. `.noema` has no language server; Flymake projects the existing
-document validator onto cell headers. RaTeX previews math in JuText prose,
-excluding control lines and fenced or inline code.
+The `.noema`-specific JuText editor, directive Company/CAPF, Flymake,
+Graph Board, settings/templates and Work Output adaptations are retired.
+Preserve ordinary notebook source projection, Jupyter outputs, Markdown
+`@@cell`, generic Company/LSP and RaTeX. Existing work-document data is kept;
+visiting it does not initialize a Project or start an Agent/kernel.
+Project Agent guidance, Emacs operations and Markdown authoring are separated
+into `noema-project`, `noema-emacs` and `noema-md` packs. Skills describe
+workflow; existing services retain their deterministic mechanisms.
 
 ## Two MCP surfaces
 
@@ -320,8 +326,7 @@ that disabled `noema` meant all of it.
 ## Host and compatibility
 
 `noema/bridge/config.el` owns the CM6 xwidget/Appine lifecycle, header line, buffer
-integration, gateway, and every `+noema-*` entry point. Graph Board, JuText,
-Inspector, approvals and project navigation are composed by Emacs. CM6
+integration, gateway, and every `+noema-*` entry point. Attention, approvals and project navigation are composed by Emacs. CM6
 Markdown, private Wiki/Graph, Agenda/Config and Jupyter output retain their
 Web implementations as Emacs-hosted surfaces; do not delete or downgrade them,
 and do not add a parallel browser or desktop workflow product.
@@ -402,5 +407,6 @@ Also run `go test -tags fts5 ./...` from `kernel/` and AaronEmacs's
 `make research-test` and `make jupyter-test`. Verify `NOEMA_HOST_MODE=desktop` cannot select a desktop runtime, no
 Electron package/build/install entry remains, the headless host defaults to
 Emacs mode, and `.noema` kernel operations fail before a process is created.
-A usable demo must open through Emacs, stream an Agent Run into the right-side
-OutputArea, persist the latest work output and preserve the exact WorkNode DAG.
+Verify the project Agent, context/memory and retained model paths separately
+from ordinary Jupyter output. The retired work-document UI must not be
+required to open a project, select a Skill or use a native notebook.

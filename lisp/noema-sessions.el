@@ -25,15 +25,12 @@
 (declare-function +noema--api-call-sync "noema/bridge/config" (channel args &optional timeout))
 (declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
 (declare-function noema-pi-router-open "noema-pi-router" (&optional directory))
-(declare-function noema-research-pin-session "noema-research-mode" (name))
-(declare-function noema-research-rename-session-directives "noema-research-mode" (old new))
-(declare-function noema-research-goto-cell "noema-research-mode" (id))
-(defvar noema-research--document)
+
+
+
 (defvar +noema--ready)
 
 (defvar-local noema-sessions--root nil "Project root listed in this buffer.")
-(defvar-local noema-sessions--scope 'project "Either `project' or `file'.")
-(defvar-local noema-sessions--source nil "JuText buffer the list was opened from.")
 (defvar-local noema-sessions--names nil "Session name objects currently shown.")
 (defvar-local noema-sessions--local nil
   "Live agent sessions of this project with no durable registry record.
@@ -243,82 +240,34 @@ the person first."
                   (or (noema-sessions--string entry "origin") "")
                   (or (noema-sessions--string entry "parentName") "")))))
 
-(defun noema-sessions--pinned-names (source)
-  "Return session names written in `@@session' lines of JuText SOURCE."
-  (when (buffer-live-p source)
-    (with-current-buffer source
-      (save-excursion
-        (goto-char (point-min))
-        (let (names)
-          (while (re-search-forward "^@@session(\\([^)\n]*\\))[ \t]*$" nil t)
-            (dolist (part (split-string (match-string-no-properties 1) ":" t "[ \t]+"))
-              (push part names)))
-          names)))))
 
-(defun noema-sessions--in-file (names runs source)
-  "Return NAMES used by RUNS of SOURCE's document or pinned in its text."
-  (let ((wanted (make-hash-table :test #'equal))
-        (notebook-id (and (buffer-live-p source)
-                          (buffer-local-value 'noema-research--document source)
-                          (noema-research--get
-                           (noema-research-notebook-meta
-                            (buffer-local-value 'noema-research--document source))
-                           "notebook_id"))))
-    (dolist (run runs)
-      (when-let* (((and notebook-id (equal (noema-sessions--string run "notebookId") notebook-id)))
-                  (name (noema-sessions--string run "sessionName")))
-        (puthash name t wanted)))
-    (dolist (name (noema-sessions--pinned-names source))
-      (puthash name t wanted))
-    (seq-filter (lambda (entry)
-                  (or (gethash (noema-sessions--string entry "name") wanted)
-                      (seq-some (lambda (alias) (gethash alias wanted))
-                                (noema-sessions--list (noema-sessions--get entry "aliases")))))
-                names)))
 
-(defun noema-sessions--render (buffer names runs)
-  "Render NAMES (filtered by RUNS in file scope) into sessions BUFFER."
+
+
+(defun noema-sessions--render (buffer names &optional _runs)
+  "Render project NAMES into sessions BUFFER."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (let* ((visible (if (eq noema-sessions--scope 'file)
-                          (noema-sessions--in-file names runs noema-sessions--source)
-                        names))
-             ;; A file-scoped list answers "which conversations does this
-             ;; document use", which a local session never does.
-             (local (unless (eq noema-sessions--scope 'file)
-                      (noema-sessions--local-sessions names noema-sessions--root)))
-             ;; What needs the person comes first; the kernel's recency
-             ;; order is kept inside each rank.
-             (visible (seq-sort-by #'noema-sessions--attention-rank #'< visible)))
+      (let ((visible (seq-sort-by #'noema-sessions--attention-rank #'< names))
+            (local (noema-sessions--local-sessions names noema-sessions--root)))
         (setq noema-sessions--names visible
               noema-sessions--local local
               tabulated-list-entries
-              (append (mapcar (lambda (entry) (noema-sessions--row entry noema-sessions--root))
-                              visible)
-                      (mapcar #'noema-sessions--local-row local))
-              mode-name (format "Noema-Sessions[%s]" noema-sessions--scope))
+              (append (mapcar (lambda (entry) (noema-sessions--row entry noema-sessions--root)) visible)
+                      (mapcar #'noema-sessions--local-row local)))
         (tabulated-list-print t)))))
 
 (defun noema-sessions-refresh ()
-  "Reload the session names of this list."
+  "Reload the project session names of this list."
   (interactive)
-  (let ((buffer (current-buffer))
-        (root noema-sessions--root))
+  (let ((buffer (current-buffer)) (root noema-sessions--root))
     (noema-sessions--api
      "noema:api:research:session:names" `((cwd . ,root) (includeArchived . t))
      (lambda (result error-object)
        (if error-object
            (message "Noema sessions: %s" (noema-sessions--error error-object))
-         (let ((names (noema-sessions--list (noema-sessions--get result "names"))))
-           (if (and (buffer-live-p buffer)
-                    (eq (buffer-local-value 'noema-sessions--scope buffer) 'file))
-               (noema-sessions--api
-                "noema:api:research:run:list" `((cwd . ,root) (limit . 1000))
-                (lambda (runs runs-error)
-                  (noema-sessions--render
-                   buffer names
-                   (unless runs-error (noema-sessions--list (noema-sessions--get runs "runs"))))))
-             (noema-sessions--render buffer names nil))))))))
+         (noema-sessions--render buffer
+                                (noema-sessions--list (noema-sessions--get result "names"))))))))
 
 (defun noema-sessions--entry (name)
   "Return the shown session object called NAME."
@@ -539,14 +488,7 @@ Resume a recorded conversation first when its agent buffer is closed."
           (unless opened
             (message "Opening %s's conversation tree after the agent connects" name)))))))
 
-(defun noema-sessions--project-jutext-buffers (root)
-  "Return live JuText buffers of files under ROOT."
-  (seq-filter (lambda (buffer)
-                (with-current-buffer buffer
-                  (and (derived-mode-p 'noema-research-mode)
-                       buffer-file-name
-                       (file-in-directory-p buffer-file-name root))))
-              (buffer-list)))
+
 
 (defun noema-sessions--refresher (list-buffer)
   "Return a callback that refreshes session LIST-BUFFER while it is live."
@@ -555,30 +497,22 @@ Resume a recorded conversation first when its agent buffer is closed."
       (with-current-buffer list-buffer (noema-sessions-refresh)))))
 
 (defun noema-sessions--rename (root name new-name &optional done)
-  "Rename session NAME of ROOT to NEW-NAME; the old name stays as an alias.
-`@@session' lines in open JuText buffers of the project are rewritten as
-ordinary, undoable edits.  DONE is called with non-nil on success."
+  "Rename session NAME of ROOT to NEW-NAME, retaining its durable alias.
+DONE is called with non-nil on success.  Source documents are not rewritten."
   (noema-sessions--api
    "noema:api:research:session:name:rename"
    `((cwd . ,root) (name . ,name) (newName . ,new-name) (actor . "emacs"))
    (lambda (_result error-object)
      (if error-object
          (message "Noema rename failed: %s" (noema-sessions--error error-object))
-       (let ((edited 0))
-         (dolist (buffer (noema-sessions--project-jutext-buffers root))
-           (with-current-buffer buffer
-             (setq edited (+ edited (noema-research-rename-session-directives name new-name)))))
-         (when-let* ((agent-buffer (+agent-acp-session-buffer name root)))
-           (+agent-acp-mark-session-buffer
-            agent-buffer new-name (buffer-local-value '+agent-acp-session-agent agent-buffer) root))
-         (message "Renamed %s to %s%s" name new-name
-                  (if (> edited 0) (format "; %d @@session line(s) updated (unsaved)" edited) ""))))
+       (when-let* ((agent-buffer (+agent-acp-session-buffer name root)))
+         (+agent-acp-mark-session-buffer
+          agent-buffer new-name (buffer-local-value '+agent-acp-session-agent agent-buffer) root))
+       (message "Renamed %s to %s" name new-name))
      (when done (funcall done (not error-object))))))
 
 (defun noema-sessions-rename (name new-name)
-  "Rename session NAME to NEW-NAME; the old name stays as an alias.
-`@@session' lines in open JuText buffers of the project are rewritten as
-ordinary, undoable edits."
+  "Rename session NAME to NEW-NAME; the old name stays as an alias."
   (interactive
    (let ((name (noema-sessions--name-at-point)))
      (noema-sessions--durable name)
@@ -640,21 +574,12 @@ Its conversation starts on the first Run that uses it."
       (kill-buffer buffer)
       (noema-sessions-refresh))))
 
-(defun noema-sessions-pin (name)
-  "Write `@@session(NAME)' into the work block at point of the source JuText."
-  (interactive (list (noema-sessions--name-at-point)))
-  (noema-sessions--durable name)
-  (let ((source noema-sessions--source))
-    (unless (buffer-live-p source)
-      (user-error "Open the session list from a .noema buffer to pin a session"))
-    (pop-to-buffer source)
-    (noema-research-pin-session name)))
+
 
 (defun noema-sessions--jump-to-run (root name last &optional then)
-  "Visit the work block of LAST, the latest Run of session NAME in ROOT.
-THEN, when non-nil, is called with point on that work block."
-  (unless last
-    (user-error "“%s” has not run yet" name))
+  "Open LAST's canonical source in ROOT for session NAME.
+THEN, when non-nil, receives the file and Cell id without an editor projection."
+  (unless last (user-error "“%s” has not run yet" name))
   (let ((notebook-id (noema-sessions--string last "notebookId"))
         (cell-id (noema-sessions--string last "cellId")))
     (unless (and notebook-id cell-id)
@@ -665,17 +590,17 @@ THEN, when non-nil, is called with point on that work block."
      (lambda (result error-object)
        (if error-object
            (message "Noema: %s" (noema-sessions--error error-object))
-         ;; Never replace the Agent window's session with the document.
-         (when-let* (((window-parameter (selected-window) 'agent-workspace))
-                     (other (seq-find (lambda (window)
-                                        (not (window-parameter window 'agent-workspace)))
-                                      (window-list nil 'nomini))))
-           (select-window other))
-         (find-file (noema-sessions--string result "file"))
-         (noema-research-goto-cell cell-id)
-         (when then (funcall then)))))))
+         (let ((file (noema-sessions--string result "file")))
+           (if then
+               (funcall then file cell-id)
+             (when-let* (((window-parameter (selected-window) 'agent-workspace))
+                         (other (seq-find (lambda (window)
+                                            (not (window-parameter window 'agent-workspace)))
+                                          (window-list nil 'nomini))))
+               (select-window other))
+             (find-file file))))))))
 
-(declare-function noema-research-execute-current "noema-research-mode" ())
+
 
 (defun noema-sessions-retry (name)
   "Run again the work block of session NAME's latest Run, which failed.
@@ -690,7 +615,11 @@ most likely fail the same way."
     (when (or (noema-sessions--true-p (noema-sessions--get last "retryable"))
               (yes-or-no-p (format "“%s” failed with %s, which retrying rarely fixes; run it again? "
                                    name (or (noema-sessions--string last "failureKind") "an error"))))
-      (noema-sessions--jump-to-run noema-sessions--root name last #'noema-research-execute-current)
+      (noema-sessions--jump-to-run
+       noema-sessions--root name last
+       (lambda (file cell-id)
+         (require 'noema-agent-worker)
+         (noema-agent-worker-run-work-cell file cell-id)))
       (noema-sessions--note-read entry noema-sessions--root))))
 
 (defun noema-sessions-jump (name)
@@ -773,10 +702,10 @@ most likely fail the same way."
 (defun noema-sessions-agent-restart (&optional buffer)
   "Restart the session of agent BUFFER: stop its process, resume its conversation."
   (interactive)
-  (pcase-let ((`(,buffer ,root ,name) (noema-sessions--agent-target buffer)))
-    (when (+agent-acp-confirm-stop buffer "restart")
-      (+agent-acp-kill buffer)
-      (noema-sessions-open-reference root name))))
+  (let ((buffer (+agent-acp-command-buffer buffer)))
+    (when (run-hook-with-args-until-success '+agent-acp-run-owned-functions buffer)
+      (user-error "Stop the Research Run and wait for its result before restarting"))
+    (+agent-acp-restart-native buffer)))
 
 (defun noema-sessions-agent-jump (&optional buffer)
   "Visit the work block of the latest Run in the session of agent BUFFER."
@@ -802,14 +731,7 @@ most likely fail the same way."
          (default-directory (buffer-local-value '+agent-acp-session-root buffer)))
     (noema-sessions 'project)))
 
-(defun noema-sessions-toggle-scope ()
-  "Toggle between this file's sessions and all project sessions."
-  (interactive)
-  (setq noema-sessions--scope
-        (if (and (eq noema-sessions--scope 'project) (buffer-live-p noema-sessions--source))
-            'file
-          'project))
-  (noema-sessions-refresh))
+
 
 (defun noema-sessions-open-pi ()
   "Open this project's Pi coordinator."
@@ -824,9 +746,7 @@ most likely fail the same way."
     (define-key map (kbd "F") #'noema-sessions-fork)
     (define-key map (kbd "a") #'noema-sessions-toggle-archive)
     (define-key map (kbd "k") #'noema-sessions-kill-buffer)
-    (define-key map (kbd "i") #'noema-sessions-pin)
     (define-key map (kbd "j") #'noema-sessions-jump)
-    (define-key map (kbd "t") #'noema-sessions-toggle-scope)
     (define-key map (kbd "P") #'noema-sessions-open-pi)
     (define-key map (kbd "c") #'noema-sessions-compact)
     (define-key map (kbd "u") #'noema-sessions-mark-read)
@@ -861,8 +781,7 @@ from the durable Handoff, freeing a context window before it fills up."
   "List the named agent sessions of a Noema project.
 
 RET switch to (or resume) the session's buffer   r rename   F fork
-a archive/restore   k kill buffer   i pin into the source work block
-j jump to latest work block   t file/project scope   c compact context
+a archive/restore   k kill buffer   j open latest Run source   c compact context
 u mark read   ! next session needing attention   s side chat beside it
 T native conversation tree for this session
 R rerun the work block of a failed latest Run
@@ -881,19 +800,15 @@ settled Run you have not opened.  Rows needing you sort first.
 ;;;###autoload
 (defun noema-sessions (&optional scope)
   "List the named agent sessions of the current project.
-From a `.noema' buffer the list starts scoped to that file; SCOPE may be
-`file' or `project'."
+SCOPE is retained for callers that pass `project'; file scope is retired."
   (interactive)
-  (let* ((source (and (derived-mode-p 'noema-research-mode) (current-buffer)))
-         (root (noema-sessions--project-root
-                (if (and source buffer-file-name) (file-name-directory buffer-file-name) default-directory)))
+  (unless (memq scope '(nil project)) (user-error "Session lists use project scope"))
+  (let* ((root (noema-sessions--project-root default-directory))
          (buffer (get-buffer-create
                   (format "*Noema Sessions: %s*" (file-name-nondirectory (directory-file-name root))))))
     (with-current-buffer buffer
       (noema-sessions-mode)
-      (setq noema-sessions--root root
-            noema-sessions--source source
-            noema-sessions--scope (or scope (if source 'file 'project))))
+      (setq noema-sessions--root root))
     (pop-to-buffer buffer)
     (noema-sessions--ensure-host
      (lambda () (when (buffer-live-p buffer) (with-current-buffer buffer (noema-sessions-refresh)))))

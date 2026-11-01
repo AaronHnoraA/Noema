@@ -13,7 +13,57 @@
 (require 'ert)
 (require 'tools/agent/context)
 (require 'noema-context)
-(require 'gptel-context)
+(require 'tools/agent/selection)
+
+(ert-deftest +agent-context-bootstrap-follows-native-session-not-the-buffer ()
+  (let ((+agent-context--session-instructions (make-hash-table :test #'equal))
+        (native "first") sent)
+    (with-temp-buffer
+      (setq-local +agent-acp-session-root "/project/"
+                  +agent-acp-session-agent "pi")
+      (cl-letf (((symbol-function '+agent-acp-state-value) (lambda (&rest _) native))
+                ((symbol-function '+agent-acp-busy-p) (lambda (_) nil))
+                ((symbol-function '+agent-acp-show-buffer) #'ignore)
+                ((symbol-function '+agent-acp-prompt)
+                 (lambda (&rest args) (push (map-elt (car (plist-get args :content)) 'text) sent))))
+        (dotimes (_ 2)
+          (+agent-context--deliver (current-buffer) '(((type . "text") (text . "question"))) '(api-v1 . "capability entry")))
+        (setq native "second")
+        (+agent-context--deliver (current-buffer) '(((type . "text") (text . "question"))) '(api-v1 . "capability entry"))
+        (should (equal (nreverse sent) '("capability entry\n\nquestion" "question" "capability entry\n\nquestion")))))))
+
+(ert-deftest +agent-context-rejected-delivery-does-not-consume-bootstrap ()
+  (let ((+agent-context--session-instructions (make-hash-table :test #'equal)) sent)
+    (with-temp-buffer
+      (cl-letf (((symbol-function '+agent-acp-state-value) (lambda (&rest _) "native"))
+                ((symbol-function '+agent-acp-busy-p) (lambda (_) nil))
+                ((symbol-function '+agent-acp-show-buffer) #'ignore)
+                ((symbol-function '+agent-acp-prompt)
+                 (lambda (&rest args)
+                   (push (map-elt (car (plist-get args :content)) 'text) sent)
+                   (funcall (plist-get args :on-failure) 'failed nil))))
+        (dotimes (_ 2)
+          (+agent-context--deliver (current-buffer) '(((type . "text") (text . "request"))) '(api . "entry")))
+        (should (equal sent '("entry\n\nrequest" "entry\n\nrequest")))))))
+
+(ert-deftest noema-md-bridge-utf16-roundtrip ()
+  (with-temp-buffer
+    (insert "😀 word\n")
+    (setq buffer-file-name "/tmp/a.md")
+    (should (= (noema-md-bridge--position 1 3) 3))
+    (should (string-match-p "1:3 to 1:7"
+                            (noema-md-bridge--review-instructions (current-buffer) 3 7)))))
+
+(ert-deftest noema-md-prompt-create-and-task-send-are-separate-actions ()
+  (with-temp-buffer
+    (let (requests)
+      (cl-letf (((symbol-function 'noema-md-bridge-pane-p) (lambda (&rest _) t))
+                ((symbol-function 'noema-md-bridge-compose) (lambda () (push 'create requests)))
+                ((symbol-function 'noema-md-bridge-request)
+                 (lambda (action scope) (push (list action scope) requests))))
+        (noema-context--editor-action 'compose)
+        (noema-context--editor-action 'compose-send)
+        (should (equal (nreverse requests) '(create ("task" "document"))))))))
 
 (defvar +agent-context-tests--body
   "alpha\nbravo\ncharlie\ndelta\necho\n"
@@ -25,8 +75,8 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
 `files' as an alist of NAME to absolute path."
   (declare (indent 1) (debug t))
   `(let* ((root (file-name-as-directory (make-temp-file "+agent-context-" t)))
-          (gptel-context nil)
-          (gptel-context-restrict-to-project-files nil)
+          (+agent-selection nil)
+          (+agent-selection-restrict-to-project-files nil)
           (+agent-context-save-before-send nil)
           (files (mapcar (lambda (entry)
                            (let ((path (expand-file-name (car entry) root)))
@@ -139,7 +189,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
           sent)
       (push buffer opened)
       ;; Something already gathered in the shared selection.
-      (setq gptel-context (list (list (alist-get "b.txt" files nil nil #'equal))))
+      (setq +agent-selection (list (list (alist-get "b.txt" files nil nil #'equal))))
       (cl-letf (((symbol-function '+agent-context--send)
                  (lambda (&rest arguments)
                    (setq sent (funcall (plist-get arguments :references) root nil)))))
@@ -149,7 +199,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
           (push-mark (+agent-context-tests--line-pos buffer 4) t t)
           (+agent-context-send-region)))
       (should (equal (mapcar #'+agent-context--reference-line sent) '("a.txt:2-3")))
-      (should (= (length gptel-context) 1)))))
+      (should (= (length +agent-selection) 1)))))
 
 (ert-deftest +agent-context-always-asks-with-last-session-preselected ()
   "Every send asks for the session; the project's last one is the default."
@@ -209,7 +259,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
            (+agent-context-clear-after-send t)
            (+agent-context--last-session (make-hash-table :test #'equal))
            copied)
-      (setq gptel-context (list (list file)))
+      (setq +agent-selection (list (list file)))
       (cl-letf (((symbol-function '+agent-context--session)
                  (lambda (&optional _) 'clipboard))
                 ((symbol-function '+agent-acp-project-root)
@@ -223,7 +273,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
         (should-not (+agent-context-send)))
       (should (string-match-p "Review this" copied))
       (should (string-match-p "- a.md" copied))
-      (should (= (length gptel-context) 1))
+      (should (= (length +agent-selection) 1))
       (should-not (gethash root +agent-context--last-session)))))
 
 (ert-deftest +agent-context-copy-at-point-includes-location ()
@@ -341,7 +391,7 @@ SPEC is a list of (NAME . CONTENT) files created in it and bound to
                     :type 'user-error))))
 
 (ert-deftest noema-md-bridge-context-action-adds-region ()
-  "The context action adds exactly the reported range to gptel's selection."
+  "The context action adds exactly the reported range to Agent selection."
   (+agent-context-tests--with-project '(("a.md" . "one\ntwo\nthree\n"))
     (let ((file (alist-get "a.md" files nil nil #'equal)))
       (pcase-let ((`(,buffer ,begin . ,end)
@@ -386,10 +436,32 @@ the next open of the note (which would then show raw Markdown)."
           (noema-md-bridge-run "agent" buffer begin end)))
       (should (string-match-p "Review this line" copied))
       (should (string-match-p "a.md:2-2" copied))
+      (should (string-match-p "Noema Markdown selection: 2:0 to 3:0" copied))
+      (should-not (string-match-p (regexp-quote "#+begin ediff") copied))
+      (should (string-match-p "document:propose" copied))
       (should-not (find-buffer-visiting file)))))
 
+(ert-deftest noema-md-bridge-review-guidance-is-only-for-markdown-agent-actions ()
+  "The review contract is not attached to non-Markdown or related-note sends."
+  (with-temp-buffer
+    (insert "one\ntwo\n")
+    (dolist (file '("/tmp/work.noema" "/tmp/code.el" "/tmp/readme.txt"))
+      (setq buffer-file-name file)
+      (should-not (noema-md-bridge--review-instructions
+                   (current-buffer) (point-min) (point-max)))))
+  (+agent-context-tests--with-project '(("a.md" . "one\ntwo\n"))
+    (let* ((file (alist-get "a.md" files nil nil #'equal))
+           (buffer (find-file-noselect file))
+           sent)
+      (push buffer opened)
+      (cl-letf (((symbol-function '+agent-context--send)
+                 (lambda (&rest arguments) (setq sent arguments) nil)))
+        (noema-md-bridge-run "related" buffer 1 4))
+      (should-not (plist-get sent :instructions))
+      (should (equal (plist-get sent :prompt) noema-context-related-prompt)))))
+
 (ert-deftest noema-md-bridge-hidden-copy-hands-a-later-open-to-noema ()
-  "A kept hidden copy (it holds gptel context) sends a later open to Noema."
+  "A kept hidden copy (it holds Agent context) sends a later open to Noema."
   (+agent-context-tests--with-project '(("a.md" . "one\ntwo\n"))
     (let ((file (alist-get "a.md" files nil nil #'equal))
           handed)
@@ -418,7 +490,7 @@ the next open of the note (which would then show raw Markdown)."
   (+agent-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\necho\n"))
     (let ((buffer (find-file-noselect (alist-get "a.txt" files nil nil #'equal))))
       (push buffer opened)
-      (gptel-context--add-region buffer
+      (+agent-selection-add-region buffer
                                  (+agent-context-tests--line-pos buffer 2)
                                  (1- (+agent-context-tests--line-pos buffer 4)))
       (let ((references (+agent-context-references nil root)))
@@ -434,7 +506,7 @@ the next open of the note (which would then show raw Markdown)."
   (+agent-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\necho\n"))
     (let ((buffer (find-file-noselect (alist-get "a.txt" files nil nil #'equal))))
       (push buffer opened)
-      (gptel-context--add-region buffer
+      (+agent-selection-add-region buffer
                                  (+agent-context-tests--line-pos buffer 2)
                                  (+agent-context-tests--line-pos buffer 4))
       (let ((reference (car (+agent-context-references nil root))))
@@ -446,7 +518,7 @@ the next open of the note (which would then show raw Markdown)."
   (+agent-context-tests--with-project '(("a.txt" . "alpha\nbravo\ncharlie\ndelta\necho\n"))
     (let ((buffer (find-file-noselect (alist-get "a.txt" files nil nil #'equal))))
       (push buffer opened)
-      (gptel-context--add-buffer buffer)
+      (+agent-selection-add-buffer buffer)
       (let ((reference (car (+agent-context-references nil root))))
         (should (eq (plist-get reference :kind) 'file))
         (should-not (plist-get reference :line-start))
@@ -456,7 +528,7 @@ the next open of the note (which would then show raw Markdown)."
   "A reference is relative only inside the session root, as agent-shell does."
   (+agent-context-tests--with-project '(("a.txt" . "alpha\n"))
     (let* ((path (alist-get "a.txt" files nil nil #'equal))
-           (gptel-context (list (list path)))
+           (+agent-selection (list (list path)))
            (outside (+agent-context-references nil "/definitely/not/here/"))
            (inside (+agent-context-references nil root)))
       (should (equal (plist-get (car outside) :relative) path))
@@ -473,8 +545,8 @@ the next open of the note (which would then show raw Markdown)."
       (with-current-buffer visiting
         (goto-char (point-max))
         (insert "unsaved edit\n"))
-      (gptel-context--add-buffer scratch)
-      (gptel-context--add-buffer visiting)
+      (+agent-selection-add-buffer scratch)
+      (+agent-selection-add-buffer visiting)
       (let ((resolved (+agent-context--resolve nil root)))
         (should (null (car resolved)))
         (should (= (length (cdr resolved)) 2))
@@ -493,7 +565,7 @@ that machine cannot reach is refused rather than sent as a dead path."
   (+agent-context-tests--with-project '(("a.txt" . "alpha\n"))
     (let* ((path (alist-get "a.txt" files nil nil #'equal))
            (session (generate-new-buffer " *+agent-context-session*"))
-           (gptel-context (list (list path)))
+           (+agent-selection (list (list path)))
            (+agent-acp-agent-file-function
             (lambda (file agent)
               (and (eq agent session)
@@ -519,14 +591,14 @@ that machine cannot reach is refused rather than sent as a dead path."
                                        ("b.txt" . "secret-marker\n"))
     (let ((buffer (find-file-noselect (alist-get "a.txt" files nil nil #'equal))))
       (push buffer opened)
-      (gptel-context--add-region buffer
+      (+agent-selection-add-region buffer
                                  (+agent-context-tests--line-pos buffer 1)
                                  (1- (+agent-context-tests--line-pos buffer 2)))
-      (gptel-context--add-region buffer
+      (+agent-selection-add-region buffer
                                  (+agent-context-tests--line-pos buffer 4)
                                  (1- (+agent-context-tests--line-pos buffer 5)))
-      (setq gptel-context
-            (append gptel-context (list (list (alist-get "b.txt" files nil nil #'equal)))))
+      (setq +agent-selection
+            (append +agent-selection (list (list (alist-get "b.txt" files nil nil #'equal)))))
       (let* ((references (+agent-context-references nil root))
              (blocks (+agent-context-content-blocks "Why does this differ?" references))
              (types (mapcar (lambda (block) (map-elt block 'type)) blocks))

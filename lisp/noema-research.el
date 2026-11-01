@@ -5,8 +5,8 @@
 ;; Noema work documents are standard nbformat 4.5 JSON containers stored as
 ;; `*.noema'; their research semantics live under the `noema_research'
 ;; metadata namespace.  This library
-;; is the pure model shared by JuText (`noema-research-mode') and the Graph
-;; Board: JSON reading and writing, cell accessors, relations, validation, the
+;; retains the pure model after the dedicated JuText and Graph editors were
+;; retired: JSON reading and writing, cell accessors, relations, validation, the
 ;; lineage projection with semantic folding, and per-notebook view state under
 ;; `<repository>/.agent/views/'.  It never writes `metadata.noema', which
 ;; belongs to Markdown sidecar notebooks.

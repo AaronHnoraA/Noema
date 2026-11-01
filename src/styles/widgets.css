@@ -2390,180 +2390,90 @@ iframe.noema-embed-fullscreen {
   font-size: 10px;
 }
 
-/* ─── In-place ediff review widget ───────────────────────────────── */
+/* ─── In-place Markdown review ──────────────────────────────────── */
 .cm-editor .noema-ediff {
-  --ediff-red: #f85149;
-  --ediff-green: #3fb950;
-  --ediff-blue: #58a6ff;
+  --ediff-red: var(--aaron-role-critical, #b13d54);
+  --ediff-green: var(--aaron-role-success, #32865a);
+  --ediff-line: var(--aaron-paper-line, color-mix(in srgb, currentColor, transparent 85%));
   box-sizing: border-box;
-  border: 1px solid color-mix(in srgb, var(--aaron-ink, #c9d1d9), transparent 78%);
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--aaron-paper, #0d1117);
-  color: var(--aaron-ink, #c9d1d9);
+  border-block: 1px solid var(--ediff-line);
+  padding: .35em 0;
+  color: var(--aaron-ink, inherit);
+  background: transparent;
   font: inherit;
+  overflow: hidden;
 }
-.cm-editor .noema-ediff-header {
+.cm-editor .noema-ediff-header,
+.cm-editor .noema-ediff-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  min-height: 38px;
-  padding: 5px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--aaron-ink, #c9d1d9), transparent 85%);
-  background: color-mix(in srgb, var(--ediff-blue), var(--aaron-paper, #0d1117) 94%);
+  flex-wrap: wrap;
+  gap: .4em .8em;
+  padding: .25em .45em;
+  font: .78em/1.5 var(--aaron-font-sans, system-ui);
 }
-.cm-editor .noema-ediff-heading { display: flex; flex-wrap: wrap; gap: 10px; min-width: 0; }
-.cm-editor .noema-ediff-heading span { color: var(--aaron-muted, #8b949e); }
-.cm-editor .noema-ediff-actions { display: flex; flex-wrap: wrap; gap: 5px; opacity: 0; }
-.cm-editor .noema-ediff:hover .noema-ediff-actions,
-.cm-editor .noema-ediff:focus-within .noema-ediff-actions { opacity: 1; }
-.cm-editor .noema-ediff-actions button,
-.cm-editor .noema-ediff-comment-form button {
-  border: 1px solid color-mix(in srgb, var(--aaron-ink, #c9d1d9), transparent 70%);
-  border-radius: 5px;
-  padding: 3px 8px;
-  background: var(--aaron-paper, #0d1117);
-  color: inherit;
-  font: 11px/1.4 var(--aaron-font-sans, system-ui);
+.cm-editor .noema-ediff-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: .6em; min-width: 0; }
+.cm-editor .noema-ediff-heading > span { font-weight: 600; overflow-wrap: anywhere; }
+.cm-editor .noema-ediff-heading small,
+.cm-editor .noema-ediff-state { color: var(--aaron-muted, #777); font-size: inherit; }
+.cm-editor .noema-ediff-display,
+.cm-editor .noema-ediff-modes,
+.cm-editor .noema-ediff-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .25em; }
+.cm-editor .noema-ediff-display { margin-left: auto; gap: .6em; }
+.cm-editor .noema-ediff button {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: .15em .5em;
+  background: transparent;
+  color: var(--aaron-muted, #777);
+  font: inherit;
   cursor: pointer;
 }
-.cm-editor .noema-ediff-actions button:first-child { border-color: var(--ediff-green); color: var(--ediff-green); }
-.cm-editor .noema-ediff-actions button:nth-child(2) { border-color: var(--ediff-red); color: var(--ediff-red); }
-.cm-editor .noema-ediff-actions button:nth-child(3) { border-color: var(--ediff-blue); color: var(--ediff-blue); }
-.cm-editor .noema-ediff-actions button:disabled { opacity: .45; cursor: default; }
+.cm-editor .noema-ediff button:hover,
+.cm-editor .noema-ediff button:focus-visible { color: var(--aaron-ink, inherit); background: color-mix(in srgb, currentColor, transparent 94%); }
+.cm-editor .noema-ediff button:focus-visible { outline: 1px solid currentColor; outline-offset: 1px; }
+.cm-editor .noema-ediff button:disabled { opacity: .45; cursor: default; }
+.cm-editor .noema-ediff-modes { border: 1px solid var(--ediff-line); border-radius: 5px; padding: 1px; gap: 1px; }
+.cm-editor .noema-ediff-modes button[aria-pressed="true"] { color: var(--aaron-ink, inherit); background: color-mix(in srgb, currentColor, transparent 92%); }
+.cm-editor .noema-ediff-actions button:first-child { color: var(--ediff-green); border-color: color-mix(in srgb, var(--ediff-green), transparent 65%); }
+.cm-editor .noema-ediff-preview { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: .8em; padding: .5em .45em; }
+.cm-editor .noema-ediff-preview-side { min-width: 0; }
+.cm-editor .noema-ediff-preview-label { color: var(--aaron-muted, #777); font: .7em/1.5 var(--aaron-font-sans, system-ui); padding-bottom: .3em; }
+.cm-editor .noema-ediff-preview-body { max-height: 9em; overflow: auto; overflow-wrap: anywhere; border-left: 2px solid var(--ediff-line); padding-left: .65em; }
+.cm-editor .noema-ediff-preview-old .noema-ediff-preview-body { border-left-color: color-mix(in srgb, var(--ediff-red), transparent 55%); }
+.cm-editor .noema-ediff-preview-new .noema-ediff-preview-body { border-left-color: color-mix(in srgb, var(--ediff-green), transparent 40%); }
+.cm-editor .noema-ediff-expanded .noema-ediff-preview-body { max-height: none; }
+.cm-editor .noema-ediff-preview-body > :first-child { margin-top: 0; }
+.cm-editor .noema-ediff-preview-body > :last-child { margin-bottom: 0; }
+.cm-editor .noema-ediff-preview-body img { max-width: 100%; }
+.cm-editor .noema-ediff-empty { color: var(--aaron-muted, #777); font-style: italic; }
 .cm-editor .noema-ediff-diff { overflow-x: auto; }
-.cm-editor .noema-ediff-row {
-  display: grid;
-  grid-template-columns: 42px 42px 22px minmax(max-content, 1fr);
-  min-width: max-content;
-  white-space: pre;
-}
-.cm-editor .noema-ediff-row > span { box-sizing: border-box; padding: 0 4px; }
+.cm-editor .noema-ediff-row { display: grid; grid-template-columns: 2.5em 2.5em .8em minmax(0, 1fr); min-width: 0; font: inherit; font-family: var(--aaron-font-mono, ui-monospace, monospace); line-height: 1.45; }
+.cm-editor .noema-ediff-row > span { box-sizing: border-box; padding: 0 .1em; }
 .cm-editor .noema-ediff-old-number,
-.cm-editor .noema-ediff-new-number { text-align: right; user-select: none; opacity: .65; }
+.cm-editor .noema-ediff-new-number { text-align: right; color: var(--aaron-muted, #777); font-variant-numeric: tabular-nums; }
+.cm-editor .noema-ediff-old-number,
+.cm-editor .noema-ediff-new-number,
 .cm-editor .noema-ediff-prefix { user-select: none; }
-.cm-editor .noema-ediff-content { padding-right: 18px !important; }
-.cm-editor .noema-ediff-deletion { background: color-mix(in srgb, var(--ediff-red), var(--aaron-paper, #0d1117) 85%); }
-.cm-editor .noema-ediff-addition { background: color-mix(in srgb, var(--ediff-green), var(--aaron-paper, #0d1117) 85%); }
+.cm-editor .noema-ediff-content { min-width: 0; padding: 0 .5em !important; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cm-editor .noema-ediff-deletion { background: color-mix(in srgb, var(--ediff-red), transparent 93%); }
+.cm-editor .noema-ediff-addition { background: color-mix(in srgb, var(--ediff-green), transparent 93%); }
 .cm-editor .noema-ediff-deletion .noema-ediff-prefix { color: var(--ediff-red); }
 .cm-editor .noema-ediff-addition .noema-ediff-prefix { color: var(--ediff-green); }
-.cm-editor .noema-ediff-hunk { color: var(--ediff-blue); background: color-mix(in srgb, var(--ediff-blue), var(--aaron-paper, #0d1117) 89%); }
-.cm-editor .noema-ediff-marker { color: var(--aaron-muted, #8b949e); font-style: italic; }
-.cm-editor .noema-ediff-status { padding: 6px 10px; color: var(--ediff-red); }
-.cm-editor .noema-ediff-status[hidden],
-.cm-editor .noema-ediff-comment-form[hidden] { display: none; }
-.cm-editor .noema-ediff-rejected .noema-ediff-header { border-left: 3px solid var(--ediff-red); }
-.cm-editor .noema-ediff-comments { padding: 8px 12px; border-top: 1px solid var(--ediff-blue); color: var(--ediff-blue); font: 12px/1.5 var(--aaron-font-sans, system-ui); }
-.cm-editor .noema-ediff-comments p { margin: 2px 0; white-space: pre-wrap; }
-.cm-editor .noema-ediff-comment-form { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--ediff-blue); }
-.cm-editor .noema-ediff-comment-form textarea { flex: 1 0 100%; min-height: 55px; resize: vertical; font: 12px/1.5 var(--aaron-font-sans, system-ui); }
-
-/* Keep the article's typography; reduce only the review chrome. */
-.cm-editor .noema-ediff-compact {
-  position: relative;
-  border: 0;
-  border-top: 1px solid color-mix(in srgb, var(--ediff-blue), transparent 82%);
-  border-bottom: 1px solid color-mix(in srgb, var(--ediff-blue), transparent 82%);
-  border-left: 2px solid var(--ediff-blue);
-  border-radius: 0;
-  background: transparent;
-  font: inherit;
-}
-.cm-editor .noema-ediff-compact.noema-ediff-rejected,
-.cm-editor .noema-ediff-compact.noema-ediff-invalid { border-left-color: var(--ediff-red); }
-.cm-editor .noema-ediff-compact .noema-ediff-header {
-  position: relative;
-  min-height: 1.2em;
-  justify-content: flex-start;
-  gap: 0.4em;
-  padding: 0.05em 0.3em;
-  border: 0;
-  background: color-mix(in srgb, var(--ediff-blue), var(--aaron-paper, #0d1117) 96%);
-}
-.cm-editor .noema-ediff-compact .noema-ediff-heading {
-  align-items: baseline;
-  gap: 0.35em;
-  min-width: 0;
-  color: var(--aaron-ink, #c9d1d9);
-  font: inherit;
-  font-family: var(--aaron-font-sans, system-ui);
-}
-.cm-editor .noema-ediff-compact .noema-ediff-heading span {
-  overflow: hidden;
-  max-width: 30ch;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--aaron-ink, #c9d1d9);
-  font-weight: 600;
-}
-.cm-editor .noema-ediff-compact .noema-ediff-heading small {
-  color: var(--aaron-muted, #8b949e);
-  font-size: 0.75em;
-}
-.cm-editor .noema-ediff-compact .noema-ediff-details-toggle {
-  border: 0;
-  padding: 0 0.15em;
-  background: transparent;
-  color: var(--ediff-blue);
-  font: inherit;
-  font-family: var(--aaron-font-sans, system-ui);
-  cursor: pointer;
-}
-.cm-editor .noema-ediff-compact .noema-ediff-actions {
-  position: absolute;
-  z-index: 2;
-  top: 0.05em;
-  right: 0.2em;
-  gap: 0.15em;
-  padding: 0.05em 0.1em;
-  border: 1px solid color-mix(in srgb, var(--ediff-blue), transparent 65%);
-  border-radius: 4px;
-  background: var(--aaron-paper, #0d1117);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 15%);
-  pointer-events: none;
-}
-.cm-editor .noema-ediff-compact:hover .noema-ediff-actions,
-.cm-editor .noema-ediff-compact:focus-within .noema-ediff-actions { pointer-events: auto; }
-.cm-editor .noema-ediff-compact .noema-ediff-actions button {
-  padding: 0.1em 0.3em;
-  border: 0;
-  font-size: 0.75em;
-}
-.cm-editor .noema-ediff-compact .noema-ediff-row {
-  grid-template-columns: 2.5em 2.5em 0.8em minmax(0, 1fr);
-  min-width: 0;
-  line-height: 1.42;
-  font-family: var(--aaron-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: inherit;
-}
-.cm-editor .noema-ediff-compact .noema-ediff-row > span { padding: 0 0.1em; }
-.cm-editor .noema-ediff-compact :is(.noema-ediff-old-number, .noema-ediff-new-number, .noema-ediff-prefix) {
-  font-variant-numeric: tabular-nums;
-  border-right: 1px solid color-mix(in srgb, var(--aaron-ink, #c9d1d9), transparent 90%);
-}
-.cm-editor .noema-ediff-compact .noema-ediff-content {
-  min-width: 0;
-  padding-left: 0.35em;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.cm-editor .noema-ediff-compact .noema-ediff-hunk {
-  display: grid;
-  line-height: 1.2;
-  background: color-mix(in srgb, var(--ediff-blue), var(--aaron-paper, #0d1117) 87%);
-}
-.cm-editor .noema-ediff-compact .noema-ediff-hunk .noema-ediff-content {
-  padding-left: 0.35em;
-}
-.cm-editor .noema-ediff-compact .noema-ediff-marker,
-.cm-editor .noema-ediff-compact .noema-ediff-extra,
-.cm-editor .noema-ediff-compact .noema-ediff-comments { display: none; }
-.cm-editor .noema-ediff-compact.noema-ediff-expanded .noema-ediff-marker,
-.cm-editor .noema-ediff-compact.noema-ediff-expanded .noema-ediff-extra { display: grid; }
-.cm-editor .noema-ediff-compact.noema-ediff-expanded .noema-ediff-comments { display: block; }
-.cm-editor .noema-ediff-compact .noema-ediff-status { padding: 2px 6px; font-size: 10px; }
-.cm-editor .noema-ediff-compact .noema-ediff-comment-form { padding: 5px 6px; }
+.cm-editor .noema-ediff-hunk,
+.cm-editor .noema-ediff-marker { color: var(--aaron-muted, #777); font-size: .8em; }
+.cm-editor .noema-ediff-marker,
+.cm-editor .noema-ediff-extra { display: none; }
+.cm-editor .noema-ediff-expanded .noema-ediff-marker,
+.cm-editor .noema-ediff-expanded .noema-ediff-extra { display: grid; }
+.cm-editor .noema-ediff-status { padding: .25em .5em; color: var(--ediff-red); font: .8em/1.5 var(--aaron-font-sans, system-ui); }
+.cm-editor .noema-ediff [hidden] { display: none; }
+.cm-editor .noema-ediff-rejected .noema-ediff-state { color: var(--aaron-muted, #777); }
+.cm-editor .noema-ediff-comments { padding: .35em .6em; border-top: 1px solid var(--ediff-line); font: .85em/1.6 var(--aaron-font-sans, system-ui); }
+.cm-editor .noema-ediff-comments p { margin: .15em 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cm-editor .noema-ediff-comment-form { display: flex; flex-wrap: wrap; gap: .4em; padding: .4em .6em; font: .85em/1.5 var(--aaron-font-sans, system-ui); }
+.cm-editor .noema-ediff-comment-form textarea { box-sizing: border-box; flex: 1 0 100%; min-height: 4em; resize: vertical; border: 1px solid var(--ediff-line); border-radius: 4px; padding: .5em; color: inherit; background: transparent; font: inherit; }
 
 .cm-editor .noema-revision {
   position: relative;
@@ -4113,36 +4023,10 @@ body.has-diagram-fullscreen {
   overflow-wrap: anywhere;
 }
 
-.cm-noema-run-output {
-  border: 1px solid var(--aaron-ui-border-subtle, color-mix(in srgb, currentColor 18%, transparent));
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: var(--aaron-ui-surface-raised, color-mix(in srgb, currentColor 4%, transparent));
-}
 
-.cm-noema-run-output > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
 
-.cm-noema-run-status {
-  border-radius: 999px;
-  padding: 1px 8px;
-  font-size: 0.82em;
-  background: color-mix(in srgb, currentColor 9%, transparent);
-}
 
-.cm-noema-run-meta {
-  margin-top: 3px;
-  color: var(--aaron-ui-text-muted, color-mix(in srgb, currentColor 62%, transparent));
-  font-size: 0.82em;
-}
 
-.cm-noema-run-content {
-  margin-top: 8px;
-}
 
 .cm-editor .cm-ceil-output {
   min-width: 0;

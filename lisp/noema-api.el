@@ -2,10 +2,9 @@
 
 ;;; Commentary:
 ;;
-;; This is the stable, domain-level Elisp boundary shared by JuText, the Graph
-;; Board, scripts and compatible agents.  It exposes projects, Cells,
-;; WorkNodes, Runs and effective capabilities rather than buffer text,
-;; overlays or transport details.
+;; Project identity, durable Run cancellation and effective capabilities for
+;; Emacs clients and compatible agents.  Legacy document models remain in
+;; noema-research; this API does not install a work-document editor.
 
 ;;; Code:
 
@@ -17,22 +16,19 @@
 (declare-function +noema-api-call "noema/bridge/config"
                   (channel args callback &optional timeout))
 (declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
-(declare-function noema-research--cell-at-point "noema-research-mode" ())
-(declare-function noema-research-op-create "noema-research-mode"
-                  (kind title parents after-id))
-(declare-function noema-research-op-link "noema-research-mode" (from to type))
-(declare-function noema-research-op-unlink "noema-research-mode" (from to type))
-(declare-function noema-research-op-set-state "noema-research-mode"
-                  (id state &optional reason outcome))
-(declare-function noema-research-goto-cell "noema-research-mode" (id))
-(declare-function noema-research-work-prompt-empty-p "noema-research-mode" (cell))
+
+
+
+
+
+
+
 (declare-function noema-agent-worker-run-work-cell "noema-agent-worker"
                   (file cell-id &optional session-policy parent-session-id session-name))
 (declare-function noema-agent-worker-cancel-run "noema-agent-worker" (run-id))
-(declare-function noema-research-run-project-file "noema-research-mode" (project-file &optional args))
+
 
 (defvar +noema--ready)
-(defvar noema-research--document)
 (defvar noema-capability--last-resolution nil
   "Most recent effective capability resolution returned by the Noema host.")
 
@@ -132,30 +128,11 @@ CONTEXT may be a buffer or path and defaults to the current buffer.  This is a
 query and does not create a project or runtime state."
   (noema-project-root (noema--project-context-path context)))
 
-;;;###autoload
-(defun noema-current-document (&optional buffer)
-  "Return BUFFER's semantic WorkDocument, or nil.
-The returned object is live mutable state; callers should use Noema mutation
-functions instead of changing its hash tables directly."
-  (with-current-buffer (or buffer (current-buffer))
-    (and (boundp 'noema-research--document) noema-research--document)))
 
-;;;###autoload
-(defun noema-current-cell (&optional buffer)
-  "Return the semantic Cell at point in BUFFER, or nil."
-  (with-current-buffer (or buffer (current-buffer))
-    (when (and (noema-current-document)
-               (fboundp 'noema-research--cell-at-point))
-      (noema-research--cell-at-point))))
 
-;;;###autoload
-(defun noema-current-node (&optional buffer)
-  "Return the semantic WorkNode at point in BUFFER, or nil."
-  (with-current-buffer (or buffer (current-buffer))
-    (when-let* ((document (noema-current-document))
-                (cell (noema-current-cell))
-                (id (noema-research-cell-work-node-id cell)))
-      (noema-research-find-work-node document id))))
+
+
+
 
 ;;;###autoload
 (defun noema-node-id (node)
@@ -168,7 +145,7 @@ functions instead of changing its hash tables directly."
 (defun noema-node-children (node &optional type document)
   "Return NODE's child WorkNodes for relation TYPE in DOCUMENT.
 TYPE defaults to `lineage'.  This is a side-effect-free query."
-  (let* ((document (or document (noema-current-document)))
+  (let* ((document document)
          (id (noema-node-id node))
          (type (or type "lineage")))
     (unless document (user-error "No Noema WorkDocument context"))
@@ -180,7 +157,7 @@ TYPE defaults to `lineage'.  This is a side-effect-free query."
 (defun noema-node-parents (node &optional type document)
   "Return NODE's parent WorkNodes for relation TYPE in DOCUMENT.
 TYPE defaults to `lineage'.  This is a side-effect-free query."
-  (let* ((document (or document (noema-current-document)))
+  (let* ((document document)
          (id (noema-node-id node))
          (type (or type "lineage")))
     (unless document (user-error "No Noema WorkDocument context"))
@@ -188,104 +165,27 @@ TYPE defaults to `lineage'.  This is a side-effect-free query."
     (delq nil (mapcar (lambda (parent) (noema-research-find-work-node document parent))
                       (noema-research-relation-parents document id type)))))
 
-;;;###autoload
-(defun noema-create-node (kind title &optional parents after)
-  "Create a semantic KIND WorkNode titled TITLE.
-PARENTS are lineage parent ids; AFTER is the WorkNode whose block precedes the
-new block.  This mutates the current JuText document as one validated,
-undoable operation and returns the new stable id."
-  (unless (noema-current-document)
-    (user-error "Noema node mutation requires a JuText WorkDocument context"))
-  (unless (fboundp 'noema-research-op-create) (require 'noema-research-mode))
-  (noema-research-op-create kind title parents after))
 
-;;;###autoload
-(defun noema-create-work (title &optional parents after)
-  "Create a work node titled TITLE with lineage PARENTS after AFTER."
-  (noema-create-node "work" title parents after))
 
-;;;###autoload
-(defun noema-create-checkpoint (title &optional parents after)
-  "Create a checkpoint titled TITLE with lineage PARENTS after AFTER."
-  (noema-create-node "checkpoint" title parents after))
 
-;;;###autoload
-(defun noema-link (from to &optional type)
-  "Add a semantic relation of TYPE from WorkNode FROM to TO.
-TYPE defaults to `lineage'.  The mutation is validated and undoable."
-  (unless (fboundp 'noema-research-op-link) (require 'noema-research-mode))
-  (noema-research-op-link (noema-node-id from) (noema-node-id to) (or type "lineage")))
 
-;;;###autoload
-(defun noema-unlink (from to &optional type)
-  "Remove a semantic relation of TYPE from WorkNode FROM to TO."
-  (unless (fboundp 'noema-research-op-unlink) (require 'noema-research-mode))
-  (noema-research-op-unlink (noema-node-id from) (noema-node-id to) (or type "lineage")))
 
-;;;###autoload
-(defun noema-set-node-agenda (node patch)
-  "Patch NODE's native Agenda metadata, preserving its DAG and outputs.
-PATCH is a hash table of canonical planning fields; nil removes inclusion."
-  (unless (fboundp 'noema-research-op-set-agenda) (require 'noema-research-mode))
-  (noema-research-op-set-agenda (noema-node-id node) patch))
 
-;;;###autoload
-(defun noema-set-node-state (node state &optional reason outcome)
-  "Set work NODE to STATE, with optional REASON and OUTCOME."
-  (unless (fboundp 'noema-research-op-set-state) (require 'noema-research-mode))
-  (noema-research-op-set-state (noema-node-id node) state reason outcome))
 
-;;;###autoload
-(defun noema-open-node (node)
-  "Move point to NODE's primary Cell in the current JuText buffer."
-  (unless (fboundp 'noema-research-goto-cell) (require 'noema-research-mode))
-  (noema-research-goto-cell (noema-node-id node)))
 
-;;;###autoload
-(defun noema-run-cell (&optional cell session-policy parent-session-id session-name)
-  "Start an agent Run for semantic CELL through the frozen RunSpec path.
-CELL defaults to the Cell at point.  SESSION-POLICY, PARENT-SESSION-ID and
-SESSION-NAME use the existing Noema session resolver.  This has runtime side
-effects and returns the local queued submission id."
-  (let* ((cell (or cell (noema-current-cell)))
-         (document (noema-current-document))
-         (node (and cell document (noema-research-work-node-for-cell document cell))))
-    (unless (and cell node
-                 (equal (noema-research--get cell "cell_type") "code")
-                 (equal (noema-research-work-node-field node "kind") "work"))
-      (user-error "Noema Agent Run requires a work Cell"))
-    (when (and (fboundp 'noema-research-work-prompt-empty-p)
-               (noema-research-work-prompt-empty-p cell))
-      (user-error "This work block has no prompt"))
-    (when (noema-research--get (noema-research-notebook-meta document) "workflow")
-      (unless (fboundp 'noema-research-workflow-assert-ready)
-        (require 'noema-research-workflow))
-      (noema-research-workflow-assert-ready document cell))
-    (unless buffer-file-name (user-error "This WorkDocument has no canonical file"))
-    (when (buffer-modified-p) (save-buffer))
-    (unless (fboundp 'noema-agent-worker-run-work-cell) (require 'noema-agent-worker))
-    ;; The runtime resolves everything against `noema.toml'; settle it here,
-    ;; where the user is asking for work, rather than when the file is visited.
-    (let ((default-directory (noema-project-ensure buffer-file-name)))
-      (let ((file (expand-file-name buffer-file-name))
-            (cell-id (noema-research-cell-id cell)))
-        (cond
-         (session-name
-          (noema-agent-worker-run-work-cell
-           file cell-id session-policy parent-session-id session-name))
-         ((or session-policy parent-session-id)
-          (noema-agent-worker-run-work-cell file cell-id session-policy parent-session-id))
-         (t (noema-agent-worker-run-work-cell file cell-id)))))))
 
-;;;###autoload
-(defun noema-agent-run (&optional cell session-policy)
-  "Run CELL using SESSION-POLICY through `noema-run-cell'."
-  (noema-run-cell cell session-policy))
 
-;;;###autoload
-(defun noema-agent-resume (&optional cell session-name)
-  "Run CELL by continuing SESSION-NAME, or the resolver's default session."
-  (noema-run-cell cell "continue" nil session-name))
+
+
+
+
+
+
+
+
+
+
+
 
 ;;;###autoload
 (defun noema-agent-cancel (run-id)
@@ -293,17 +193,7 @@ effects and returns the local queued submission id."
   (unless (fboundp 'noema-agent-worker-cancel-run) (require 'noema-agent-worker))
   (noema-agent-worker-cancel-run run-id))
 
-;;;###autoload
-(defun noema-run-project-file (&optional project-file args)
-  "Run a project `.py' or `.ipynb' from the current WorkNode.
-PROJECT-FILE and ARGS are forwarded to Noema's frozen project-file Run path.
-Interactively, prompt for them through the existing Emacs UI.  This is a
-runtime effect and retains the explicit local-execution confirmation."
-  (interactive)
-  (unless (fboundp 'noema-research-run-project-file) (require 'noema-research-mode))
-  (if project-file
-      (noema-research-run-project-file project-file args)
-    (call-interactively #'noema-research-run-project-file)))
+
 
 (defun noema--host-call-now (channel body callback &optional timeout)
   "Call host CHANNEL with BODY and CALLBACK after readiness was checked.

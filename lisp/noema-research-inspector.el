@@ -270,17 +270,9 @@ kernel's normalized action."
            (pop-to-buffer buffer))))
      30)))
 
-(declare-function noema-research-merge-disk-outputs "noema-research-mode" ())
 
-(defun noema-research-attention--reconcile-materialized (result)
-  "Merge an accepted Proposal's materialized Cell into its open JuText buffer.
-Without this, the next JuText save would overwrite the Cell Node wrote."
-  (when-let* ((materialized (noema-research-attention--value result "materialized"))
-              (file (noema-research-attention--string materialized "file"))
-              (buffer (find-buffer-visiting file)))
-    (with-current-buffer buffer
-      (when (derived-mode-p 'noema-research-mode)
-        (noema-research-merge-disk-outputs)))))
+
+
 
 (defun noema-research-attention--review-proposal (proposal decision)
   "Submit human DECISION for versioned PROPOSAL."
@@ -307,8 +299,6 @@ Without this, the next JuText save would overwrite the Cell Node wrote."
        (if error-object
            (message "Noema Proposal review lost/conflicted: %s"
                     (noema-research-attention--error error-object))
-         (when (equal decision "accept")
-           (noema-research-attention--reconcile-materialized result))
          (message "Noema Proposal %s %s" proposal-id
                   (if (equal decision "accept") "accepted" "rejected")))
        (when (buffer-live-p buffer)

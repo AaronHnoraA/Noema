@@ -44,7 +44,7 @@
           noema-project-overview--responses (make-hash-table :test 'eq))
     (noema-project-overview--render)
     (dolist (label '("Sessions" "All agents" "Skills / MCP" "Work queue" "Attention" "Agenda"
-                     "New workflow" "History search" "Findings"))
+                     "History search" "Findings"))
       (goto-char (point-min))
       (search-forward label)
       (should (button-at (1- (point)))))))
@@ -71,21 +71,7 @@
         (button-activate (button-at (1- (point)))))
       (should (equal opened '(("second" "sid-2") ("first" "sid-1")))))))
 
-(ert-deftest noema-project-overview-run-opens-durable-source ()
-  "Run navigation resolves its notebook and cell identity before visiting."
-  (let (requested visited cell)
-    (cl-letf (((symbol-function '+noema-api-call)
-               (lambda (channel args callback &optional _timeout)
-                 (should (equal channel "noema:api:research:cell:resolve"))
-                 (setq requested (aref args 0))
-                 (funcall callback '((file . "/tmp/source.noema")) nil)))
-              ((symbol-function 'find-file) (lambda (file) (setq visited file)))
-              ((symbol-function 'noema-research-goto-cell) (lambda (id) (setq cell id))))
-      (noema-project-overview--open-run
-       "/tmp/project/" '((notebookId . "nb-1") (cellId . "c-1")))
-      (should (equal (alist-get 'notebookId requested) "nb-1"))
-      (should (equal visited "/tmp/source.noema"))
-      (should (equal cell "c-1")))))
+
 
 (ert-deftest noema-project-overview-summary-uses-kernel-task-states ()
   "Open and blocked are the Task states; active is not a Task state."

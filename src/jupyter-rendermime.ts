@@ -27,7 +27,7 @@ import "@jupyterlab/rendermime/style/base.css";
 import "@jupyterlab/outputarea/style/base.css";
 
 const WIDGET_VIEW_MIMETYPE = "application/vnd.jupyter.widget-view+json";
-export const NOEMA_RUN_MIMETYPE = "application/vnd.noema.run+json";
+
 
 export type JupyterWidgetRuntimeRef = {
   id: string;
@@ -205,96 +205,7 @@ class NoemaJsonRenderer extends Widget implements IRenderMime.IRenderer {
   }
 }
 
-class NoemaRunRenderer extends Widget implements IRenderMime.IRenderer {
-	private richOutput: JupyterOutputView | null = null;
 
-  constructor() {
-    super();
-    this.node.className = "cm-noema-run-output";
-    this.node.setAttribute("aria-readonly", "true");
-  }
-
-  async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
-	if (this.richOutput) {
-	  this.richOutput();
-	  this.richOutput = null;
-	}
-    const raw = model.data[NOEMA_RUN_MIMETYPE];
-    let snapshot: any = raw;
-    if (typeof raw === "string") {
-      try { snapshot = JSON.parse(raw); } catch { snapshot = null; }
-    }
-    if (!snapshot || typeof snapshot !== "object") {
-      this.node.textContent = "Invalid Noema Run snapshot.";
-      return;
-    }
-    const run = (snapshot.run && typeof snapshot.run === "object"
-      ? snapshot.run
-      : {
-          id: snapshot.run_id,
-          agent: snapshot.agent,
-          status: snapshot.status,
-        }) as Record<string, unknown>;
-    const events = Array.isArray(snapshot.events) ? snapshot.events : [];
-    const header = document.createElement("header");
-    const title = document.createElement("strong");
-    title.textContent = `Run ${String(run.id || "")}`;
-    const status = document.createElement("span");
-    status.className = "cm-noema-run-status";
-    status.dataset.status = String(run.status || "unknown");
-    status.textContent = String(run.status || "unknown");
-    header.append(title, status);
-    const meta = document.createElement("div");
-    meta.className = "cm-noema-run-meta";
-    meta.textContent = [run.agent, run.sessionId, snapshot.seq ? `seq ${snapshot.seq}` : ""]
-      .filter(Boolean).map(String).join(" · ");
-    const content = events
-      .filter((event: any) => event?.type === "run.content.segment" && typeof event?.payload?.text === "string")
-      .map((event: any) => event.payload.text).join("");
-	const richOutputs = events
-	  .filter((event: any) => event?.type === "run.jupyter.outputs")
-	  .flatMap((event: any) => Array.isArray(event?.payload?.outputs) ? event.payload.outputs : []);
-    const output = document.createElement("div");
-    output.className = "cm-noema-run-content";
-    if (content) {
-      const pre = document.createElement("pre");
-      pre.textContent = content;
-      output.append(pre);
-	}
-	if (richOutputs.length) {
-	  const rich = document.createElement("div");
-	  rich.className = "cm-noema-run-rich-output";
-	  output.append(rich);
-	  this.richOutput = renderJupyterOutputs(rich, richOutputs);
-	}
-	if (!content && !richOutputs.length) {
-      output.textContent = ["completed", "cancelled", "failed", "interrupted"].includes(String(run.status))
-		? "No project output was recorded."
-		: "Waiting for Run output…";
-    }
-    const actions = events.filter((event: any) => (
-      event?.type === "run.action.updated" || String(event?.type || "").includes("permission")
-    ));
-    if (actions.length > 0) {
-      const details = document.createElement("details");
-      const summary = document.createElement("summary");
-      summary.textContent = `${actions.length} action / permission update${actions.length === 1 ? "" : "s"}`;
-      const pre = document.createElement("pre");
-      pre.textContent = JSON.stringify(actions.map((event: any) => event.payload), null, 2);
-      details.append(summary, pre);
-      output.append(details);
-    }
-    this.node.replaceChildren(header, meta, output);
-  }
-
-	dispose(): void {
-	  if (this.richOutput) {
-		this.richOutput();
-		this.richOutput = null;
-	  }
-	  super.dispose();
-	}
-}
 
 function jsonMimeTypesForOutput(output: unknown): string[] {
   const data = output && typeof output === "object" ? (output as { data?: unknown }).data : null;
@@ -408,14 +319,7 @@ export function createBaseRenderMime(options: Pick<RenderMimeOptions, "markdownP
     mimeTypes: ["text/markdown"],
     createRenderer: (rendererOptions) => new NoemaMarkdownRenderer(rendererOptions),
   }, 60);
-  registry.addFactory({
-    safe: true,
-    mimeTypes: [NOEMA_RUN_MIMETYPE],
-    createRenderer: () => new NoemaRunRenderer(),
-  // Prefer a persisted text/markdown member when a terminal work output
-  // contains both it and the vendor metadata.  Vendor-only live snapshots
-  // still use this read-only status/action renderer.
-  }, 75);
+
   registry.addFactory({
     safe: true,
     mimeTypes: ["application/json"],

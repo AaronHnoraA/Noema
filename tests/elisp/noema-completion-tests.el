@@ -1,201 +1,36 @@
 ;;; noema-completion-tests.el --- Completion and capability UI regressions -*- lexical-binding: t; -*-
 (require 'ert)
 (require 'cl-lib)
-(require 'noema-research-mode)
+
 (require 'noema-capability-ui)
 
-(ert-deftest noema-completion-snippet-preview-does-not-open-a-document ()
-  "A real snippet preview may borrow JuText syntax without opening a file."
-  (skip-unless (require 'company-yasnippet nil t))
-  (require 'yasnippet)
-  (save-window-excursion
-    (with-temp-buffer
-      (let ((source (current-buffer))
-            (layout (current-window-configuration)))
-        (setq-local major-mode 'noema-research-mode
-                    buffer-file-name "/tmp/preview-source.noema")
-        (cl-letf (((symbol-function 'noema-research--load)
-                   (lambda (&rest _) (ert-fail "Preview loaded a work document")))
-                  ((symbol-function 'noema-research-completion-refresh)
-                   (lambda () (ert-fail "Preview scheduled capability requests")))
-                  ((symbol-function 'noema-research--schedule-default-output)
-                   (lambda () (ert-fail "Preview scheduled workspace changes"))))
-          (unwind-protect
-              (let ((preview
-                     (company-yasnippet
-                      'doc-buffer
-                      (propertize "@@skill" 'yas-template
-                                  (yas--make-template :content "@@skill(example)")))))
-                (should (buffer-live-p preview))
-                (should (eq (current-buffer) source))
-                (with-current-buffer preview
-                  (should (derived-mode-p 'noema-research-mode))
-                  (should (equal (buffer-string) "@@skill(example)"))
-                  (should-not noema-research--document)
-                  (should-not noema-research--output-timer)
-                  (should-not (memq #'noema-research-mode--write-contents
-                                    write-contents-functions)))
-                (should (compare-window-configurations
-                         layout (current-window-configuration))))
-            (when-let* ((preview (get-buffer "*company-documentation*")))
-              (kill-buffer preview))))))))
 
-(ert-deftest noema-completion-delayed-mode-preserves-preview-text ()
-  (with-temp-buffer
-    (insert "@@skill(example)")
-    (delay-mode-hooks (noema-research-mode))
-    (font-lock-ensure)
-    (should (equal (buffer-string) "@@skill(example)"))
-    (should-not noema-research--document)))
 
-(defmacro noema-completion-test--buffer (text &rest body)
-  (declare (indent 1))
-  `(with-temp-buffer
-     (setq-local major-mode 'noema-research-mode
-                 noema-research-completion--project "/project/")
-     (insert ,text)
-     ,@body))
 
-(ert-deftest noema-completion-directive-names-and-delimiters ()
-  (noema-completion-test--buffer "%% work Review\n@@ski"
-    (let* ((capf (noema-research-completion-at-point))
-           (exit (plist-get (nthcdr 3 capf) :exit-function)))
-      (should (member "@@skill" (nth 2 capf)))
-      (delete-region (nth 0 capf) (nth 1 capf))
-      (insert "@@skill")
-      (funcall exit "@@skill" 'finished)
-      (should (looking-at ")"))
-      (should (string-suffix-p "@@skill()" (buffer-string))))))
 
-(ert-deftest noema-completion-only-in-work-leading-control-region ()
-  (dolist (text '("%% question Q\n@@" "%% note N\n@@" "%% work W\nPrompt\n@@"
-                  "%% work W\n```\n@@" "%% work W\n\n@@" "%% work W\n  @@"))
-    (noema-completion-test--buffer text
-      (should-not (noema-research-completion-at-point))))
-  (noema-completion-test--buffer "%% note N\nData\n%% work W\n@@ctx(lineage)\n\n@@"
-    (should (noema-research-completion-at-point))))
 
-(ert-deftest noema-completion-cached-candidates-do-no-io ()
-  (let ((noema-capability--cache (make-hash-table :test #'equal)))
-    (puthash "/project/"
-             '(:resolution ((skills . [((id . "available") (selectable . t) (enabled . :false))
-                                      ((id . "disabled") (selectable . :false))
-                                      ((id . "invalid") (selectable . :false))])))
-             noema-capability--cache)
-    (noema-completion-test--buffer "%% work W\n@@skill("
-      (cl-letf (((symbol-function 'noema--host-call) (lambda (&rest _) (ert-fail "CAPF made a request")))
-                ((symbol-function 'noema-current-project) (lambda (&rest _) (ert-fail "CAPF scanned for a project")))
-                ((symbol-function 'directory-files) (lambda (&rest _) (ert-fail "CAPF scanned a directory"))))
-        (dotimes (_ 1000)
-          (should (equal (nth 2 (noema-research-completion-at-point)) '("available"))))))
-    (noema-completion-test--buffer "%% work W\n@@skill("
-      (setq noema-research-completion--project "/other-project/")
-      (should-not (noema-research-completion-at-point)))))
 
-(ert-deftest noema-completion-file-candidates-are-memory-only ()
-  (let ((noema-research-completion--files (make-hash-table :test #'equal)))
-    (puthash '("/project/" . "src/") '(:files ("main.py" "sub/")) noema-research-completion--files)
-    (noema-completion-test--buffer "%% work W\n@@ctx(file:src/"
-      (cl-letf (((symbol-function 'file-name-all-completions) (lambda (&rest _) (ert-fail "CAPF read files")))
-                ((symbol-function 'noema--host-call) (lambda (&rest _) (ert-fail "CAPF queried host"))))
-        (should (equal (nth 2 (noema-research-completion-at-point)) '("file:src/main.py" "file:src/sub/")))))))
 
-(ert-deftest noema-completion-company-supports-empty-value-prefix ()
-  (skip-unless (require 'company-capf nil t))
-  (noema-completion-test--buffer "%% work W\n@@session("
-    (setq-local completion-at-point-functions '(noema-research-completion-at-point))
-    (should (equal (company-capf 'prefix) '("" "" t)))))
 
-(ert-deftest noema-completion-company-routes-skill-ids-without-snippets ()
-  (skip-unless (require 'company-capf nil t))
-  (let ((noema-capability--cache (make-hash-table :test #'equal)))
-    (dolist (resolution-present '(nil t))
-      (clrhash noema-capability--cache)
-      (when resolution-present
-        (puthash "/project/"
-                 '(:resolution ((skills . [((id . "lean-proof") (selectable . t)
-                                            (description . "Check proofs"))
-                                          ((id . "lean4") (selectable . t)
-                                           (description . "Lean tools"))])))
-                 noema-capability--cache))
-      (noema-completion-test--buffer "%% work Review\n@@skill(le"
-        (setq-local completion-at-point-functions '(noema-research-completion-at-point))
-        (noema-research-completion-setup)
-        (should (equal company-backends '(noema-research-company-backend)))
-        (cl-letf (((symbol-function 'company-yasnippet)
-                   (lambda (&rest _) (ert-fail "A snippet leaked into @@skill")))
-                  ((symbol-function 'company-dabbrev)
-                   (lambda (&rest _) (ert-fail "Prose completion leaked into @@skill"))))
-          (should (equal (noema-research-company-backend 'prefix)
-                         (and resolution-present '("le" "" t))))
-          (should (eq noema-research-completion--company-source 'company-capf))
-          (when resolution-present
-            (should (equal (noema-research-company-backend 'candidates "le" "")
-                           '("lean-proof" "lean4")))))))))
 
-(ert-deftest noema-completion-prose-uses-only-prose-backend ()
-  (skip-unless (require 'company nil t))
-  (noema-completion-test--buffer "%% work Review\nSummary of le"
-    (noema-research-completion-setup)
-    (noema-research-company-backend 'prefix)
-    (should (eq noema-research-completion--company-source 'company-dabbrev))))
 
-(ert-deftest noema-completion-font-lock-colors-work-controls-only ()
-  (with-temp-buffer
-    (insert "%% work Review\n@@skill(lean4)\n@@skill(lean\nPrompt\n%% note Example\n@@skill(lean4)\n")
-    (delay-mode-hooks (noema-research-mode))
-    (font-lock-ensure)
-    (goto-char (point-min))
-    (search-forward "@@skill(lean4)")
-    (search-backward "lean4")
-    (should (eq (get-text-property (point) 'face)
-                'noema-research-control-value-face))
-    (search-forward "@@skill(lean")
-    (search-backward "lean")
-    (should (eq (get-text-property (point) 'face)
-                'noema-research-control-value-face))
-    (search-forward "@@skill(lean4)")
-    (search-backward "lean4")
-    (should-not (eq (get-text-property (point) 'face)
-                    'noema-research-control-value-face))))
 
-(ert-deftest noema-research-flymake-maps-validation-to-cell-header ()
-  (let* ((document (noema-research-create-document "Diagnostics"))
-         (id (noema-research-create-work-node document "work" "Review"))
-         (node (noema-research-find-work-node document id)))
-    (puthash "state" "unsupported" node)
-    (with-temp-buffer
-      (setq-local major-mode 'noema-research-mode
-                  noema-research--document document)
-      (noema-research--render document)
-      (let (reported)
-        (noema-research-flymake (lambda (diagnostics) (setq reported diagnostics)))
-        (should (seq-some
-                 (lambda (diagnostic)
-                   (and (eq (flymake-diagnostic-type diagnostic) :error)
-                        (string-match-p "unsupported work state"
-                                        (flymake-diagnostic-text diagnostic))
-                        (= (flymake-diagnostic-beg diagnostic) (point-min))))
-                 reported))))))
 
-(ert-deftest noema-research-mode-installs-scoped-editor-tools ()
-  (with-temp-buffer
-    (insert (noema-research-serialize
-             (noema-research-create-document "Editor tools")))
-    (noema-research-mode)
-    (should (equal company-backends '(noema-research-company-backend)))
-    (should (memq #'noema-research-completion-at-point
-                  completion-at-point-functions))
-    (should (memq #'noema-research-flymake flymake-diagnostic-functions))
-    (should flymake-mode)))
 
-(ert-deftest noema-completion-file-request-failure-does-not-stick-pending ()
-  (let ((noema-research-completion--files (make-hash-table :test #'equal)))
-    (noema-completion-test--buffer "%% work W\n@@ctx(file:"
-      (setq noema-research-completion--file-directory "./")
-      (cl-letf (((symbol-function 'noema--host-call) (lambda (&rest _) (error "offline"))))
-        (noema-research-completion--request-files)
-        (should-not (plist-get (gethash '("/project/" . "./") noema-research-completion--files) :pending))))))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 (ert-deftest noema-capability-manager-global-actions-use-host-paths ()
   (with-temp-buffer
@@ -383,14 +218,7 @@
                                '("/global/capabilities.json" "/global/skills" "/codex/config.toml"))))))
         (kill-buffer "*Noema capability libraries*")))))
 
-(ert-deftest noema-completion-replaces-whole-value-without-duplicating-close ()
-  (noema-completion-test--buffer "%% work W\n@@session(continue)"
-    (search-backward "tinue")
-    (let ((capf (noema-research-completion-at-point)))
-      (delete-region (nth 0 capf) (nth 1 capf))
-      (insert "fresh")
-      (funcall (plist-get (nthcdr 3 capf) :exit-function) "fresh" 'finished)
-      (should (string-suffix-p "@@session(fresh)" (buffer-string))))))
+
 
 (ert-deftest noema-capability-cache-coalesces-and-rejects-stale-responses ()
   (let ((noema-capability--cache (make-hash-table :test #'equal))
@@ -423,73 +251,9 @@
       (should-not (plist-get (gethash "/project/" noema-capability--cache) :pending))
       (should (plist-get (gethash "/project/" noema-capability--cache) :error)))))
 
-(ert-deftest noema-capability-manager-inserts-skill-at-work-start-once ()
-  (let* ((document (noema-research-create-document "Skill insertion"))
-         (node (noema-research-create-work-node document "work" "Review"))
-         (cell (noema-research-primary-cell document node)))
-    (puthash "source" "Review this proof." cell)
-    (with-temp-buffer
-      (setq-local major-mode 'noema-research-mode noema-research--document document)
-      (noema-research--render document)
-      (goto-char (point-max))
-      (let ((origin (point-marker)) (editor (current-buffer)))
-        (with-temp-buffer
-          (noema-capability-ui-mode)
-          (setq noema-capability-ui--project "/project/" noema-capability-ui--origin origin)
-          (noema-capability-ui--render '((skills . [((id . "review") (type . "skill") (selectable . t))])))
-          (let ((manager (current-buffer)))
-            (cl-letf (((symbol-function 'pop-to-buffer) (lambda (buffer &rest _) (set-buffer buffer))))
-              (noema-capability-ui-insert-skill)
-              (set-buffer manager)
-              (noema-capability-ui-insert-skill)))
-          (with-current-buffer editor
-            (should (string-match-p "%% work Review\n@@skill(review)\nReview this proof" (buffer-string)))
-            (should (= (how-many "@@skill(review)" (point-min) (point-max)) 1))))))))
 
-(ert-deftest noema-capability-skill-selection-restores-covered-pane ()
-  "Selecting a Skill restores the output pane and focuses the source."
-  (save-window-excursion
-    (let* ((source (generate-new-buffer " *skill-source*"))
-           (output (generate-new-buffer " *skill-output*"))
-           (graph (generate-new-buffer " *skill-graph*"))
-           (manager (generate-new-buffer " *skill-manager*"))
-           (document (noema-research-create-document "Selection"))
-           (node (noema-research-create-work-node document "work" "Review")))
-      (unwind-protect
-          (progn
-            (puthash "source" "Review this proof."
-                     (noema-research-primary-cell document node))
-            (delete-other-windows)
-            (switch-to-buffer source)
-            (setq-local major-mode 'noema-research-mode
-                        noema-research--document document)
-            (noema-research--render document)
-            (goto-char (point-max))
-            (let* ((origin (point-marker))
-                   (left (selected-window))
-                   (right (split-window-right))
-                   (bottom (split-window left nil 'below)))
-              (set-window-buffer right output)
-              (set-window-buffer bottom graph)
-              (with-current-buffer output
-                (setq-local major-mode 'xwidget-webkit-mode))
-              (with-current-buffer manager
-                (noema-capability-ui-mode)
-                (setq noema-capability-ui--origin origin)
-                (noema-capability-ui--render
-                 '((skills . [((id . "review") (type . "skill") (selectable . t))]))))
-              (let ((edges (mapcar #'window-edges (list left right bottom))))
-                (select-window right)
-                (pop-to-buffer manager '(display-buffer-same-window))
-                (noema-capability-ui-insert-skill)
-                (should (eq (selected-window) left))
-                (should (eq (window-buffer right) output))
-                (should (eq (window-buffer bottom) graph))
-                (should (equal edges (mapcar #'window-edges (list left right bottom))))
-                (should-not (get-buffer-window manager))
-                (should (string-match-p "@@skill(review)" (buffer-string))))))
-        (dolist (buffer (list source output graph manager))
-          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+
 
 (ert-deftest noema-capability-json-patch-keeps-null-empty-objects-and-project ()
   (save-window-excursion
@@ -530,22 +294,3 @@
           (when (buffer-live-p form) (kill-buffer form)))))))
 
 (provide 'noema-completion-tests)
-
-(ert-deftest noema-completion-pack-directive-offers-selectable-packs ()
-  (let ((noema-capability--cache (make-hash-table :test #'equal)))
-    (puthash "/project/"
-             '(:resolution ((packs . [((id . "math-writing") (selectable . t) (description . "Prose")
-                                       (members . [((id . "math-prose"))]))
-                                      ((id . "broken") (selectable . :false))])))
-             noema-capability--cache)
-    (noema-completion-test--buffer "%% work Review\n@@pa"
-      (should (member "@@pack" (nth 2 (noema-research-completion-at-point)))))
-    (noema-completion-test--buffer "%% work Review\n@@pack(ma"
-      (cl-letf (((symbol-function 'noema-research-completion-refresh) #'ignore))
-        (let ((capf (noema-research-completion-at-point)))
-          (should (equal (nth 2 capf) '("math-writing")))
-          (should (string-match-p "math-prose"
-                                  (funcall (plist-get (nthcdr 3 capf) :annotation-function) "math-writing"))))))
-    ;; A leading @@pack keeps the control region open for the next directive.
-    (noema-completion-test--buffer "%% work Review\n@@pack(math-writing)\n@@sk"
-      (should (member "@@skill" (nth 2 (noema-research-completion-at-point)))))))

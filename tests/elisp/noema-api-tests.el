@@ -6,7 +6,7 @@
 (require 'ert)
 (require 'noema-api)
 (require 'noema-capability-ui)
-(require 'noema-research-mode)
+
 (require 'noema-agent-worker)
 
 (defmacro noema-api-test--with-project (root &rest body)
@@ -38,45 +38,11 @@
                            (noema-node-parents child "lineage" document))
                    (list parent)))))
 
-(ert-deftest noema-api-mutation-dispatches-to-one-structural-backend ()
-  (with-temp-buffer
-    (setq-local major-mode 'noema-research-mode
-                noema-research--document (noema-research-create-document "Mutation test"))
-    (let (called)
-      (cl-letf (((symbol-function 'noema-research-op-create)
-                 (lambda (kind title parents after)
-                   (setq called (list kind title parents after))
-                   "wn-created")))
-        (should (equal (noema-create-work "Check proof" '("wn-parent") "wn-after")
-                       "wn-created"))
-        (should (equal called '("work" "Check proof" ("wn-parent") "wn-after")))))))
 
-(ert-deftest noema-api-run-freezes-through-the-existing-worker-dispatch ()
-  (noema-api-test--with-project root
-    (let* ((document (noema-research-create-document "Run test"))
-           (id (noema-research-create-work-node document "work" "Execute"))
-           (cell (noema-research-primary-cell document id))
-           (file (expand-file-name "run.noema" root))
-           called)
-      (puthash "source" "Perform the semantic operation." cell)
-      (with-temp-buffer
-        (setq-local major-mode 'noema-research-mode
-                    noema-research--document document
-                    buffer-file-name file)
-        (set-buffer-modified-p nil)
-        (cl-letf (((symbol-function 'noema-current-cell) (lambda (&optional _) cell))
-                  ((symbol-function 'noema-agent-worker-run-work-cell)
-                   (lambda (&rest args) (setq called args) "submission-test")))
-          (should (equal (noema-run-cell nil "continue") "submission-test"))
-          (should (equal called (list file (noema-research-cell-id cell)
-                                     "continue" nil))))))))
 
-(ert-deftest noema-api-resume-routes-a-name-separately-from-session-policy ()
-  (let (called)
-    (cl-letf (((symbol-function 'noema-run-cell)
-               (lambda (&rest args) (setq called args) 'queued)))
-      (should (eq (noema-agent-resume 'cell "review-session") 'queued))
-      (should (equal called '(cell "continue" nil "review-session"))))))
+
+
+
 
 (ert-deftest noema-api-capability-query-uses-the-semantic-host-channel ()
   (noema-api-test--with-project root
@@ -203,8 +169,8 @@
                   (should +agent-acp-tabs-mode)
                   (should tab-line-exclude)
                   (let ((tabs (+agent-acp--tab-line)))
-                    (should (string-match-p "main · opencode" tabs))
-                    (should (string-match-p "branch · opencode" tabs))
+                    (should (string-match-p "main" tabs))
+                    (should (string-match-p "branch" tabs))
                     (should (eq 'tab-line-tab-current
                                 (get-text-property (string-match "branch" tabs) 'face tabs)))
                     (should (eq 'tab-line-tab-inactive
@@ -213,7 +179,7 @@
                 (should (eq main (window-buffer window)))
                 (let ((edges (window-edges window)))
                   (should (>= (car edges) (/ (frame-width) 2)))
-                  (should (> (cadr edges) 0)))
+                  (should (eq (window-parameter window 'window-side) 'right)))
                 (should (eq main (+agent-acp-session-buffer "main" root))))))
         (when (buffer-live-p main) (kill-buffer main))
         (when (buffer-live-p branch) (kill-buffer branch))))))
@@ -490,25 +456,9 @@
         (should (eq (noema-agent-worker-queue-state preparing) 'cancelled))
         (should-not (gethash "run_frozen" noema-agent-worker--runs))))))
 
-(ert-deftest noema-jutext-interrupt-cancels-only-the-cell-at-point ()
-  (let (called)
-    (with-temp-buffer
-      (setq buffer-file-name "/tmp/noema-interrupt/work.noema")
-      (cl-letf (((symbol-function 'noema-research--require-cell) (lambda () 'cell))
-                ((symbol-function 'noema-research-cell-id) (lambda (_cell) "c-7"))
-                ((symbol-function 'noema-agent-worker-cancel-cell)
-                 (lambda (file id) (setq called (list file id)) nil)))
-        (should-error (noema-research-interrupt-current) :type 'user-error)
-        (should (equal called '("/tmp/noema-interrupt/work.noema" "c-7")))))))
 
-(ert-deftest noema-jutext-refuses-session-keyword-lookalikes ()
-  (should (equal (noema-research-session-keyword-suggestion "refresh") "fresh"))
-  (should (equal (noema-research-session-keyword-suggestion "Fresh") "fresh"))
-  (should-not (noema-research-session-keyword-suggestion "refresh-notes"))
-  (should (noema-research-session-directive-valid-p "fresh"))
-  (should-not (noema-research-session-directive-valid-p "refresh"))
-  (should-not (noema-research-session-directive-valid-p "refresh:child"))
-  (should (noema-research-session-directive-valid-p "refresh-notes")))
+
+
 
 (ert-deftest noema-sessions-agent-commands-act-on-the-tab-session ()
   (require 'noema-sessions)
@@ -537,18 +487,9 @@
             (should-error (noema-sessions-agent-rename buffer "x") :type 'user-error))
         (kill-buffer buffer)))))
 
-(ert-deftest noema-jutext-execution-consumes-the-public-api ()
-  (let (called)
-    (cl-letf (((symbol-function 'noema-run-cell)
-               (lambda (&rest args) (setq called args) 'queued)))
-      (should (eq (noema-research-execute-current) 'queued))
-      (should (equal called nil)))))
 
-(ert-deftest noema-jutext-exposes-api-backed-capability-and-project-run-commands ()
-  (should (eq (lookup-key noema-research-mode-map (kbd "C-c j C"))
-              'noema-capability-manager))
-  (should (eq (lookup-key noema-research-mode-map (kbd "C-c j r"))
-              'noema-run-project-file)))
+
+
 
 (provide 'noema-api-tests)
 ;;; noema-api-tests.el ends here

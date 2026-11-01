@@ -2,7 +2,7 @@
 (require 'ert)
 (require 'noema-agenda)
 (require 'noema-research)
-(require 'noema-research-mode)
+
 
 (defun noema-agenda-test--snapshot ()
   (copy-tree '((todos . [((uid . "one") (id . "#abc123") (scopeId . "knowledge")
@@ -174,33 +174,7 @@
        (should (= calls 2))
        (should-not noema-agenda--pending)))))
 
-(ert-deftest noema-agenda-worknode-visible-syntax-roundtrips-with-dag-and-output ()
-  (let* ((file (expand-file-name "../poc/org-agenda/example.noema"
-                                  (file-name-directory (locate-library "noema-agenda")))))
-    (with-temp-buffer
-      (insert-file-contents file)
-      (let* ((document (json-parse-buffer :object-type 'hash-table :array-type 'array
-                                         :null-object :null :false-object :false))
-             (outputs (json-serialize (gethash "outputs" (aref (gethash "cells" document) 2))))
-             (dependencies (json-serialize (gethash "dependencies" (gethash "noema_research" (gethash "metadata" document)))))
-             (patch (make-hash-table :test #'equal)))
-        (should-not (noema-research--directive-errors document))
-        (puthash "sche" "2026-09-16 10:30" patch)
-        (noema-research-set-agenda document "wn_proof" patch)
-        (should-not (plist-get (noema-research-validate document) :errors))
-        (let* ((roundtrip (json-parse-string (json-serialize document) :object-type 'hash-table :array-type 'array
-                                            :null-object :null :false-object :false))
-               (cell (noema-research-primary-cell roundtrip "wn_proof"))
-               (agenda (noema-research-agenda-directive (noema-research-cell-source cell) "work")))
-          (should (equal (gethash "sche" agenda) "2026-09-16 10:30"))
-          (should (string-match-p "@@todo \\[Ask the agent" (noema-research-cell-source cell)))
-          (should (equal outputs (json-serialize (gethash "outputs" cell))))
-          (should-not (gethash "agenda" (noema-research-find-work-node roundtrip "wn_proof")))
-          (should (equal dependencies (json-serialize (gethash "dependencies" (gethash "noema_research" (gethash "metadata" roundtrip)))))))
-        (noema-research-set-agenda document "wn_proof" nil)
-        (should-not (noema-research-agenda-directive
-                     (noema-research-cell-source (noema-research-primary-cell document "wn_proof"))
-                     "work"))))))
+
 
 (ert-deftest noema-agenda-discards-old-query-after-changing-date-range ()
   (noema-agenda-test--with-buffer
