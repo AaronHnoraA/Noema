@@ -314,7 +314,7 @@ test("the script's check is a gate", async () => {
 });
 
 test("the Skills stay small: rules belong in this code", () => {
-  const budget: Record<string, number> = { "noema-project-graph": 1000, "noema-project-plan": 800, "noema-project-run": 600, "noema-project-review": 400 };
+  const budget: Record<string, number> = { "noema-project-graph": 1000, "noema-project-plan": 800, "noema-project-run": 600, "noema-project-review": 400, "noema-pi": 900 };
   for (const [skill, limit] of Object.entries(budget))
     expect([skill, readFileSync(join(process.cwd(), "resources/skills", skill, "SKILL.md"), "utf8").length <= limit]).toEqual([skill, true]);
 });

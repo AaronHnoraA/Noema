@@ -50,6 +50,7 @@ export function createEmacsApiHandlers({
       parameters: [{ action: "context | list | status | ensure | send | resume | new | archive",
         root: "absolute local project root", companion: "true for the Emacs companion",
         sessionId: "owned Pi record id for resume/archive", prompt: "required for send",
+        from: "send: optional {buffer, nativeSessionId} of the calling Agent session; Pi sees who is asking and can reply to it",
         focus: "optional true for ensure/send; default preserves focus", offset: "list pagination, default 0", limit: "list page size 1..100, default 20" }],
     } }),
     "noema:api:emacs:agent": Object.assign((body) => apiAgent(body), { apiDoc: {

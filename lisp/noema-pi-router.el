@@ -27,6 +27,7 @@
 
 (declare-function +noema-api-call "noema/bridge/config" (channel args callback &optional timeout))
 (declare-function +noema--ensure-server "noema/bridge/config" (&optional callback))
+(declare-function +agent-api-identified "tools/agent/api" (body))
 (declare-function +agent-context-state "tools/agent/context" (&optional window))
 (declare-function +agent-context--deliver "tools/agent/context" (buffer blocks &optional instructions no-focus))
 (declare-function noema-agent-worker-claim-coordinator-requests "noema-agent-worker" (root &optional on-complete))
@@ -267,6 +268,15 @@ Outside a project, or with prefix COMPANION, toggle the Emacs companion."
   (let ((root (noema-pi-router--root directory)))
     (or (noema-pi-router-buffer root) (noema-pi-router--launch root nil))))
 
+(defun noema-pi-router--from-header (from)
+  "Return the header naming the Agent session FROM, proven by its identity.
+An Agent cannot be answered, or told from a person, without this."
+  (remote-require-on-client 'tools/agent/api)
+  (let ((session (+agent-api-identified from)))
+    (format "[From Agent session: agent=%s buffer=%s nativeSessionId=%s root=%s. This is another Agent, not the person. Reply with emacs:agent action=send to that buffer and nativeSessionId.]\n\n"
+            (plist-get session :agent) (buffer-name (plist-get session :buffer))
+            (plist-get session :native-session-id) (plist-get session :root))))
+
 (defun noema-pi-send (directory prompt &optional companion focus)
   "Submit PROMPT to DIRECTORY's child Pi, or the COMPANION.
 Queue behind an active turn; never interrupt or replay the current turn."
@@ -290,7 +300,8 @@ Queue behind an active turn; never interrupt or replay the current turn."
          (root (if record (unless companion (gethash "scope" record))
                  (noema-pi-router--string body "root")))
          (focus (eq (noema-pi-router--value body "focus") t))
-         (prompt (noema-pi-router--string body "prompt")) buffer)
+         (prompt (noema-pi-router--string body "prompt"))
+         (from (noema-pi-router--value body "from")) buffer)
     (when (equal action "context")
       (remote-require-on-client 'tools/agent/context)
       (cl-return-from noema-pi-api `((ok . t) (context . ,(+agent-context-state)))))
@@ -332,7 +343,9 @@ Queue behind an active turn; never interrupt or replay the current turn."
             ("ensure" (if companion (noema-pi-emacs-ensure focus)
                         (let ((child (noema-pi-project-ensure root)))
                           (if focus (noema-pi-router--show-or-resume child) child))))
-            ("send" (noema-pi-send root prompt companion focus))
+            ("send" (noema-pi-send root (if (memq from '(nil :null)) prompt
+                                          (concat (noema-pi-router--from-header from) prompt))
+                                   companion focus))
             ("resume" (unless record (user-error "sessionId is required"))
              (noema-pi-sessions-resume record))
             ("new" (noema-pi-sessions-new (if companion "emacs" (noema-pi-project-root root))))

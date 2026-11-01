@@ -90,6 +90,8 @@ description: 查看和维护 Noema 项目的共享资源：`.agent/` 缓存、Hy
 - 分工和交接按 `project-agent-management`，共享工作区按 `noema-parallel-runs`，会话操作
   按 `noema-agent-operations`。
 
+要转交、问全局情况或找人接手时直接和项目 Pi 沟通，按 `noema-pi`。
+
 ## 判断 ACP 能力
 
 能力以 `status` 的 `capabilities` 为准，不按 Agent 名字猜：

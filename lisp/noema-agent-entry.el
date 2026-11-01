@@ -33,13 +33,14 @@
             (shell-quote-argument (decode-coding-string args 'utf-8))
             (shell-quote-argument api))))
 
-(defun noema-agent-entry--text (root)
-  "Return the entry for Project ROOT."
+(defun noema-agent-entry--text (root buffer session)
+  "Return the entry for Project ROOT, told to BUFFER's native SESSION."
   (let ((project (directory-file-name root)))
-    (format "Noema Project %s. Its shared cache, memory, context, sub-Agents and ACP facts are described by the Skill noema-project-maintenance; read it before maintaining them, with:\n%s\nIf the Noema host is down, its file is %s. This is a reference, not a task."
+    (format "Noema Project %s. Its shared cache, memory, context, sub-Agents and ACP facts are described by the Skill noema-project-maintenance; read it before maintaining them, with:\n%s\nIf the Noema host is down, its file is %s. Pi is this Project's long-lived manager Agent, and you can talk to it directly over ACP; the Skill noema-pi, read the same way, says when and how. Your session is buffer=%s nativeSessionId=%s. This is a reference, not a task."
             project (noema-agent-entry--command root)
             (expand-file-name "resources/skills/noema-project-maintenance/SKILL.md"
-                              noema-agent-entry--source))))
+                              noema-agent-entry--source)
+            (buffer-name buffer) session)))
 
 (defun noema-agent-entry--pending-for (buffer prompt)
   "Return (SESSION . TEXT) when BUFFER's turn with PROMPT should carry the entry.
@@ -55,7 +56,7 @@ Pi has its catalog, and origins that own their context take none."
                 ((not (gethash session noema-agent-entry--sent)))
                 (scope (noema-hy-memory--local-root buffer))
                 (root (noema-project-root scope)))
-      (cons session (noema-agent-entry--text root)))))
+      (cons session (noema-agent-entry--text root buffer session)))))
 
 (defun noema-agent-entry--send-command-a (original &rest args)
   "Offer the entry to the request ORIGINAL builds for one ordinary turn."

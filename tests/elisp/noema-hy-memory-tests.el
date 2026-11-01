@@ -117,7 +117,10 @@
         (should (= (length (car requests)) 1))
         (should (string-match-p "noema-project-maintenance"
                                 (alist-get 'text (aref (cadr requests) 1))))
-        (should (string-match-p "/tmp/p" (alist-get 'text (aref (cadr requests) 1)))))
+        (should (string-match-p "/tmp/p" (alist-get 'text (aref (cadr requests) 1))))
+        ;; C22: the session learns that Pi exists and who it is to Pi.
+        (should (string-match-p "Skill noema-pi" (alist-get 'text (aref (cadr requests) 1))))
+        (should (string-match-p "nativeSessionId=native" (alist-get 'text (aref (cadr requests) 1)))))
       (setq requests nil)
       (clrhash noema-agent-entry--sent)
       (cl-letf (((symbol-function 'noema-hy-memory--local-root) (lambda (_) "/tmp/q/"))
