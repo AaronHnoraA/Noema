@@ -8,7 +8,7 @@ import { callAgentApi } from "../server/lib/agent-api-client.mjs";
 
 export function createAgentMcp(invoke = callAgentApi) {
   const server = new McpServer({ name: "Noema API", version: "1.0.0" }, {
-    instructions: "Use noema_api to search live API names or describe one channel, then noema_call with positional args. Disclose only the operation needed. For Markdown revisions, document:read then document:propose; Noema creates review cards and the person accepts. Never replace this with direct file edits. Keep existing authorization and version checks; after transport interruption inspect current state before retrying mutations.",
+    instructions: "Use noema_api to search live API names or describe one channel, then noema_call. args is a JSON array: most channels take one object, args=[{"field":value}], never a list of values. Disclose only the operation needed. For Markdown revisions, document:read then document:propose; Noema creates review cards and the person accepts. Never replace this with direct file edits. Keep existing authorization and version checks; after transport interruption inspect current state before retrying mutations.",
   });
   const wrap = (fn) => async (args) => {
     try {
@@ -23,8 +23,8 @@ export function createAgentMcp(invoke = callAgentApi) {
   }, wrap(({ channel, ...search }) => channel
     ? invoke("noema:api:agent:describe", [{ channel }]) : invoke("noema:api:agent:discover", [search])));
   server.registerTool("noema_call", {
-    description: "Invoke one discovered Noema backend API, through its existing handlers and UI notifications. May change local state or invoke external services depending on channel.",
-    inputSchema: { channel: z.string(), args: z.array(z.unknown()).default([]) },
+    description: "Invoke one Noema backend API, through its existing handlers and UI notifications. Most channels take one object: args=[{\"action\":\"list\"}]. May change local state or invoke external services depending on channel.",
+    inputSchema: { channel: z.string(), args: z.array(z.unknown()).default([]).describe("Usually one object holding the fields, as the channel's description shows") },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, wrap(({ channel, args }) => invoke(channel, args)));
   return server;

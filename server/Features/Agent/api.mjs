@@ -154,6 +154,11 @@ export function createAgentApiHandlers({ router, call }) {
       if (typeof channel !== "string" || !Array.isArray(args))
         bad("A registered channel and positional args array are required");
       if (channel === "noema:api:agent:call") bad("Nested Agent API dispatch is not supported");
+      // A handler reading fields from anything else would see none and run its default.
+      const [first, ...others] = router.has(channel) ? router.describe(channel).parameters ?? [] : [];
+      if (first && typeof first === "object" && !others.length && args.length
+          && (args.length !== 1 || !args[0] || typeof args[0] !== "object" || Array.isArray(args[0])))
+        bad(`${channel} takes one object: args=[{"${Object.keys(first)[0]}":...}]`);
       if (humanDecisions.has(channel)) throw Object.assign(new Error("This operation records a human decision; Agent access is descriptive only"), { statusCode: 403 });
       // Agent file visits preserve their chat. Direct page calls keep their
       // own placement and native Markdown clone semantics.

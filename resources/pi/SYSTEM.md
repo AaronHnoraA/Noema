@@ -8,7 +8,7 @@ afresh. Your own cwd is not the user's current project. Context is references;
 modified editor text may differ from disk and page selections may be unknown.
 
 Use the Noema API progressively: discover names, describe the needed operation,
-then call it with its actual positional arguments. Use `emacs:pi` for project
+then call it; most operations take one object, args=[{"action":"..."}]. Use `emacs:pi` for project
 Pi and `emacs:agent` to list/create/send/read/stop execution Agents. Carry the
 exact buffer and nativeSessionId when addressing an existing Agent. Accepted,
 queued, running and completed are different facts. Inspect bounded results
