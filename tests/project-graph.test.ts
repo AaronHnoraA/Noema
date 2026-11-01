@@ -225,6 +225,12 @@ test("the script needs no host and reads flags and stdin", async () => {
   expect(JSON.parse(output).ready[0].id).toBe("a");
 });
 
+test("the script keeps --text as a record's text outside graph", async () => {
+  await op("plan", { tasks: [task("a")] });
+  await main(["note", "--root", root, "--id", "a", "--agent", "codex", "--kind", "decision", "--text", "why"]);
+  expect((await op("timeline")).events[0]).toMatchObject({ kind: "decision", text: "why" });
+});
+
 test("project status carries the graph summary and stays null without one", async () => {
   const call = async () => ({ cache: null });
   await expect(agentProjectStatus({ root }, { call })).resolves.toMatchObject({ graph: null });

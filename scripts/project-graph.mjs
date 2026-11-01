@@ -41,11 +41,11 @@ export async function main(argv, input = async () => {
   const [op, ...rest] = argv;
   if (!op || op === "help") return { text: USAGE };
   const { fields, stdin } = parseFlags(rest);
-  const { text: asText, ...flags } = fields;
-  const body = { ...(stdin ? JSON.parse(await input()) : {}), ...flags, op,
+  const body = { ...(stdin ? JSON.parse(await input()) : {}), ...fields, op,
     root: resolve(String(fields.root || process.cwd())) };
   const result = await projectGraph(body);
-  return op === "graph" && asText ? { text: renderGraph(result) } : { json: result };
+  // Only for `graph` is --text the drawing; everywhere else it is the record's text.
+  return op === "graph" && fields.text ? { text: renderGraph(result) } : { json: result };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
