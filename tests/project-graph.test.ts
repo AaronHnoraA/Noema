@@ -314,7 +314,12 @@ test("the script's check is a gate", async () => {
 });
 
 test("the Skills stay small: rules belong in this code", () => {
-  const budget: Record<string, number> = { "noema-project-graph": 1000, "noema-project-plan": 800, "noema-project-run": 600, "noema-project-review": 400, "noema-pi": 1500 };
+  const budget: Record<string, number> = { "noema-project-graph": 1150, "noema-project-plan": 800, "noema-project-run": 600, "noema-project-review": 400, "noema-pi": 1200 };
   for (const [skill, limit] of Object.entries(budget))
     expect([skill, readFileSync(join(process.cwd(), "resources/skills", skill, "SKILL.md"), "utf8").length <= limit]).toEqual([skill, true]);
+});
+
+test("the task id may come first, and only one id", () => {
+  expect(parseFlags(["a", "--agent", "x"]).fields).toEqual({ id: "a", agent: "x" });
+  expect(() => parseFlags(["a", "b"])).toThrow(/Unexpected argument: b/);
 });

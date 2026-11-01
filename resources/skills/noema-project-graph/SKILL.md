@@ -13,7 +13,8 @@ description: 项目开发规范：用 `.agent/tasks/` 的任务图谱记录要�
 - 有 shell：`node ~/.config/emacs/site-lisp/noema/scripts/project-graph.mjs help`，不需要 host。
 - Pi：`noema_call` 调 `noema:api:agent:project:graph`，参数 `[{"root":"…","op":"status"}]`。
 
-循环：`status` → `next` → `claim` → 工作 → `note` → `submit` → `check`。
+循环：`status` → `next` → `claim` → 工作 → `note` → `submit` → `check`。`claim` 带 `--session <你的 nativeSessionId>`，
+接手的人才能恢复你的会话。等别人时不空转，用 `noema-pi` 的观察项。
 
 判断工具替不了你：
 - 只记值得留下的：`note --kind decision` 写为什么，`--kind commit --refs <sha>` 记提交。不写流水。

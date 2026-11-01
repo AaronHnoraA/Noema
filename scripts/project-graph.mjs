@@ -9,12 +9,12 @@ import { projectGraph, renderGraph } from "../server/lib/project-graph.mjs";
 
 const USAGE = `node scripts/project-graph.mjs OP [--root DIR] [--text] [- < args.json]
 
-Read:   status  next  check  graph  timeline  show --id ID
+Read:   status  next  check  graph  timeline  show ID
 Write:  plan (JSON {"tasks":[{id,title,after,related,agent,review,cycles,body}]},
         --dryRun to vet)  claim [--take]  release  submit --evidence E [--partial]
         review --verdict V [--self]  note [--kind decision|commit --refs SHA]
         state --state todo|blocked|dropped  maintain
-Flags become fields (--id ID --agent NAME --session ID); "-" reads a JSON object
+The task id comes first; flags become fields (--agent NAME --session ID); "-" reads a JSON object
 from stdin.  graph --text draws it; check exits 1 on errors.  A refusal says why
 and what to do; findings carry their own fix.`;
 
@@ -24,7 +24,11 @@ export function parseFlags(argv) {
   for (let index = 0; index < argv.length; index++) {
     const word = argv[index];
     if (word === "-") { stdin = true; continue; }
-    if (!word.startsWith("--")) throw new Error(`Unexpected argument: ${word}`);
+    if (!word.startsWith("--")) {
+      if (fields.id !== undefined) throw new Error(`Unexpected argument: ${word}`);
+      fields.id = word;
+      continue;
+    }
     const key = word.slice(2);
     const next = argv[index + 1];
     if (next === undefined || next === "-" || next.startsWith("--")) fields[key] = true;

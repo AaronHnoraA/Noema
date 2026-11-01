@@ -242,7 +242,6 @@ import { knowledgeSearchResponse } from "./server/lib/knowledge-search.mjs";
 import { virtualReferencesPayload } from "./server/lib/virtual-references.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
 import { createAgentApiHandlers } from "./server/Features/Agent/api.mjs";
-import { createPiWatcher } from "./server/lib/pi-watch.mjs";
 import { readJson, readText } from "./server/infrastructure/http-body.mjs";
 import { foreignPage } from "./server/infrastructure/local-boundary.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
@@ -1708,7 +1707,6 @@ async function beginShutdown({ reason = "shutdown", exitCode = 0, deadlineMs = 3
         Promise.resolve().then(() => jupyterKernelWs?.close()),
         jupyterCell?.shutdown(),
         kernelSupervisor?.close(),
-        piWatcher?.stop(),
         shutdownCopilot(),
         stopAllWikiGitUis(),
       ]);
@@ -2946,13 +2944,7 @@ async function callApi(channel, args = []) {
 
 // The local Agent surface discovers the live registry and reuses the same
 // dispatch/save/notification path as pages. Server mode retains its allowlist.
-const piWatcher = hostMode === "server" ? null : createPiWatcher({
-  rootsFile: join(stateRoot, "pi-watch-roots.json"),
-  deliver: { pi: (body) => gatewayRequest("noema.pi", body, 30_000),
-    agent: (body) => gatewayRequest("noema.agent", body, 30_000) },
-  log: (message) => process.stderr.write(`[noema-web] ${message}\n`),
-});
-if (hostMode !== "server") apiRouter.register(createAgentApiHandlers({ router: apiRouter, call: callApi, piWatcher }), "Agent");
+if (hostMode !== "server") apiRouter.register(createAgentApiHandlers({ router: apiRouter, call: callApi }), "Agent");
 
 async function handleEmacsCommand(body = {}) {
   if (body.type === "command" || body.command) {
@@ -4241,5 +4233,4 @@ server.listen(bindPort, bindHost, () => {
     }
   }
   if (hostMode === "emacs") connectGateway(port);
-  piWatcher?.start().catch((error) => process.stderr.write(`[noema-web] watches: ${error.message}\n`));
 });

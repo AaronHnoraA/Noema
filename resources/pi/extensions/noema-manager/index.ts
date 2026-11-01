@@ -4,7 +4,25 @@ import { join } from "node:path";
 
 const ALLOWED = /^mcp__noema-(?:api|coordinator)__/;
 
+/** A project Pi keeps its Project's watches for as long as it runs. */
+async function startWatcher() {
+  const source = process.env.NOEMA_PI_SOURCE;
+  const root = process.env.NOEMA_PI_SCOPE;
+  if (!source || !root || root === "emacs") return null;
+  const load = (file: string) => import(pathToFileURL(join(source, file)).href);
+  const { callAgentApi } = await load("server/lib/agent-api-client.mjs");
+  const { resolveGraphRoot } = await load("server/lib/project-graph.mjs");
+  const { createPiWatcher } = await load("resources/pi/extensions/noema-manager/watcher.mjs");
+  const watcher = createPiWatcher({ root: await resolveGraphRoot(root), deliver: {
+    pi: (body: any) => callAgentApi("noema:api:emacs:pi", [body]),
+    agent: (body: any) => callAgentApi("noema:api:emacs:agent", [body]),
+  } });
+  await watcher.start();
+  return watcher;
+}
+
 export default function (pi: any) {
+  let watcher: Promise<any> | null = null;
   const restrict = () => {
     const wanted = pi.getAllTools().map((tool: any) => tool.name)
       .filter((name: string) => ALLOWED.test(name));
@@ -12,7 +30,14 @@ export default function (pi: any) {
     if (wanted.length !== active.length || wanted.some((name: string) => !active.includes(name)))
       pi.setActiveTools(wanted);
   };
-  pi.on("session_start", restrict);
+  pi.on("session_start", () => {
+    restrict();
+    watcher ??= startWatcher().catch(() => null);
+  });
+  pi.on("session_shutdown", async () => {
+    (await watcher)?.stop();
+    watcher = null;
+  });
   pi.on("before_agent_start", async (event: any, context: any) => {
     restrict();
     try {

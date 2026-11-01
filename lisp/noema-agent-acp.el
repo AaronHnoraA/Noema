@@ -164,6 +164,5 @@ leaves the session registered on the Emacs side alone."
 
 (require 'noema-hy-memory)
 (require 'noema-agent-entry)
-(require 'noema-pi-watch)
 (provide 'noema-agent-acp)
 ;;; noema-agent-acp.el ends here

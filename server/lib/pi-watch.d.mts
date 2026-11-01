@@ -1,5 +1,13 @@
 export const WATCH_ADVICE: Record<string, string>;
-export function foldWatches(events: any[], now: number): { watches: Map<string, any>; paused: boolean; open: any[]; messages: number };
+export function foldWatches(events: any[], now: number): { watches: Map<string, any>; running: any[]; messages: number };
 export function watchSummary(root: string): Promise<any>;
-export function piWatch(body?: any, options?: { watcher?: any; now?: number }): Promise<any>;
-export function createPiWatcher(options: any): any;
+export function piWatch(body?: any, options?: { now?: number }): Promise<any>;
+export const DAILY_MESSAGES: number;
+export const directoryOf: (root: string) => string;
+export const journalOf: (root: string) => string;
+export const ownerOf: (root: string) => string;
+export const tasksOf: (root: string) => string;
+export const load: (root: string, now: number) => Promise<any>;
+export const armedOf: (folded: any) => any[];
+export function scriptPath(root: string, script: string): Promise<{ path: string; cwd: string }>;
+export function watcherRunning(root: string): boolean;
