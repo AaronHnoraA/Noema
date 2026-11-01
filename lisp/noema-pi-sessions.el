@@ -16,6 +16,39 @@
 
 (defvar-local noema-pi-sessions--refresh-timer nil)
 (defvar-local noema-pi-sessions--watching nil)
+(defvar-local noema-pi-sessions--scope nil
+  "Displayed Pi scope: emacs, a project root, or nil for an explicit all view.")
+
+(defun noema-pi-sessions--buffer-scope (buffer)
+  "Read BUFFER's Pi ownership without resolving its process directory again."
+  (or (buffer-local-value 'noema-pi-router--scope buffer)
+      (if (eq (buffer-local-value '+agent-acp-session-origin buffer) 'pi-emacs) "emacs"
+        (buffer-local-value '+agent-acp-session-root buffer))))
+
+(defun noema-pi-sessions--context-scope ()
+  "Find the invoking Pi or editor's project without starting a conversation."
+  (cond
+   ((derived-mode-p 'noema-pi-sessions-mode) noema-pi-sessions--scope)
+   ((eq (+agent-session-kind (current-buffer)) 'pi)
+    (noema-pi-sessions--buffer-scope (current-buffer)))
+   ((and (+agent-acp-agent-buffer-p (current-buffer)) +agent-acp-session-root)
+    (noema-pi-project-root +agent-acp-session-root))
+   (t
+    (remote-require-on-client 'tools/agent/context)
+    (let ((context (+agent-context-state)))
+      (if-let* ((root (or (and (or (alist-get 'file context) (derived-mode-p 'dired-mode))
+                                (alist-get 'root context))
+                           (alist-get 'activeProject context))))
+          (noema-pi-project-root root)
+        "emacs")))))
+
+(defun noema-pi-sessions--project-activated (root)
+  "Follow an explicit project switch only in a project-scoped Pi list."
+  (when-let* ((view (get-buffer "*Pi Sessions*")))
+    (with-current-buffer view
+      (when (and root noema-pi-sessions--scope (not (equal noema-pi-sessions--scope "emacs")))
+        (setq noema-pi-sessions--scope (noema-pi-project-root root))
+        (noema-pi-sessions--refresh-visible)))))
 
 (defun noema-pi-sessions--cancel-refresh ()
   (when (timerp noema-pi-sessions--refresh-timer)
@@ -30,6 +63,7 @@
 (defun noema-pi-sessions--view-killed-h ()
   (noema-pi-sessions--suspend)
   (remove-hook 'window-buffer-change-functions #'noema-pi-sessions--visibility-h)
+  (remove-hook '+project-activated-hook #'noema-pi-sessions--project-activated)
   (remove-hook 'kill-emacs-hook #'noema-pi-sessions--shutdown-view))
 
 (defun noema-pi-sessions--shutdown-view ()
@@ -204,8 +238,8 @@
     (let* ((store (noema-pi-sessions--edit))
            (record (noema-pi-sessions--record store scope native)))
       (puthash "persistence" "confirmed" record)
-      (with-current-buffer buffer (setq-local noema-pi-session-id (gethash "id" record)))
       (noema-pi-sessions--write store)
+      (with-current-buffer buffer (setq-local noema-pi-session-id (gethash "id" record)))
       record)))
 
 (defun noema-pi-sessions-note-volatile (scope native)
@@ -240,6 +274,7 @@
   (seq-find (lambda (buffer)
               (and (buffer-live-p buffer)
                    (memq (buffer-local-value '+agent-acp-session-origin buffer) '(pi pi-emacs pi-project))
+                   (equal (noema-pi-sessions--buffer-scope buffer) (gethash "scope" record))
                    (equal (+agent-acp-state-value buffer '(:session :id))
                           (gethash "nativeSessionId" record))))
             (buffer-list)))
@@ -358,7 +393,7 @@ conversations keep their active pointer."
    (let ((id (tabulated-list-get-id)))
      (cond ((bufferp id) (buffer-local-value 'noema-pi-router--scope id))
            (id (gethash "scope" (noema-pi-sessions--selected)))
-           (t "emacs")))))
+           (t (or noema-pi-sessions--scope "emacs"))))))
 
 (defun noema-pi-sessions-archive-at-point ()
   (interactive)
@@ -378,22 +413,25 @@ conversations keep their active pointer."
   "Refresh from one metadata read and a single pass over live Pi buffers."
   (interactive)
   (noema-pi-sessions--cancel-refresh)
-  (let* ((records (noema-pi-sessions-records))
+  (let* ((scope noema-pi-sessions--scope)
+         (records (seq-filter (lambda (record) (or (null scope) (equal scope (gethash "scope" record))))
+                              (noema-pi-sessions-records)))
          (buffers (seq-filter
                    (lambda (buffer)
-                     (memq (buffer-local-value '+agent-acp-session-origin buffer) '(pi pi-emacs pi-project)))
+                     (and (eq (+agent-session-kind buffer) 'pi)
+                          (or (null scope) (equal scope (noema-pi-sessions--buffer-scope buffer)))))
                    (buffer-list)))
          (by-native (make-hash-table :test #'equal))
          (listed (make-hash-table :test #'eq)))
     (dolist (buffer buffers)
       (when-let* ((id (or (+agent-acp-state-value buffer '(:session :id))
                          (+agent-acp-state-value buffer '(:resume-session-id)))))
-        (puthash id buffer by-native)))
+        (puthash (cons (noema-pi-sessions--buffer-scope buffer) id) buffer by-native)))
     (setq tabulated-list-entries
           (mapcar (lambda (record)
                     (let* ((scope (gethash "scope" record))
                            (native (gethash "nativeSessionId" record))
-                           (buffer (gethash native by-native)))
+                           (buffer (gethash (cons scope native) by-native)))
                       (when buffer (puthash buffer t listed))
                       (list (gethash "id" record)
                             (vector (gethash "role" record)
@@ -411,6 +449,10 @@ conversations keep their active pointer."
                             (or (buffer-local-value '+agent-acp-session-root buffer) "")
                             (noema-pi-sessions--state buffer)
                             (or (+agent-acp-state-value buffer '(:session :id)) "pending") "")) tabulated-list-entries))))
+  (setq mode-line-process
+        (list (format " · %s" (pcase noema-pi-sessions--scope
+                               ('nil "All Pi scopes") ("emacs" "Emacs")
+                               (root (abbreviate-file-name root))))))
   (tabulated-list-print t))
 
 (define-derived-mode noema-pi-sessions-mode tabulated-list-mode "Pi Sessions"
@@ -421,6 +463,7 @@ conversations keep their active pointer."
   (add-hook 'kill-buffer-hook #'noema-pi-sessions--view-killed-h nil t)
   (add-hook 'change-major-mode-hook #'noema-pi-sessions--view-killed-h nil t)
   (add-hook 'window-buffer-change-functions #'noema-pi-sessions--visibility-h)
+  (add-hook '+project-activated-hook #'noema-pi-sessions--project-activated)
   (add-hook 'kill-emacs-hook #'noema-pi-sessions--shutdown-view)
   (tabulated-list-init-header))
 (define-key noema-pi-sessions-mode-map (kbd "RET") #'noema-pi-sessions-visit)
@@ -430,14 +473,16 @@ conversations keep their active pointer."
 (define-key noema-pi-sessions-mode-map (kbd "i") #'noema-pi-sessions-import-research)
 
 ;;;###autoload
-(defun noema-pi-sessions ()
-  "Open Pi's independent conversation list without starting a model turn."
-  (interactive)
+(defun noema-pi-sessions (&optional all)
+  "Show this Pi or project's history; prefix ALL explicitly shows every scope."
+  (interactive "P")
   (require 'noema-pi-router)
-  (with-current-buffer (get-buffer-create "*Pi Sessions*")
+  (let ((scope (unless all (noema-pi-sessions--context-scope))))
+   (with-current-buffer (get-buffer-create "*Pi Sessions*")
     (unless (derived-mode-p 'noema-pi-sessions-mode) (noema-pi-sessions-mode))
+    (setq noema-pi-sessions--scope scope)
     (pop-to-buffer (current-buffer))
     (noema-pi-sessions--visibility-h)
-    (noema-pi-sessions-refresh)))
+    (noema-pi-sessions-refresh))))
 
 (provide 'noema-pi-sessions)

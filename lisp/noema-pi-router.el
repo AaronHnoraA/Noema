@@ -882,6 +882,17 @@ Never starts one; use `noema-pi-router-open' for that."
     ((or 'pi 'pi-project) (noema-pi-router--attach root buffer))))
 (add-hook '+agent-session-adopt-functions #'noema-pi-router--adopt-runtime)
 
+(defun noema-pi-router--session-action (operation buffer &rest _arguments)
+  "Own Pi's management entry through the existing domain action boundary."
+  (cond
+   ((eq (+agent-session-kind buffer) 'pi)
+    (pcase operation
+      ('manage (with-current-buffer buffer (call-interactively #'noema-pi-sessions)) t)
+      ('new (noema-pi-sessions-new (noema-pi-sessions--buffer-scope buffer)) t)))
+   ((and (eq operation 'new) (with-current-buffer buffer (derived-mode-p 'noema-pi-sessions-mode)))
+    (with-current-buffer buffer (noema-pi-sessions-new-at-point)) t)))
+(add-hook '+agent-session-action-functions #'noema-pi-router--session-action)
+
 (defun noema-pi-router--start-scope (scope directory native focus &optional endpoint)
   "Start or resume exactly one Pi conversation through the shared runtime."
   (let ((config (or (+agent-acp-pi-config (noema-pi-deploy))

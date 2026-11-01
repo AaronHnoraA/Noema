@@ -644,8 +644,8 @@ that machine cannot reach is refused rather than sent as a dead path."
                            (+agent-acp--workspace-root root)))))
       (delete-directory root t))))
 
-(ert-deftest +agent-acp-generated-names-are-unique-and-spare-pi ()
-  "Generated local names never collide and never claim the coordinator name."
+(ert-deftest +agent-acp-generated-names-are-unique-and-independent-of-pi-role ()
+  "Execution names are unique in their own domain; Pi roles do not reserve them."
   (let ((root "/tmp/noema-name-test/"))
     (cl-letf (((symbol-function '+agent-acp--claimed-names)
                (lambda (_root) '("popup/claude" "popup/claude-2"))))
@@ -653,7 +653,7 @@ that machine cannot reach is refused rather than sent as a dead path."
                      "popup/claude-3"))
       (should (equal (+agent-acp--unique-name "popup/codex" root)
                      "popup/codex"))
-      (should (equal (+agent-acp--unique-name "pi" root) "pi-2")))))
+      (should (equal (+agent-acp--unique-name "pi" root) "pi")))))
 
 (ert-deftest +agent-acp-adopt-registers-without-touching-the-host ()
   "Adopting in a plain directory names the session and asks the host nothing."

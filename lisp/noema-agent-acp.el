@@ -131,12 +131,6 @@ leaves the session registered on the Emacs side alone."
   (and (noema-agent--session-id buffer)
        (memq operation '(fork compact archive jump))))
 
-(defun noema-agent--menu (buffer)
-  "Add Research actions only when BUFFER has a durable association."
-  (when (noema-agent--session-id buffer)
-    `("--" ["Jump to latest work block" (+agent-session-jump ,buffer)]
-      ["Archive Research session" (+agent-session-archive ,buffer)])))
-
 (defun noema-agent--attention (buffer)
   "Project active Research requests without querying or starting its host."
   (when (hash-table-p (bound-and-true-p noema-agent-worker--runs))
@@ -157,7 +151,6 @@ leaves the session registered on the Emacs side alone."
 (add-hook '+agent-session-close-functions #'noema-agent--close)
 (add-hook '+agent-session-operation-functions #'noema-agent--operation-supported-p)
 (add-hook '+agent-session-action-functions #'noema-agent--action)
-(add-hook '+agent-session-menu-functions #'noema-agent--menu)
 (add-hook '+agent-session-attention-functions #'noema-agent--attention)
 (add-hook '+agent-session-private-functions #'noema-agent-export-session-p)
 
