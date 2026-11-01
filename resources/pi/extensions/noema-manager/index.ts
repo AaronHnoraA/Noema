@@ -19,12 +19,13 @@ export default function (pi: any) {
       const source = process.env.NOEMA_PI_SOURCE;
       if (!source) throw new Error("No Emacs-owned Noema source");
       const { callAgentApi } = await import(pathToFileURL(join(source, "server/lib/agent-api-client.mjs")).href);
+      const { renderAgentCatalog } = await import(pathToFileURL(join(source, "server/lib/agent-catalog-text.mjs")).href);
       const scope = process.env.NOEMA_PI_SCOPE;
       const catalog = await callAgentApi("noema:api:agent:skill:list", [{
         ...(scope === "emacs" ? { scope: "global" } : { root: scope || context.cwd }),
       }], { fetcher: (url: string, options: any) => fetch(url, { ...options, signal: AbortSignal.timeout(3000) }) });
       return { systemPrompt: event.systemPrompt + "\n\nAvailable Noema Skills (read one through agent:skill:read):\n"
-        + JSON.stringify(catalog) };
+        + renderAgentCatalog(catalog) };
     } catch {
       return { systemPrompt: event.systemPrompt + "\n\nSkill catalog is currently unavailable. Query agent:skill:list when the Noema host is ready; do not assume that no Skills exist." };
     }

@@ -13,6 +13,6 @@ description: 按任务图谱推进工作、分派子 Agent、处理图谱异常�
 1. 优先派能解锁最多下游的 `ready` 任务；先替它 `claim` 再说明。
 2. 子 Agent 用 `noema:api:emacs:agent`，优先复用做过这条线的会话，写同批文件时带 `worktree`。
 3. 每次 `submit` 后重读 `status`：图谱和实际产物是权威，子 Agent 说完成不算。
-4. 评审派给另一个 Agent。
+4. 评审派给另一个 Agent。等待时不空转：用 `noema-pi` 的观察项等 `submit` 或 `phase`。
 
 失败后按原因决定，不自动重放可能有副作用的操作。异常跑 `check`，按每条的 `fix` 处理。

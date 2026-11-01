@@ -3,6 +3,7 @@ import { scanEdiffBlocks, ediffSide } from "../../../shared/ediff-source.mjs";
 import { listAgentSkills, readAgentSkill } from "../../lib/agent-skills.mjs";
 import { agentMemorySearch, agentProjectMaintain, agentProjectStatus } from "../../lib/agent-project.mjs";
 import { projectGraph } from "../../lib/project-graph.mjs";
+import { piWatch } from "../../lib/pi-watch.mjs";
 
 const bad = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
 const humanDecisions = new Set([
@@ -98,7 +99,7 @@ export function proposeMarkdown(source, edits) {
   return result;
 }
 
-export function createAgentApiHandlers({ router, call }) {
+export function createAgentApiHandlers({ router, call, piWatcher }) {
   const documented = (handler, apiDoc) => Object.assign(handler, { apiDoc });
   return {
     "noema:api:agent:skill:list": documented((body) => listAgentSkills(body), {
@@ -109,8 +110,12 @@ export function createAgentApiHandlers({ router, call }) {
       description: "Read one effective Skill with project patches and dependencies; explicit disables remain authoritative. No task is executed.",
       parameters: [{ id: "Skill id", root: "optional absolute project root", scope: "global or project" }],
     }),
-    "noema:api:agent:project:status": documented((body) => agentProjectStatus(body, { call }), {
-      description: "Read a Project's shared resources: root, workspace, the `.agent/` cache's size and pressure, and Hy Memory's state. Starts nothing and creates no Project or store.",
+    "noema:api:agent:project:status": documented(async (body) => {
+      const status = await agentProjectStatus(body, { call });
+      if (status.project) await piWatcher?.notice(status.project.root);
+      return status;
+    }, {
+      description: "Read a Project's shared resources: root, workspace, the `.agent/` cache's size and pressure, the task graph, Pi's watches and Hy Memory's state. Starts nothing and creates no Project or store.",
       parameters: [{ root: "absolute path in the Project" }],
     }),
     "noema:api:agent:project:maintain": documented((body) => agentProjectMaintain(body, { call }), {
@@ -120,6 +125,13 @@ export function createAgentApiHandlers({ router, call }) {
     "noema:api:agent:project:graph": documented((body) => projectGraph(body), {
       description: "Read or maintain the Project's task graph in `.agent/tasks/`: task definitions plus an append-only journal. Reads: status, next, check, graph, timeline, show. Writes: plan, claim, release, submit, review, note, state. The noema-project-graph pack is how to use it; agents with a shell can run scripts/project-graph.mjs with no host.",
       parameters: [{ root: "absolute path in the Project", op: "operation, default status", id: "task id", agent: "who is acting; required by claim, release, submit, review, note and state", session: "optional native Session id", tasks: "plan: task definitions", dryRun: "plan: vet only", evidence: "submit: what proves it", verdict: "review: passed or needs_changes", text: "note, review, release or state text", kind: "note: note, decision or commit", refs: "note: commit shas or paths", state: "state: todo, blocked or dropped", take: "claim: take over an expired claim", requestId: "optional key that makes a retried write a no-op", limit: "timeline length" }],
+    }),
+    "noema:api:agent:pi:watch": documented((body) => piWatch(body, { watcher: piWatcher }), {
+      description: "Long-lived work for short-lived Agents: when something happens (a countdown, a repeating time, a task graph event, a session event, a script's end), tell Pi or a session, or run a Project script. Kept in `.agent/pi/`, fired by the host, and every watch ends. Reads: list, log. Writes: add, cancel, pause, resume. The noema-pi Skill says when to use it.",
+      parameters: [{ root: "absolute path in the Project", op: "list (default) | log | add | cancel | pause | resume", agent: "add: who is asking", why: "add: one line saying what this is for",
+        when: "add: exactly one of {after:'20m'} {at:ISO} {every:'10m',times?,until?} {on:{kind,task,agent,buffer,watch}} {on:{task,phase}}. kind: a graph event, turn-end, client-exit, script-ok, script-failed",
+        do: "add: {prompt, to?: 'pi'|'companion'|{buffer,nativeSessionId}} or {script: Project file, args?: strings, timeout?: '10m', report?: same as to}",
+        id: "cancel, log; optional name on add", n: "log: which firing", requestId: "add: key that makes a retry a no-op", limit: "list, log: length" }],
     }),
     "noema:api:agent:memory:search": documented((body) => agentMemorySearch(body), {
       description: "Search Hy Memory in the Project's scope with a query of your own; ordinary turns already recall by their prompt. `state` other than ok means unknown, not empty. Results are unverified background.",

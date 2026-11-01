@@ -4,9 +4,10 @@
 ;; Agents keep a Project's task graph in `.agent/tasks/', and its cache and
 ;; memory have their own owners.  This page parses them on request: open it to
 ;; look, close it and nothing keeps running.  It holds no state and draws what
-;; `agent:project:status' and `agent:project:graph' answer, so a person and an
-;; Agent read one answer.  The only write is the same conservative maintenance
-;; Agents call.  Contract: docs/noema/design/project-graph.md.
+;; `agent:project:status', `agent:project:graph' and `agent:pi:watch' answer, so
+;; a person and an Agent read one answer.  The writes are the conservative
+;; maintenance Agents call and a person's stop on Pi's watches.
+;; Contract: docs/noema/design/project-graph.md, docs/design/pi-watches.md.
 
 ;;; Code:
 
@@ -112,6 +113,30 @@
                         (if (and text (not (string-empty-p text))) text
                           (string-join (noema--sequence (noema--value event "refs")) " "))))))))
 
+(defun noema-project-graph--render-watches (watches)
+  "Insert Pi's armed WATCHES and their findings."
+  (let ((armed (noema--sequence (noema--value watches "armed")))
+        (findings (noema--sequence (noema--value watches "findings"))))
+    (when (or armed findings)
+      (noema-project-graph--heading "Watches")
+      (when (eq (noema--value watches "paused") t)
+        (insert (propertize "  Paused; p resumes\n" 'face 'warning)))
+      (dolist (watch armed)
+        (let ((start (point)) (next (noema--value watch "nextAt")))
+          (insert "  " (propertize (noema--value watch "id") 'face 'font-lock-constant-face)
+                  "  " (or (noema--value watch "why") "") "  "
+                  (propertize (format "%s → %s%s" (noema--value watch "when") (noema--value watch "action")
+                                      (if (numberp next)
+                                          (format-time-string " · next %m-%d %H:%M" (/ next 1000)) ""))
+                              'face 'shadow)
+                  "\n")
+          (put-text-property start (point) 'noema-project-graph-watch (noema--value watch "id"))))
+      (dolist (finding findings)
+        (insert "  " (propertize (noema--value finding "code") 'face 'warning)
+                (let ((id (noema--value finding "id"))) (if id (concat " " id) ""))
+                "  " (or (noema--value finding "fix") "") "\n"))
+      (insert "\n"))))
+
 (defun noema-project-graph--render ()
   "Draw the latest answers, keeping point's line."
   (let ((inhibit-read-only t)
@@ -128,8 +153,9 @@
       (when status (noema-project-graph--render-resources status))
       (noema-project-graph--render-graph graph)
       (when status (noema-project-graph--render-findings status))
+      (noema-project-graph--render-watches (gethash 'watches responses))
       (noema-project-graph--render-journal (gethash 'timeline responses))
-      (dolist (name '(status graph timeline))
+      (dolist (name '(status graph timeline watches))
         (when-let* ((failure (gethash (intern (format "%s-error" name)) responses)))
           (insert (propertize (format "%s: %s\n" name (or (noema--value failure "message") "unavailable"))
                               'face 'error)))))
@@ -148,7 +174,8 @@
                    `((status "noema:api:agent:project:status")
                      (graph "noema:api:agent:project:graph" (op . "graph"))
                      (timeline "noema:api:agent:project:graph" (op . "timeline")
-                               (limit . ,noema-project-graph--journal-length))))
+                               (limit . ,noema-project-graph--journal-length))
+                     (watches "noema:api:agent:pi:watch" (op . "list"))))
       (+noema-api-call
        channel (vector `((root . ,root) ,@fields))
        (lambda (result failure)
@@ -179,12 +206,37 @@
          (with-current-buffer buffer (noema-project-graph-refresh))))
      60)))
 
+(defun noema-project-graph--watch-call (body)
+  "Change Pi's watches with BODY, then refresh."
+  (let ((buffer (current-buffer)))
+    (+noema-api-call
+     "noema:api:agent:pi:watch" (vector `((root . ,noema-project-graph--root) ,@body))
+     (lambda (_result failure)
+       (when failure (message "Watches: %s" (noema--value failure "message")))
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer (noema-project-graph-refresh)))))))
+
+(defun noema-project-graph-cancel-watch ()
+  "Cancel Pi's watch on this line."
+  (interactive)
+  (if-let* ((id (get-text-property (point) 'noema-project-graph-watch)))
+      (noema-project-graph--watch-call `((op . "cancel") (id . ,id) (agent . "person")))
+    (user-error "No watch on this line")))
+
+(defun noema-project-graph-toggle-watches ()
+  "Pause this Project's watches, or resume them."
+  (interactive)
+  (let ((paused (noema--value (gethash 'watches noema-project-graph--responses) "paused")))
+    (noema-project-graph--watch-call `((op . ,(if (eq paused t) "resume" "pause"))))))
+
 (defvar noema-project-graph-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map special-mode-map)
     (define-key map (kbd "g") #'noema-project-graph-refresh)
     (define-key map (kbd "RET") #'noema-project-graph-open)
     (define-key map (kbd "m") #'noema-project-graph-maintain)
+    (define-key map (kbd "x") #'noema-project-graph-cancel-watch)
+    (define-key map (kbd "p") #'noema-project-graph-toggle-watches)
     map))
 
 (define-derived-mode noema-project-graph-mode special-mode "Noema-Agent-Cache"

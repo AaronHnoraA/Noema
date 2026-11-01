@@ -32,7 +32,7 @@
     (noema-project-graph-refresh)
     (should (equal (mapcar #'car calls)
                    '("noema:api:agent:project:status" "noema:api:agent:project:graph"
-                     "noema:api:agent:project:graph")))
+                     "noema:api:agent:project:graph" "noema:api:agent:pi:watch")))
     (noema-project-graph-tests--answer
      (nth 0 calls)
      '((cache (totalBytes . 2048) (pressure . t)) (memory (state . "ok"))
@@ -90,6 +90,28 @@
     (noema-project-graph-maintain)
     (should (equal (caar calls) "noema:api:agent:project:maintain"))
     (noema-project-graph-tests--answer (car calls) '((root . "/tmp/demo/")))
-    (should (= (length calls) 4))))
+    (should (= (length calls) 5))))
+
+(ert-deftest noema-project-graph-w10-a-person-sees-and-stops-watches ()
+  (noema-project-graph-tests--with-page calls
+    (noema-project-graph-refresh)
+    (noema-project-graph-tests--answer
+     (nth 3 calls)
+     '((paused . :json-false)
+       (armed . [((id . "ci") (why . "Check CI") (when . "once") (action . "tell pi") (nextAt . 1000))])
+       (findings . [((code . "budget") (fix . "Wait."))])))
+    (should (string-match-p "ci  Check CI  once → tell pi · next" (buffer-string)))
+    (should (string-match-p "budget  Wait\\." (buffer-string)))
+    (goto-char (point-min))
+    (search-forward "Check CI")
+    (setq calls nil)
+    (noema-project-graph-cancel-watch)
+    (should (equal (alist-get 'op (aref (nth 1 (car calls)) 0)) "cancel"))
+    (should (equal (alist-get 'id (aref (nth 1 (car calls)) 0)) "ci"))
+    (setq calls nil)
+    (noema-project-graph-toggle-watches)
+    (should (equal (alist-get 'op (aref (nth 1 (car calls)) 0)) "pause"))
+    (goto-char (point-min))
+    (should-error (noema-project-graph-cancel-watch) :type 'user-error)))
 
 ;;; noema-project-graph-tests.el ends here

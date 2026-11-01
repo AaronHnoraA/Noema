@@ -7,6 +7,7 @@ import { isAbsolute, join } from "node:path";
 import { findResearchProjectRootOrNull, readProjectLayout } from "./research-project.mjs";
 import { hyMemoryStatus, searchHyMemory } from "./hy-memory-bridge.mjs";
 import { projectGraph } from "./project-graph.mjs";
+import { watchSummary } from "./pi-watch.mjs";
 
 const fail = (message, statusCode = 400) => { throw Object.assign(new Error(message), { statusCode }); };
 
@@ -34,10 +35,11 @@ export async function agentProjectStatus(body, { call }) {
     ? (await call("noema:api:research:cache:status", [{ root: project.root }])).cache : null;
   // Agents own the task graph; a Project without one reads as null, like `cache`.
   const graph = await projectGraph({ root: project.root, op: "status" }).catch((error) => ({ error: error.message }));
+  const watches = await watchSummary(project.root).catch((error) => ({ error: error.message }));
   return { root, project: { root: project.root, id: layout.id ?? null,
     workspace: layout.workspace ?? null, stateDirectory: project.state,
     ...(layout.error ? { error: layout.error } : {}) },
-    cache, graph: graph.store === false ? null : graph, memory: { scope: project.root, ...hyMemoryStatus() } };
+    cache, graph: graph.store === false ? null : graph, watches, memory: { scope: project.root, ...hyMemoryStatus() } };
 }
 
 export async function agentProjectMaintain(body, { call }) {

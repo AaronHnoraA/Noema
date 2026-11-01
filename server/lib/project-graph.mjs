@@ -14,8 +14,8 @@
 // Node built-ins only: `scripts/project-graph.mjs` runs this with no Noema host.
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendEvent, atomicWrite, ensureAgentDirectory, readJournal, withLock } from "./agent-journal.mjs";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { findResearchProjectRootOrNull } from "./research-project.mjs";
@@ -25,7 +25,6 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const LEASE_MS = 4 * HOUR;
 const QUIET_MS = 3 * DAY;
-const LOCK_WAIT_MS = 5_000;
 const MAX_TEXT = 8_192;
 const DEFAULT_CYCLES = 2;
 const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -176,47 +175,6 @@ async function readTasks(root) {
 // The journal
 // ---------------------------------------------------------------------------
 
-async function readJournal(root) {
-  let text;
-  try {
-    text = await readFile(journalFile(root), "utf8");
-  } catch (error) {
-    if (error.code === "ENOENT") return { events: [], torn: 0 };
-    throw error;
-  }
-  const events = [];
-  let torn = 0;
-  for (const line of text.split("\n")) {
-    if (!line) continue;
-    try { events.push(JSON.parse(line)); } catch { torn += 1; }
-  }
-  return { events, torn };
-}
-
-/** Append one event durably.  A crash can only leave a torn last line, which
- * readers skip; the next append starts on a line of its own. */
-async function appendEvent(root, event) {
-  const file = journalFile(root);
-  let separator = "";
-  try {
-    const handle = await open(file, "r");
-    try {
-      const { size } = await handle.stat();
-      if (size) {
-        const { buffer } = await handle.read(Buffer.alloc(1), 0, 1, size - 1);
-        if (buffer[0] !== 10) separator = "\n";
-      }
-    } finally { await handle.close(); }
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-  const handle = await open(file, "a");
-  try {
-    await handle.appendFile(`${separator}${JSON.stringify(event)}\n`);
-    await handle.sync();
-  } finally { await handle.close(); }
-}
-
 /** Fold EVENTS into each task's state.  Pure, so every view sees one answer. */
 export function foldJournal(events) {
   const facts = new Map();
@@ -325,7 +283,7 @@ async function loadGraph(root, start = root, now = Date.now()) {
   const read = await readTasks(root);
   if (!read) return null;
   const { tasks, problems, freehand, temporaries } = read;
-  const { events, torn } = await readJournal(root);
+  const { events, torn } = await readJournal(journalFile(root));
   const facts = foldJournal(events);
   const cycles = findCycles(tasks);
   const blank = foldJournal([{ task: "blank" }]).get("blank");
@@ -422,50 +380,7 @@ export function diagnose(graph) {
 // Writing
 // ---------------------------------------------------------------------------
 
-const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
-
-function ownerAlive(pid) {
-  try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
-}
-
-/** Serialize writers across processes.  A lock is broken only when its owner
- * is provably dead; a slow writer is waited for and then reported, never
- * overwritten, however long it takes. */
-async function withLock(root, work) {
-  const lock = join(tasksDirectory(root), ".lock");
-  const started = Date.now();
-  for (;;) {
-    try {
-      await writeFile(lock, JSON.stringify({ pid: process.pid, at: Date.now() }), { flag: "wx" });
-      break;
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      const holder = await readFile(lock, "utf8").then(JSON.parse).catch(() => null);
-      if (holder && !ownerAlive(holder.pid)) { await rm(lock, { force: true }); continue; }
-      if (Date.now() - started > LOCK_WAIT_MS) fail("Another writer holds the task graph; retry", 423);
-      await sleep(25);
-    }
-  }
-  try { return await work(); } finally { await rm(lock, { force: true }); }
-}
-
-async function ensureStore(root) {
-  await mkdir(tasksDirectory(root), { recursive: true });
-  // `.agent/` is never tracked; a repository with no kernel store has no ignore yet.
-  await writeFile(join(root, ".agent", ".gitignore"), "*\n", { flag: "wx" }).catch((error) => {
-    if (error.code !== "EEXIST") throw error;
-  });
-}
-
-async function atomicWrite(file, text) {
-  const temporary = `${file}.${randomUUID()}.tmp`;
-  const handle = await open(temporary, "w");
-  try {
-    await handle.writeFile(text);
-    await handle.sync();
-  } finally { await handle.close(); }
-  await rename(temporary, file);
-}
+const ensureStore = (root) => ensureAgentDirectory(root, "tasks");
 
 const bounded = (text, name) => {
   const value = text === undefined || text === null ? "" : String(text);
@@ -529,7 +444,7 @@ async function record(root, graph, body, event) {
     if (earlier) return { ...earlier, replayed: true };
   }
   const entry = { at: Date.now(), ...event, ...(requestId ? { requestId } : {}) };
-  await appendEvent(root, entry);
+  await appendEvent(journalFile(root), entry);
   return entry;
 }
 
@@ -674,7 +589,7 @@ export async function projectGraph(body = {}) {
   if (operation === "plan" && body.dryRun) return writer(root, await loadGraph(root, body.root), body);
   if (operation === "maintain" && !await loadGraph(root)) return { root, store: false, removed: 0 };
   await ensureStore(root);
-  return withLock(root, async () => writer(root, await loadGraph(root, body.root), body));
+  return withLock(tasksDirectory(root), "the task graph", async () => writer(root, await loadGraph(root, body.root), body));
 }
 
 /** The line-oriented form of a graph, for a terminal and for agents. */
