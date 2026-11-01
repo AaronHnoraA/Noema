@@ -4,6 +4,7 @@ import { listAgentSkills, readAgentSkill } from "../../lib/agent-skills.mjs";
 import { agentMemorySearch, agentProjectMaintain, agentProjectStatus } from "../../lib/agent-project.mjs";
 import { projectGraph } from "../../lib/project-graph.mjs";
 import { piWatch } from "../../lib/pi-watch.mjs";
+import { fullChannel } from "../../lib/agent-api-client.mjs";
 
 const bad = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
 const humanDecisions = new Set([
@@ -98,9 +99,6 @@ export function proposeMarkdown(source, edits) {
   if (invalid) bad(invalid.error);
   return result;
 }
-
-/** Skills and prompts say `emacs:agent`; both spellings name one channel. */
-const fullChannel = (channel) => (typeof channel === "string" && !channel.startsWith("noema:api:") ? `noema:api:${channel}` : channel);
 
 export function createAgentApiHandlers({ router, call }) {
   const documented = (handler, apiDoc) => Object.assign(handler, { apiDoc });

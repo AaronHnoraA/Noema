@@ -24,9 +24,13 @@ export async function agentApiConnection() {
   throw new Error("No live local Noema host. Start/restart Noema in Emacs; do not edit the document as an API fallback.");
 }
 
-export async function callAgentApi(channel, args = [], { connection = agentApiConnection, fetcher = fetch } = {}) {
-  if (typeof channel !== "string" || !channel.startsWith("noema:api:") || !Array.isArray(args))
-    throw new Error("A noema:api: channel and positional JSON args array are required");
+/** Skills and prompts say `emacs:agent`; both spellings name one channel. */
+export const fullChannel = (channel) => (typeof channel === "string" && !channel.startsWith("noema:api:") ? `noema:api:${channel}` : channel);
+
+export async function callAgentApi(given, args = [], { connection = agentApiConnection, fetcher = fetch } = {}) {
+  const channel = fullChannel(given);
+  if (typeof channel !== "string" || !Array.isArray(args))
+    throw new Error("A channel and a JSON args array are required");
   let response;
   try {
     response = await fetcher(`${await connection()}/api`, {

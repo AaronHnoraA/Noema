@@ -276,10 +276,13 @@ An Agent cannot be answered, or told from a person, without this."
     (format "[From Agent session: agent=%s buffer=%s nativeSessionId=%s root=%s. This is another Agent, not the person. It hears you only through this call: noema_call channel=noema:api:emacs:agent args=%s]\n\n"
             (plist-get session :agent) (buffer-name (plist-get session :buffer))
             (plist-get session :native-session-id) (plist-get session :root)
-            (json-serialize
-             (vector `((action . "send") (buffer . ,(buffer-name (plist-get session :buffer)))
-                       (nativeSessionId . ,(plist-get session :native-session-id))
-                       (prompt . "<your reply>")))))))
+            ;; Buffer names are not ASCII, and `json-serialize' answers in bytes.
+            (decode-coding-string
+             (json-serialize
+              (vector `((action . "send") (buffer . ,(buffer-name (plist-get session :buffer)))
+                        (nativeSessionId . ,(plist-get session :native-session-id))
+                        (prompt . "<your reply>"))))
+             'utf-8))))
 
 (defun noema-pi-send (directory prompt &optional companion focus)
   "Submit PROMPT to DIRECTORY's child Pi, or the COMPANION.
