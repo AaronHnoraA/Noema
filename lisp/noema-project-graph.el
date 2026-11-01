@@ -220,6 +220,20 @@
        (when (buffer-live-p buffer)
          (with-current-buffer buffer (noema-project-graph-refresh)))))))
 
+;;;###autoload
+(defun noema-project-graph-add-watch (after prompt)
+  "Tell this Project's Pi PROMPT AFTER a countdown such as 20m."
+  (interactive (list (read-string "After (90s, 20m, 2h): ") (read-string "Tell Pi: ")))
+  (+noema-api-call
+   "noema:api:agent:pi:watch"
+   (vector `((root . ,(expand-file-name (or (noema-current-project default-directory) default-directory)))
+             (op . "add") (agent . "person") (why . ,prompt)
+             (when . ((after . ,after))) (do . ((prompt . ,prompt)))))
+   (lambda (result failure)
+     (message "%s" (cond (failure (format "Watch refused: %s" (noema--value failure "message")))
+                         ((eq (noema--value result "running") t) "Watch set")
+                         (t "Watch set; it waits for this Project's Pi"))))))
+
 (defvar noema-project-graph-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map special-mode-map)

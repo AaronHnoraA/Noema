@@ -174,6 +174,8 @@ describe("progressive live API", () => {
     expect(JSON.stringify(result)).not.toContain("implementation");
     const detail = await call("noema:api:agent:describe", [{ channel: "noema:api:agent:document:propose" }]);
     expect(detail.parameters[0].baseVersion).toContain("version");
+    expect((await call("noema:api:agent:describe", [{ channel: "agent:document:propose" }])).channel).toBe("noema:api:agent:document:propose");
+    expect(detail.arguments).toContain("[{");
     router.register({ "noema:api:late": () => 1 });
     expect((await call("noema:api:agent:discover", [{ query: "late" }])).total).toBe(1);
     await expect(call("noema:api:agent:describe", [{ channel: "absent" }])).rejects.toMatchObject({ statusCode: 404 });

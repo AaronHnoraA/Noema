@@ -112,4 +112,16 @@
     (goto-char (point-min))
     (should-error (noema-project-graph-cancel-watch) :type 'user-error)))
 
+(ert-deftest noema-project-graph-w3-a-watch-from-the-input-says-if-it-waits ()
+  (noema-project-graph-tests--with-page calls
+    (cl-letf (((symbol-function 'noema-current-project) (lambda (_) "/tmp/demo/"))
+              ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) calls))))
+      (noema-project-graph-add-watch "20m" "Check CI")
+      (let ((call (car (last calls))) (body nil))
+        (setq body (aref (nth 1 call) 0))
+        (should (equal (alist-get 'after (alist-get 'when body)) "20m"))
+        (should (equal (alist-get 'prompt (alist-get 'do body)) "Check CI"))
+        (noema-project-graph-tests--answer call '((running . :json-false)))
+        (should (string-match-p "waits" (car calls)))))))
+
 ;;; noema-project-graph-tests.el ends here

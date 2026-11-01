@@ -99,6 +99,9 @@ export function proposeMarkdown(source, edits) {
   return result;
 }
 
+/** Skills and prompts say `emacs:agent`; both spellings name one channel. */
+const fullChannel = (channel) => (typeof channel === "string" && !channel.startsWith("noema:api:") ? `noema:api:${channel}` : channel);
+
 export function createAgentApiHandlers({ router, call }) {
   const documented = (handler, apiDoc) => Object.assign(handler, { apiDoc });
   return {
@@ -140,15 +143,17 @@ export function createAgentApiHandlers({ router, call }) {
       return { total: channels.length, channels: channels.slice(offset, offset + limit),
         nextOffset: offset + limit < channels.length ? offset + limit : null };
     }, { description: "Search live API names, descriptions and aliases; returns only matching names, never all schemas or implementations. Name matches rank first.", parameters: [{ query: "optional words, e.g. emacs open file or 打开文件", offset: "optional integer", limit: "optional 1..50" }] }),
-    "noema:api:agent:describe": documented(({ channel } = {}) => ({ ...router.describe(channel),
-      agentCallable: !humanDecisions.has(channel),
-      ...(humanDecisions.has(channel) ? { audience: "human", reason: "Human permission/answer/review decision" } : {}),
-    }), {
+    "noema:api:agent:describe": documented(({ channel } = {}) => {
+      const name = fullChannel(channel);
+      return { ...router.describe(name), agentCallable: !humanDecisions.has(name),
+        ...(humanDecisions.has(name) ? { audience: "human", reason: "Human permission/answer/review decision" } : {}) };
+    }, {
       description: "Inspect one API's positional contract and actual implementation. Existing authorization and runtime checks apply.",
       parameters: [{ channel: "registered channel name" }],
     }),
-    "noema:api:agent:call": documented(({ channel, args = [] } = {}) => {
-      if (typeof channel !== "string" || !channel.startsWith("noema:api:") || !Array.isArray(args))
+    "noema:api:agent:call": documented(({ channel: given, args = [] } = {}) => {
+      const channel = fullChannel(given);
+      if (typeof channel !== "string" || !Array.isArray(args))
         bad("A registered channel and positional args array are required");
       if (channel === "noema:api:agent:call") bad("Nested Agent API dispatch is not supported");
       if (humanDecisions.has(channel)) throw Object.assign(new Error("This operation records a human decision; Agent access is descriptive only"), { statusCode: 403 });

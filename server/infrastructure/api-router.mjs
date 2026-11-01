@@ -44,7 +44,10 @@ export class ApiRouter {
   describe(channel) {
     const handler = this.#handlers.get(String(channel || ""));
     if (!handler) throw Object.assign(new Error(`Unknown API channel: ${channel}`), { statusCode: 404 });
-    return { channel, arguments: "Positional JSON array, in the handler's parameter order.",
+    const [first, ...others] = handler.apiDoc?.parameters ?? [];
+    const named = first && typeof first === "object" && !others.length;
+    return { channel, arguments: named ? "args holds one object with these fields: [{...}]"
+      : "Positional JSON array, in the handler's parameter order.",
       ...handler.apiDoc, implementation: handler.apiDoc?.implementation || handler.toString() };
   }
 
