@@ -25,9 +25,9 @@ description: 查看和维护 Noema 项目的共享资源：`.agent/` 缓存、Hy
 先看全貌，这个调用只读，不创建项目或存储：
 
 `noema:api:agent:project:status`，参数 `[{"root":"<项目内绝对路径>"}]`。
-返回 `project`（根、id、`workspace`、`stateDirectory`）、`cache`、`memory`。
+返回 `project`（根、id、`workspace`、`stateDirectory`）、`cache`、`graph`、`memory`。
 `project` 为 null 表示这里不是 Noema 项目，只有 Hy Memory 按目录分区可用；不要为此
-创建项目。`cache` 为 null 表示项目还没有运行状态。
+创建项目。`cache` 为 null 表示项目还没有运行状态，`graph` 为 null 表示还没有任务图谱。
 
 项目根和执行目录可以不同：记忆、缓存和 Session 归项目根，命令在 `workspace` 里跑。
 
@@ -38,7 +38,8 @@ description: 查看和维护 Noema 项目的共享资源：`.agent/` 缓存、Hy
 | 运行状态 | `.agent/state.sqlite` | Go kernel | 经 `research:*` API，从不手改 |
 | 内容寻址对象 | `.agent/objects/sha256/` | Go kernel | `research:artifact:read`、`research:corpus:search` |
 | 笔记本视图 | `.agent/views/` | Noema | 不直接读写 |
-| 任务与交接 | `.agent/tasks/`、`.agent/handoffs/` | 项目 | Markdown，按 `project-agent-management` |
+| 任务图谱 | `.agent/tasks/` | Agent，经 `agent:project:graph` | 按 `noema-project-graph`，`status` 的 `graph` 是摘要 |
+| 交接 | `.agent/handoffs/` | 项目 | Markdown，按 `project-agent-management` |
 | 未核实记忆 | Hy Memory 索引，按项目根分区 | Hy Memory | 见下 |
 | 已审核知识 | Finding | Noema Research | `research:finding:list`、`research:memory:propose-from-run` |
 | 历史会话 | 原生 Session 与历史索引 | 各 Agent、Emacs | `research:history:search`、`research:history:read` |

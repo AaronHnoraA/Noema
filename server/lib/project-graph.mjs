@@ -13,8 +13,9 @@
 //
 // Node built-ins only: `scripts/project-graph.mjs` runs this with no Noema host.
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { findResearchProjectRootOrNull } from "./research-project.mjs";
@@ -29,6 +30,44 @@ const MAX_TEXT = 8_192;
 const DEFAULT_CYCLES = 2;
 const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const NOTE_KINDS = new Set(["note", "decision", "commit"]);
+const FANOUT = 3;
+const BODY_BUDGET = 4_096;
+const TEMP_AGE_MS = HOUR;
+
+/** What to do about each phase and finding.  Rules live here rather than in a
+ * Skill: an Agent reads the one line it needs, when it needs it. */
+export const PHASE_ADVICE = {
+  ready: "Claim it, or work on something that unlocks more.",
+  waiting: "Finish the tasks in `on` first.",
+  claimed: "Held by another Agent; coordinate through emacs:agent, do not touch it.",
+  stale_claim: "The claim expired. Confirm with emacs:agent status that the holder stopped, read its journal, then claim with take.",
+  awaiting_review: "Needs a verdict from an Agent other than the submitter.",
+  blocked: "Read `reason`. Exhausted review cycles are a person's decision; state todo resumes it.",
+  blocked_by_dependency: "A dependency was dropped or is missing; a dropped task does not satisfy it. Change the plan.",
+  cycle: "A hand edit made a dependency cycle; fix `after` with plan.",
+  done: "Finished.",
+  dropped: "Abandoned; its file stays because the journal refers to it.",
+};
+export const FINDING_ADVICE = {
+  "id-mismatch": "Rename the file to <id>.md.",
+  "duplicate-id": "Two files claim this id; keep one and rename the other.",
+  cycle: "Fix `after` with plan.",
+  "unknown-dependency": "Fix `after` with plan, or restore the task.",
+  "torn-journal-line": "A crash left half a line, already skipped. Check the last action took effect; never edit the journal.",
+  "done-without-evidence": "Review the actual output; add a follow-up task with plan if it does not hold.",
+  "done-above-open-work": "Done while a dependency is open; verify it, or add a task to reconcile.",
+  "submitted-with-open-acceptance": "Submitted with unchecked acceptance; finish it in a follow-up task or correct the criteria.",
+  "self-reviewed": "Have another Agent look at it, or leave the note why none could.",
+  "stale-claim": "Confirm the holder stopped, then claim with take.",
+  quiet: "Ask the holder or the person whether this line continues; do not abandon it automatically.",
+  "journal-without-task": "The task file is gone; rebuild it with plan from the journal, or confirm it was abandoned.",
+  deadlocked: "Open tasks remain and none can move. Tell the person; do not bypass dependencies.",
+  "no-acceptance": "Add `- [ ]` criteria that someone else could verify.",
+  "body-over-budget": "Reference files and ranges instead of pasting material.",
+  "missing-reference": "The body names a path that does not exist; update it.",
+  "high-fanout-without-review": "Many tasks depend on this one; set review: required.",
+  "leftover-temp": "Harmless; agent:project:maintain removes it.",
+};
 
 const fail = (message, statusCode = 400) => { throw Object.assign(new Error(message), { statusCode }); };
 
@@ -48,6 +87,12 @@ async function gitPlaces(directory) {
   } catch {
     return null;
   }
+}
+
+/** True only when START is a repository that positively lacks REF. */
+async function gitLacks(start, ref) {
+  if (!await gitPlaces(start)) return false;
+  return run("git", ["-C", start, "cat-file", "-e", `${ref}^{commit}`], { timeout: 3_000 }).then(() => false, () => true);
 }
 
 /** The directory holding `.agent/` for START: the nearest Noema Project seen
@@ -115,6 +160,7 @@ async function readTasks(root) {
     throw error;
   }
   let freehand = 0;
+  const temporaries = names.filter((name) => name.endsWith(".tmp")).length;
   for (const name of names.sort()) {
     if (!name.endsWith(".md") || name.startsWith(".")) continue;
     const task = parseTask(await readFile(join(tasksDirectory(root), name), "utf8"));
@@ -123,7 +169,7 @@ async function readTasks(root) {
     if (tasks.has(task.id)) { problems.push({ code: "duplicate-id", task: task.id, file: name }); continue; }
     tasks.set(task.id, { ...task, file: taskFile(root, name.slice(0, -3)) });
   }
-  return { tasks, problems, freehand };
+  return { tasks, problems, freehand, temporaries };
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +222,7 @@ export function foldJournal(events) {
   const facts = new Map();
   const fact = (id) => {
     if (!facts.has(id)) facts.set(id, { state: "todo", claim: null, cycles: 0, sessions: [],
-      evidence: "", feedback: "", reason: "", lastEvent: 0, submittedBy: "", reviewedBy: "" });
+      evidence: "", feedback: "", reason: "", lastEvent: 0, submittedBy: "", reviewedBy: "", openAcceptance: [] });
     return facts.get(id);
   };
   for (const event of events) {
@@ -192,7 +238,8 @@ export function foldJournal(events) {
       Object.assign(item, { state: "todo", claim: null, reason: event.text || "" });
     } else if (event.kind === "submit") {
       Object.assign(item, { state: event.needsReview ? "review" : "done", claim: null,
-        evidence: event.text || "", submittedBy: event.agent || "", feedback: "" });
+        evidence: event.text || "", submittedBy: event.agent || "", feedback: "",
+        openAcceptance: event.openAcceptance || [] });
     } else if (event.kind === "review") {
       item.reviewedBy = event.agent || "";
       if (event.verdict === "passed") Object.assign(item, { state: "done", feedback: "" });
@@ -274,23 +321,23 @@ function buildRows(tasks) {
   return rows;
 }
 
-async function loadGraph(root, now = Date.now()) {
+async function loadGraph(root, start = root, now = Date.now()) {
   const read = await readTasks(root);
   if (!read) return null;
-  const { tasks, problems, freehand } = read;
+  const { tasks, problems, freehand, temporaries } = read;
   const { events, torn } = await readJournal(root);
   const facts = foldJournal(events);
   const cycles = findCycles(tasks);
-  const blank = { state: "todo", claim: null, cycles: 0, sessions: [], evidence: "", feedback: "",
-    reason: "", lastEvent: 0, submittedBy: "", reviewedBy: "" };
+  const blank = foldJournal([{ task: "blank" }]).get("blank");
   const view = new Map();
   for (const task of tasks.values()) {
     const fact = facts.get(task.id) ?? blank;
     const { phase, on } = phaseOf(task, fact, tasks, facts, cycles, now);
     const { body, ...definition } = task;
-    view.set(task.id, { ...definition, ...fact, phase, on, unresolvedAfter: task.after.filter((dep) => !tasks.has(dep)) });
+    view.set(task.id, { ...definition, ...fact, phase, on, advice: PHASE_ADVICE[phase], unresolvedAfter: task.after.filter((dep) => !tasks.has(dep)) });
   }
-  return { root, tasks, view, events, torn, problems, freehand, facts, cycles, now };
+  return { root, tasks, view, events, torn, problems, freehand, temporaries, facts, cycles, now,
+    places: [...new Set([root, start])] };
 }
 
 const OPEN = new Set(["ready", "waiting", "claimed", "stale_claim", "awaiting_review", "blocked",
@@ -304,20 +351,52 @@ function summarize(graph) {
   const moving = ["ready", "claimed", "stale_claim", "awaiting_review"].some((phase) => counts[phase]);
   return { root: graph.root, tasks: graph.view.size, counts, ready: list("ready"),
     awaitingReview: list("awaiting_review"), staleClaims: list("stale_claim"),
-    deadlocked: open.length > 0 && !moving };
+    deadlocked: open.length > 0 && !moving,
+    advice: open.length === 0 ? "No open work." : !moving ? FINDING_ADVICE.deadlocked
+      : list("ready").length ? `Run next, then claim one of ${list("ready").length} ready tasks.`
+        : "Open work is held or awaiting review; see graph." };
 }
 
 /** Refuse what corrupts the graph; warn about claims nothing supports; leave
  * modelling judgement to the Skill. */
+function referencedPaths(body) {
+  const paths = new Set();
+  for (const [, token] of body.matchAll(/`([^`\s]+)`/g)) {
+    const path = token.replace(/:\d+(?:-\d+)?$/, "");
+    if (/^[\w.~-]+(?:\/[\w.-]+)+$/.test(path) && !path.startsWith("~") && !path.startsWith(".agent/")) paths.add(path);
+  }
+  return [...paths];
+}
+
+/** Audit what a machine can: open tasks' references, size and blast radius. */
+function auditOpenWork(graph, warnings) {
+  const dependents = new Map();
+  for (const task of graph.tasks.values())
+    for (const dep of task.after) dependents.set(dep, (dependents.get(dep) ?? 0) + 1);
+  for (const item of graph.view.values()) {
+    if (!OPEN.has(item.phase)) continue;
+    const { body } = graph.tasks.get(item.id);
+    if (!/^\s*- \[[ x]\]/m.test(body)) warnings.push({ code: "no-acceptance", task: item.id });
+    if (body.length > BODY_BUDGET) warnings.push({ code: "body-over-budget", task: item.id, length: body.length });
+    if (!item.review && (dependents.get(item.id) ?? 0) >= FANOUT)
+      warnings.push({ code: "high-fanout-without-review", task: item.id, dependents: dependents.get(item.id) });
+    for (const path of referencedPaths(body))
+      if (!graph.places.some((place) => existsSync(join(place, path))))
+        warnings.push({ code: "missing-reference", task: item.id, path });
+  }
+}
+
 export function diagnose(graph) {
   const errors = [...graph.problems];
   const warnings = [];
+  if (graph.temporaries) warnings.push({ code: "leftover-temp", count: graph.temporaries });
   for (const id of graph.cycles) errors.push({ code: "cycle", task: id });
   if (graph.torn) warnings.push({ code: "torn-journal-line", count: graph.torn });
   for (const item of graph.view.values()) {
     for (const dep of item.unresolvedAfter) errors.push({ code: "unknown-dependency", task: item.id, dependency: dep });
     if (item.phase === "done") {
       if (!item.evidence) warnings.push({ code: "done-without-evidence", task: item.id });
+      if (item.openAcceptance.length) warnings.push({ code: "submitted-with-open-acceptance", task: item.id, items: item.openAcceptance });
       if (item.review && item.submittedBy && item.submittedBy === item.reviewedBy)
         warnings.push({ code: "self-reviewed", task: item.id, agent: item.submittedBy });
       const openDeps = item.after.filter((dep) => {
@@ -334,7 +413,9 @@ export function diagnose(graph) {
   for (const id of graph.facts.keys())
     if (!graph.tasks.has(id)) warnings.push({ code: "journal-without-task", task: id });
   if (summarize(graph).deadlocked) warnings.push({ code: "deadlocked" });
-  return { ok: errors.length === 0, errors, warnings, freehandNotes: graph.freehand };
+  auditOpenWork(graph, warnings);
+  const advised = (finding) => ({ ...finding, fix: FINDING_ADVICE[finding.code] });
+  return { ok: errors.length === 0, errors: errors.map(advised), warnings: warnings.map(advised), freehandNotes: graph.freehand };
 }
 
 // ---------------------------------------------------------------------------
@@ -434,9 +515,10 @@ function vetPlan(existing, inputs) {
       if (!merged.has(dep)) fail(`Task ${task.id} refers to unknown task ${dep}`, 422);
   const cycle = findCycles(merged);
   if (cycle.size) fail(`The plan has a dependency cycle: ${[...cycle].join(", ")}`, 422);
-  const warnings = [];
-  for (const task of incoming.values())
-    if (!/^\s*- \[[ x]\]/m.test(task.body)) warnings.push({ code: "no-acceptance", task: task.id });
+  const vague = [...incoming.values()].filter((task) => !/^\s*- \[[ x]\]/m.test(task.body)).map((task) => task.id);
+  if (vague.length) fail(`Tasks need \`- [ ]\` acceptance criteria: ${vague.join(", ")}`, 422);
+  const warnings = [...incoming.values()].filter((task) => task.body.length > BODY_BUDGET)
+    .map((task) => ({ code: "body-over-budget", task: task.id, fix: FINDING_ADVICE["body-over-budget"] }));
   return { incoming, warnings };
 }
 
@@ -458,6 +540,17 @@ function requireHolder(item, agent) {
 }
 
 const writers = {
+  /** Remove what a crash left behind.  Task files and the journal are never touched. */
+  async maintain(root) {
+    const cutoff = Date.now() - TEMP_AGE_MS;
+    let removed = 0;
+    for (const name of await readdir(tasksDirectory(root))) {
+      if (!name.endsWith(".tmp")) continue;
+      const file = join(tasksDirectory(root), name);
+      if ((await stat(file)).mtimeMs < cutoff) { await rm(file, { force: true }); removed += 1; }
+    }
+    return { root, removed };
+  },
   async plan(root, graph, body) {
     const { incoming, warnings } = vetPlan(graph?.tasks ?? new Map(), body.tasks);
     if (body.dryRun) return { dryRun: true, tasks: [...incoming.keys()], warnings };
@@ -490,6 +583,11 @@ const writers = {
     const task = body.id ? taskOf(graph, body.id).id : undefined;
     const refs = (Array.isArray(body.refs) ? body.refs.map(String) : String(body.refs ?? "").split(","))
       .map((ref) => ref.trim()).filter(Boolean);
+    if (kind === "commit") {
+      if (!refs.length) fail("A commit note needs refs with its sha");
+      for (const ref of refs)
+        if (await gitLacks(body.root, ref)) fail(`Git does not know ${ref} here; record the commit from its repository`, 422);
+    }
     return record(root, graph, body, { kind, ...(task ? { task } : {}), ...who,
       text: bounded(body.text, "text"), ...(refs.length ? { refs } : {}) });
   },
@@ -499,8 +597,14 @@ const writers = {
     requireHolder(item, who.agent);
     if (!["ready", "claimed", "stale_claim"].includes(item.phase))
       fail(`Task ${item.id} cannot be submitted while ${item.phase}`, 409);
+    const evidence = bounded(body.evidence, "evidence").trim();
+    if (!evidence) fail("evidence is required: what was run or inspected, and what it showed");
+    const unchecked = [...graph.tasks.get(item.id).body.matchAll(/^\s*- \[ \]\s*(.*)$/gm)].map((match) => match[1]);
+    if (unchecked.length && body.partial !== true)
+      fail(`Acceptance is unchecked in ${item.id}.md; check what holds, or pass partial to submit honestly without it: ${unchecked.join("; ")}`, 409);
     return record(root, graph, body, { kind: "submit", task: item.id, ...who,
-      needsReview: item.review === "required", text: bounded(body.evidence, "evidence") });
+      needsReview: item.review === "required", text: evidence,
+      ...(unchecked.length ? { openAcceptance: unchecked } : {}) });
   },
   async review(root, graph, body) {
     const who = identity(body);
@@ -509,6 +613,8 @@ const writers = {
     const earlier = body.requestId && graph.events.find((event) => event.requestId === body.requestId);
     if (earlier) return { ...earlier, replayed: true };
     if (item.phase !== "awaiting_review") fail(`Task ${item.id} is ${item.phase}, not awaiting review`, 409);
+    if (item.submittedBy === who.agent && body.self !== true)
+      fail(`${who.agent} submitted ${item.id}; another Agent reviews it, or pass self to record that none could`, 409);
     const limit = graph.tasks.get(item.id).cycles ?? DEFAULT_CYCLES;
     const exhausted = body.verdict === "needs_changes" && graph.facts.get(item.id).cycles + 1 >= limit;
     return record(root, graph, body, { kind: "review", task: item.id, ...who, verdict: body.verdict,
@@ -533,8 +639,9 @@ const readers = {
   check: (graph) => ({ root: graph.root, ...diagnose(graph) }),
   next(graph) {
     const items = [...graph.view.values()].filter((item) => item.phase === "ready");
-    return { root: graph.root, ready: items.map(({ id, title, agent, feedback, sessions }) =>
-      ({ id, title, agent, feedback, lastSession: sessions.at(-1) ?? "" })) };
+    return { root: graph.root, advice: summarize(graph).advice,
+      ready: items.map(({ id, title, agent, feedback, sessions }) =>
+        ({ id, title, agent, feedback, lastSession: sessions.at(-1) ?? "" })) };
   },
   show(graph, body) {
     const item = taskOf(graph, body.id);
@@ -559,14 +666,15 @@ export async function projectGraph(body = {}) {
   const operation = String(body.op || "status");
   const root = await resolveGraphRoot(body.root);
   if (readers[operation]) {
-    const graph = await loadGraph(root);
+    const graph = await loadGraph(root, body.root);
     return graph ? readers[operation](graph, body) : { root, store: false };
   }
   const writer = writers[operation];
   if (!writer) fail(`Unknown operation: ${operation}`);
-  if (operation === "plan" && body.dryRun) return writer(root, await loadGraph(root), body);
+  if (operation === "plan" && body.dryRun) return writer(root, await loadGraph(root, body.root), body);
+  if (operation === "maintain" && !await loadGraph(root)) return { root, store: false, removed: 0 };
   await ensureStore(root);
-  return withLock(root, async () => writer(root, await loadGraph(root), body));
+  return withLock(root, async () => writer(root, await loadGraph(root, body.root), body));
 }
 
 /** The line-oriented form of a graph, for a terminal and for agents. */

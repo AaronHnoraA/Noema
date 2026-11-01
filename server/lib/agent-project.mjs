@@ -43,9 +43,11 @@ export async function agentProjectStatus(body, { call }) {
 export async function agentProjectMaintain(body, { call }) {
   const project = await projectFor(absoluteRoot(body));
   if (!project) fail("No Noema Project contains this path; nothing to maintain", 404);
-  if (!hasStore(project)) return { root: project.root, cache: null };
+  const swept = await projectGraph({ root: project.root, op: "maintain" });
+  const graph = swept.store === false ? {} : { graph: swept };
+  if (!hasStore(project)) return { root: project.root, cache: null, ...graph };
   const { cache } = await call("noema:api:research:cache:maintain", [{ root: project.root }]);
-  return { root: project.root, cache };
+  return { root: project.root, cache, ...graph };
 }
 
 export async function agentMemorySearch(body, { search = searchHyMemory } = {}) {

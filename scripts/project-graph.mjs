@@ -10,9 +10,13 @@ import { projectGraph, renderGraph } from "../server/lib/project-graph.mjs";
 const USAGE = `node scripts/project-graph.mjs OP [--root DIR] [--text] [- < args.json]
 
 Read:   status  next  check  graph  timeline  show --id ID
-Write:  plan (JSON {"tasks":[...]}, --dryRun to vet)  claim  release  submit
-        review  note  state  (--id ID --agent NAME --session ID ...)
-Flags become fields; "-" reads a JSON object from stdin.  graph --text draws it.`;
+Write:  plan (JSON {"tasks":[{id,title,after,related,agent,review,cycles,body}]},
+        --dryRun to vet)  claim [--take]  release  submit --evidence E [--partial]
+        review --verdict V [--self]  note [--kind decision|commit --refs SHA]
+        state --state todo|blocked|dropped  maintain
+Flags become fields (--id ID --agent NAME --session ID); "-" reads a JSON object
+from stdin.  graph --text draws it; check exits 1 on errors.  A refusal says why
+and what to do; findings carry their own fix.`;
 
 export function parseFlags(argv) {
   const fields = {};
@@ -48,5 +52,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
   try {
     const { text, json } = await main(process.argv.slice(2));
     process.stdout.write(text !== undefined ? text.replace(/\n?$/, "\n") : JSON.stringify(json, null, 2) + "\n");
+    // `check` is usable as a gate: errors make the command fail.
+    if (json?.ok === false) process.exitCode = 1;
   } catch (error) { process.stderr.write(`${error.message || error}\n`); process.exitCode = 1; }
 }

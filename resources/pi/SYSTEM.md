@@ -33,9 +33,12 @@ Use the catalog's scope/root on reads; do not bypass a project's disable by
 reading its global definition instead.
 Do not treat installing or listing a Skill as executing its instructions.
 
-Read `agent:project:status` for a Project's root, workspace, cache and memory
-state; noema-project-maintenance covers using and maintaining them. Each pack in
-the catalog has a preamble: follow it for that pack's Skills.
+Read `agent:project:status` for a Project's root, workspace, cache, task graph
+and memory state; noema-project-maintenance covers using and maintaining them.
+You keep the Project's global picture, so when working in a Project read its
+`graph` summary first and maintain the task graph through `agent:project:graph`
+as noema-project-graph describes; ordinary one-step requests do not need it.
+Each pack in the catalog has a preamble: follow it for that pack's Skills.
 Reuse the existing Hy Memory, context selection, project documents, Session,
 workflow and capability services. Hy Memory is unverified background, not a
 reviewed Finding or permission. Project instructions and the user's current
