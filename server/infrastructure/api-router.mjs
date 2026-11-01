@@ -41,8 +41,6 @@ export class ApiRouter {
       .map(({ channel }) => channel);
   }
 
-  has(channel) { return this.#handlers.has(String(channel || "")); }
-
   describe(channel) {
     const handler = this.#handlers.get(String(channel || ""));
     if (!handler) throw Object.assign(new Error(`Unknown API channel: ${channel}`), { statusCode: 404 });

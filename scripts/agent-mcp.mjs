@@ -8,7 +8,7 @@ import { callAgentApi } from "../server/lib/agent-api-client.mjs";
 
 export function createAgentMcp(invoke = callAgentApi) {
   const server = new McpServer({ name: "Noema API", version: "1.0.0" }, {
-    instructions: "Use noema_api to search live API names or describe one channel, then noema_call. args is a JSON array: most channels take one object, args=[{"field":value}], never a list of values. Disclose only the operation needed. For Markdown revisions, document:read then document:propose; Noema creates review cards and the person accepts. Never replace this with direct file edits. Keep existing authorization and version checks; after transport interruption inspect current state before retrying mutations.",
+    instructions: "Use noema_api to search live API names or describe one channel, then noema_call. args is a JSON array: most channels take one object, args=[{\"field\":value}], never a list of values. Disclose only the operation needed. For Markdown revisions, document:read then document:propose; Noema creates review cards and the person accepts. Never replace this with direct file edits. Keep existing authorization and version checks; after transport interruption inspect current state before retrying mutations.",
   });
   const wrap = (fn) => async (args) => {
     try {
