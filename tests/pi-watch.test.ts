@@ -253,6 +253,15 @@ test("W12 with nothing armed the watcher holds nothing", async () => {
   expect(watcher.idle()).toBe(true);
 });
 
+test("W12 a long journal stays cheap to read", async () => {
+  const fact = (index: number) => JSON.stringify({ kind: "fire", at: now, id: "a", n: index, reason: "x", message: false });
+  await add({ id: "a", when: { every: "1m", times: 1_000_000 }, do: { script: script("ok.sh", "exit 0") } });
+  writeFileSync(journalFile(), `${readFileSync(journalFile(), "utf8")}${Array.from({ length: 50_000 }, (_, index) => fact(index + 1)).join("\n")}\n`);
+  const started = performance.now();
+  await list();
+  expect(performance.now() - started).toBeLessThan(500);
+});
+
 test("the catalog Pi carries each turn says only what choosing a Skill needs", () => {
   const catalog = { scope: "global", root: null, diagnostics: [],
     packs: [{ id: "ops", members: ["a"], preamble: "Use it." }],

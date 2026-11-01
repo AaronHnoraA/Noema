@@ -245,3 +245,13 @@ describe("progressive live API", () => {
     await expect(call("noema:api:agent:call", [{ channel: "noema:api:agent:call", args: [] }])).rejects.toThrow("Nested");
   });
 });
+
+test("what Pi tells an Agent is marked by code, once, and only for Pi", async () => {
+  const { markPiMessage } = await import("../scripts/agent-mcp.mjs");
+  const send = [{ action: "send", buffer: "b", nativeSessionId: "n", prompt: "pong" }];
+  expect(markPiMessage("emacs:agent", send, "pi")[0].prompt).toBe("[From Pi, not the person] pong");
+  expect(markPiMessage("noema:api:emacs:agent", markPiMessage("emacs:agent", send, "pi"), "pi")[0].prompt).toBe("[From Pi, not the person] pong");
+  expect(markPiMessage("emacs:agent", send, undefined)).toBe(send);
+  expect(markPiMessage("emacs:pi", send, "pi")).toBe(send);
+  expect(markPiMessage("emacs:agent", [{ action: "read" }], "pi")[0]).toEqual({ action: "read" });
+});

@@ -319,6 +319,15 @@ test("the Skills stay small: rules belong in this code", () => {
     expect([skill, readFileSync(join(process.cwd(), "resources/skills", skill, "SKILL.md"), "utf8").length <= limit]).toEqual([skill, true]);
 });
 
+test("the task graph stays cheap to read at 100 000 events", async () => {
+  await op("plan", { tasks: [task("a")] });
+  const line = JSON.stringify({ at: 1, kind: "note", agent: "a", task: "a", text: "ordinary note" });
+  appendFileSync(join(root, ".agent", "tasks", "journal.jsonl"), `${Array(100_000).fill(line).join("\n")}\n`);
+  const started = performance.now();
+  await op("status", {});
+  expect(performance.now() - started).toBeLessThan(500);
+});
+
 test("the task id may come first, and only one id", () => {
   expect(parseFlags(["a", "--agent", "x"]).fields).toEqual({ id: "a", agent: "x" });
   expect(() => parseFlags(["a", "b"])).toThrow(/Unexpected argument: b/);

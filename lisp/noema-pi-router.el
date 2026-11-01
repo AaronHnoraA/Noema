@@ -281,7 +281,7 @@ An Agent cannot be answered, or told from a person, without this."
              (json-serialize
               (vector `((action . "send") (buffer . ,(buffer-name (plist-get session :buffer)))
                         (nativeSessionId . ,(plist-get session :native-session-id))
-                        (prompt . "[From Pi, not the person] <your reply>"))))
+                        (prompt . "<your answer>"))))
              'utf-8))))
 
 (defun noema-pi-send (directory prompt &optional companion focus)
@@ -818,7 +818,8 @@ Never starts one; use `noema-pi-router-open' for that."
            (command . ,(or (executable-find "node") "node"))
            (args . [,(expand-file-name "../scripts/agent-mcp.mjs"
                                       (file-name-directory (locate-library "noema-pi-router")))])
-           (env . [])))
+           ;; The facade marks what Pi tells an Agent; the model cannot leave it out.
+           (env . [((name . "NOEMA_CALLER") (value . "pi"))])))
    (when-let* ((coordinator (noema-pi-router--string endpoint "coordinatorUrl")))
      (list `((name . "noema-coordinator") (type . "http") (url . ,coordinator) (headers . ()))))))
 
