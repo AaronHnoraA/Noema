@@ -4,7 +4,7 @@
 ;;
 ;; These cover the two promises of `+agent-context': a selection becomes a
 ;; reference with the right line range, and what is sent never contains the
-;; text itself.  Nothing here starts an agent or reaches the Noema host.
+;; text itself; the Noema review path alone adds a short selection (Pi C23).  Nothing here starts an agent or reaches the Noema host.
 
 ;;; Code:
 
@@ -53,6 +53,26 @@
     (should (= (noema-md-bridge--position 1 3) 3))
     (should (string-match-p "1:3 to 1:7"
                             (noema-md-bridge--review-instructions (current-buffer) 3 7)))))
+
+(ert-deftest noema-md-bridge-c23-short-selection-travels-with-the-request ()
+  (with-temp-buffer
+    (insert "| a | 80 |\n")
+    (setq buffer-file-name "/tmp/a.md")
+    (should (string-match-p "<selection>80</selection>"
+                            (noema-md-bridge--review-instructions (current-buffer) 7 9)))
+    (should-not (string-match-p "<selection>"
+                                (noema-md-bridge--review-instructions (current-buffer) 3 3)))
+    (let ((noema-md-bridge--inline-selection-limit 1))
+      (should-not (string-match-p "<selection>"
+                                  (noema-md-bridge--review-instructions (current-buffer) 7 9))))))
+
+(ert-deftest noema-md-bridge-c23-bootstrap-gives-the-whole-call ()
+  (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) "/x/lisp/noema-md-bridge.el")))
+    (let ((text (cdr (noema-md-bridge--review-bootstrap))))
+      (should (string-match-p "agent:document:propose" text))
+      (should (string-match-p "oldText" text))
+      (should-not (string-match-p "help` for\\|baseVersion" text))
+      (should (<= (length text) 800)))))
 
 (ert-deftest noema-md-prompt-create-and-task-send-are-separate-actions ()
   (with-temp-buffer

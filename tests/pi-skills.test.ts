@@ -207,6 +207,15 @@ test("what Pi carries on every turn stays small", async () => {
   expect(prompt.length).toBeLessThanOrEqual(4_300);
 });
 
+test("a Skill's body stays small enough to read for one question", async () => {
+  const { readFile, readdir } = await import("node:fs/promises");
+  const skills = join(process.cwd(), "resources/skills");
+  for (const id of await readdir(skills)) {
+    const text = await readFile(join(skills, id, "SKILL.md"), "utf8").catch(() => "");
+    expect([id, text.length <= 3_200]).toEqual([id, true]);
+  }
+});
+
 test("the catalog stays small: descriptions and preambles have budgets", async () => {
   const { readFile, readdir } = await import("node:fs/promises");
   const skills = join(process.cwd(), "resources/skills");

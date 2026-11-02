@@ -134,6 +134,14 @@
         (noema-agent-entry--send-command-a build :shell-buffer (current-buffer) :prompt "Task")
         (should (= (length (car requests)) 1))))))
 
+(ert-deftest noema-agent-entry-c51-offers-rather-than-orders ()
+  (require 'noema-agent-entry)
+  (with-temp-buffer
+    (let ((text (noema-agent-entry--text "/tmp/p/" (current-buffer) "native")))
+      (should (string-match-p "not needed for ordinary work" text))
+      (should-not (string-match-p "read it before" text))
+      (should (<= (length text) 700)))))
+
 (ert-deftest noema-agent-entry-c51-command-encodes-paths-as-shell-and-json ()
   (require 'noema-agent-entry)
   (let* ((directory (make-temp-file "entry command ' " t))

@@ -17,7 +17,7 @@ Agent 可使用 `emacsopen -o FILE`（`emacs-open` 是同一 CLI 的名字）。
 
 ## 打开文件
 
-已有路径时 describe `noema:api:emacs:open`，然后直接调用：
+已有路径时直接调用，不用先 describe：
 
 ```json
 {"channel":"noema:api:emacs:open","args":[{"file":"/absolute/path/to/document.md","placement":"other"}]}
@@ -42,7 +42,7 @@ Session 管理与文件打开是不同操作。已有工具可执行时直接操
   `emacs:input-focus` 是页面上报入口，不能当成查询；`emacs:key` 是页面键盘转交。
 
 搜索支持 `emacs open file`、`emacs-open`、`打开文件` 等名字、用途和别名。
-一次搜索无结果时缩小关键词或 describe 已知名字，再判断能力是否存在；不要猜参数。
+一次搜索无结果时缩小关键词或 describe 已知名字，再判断能力是否存在。
 
 窗口契约：`~/.config/emacs/docs/design/window-lifecycle.md`。
 Pi 的上下文与 API 披露：`~/.config/emacs/docs/design/pi-sessions.md`。

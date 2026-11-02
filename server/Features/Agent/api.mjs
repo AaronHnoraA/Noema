@@ -100,6 +100,9 @@ export function proposeMarkdown(source, edits) {
   return result;
 }
 
+const apiAreas = (channels) => Object.fromEntries(Map.groupBy(channels, (name) => name.split(":")[2]).entries()
+  .map(([area, names]) => [area, names.length]));
+
 export function createAgentApiHandlers({ router, call }) {
   const documented = (handler, apiDoc) => Object.assign(handler, { apiDoc });
   return {
@@ -134,20 +137,26 @@ export function createAgentApiHandlers({ router, call }) {
       description: "Search Hy Memory in the Project's scope with a query of your own; ordinary turns already recall by their prompt. `state` other than ok means unknown, not empty. Results are unverified background.",
       parameters: [{ root: "absolute path in the Project", query: "what to recall" }],
     }),
-    "noema:api:agent:discover": documented(({ query = "", offset = 0, limit = 12 } = {}) => {
-      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50)
+    "noema:api:agent:discover": documented(({ query = "", offset = 0, limit } = {}) => {
+      if (!Number.isSafeInteger(offset) || offset < 0 || limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 50))
         bad("offset >= 0; limit 1..50");
       const channels = router.search(query);
-      return { total: channels.length, channels: channels.slice(offset, offset + limit),
-        nextOffset: offset + limit < channels.length ? offset + limit : null };
-    }, { description: "Search live API names, descriptions and aliases; returns only matching names, never all schemas or implementations. Name matches rank first.", parameters: [{ query: "optional words, e.g. emacs open file or 打开文件", offset: "optional integer", limit: "optional 1..50" }] }),
-    "noema:api:agent:describe": documented(({ channel } = {}) => {
+      // An alphabetical page of 346 names answers nothing: without words, show the areas.
+      if (!String(query).trim() && limit === undefined) return { total: channels.length, areas: apiAreas(channels) };
+      const size = limit ?? 12;
+      return { total: channels.length, channels: channels.slice(offset, offset + size),
+        nextOffset: offset + size < channels.length ? offset + size : null };
+    }, { description: "Search live API names, descriptions and aliases; returns only matching names, never all schemas or implementations. Name matches rank first. With no words and no limit, returns each area's channel count.", parameters: [{ query: "optional words, e.g. emacs open file or 打开文件", offset: "optional integer", limit: "optional 1..50" }] }),
+    "noema:api:agent:describe": documented(({ channel, source = false } = {}) => {
       const name = fullChannel(channel);
-      return { ...router.describe(name), agentCallable: !humanDecisions.has(name),
+      const { implementation, ...doc } = router.describe(name);
+      // Named fields are the contract; only an undocumented handler is its own.
+      const contract = typeof doc.parameters?.[0] === "object";
+      return { ...doc, ...(source || !contract ? { implementation } : {}), agentCallable: !humanDecisions.has(name),
         ...(humanDecisions.has(name) ? { audience: "human", reason: "Human permission/answer/review decision" } : {}) };
     }, {
-      description: "Inspect one API's positional contract and actual implementation. Existing authorization and runtime checks apply.",
-      parameters: [{ channel: "registered channel name" }],
+      description: "Inspect one API's positional contract, with its implementation when its fields are not listed. Existing authorization and runtime checks apply.",
+      parameters: [{ channel: "registered channel name", source: "optional: true also returns the implementation" }],
     }),
     "noema:api:agent:call": documented(({ channel: given, args = [] } = {}) => {
       const channel = fullChannel(given);
@@ -190,15 +199,16 @@ export function createAgentApiHandlers({ router, call }) {
     }, { description: "Read current Markdown, its exact version and optional range, including saved review feedback.",
       parameters: [{ file: "absolute Markdown path", range: "optional {from,to}; UTF-16 offsets or {line:1-based,column:0-based}" }] }),
     "noema:api:agent:document:propose": documented(async ({ file, baseVersion, edits } = {}) => {
-      if (typeof baseVersion !== "string" || !baseVersion) bad("baseVersion from document:read is required");
+      if (baseVersion !== undefined && (typeof baseVersion !== "string" || !baseVersion)) bad("baseVersion must be a document:read version");
       if (typeof file !== "string" || !/\.(md|markdown)$/i.test(file)) bad("A saved Markdown file is required");
       const opened = await call("noema:api:notes:open", [file]);
-      if (opened?.version !== baseVersion) return { ok: false, conflict: true, version: opened?.version, message: "Document changed; read it again before revising" };
+      // Without a version, each edit's oldText is the check: it must match at its position.
+      if (baseVersion !== undefined && opened?.version !== baseVersion) return { ok: false, conflict: true, version: opened?.version, message: "Document changed; read it again before revising" };
       const content = proposeMarkdown(opened.content, edits);
-      return call("noema:api:notes:save", [{ file: opened.file || file, content, baseVersion,
+      return call("noema:api:notes:save", [{ file: opened.file || file, content, baseVersion: opened.version,
         clientId: `agent-proposal-${randomUUID()}`, seq: 1, mode: "source", refresh: "deferred" }]);
     }, { description: "Create or revise in-place review proposals through the canonical save and UI notification path. Never accepts proposals. Preserves unselected text and the original side; clears resolved feedback on revision. Conflicts require rereading, never force/retry a mutation blindly.",
-      parameters: [{ file: "absolute Markdown path", baseVersion: "document:read version",
+      parameters: [{ file: "absolute Markdown path", baseVersion: "optional document:read version; without it oldText alone guards each edit",
         edits: "[{from,to,oldText,newText,title?}]; UTF-16 offsets or line/column positions. Existing proposals must use their whole from/end range; newText is the replacement proposed side." }] }),
   };
 }

@@ -57,7 +57,7 @@ export async function listAgentSkills(body = {}, options = {}) {
       id: pack.id, members: pack.effective?.members || [], preamble: pack.effective?.preamble || "",
     })),
     skills: resolution.skills.filter((skill) => chosen.has(skill.id) && skill.enabled && skill.validation.valid).map((skill) => ({
-      id: skill.id, description: skill.description || "", source: skill.source?.path,
+      id: skill.id, description: skill.description || "",
     })),
     diagnostics: resolution.diagnostics.filter((item) => item.type !== "mcp" && relevant.has(item.id))
       .map(({ id, severity, code }) => ({ id, severity, code })),

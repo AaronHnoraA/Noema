@@ -5,8 +5,7 @@ description: 在 Emacs 中创建、查找、跟进或介入正在运行的 Agent
 
 # 操作已有 Agent
 
-先通过 Noema API 搜索 `emacs agent`，描述 `noema:api:emacs:agent`，再按实际
-接口调用。查询不启动 Agent，也不抢焦点。Emacs 拥有 ACP client、buffer、队列、
+用 `noema:api:emacs:agent`，参数不确定时 describe 它。查询不启动 Agent，也不抢焦点。Emacs 拥有 ACP client、buffer、队列、
 审批与原生会话；Noema 的 Research Run 有自己的执行 owner。
 
 - 先 `list`，按项目根、target 和任务确定对象，再 `status`。后续调用同时携带

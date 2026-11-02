@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -12,7 +12,7 @@ import { createAgentApiHandlers, proposeMarkdown } from "../server/Features/Agen
 import { scanEdiffBlocks, ediffSide, approvedEdiffMarkdown } from "../shared/ediff-source.mjs";
 import { createAgentMcp } from "../scripts/agent-mcp.mjs";
 import { main } from "../scripts/agent-api.mjs";
-import { callAgentApi } from "../server/lib/agent-api-client.mjs";
+import { agentApiConnection, callAgentApi } from "../server/lib/agent-api-client.mjs";
 import { createEmacsApiHandlers } from "../server/Features/Emacs/api.mjs";
 
 describe("Pi global butler API", () => {
@@ -166,6 +166,57 @@ describe("progressive live API", () => {
     return { router, call, saved, setRace: () => { race = true; } };
   }
 
+  test("C23 one propose call is enough: oldText guards an edit made without a version", async () => {
+    const saved: any[] = [];
+    const source = "alpha\nbeta\n";
+    const router = new ApiRouter();
+    const call = async (channel: string, args: any[] = []): Promise<any> => {
+      if (channel === "noema:api:notes:open") return { ok: true, file: args[0], content: source, version: "v1" };
+      if (channel === "noema:api:notes:save") { saved.push(args[0]); return { ok: true }; }
+      return router.call(channel, args);
+    };
+    router.register(createAgentApiHandlers({ router, call }));
+    const propose = (oldText: string) => call("noema:api:agent:document:propose", [{ file: "/tmp/a.md",
+      edits: [{ from: { line: 2, column: 0 }, to: { line: 2, column: 4 }, oldText, newText: "gamma" }] }]);
+    expect(await propose("beta")).toMatchObject({ ok: true });
+    expect(saved[0]).toMatchObject({ baseVersion: "v1" });
+    expect(saved[0].content).toContain("-beta\n+gamma\n");
+    await expect(propose("stale")).rejects.toThrow("oldText");
+    expect(saved).toHaveLength(1);
+  });
+
+  test("C24 a failed request says what happened, and a sandbox is not a dead host", async () => {
+    const failing = (code: string) => async () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code } }); };
+    const connection = async () => "http://127.0.0.1:1";
+    await expect(callAgentApi("noema:api:x", [], { connection, fetcher: failing("EPERM") as any }))
+      .rejects.toThrow("sandbox");
+    await expect(callAgentApi("noema:api:x", [], { connection, fetcher: failing("ECONNREFUSED") as any }))
+      .rejects.toThrow("Nothing was sent");
+    await expect(callAgentApi("noema:api:x", [], { connection, fetcher: failing("ECONNRESET") as any }))
+      .rejects.toThrow("outcome may be unknown");
+    await expect(callAgentApi("noema:api:x", [], { connection: async () => { throw new Error("No live local Noema host."); } }))
+      .rejects.toThrow(/^No live/);
+  });
+
+  test("C24 a host this process may not signal still counts as live", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "noema-host-"));
+    const descriptor = join(dir, "host.json");
+    writeFileSync(descriptor, JSON.stringify({ pid: 4242, url: "http://127.0.0.1:50815" }));
+    const previous = process.env.NOEMA_HOST_DESCRIPTOR;
+    const kill = process.kill;
+    process.env.NOEMA_HOST_DESCRIPTOR = descriptor;
+    try {
+      process.kill = (() => { throw Object.assign(new Error("denied"), { code: "EPERM" }); }) as any;
+      expect(await agentApiConnection()).toBe("http://127.0.0.1:50815");
+      process.kill = (() => { throw Object.assign(new Error("gone"), { code: "ESRCH" }); }) as any;
+      await expect(agentApiConnection()).rejects.toThrow("No live");
+    } finally {
+      process.kill = kill;
+      if (previous === undefined) delete process.env.NOEMA_HOST_DESCRIPTOR; else process.env.NOEMA_HOST_DESCRIPTOR = previous;
+      rmSync(dir, { recursive: true });
+    }
+  });
+
   test("discovers names without implementations, and describes one actual handler", async () => {
     const { router, call } = fixture();
     const result = await call("noema:api:agent:discover", [{ query: "agent document", limit: 1 }]);
@@ -176,6 +227,12 @@ describe("progressive live API", () => {
     expect(detail.parameters[0].baseVersion).toContain("version");
     expect((await call("noema:api:agent:describe", [{ channel: "agent:document:propose" }])).channel).toBe("noema:api:agent:document:propose");
     expect(detail.arguments).toContain("[{");
+    expect(detail.implementation).toBeUndefined();
+    expect((await call("noema:api:agent:describe", [{ channel: "agent:document:propose", source: true }])).implementation).toContain("baseVersion");
+    expect((await call("noema:api:agent:describe", [{ channel: "noema:api:agent:call", source: true }])).agentCallable).toBe(true);
+    const areas = await call("noema:api:agent:discover", [{}]);
+    expect(areas.areas.agent).toBeGreaterThan(1);
+    expect(areas.channels).toBeUndefined();
     await expect(call("noema:api:agent:call", [{ channel: "noema:api:agent:document:read", args: [["a.md"]] }])).rejects.toThrow(/takes one object/);
     router.register({ "noema:api:late": () => 1 });
     expect((await call("noema:api:agent:discover", [{ query: "late" }])).total).toBe(1);

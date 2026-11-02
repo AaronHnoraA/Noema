@@ -36,7 +36,7 @@
 (defun noema-agent-entry--text (root buffer session)
   "Return the entry for Project ROOT, told to BUFFER's native SESSION."
   (let ((project (directory-file-name root)))
-    (format "Noema Project %s. Its shared cache, memory, context, sub-Agents and ACP facts are described by the Skill noema-project-maintenance; read it before maintaining them, with:\n%s\nIf the Noema host is down, its file is %s. Pi is this Project's long-lived manager Agent, and you can talk to it directly over ACP; the Skill noema-pi, read the same way, says when and how. Your session is buffer=%s nativeSessionId=%s. This is a reference, not a task."
+    (format "Noema Project %s. Available when useful, not needed for ordinary work: the Skill noema-project-maintenance covers its shared cache, memory, context, sub-Agents and ACP facts, and the Skill noema-pi covers talking to Pi, its long-lived manager Agent. Read one with:\n%s\n(Host down: %s.) Your session is buffer=%s nativeSessionId=%s. This is a reference, not a task."
             project (noema-agent-entry--command root)
             (expand-file-name "resources/skills/noema-project-maintenance/SKILL.md"
                               noema-agent-entry--source)

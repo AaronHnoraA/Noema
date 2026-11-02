@@ -351,11 +351,15 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
            (length +agent-selection)
            (if (= (length +agent-selection) 1) "" "s")))
 
+(defconst noema-md-bridge--inline-selection-limit 1200
+  "Longest selection, in characters, a request carries as text.
+A longer one stays a reference for the Agent to read.")
+
 (defun noema-md-bridge--review-bootstrap ()
-  "Return a small, progressively disclosed capability entry for an Agent."
-  (cons 'noema-api-review-v1
+  "Return a small capability entry for an Agent, enough for one direct call."
+  (cons 'noema-api-review-v2
         (format
-         "Noema review: answer questions normally. For requested Markdown revisions, use the Noema API document:read then document:propose; the person reviews the cards. Discover/describe only the operation needed. Use noema_api/noema_call when available; otherwise run `node %s help` for the live API client. Keep edits inside the supplied selection; an empty request with saved review feedback means revise that proposal."
+         "Noema review: answer questions normally. A requested Markdown revision is a review card the person accepts, not a direct file edit: call agent:document:propose with [{\"file\":F,\"edits\":[{\"from\":{\"line\":L,\"column\":C},\"to\":{\"line\":L,\"column\":C},\"oldText\":OLD,\"newText\":NEW,\"title\":T}]}], through noema_call when you have it, otherwise by piping that JSON to `node %s call CHANNEL -` (`help` lists more). When the selected text is shown, that one call is enough; agent:document:read is for text not shown or a reported mismatch. Stay inside the selection. An empty request with saved review feedback means revise that proposal."
          (shell-quote-argument
           (expand-file-name "../scripts/agent-api.mjs"
                             (file-name-directory (locate-library "noema-md-bridge")))))))
@@ -368,17 +372,22 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
              sum (if (> character #xffff) 2 1))))
 
 (defun noema-md-bridge--review-instructions (buffer begin end)
-  "Describe only this Markdown request's saved selection and API file."
+  "Describe this Markdown request's saved selection and API file.
+A short selection carries its text, which saves the Agent a read."
   (with-current-buffer buffer
     (when (and buffer-file-name
                (string-match-p "\\.\\(?:md\\|markdown\\)\\'"
                                (downcase buffer-file-name)))
-      (format "Noema Markdown selection: %d:%d to %d:%d (1-based lines, UTF-16 columns; end exclusive).\nAPI file: %s"
-              (line-number-at-pos begin t)
-              (noema-md-bridge--column begin)
-              (line-number-at-pos end t)
-              (noema-md-bridge--column end)
-              buffer-file-name))))
+      (concat
+       (format "Noema Markdown selection: %d:%d to %d:%d (1-based lines, UTF-16 columns; end exclusive).\nAPI file: %s"
+               (line-number-at-pos begin t)
+               (noema-md-bridge--column begin)
+               (line-number-at-pos end t)
+               (noema-md-bridge--column end)
+               buffer-file-name)
+       (when (< 0 (- end begin) (1+ noema-md-bridge--inline-selection-limit))
+         (format "\nSelected text as saved (this is oldText; no need to open the reference):\n<selection>%s</selection>"
+                 (buffer-substring-no-properties begin end)))))))
 
 (defun noema-md-bridge-run (action buffer begin end)
   "Run ACTION on BEGIN..END of note BUFFER."
