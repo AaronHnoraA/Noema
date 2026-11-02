@@ -13,7 +13,7 @@
 (defvar +agent-acp-session-origin)
 (defvar agent-shell--state)
 
-(require 'noema-context)
+(require 'noema-agent-text)
 
 (defconst noema-agent-entry--source
   (file-name-directory (directory-file-name

@@ -46,7 +46,8 @@
 (declare-function +agent/compose "tools/agent/compose" (&optional name))
 (declare-function +agent-context--send "tools/agent/context" (&rest arguments))
 (declare-function +agent-context--region-references "tools/agent/context" (buffer begin end))
-(declare-function noema-agent-text "noema-context" (name &rest values))
+(declare-function noema-agent-text "noema-agent-text" (name &rest values))
+(defvar noema-agent-text-directory)
 
 (defgroup noema-md-bridge nil
   "Running Emacs tools on the text of a Noema Markdown pane."
@@ -358,7 +359,7 @@ A longer one stays a reference for the Agent to read.")
 (defun noema-md-bridge--review-bootstrap ()
   "Return the capability entry for an Agent: the tool guide and this entry's facts.
 Its key follows the text, so a changed guide reaches sessions that had the old one."
-  (require 'noema-context)
+  (require 'noema-agent-text)
   (let ((text (concat (noema-agent-text "tools") "\n"
                       (noema-agent-text
                        "page-entry" :api

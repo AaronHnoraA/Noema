@@ -1,25 +1,8 @@
 ;;; noema-context.el --- Noema page and knowledge context adapters -*- lexical-binding: t; -*-
 (require 'tools/agent/context)
 (require 'noema-md-bridge)
+(require 'noema-agent-text)
 
-(defconst noema-agent-text-directory
-  (expand-file-name "../resources/agent/"
-                    (file-name-directory (or load-file-name buffer-file-name)))
-  "Where Agent-facing text lives.  It is data, read when used, so changing a
-prompt needs no compilation, reload or restart.")
-
-(defun noema-agent-text (name &rest values)
-  "Return the text resources/agent/NAME.md with VALUES filled in.
-VALUES is a plist of field names and strings: `:project' fills {project}."
-  (let ((text (string-trim
-               (with-temp-buffer
-                 (insert-file-contents (expand-file-name (concat name ".md")
-                                                         noema-agent-text-directory))
-                 (buffer-string)))))
-    (while values
-      (setq text (string-replace (format "{%s}" (substring (symbol-name (pop values)) 1))
-                                 (pop values) text)))
-    text))
 
 
 

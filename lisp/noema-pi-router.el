@@ -16,7 +16,7 @@
 (require 'subr-x)
 (require 'json)
 (require 'noema-pi-sessions)
-(require 'noema-context)
+(require 'noema-agent-text)
 (require 'tools/agent/acp)
 
 (defconst noema-pi-router--resource-directory
