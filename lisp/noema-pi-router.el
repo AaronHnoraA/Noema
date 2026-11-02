@@ -16,6 +16,7 @@
 (require 'subr-x)
 (require 'json)
 (require 'noema-pi-sessions)
+(require 'noema-context)
 (require 'tools/agent/acp)
 
 (defconst noema-pi-router--resource-directory
@@ -374,8 +375,8 @@ SOURCE and SELECTION are references, never copied into a new Compose UI."
   (interactive)
   (let* ((directory (or directory default-directory))
          (purpose (read-string "Prompt document purpose: "))
-         (request (format "Read the noema-prompt-document Skill with agent:skill:read. Create and open an ordinary Noema Markdown prompt document for project %s. Purpose: %s.%s%s"
-                          directory purpose
+         (request (format "%s%s%s"
+                          (noema-agent-text "prompt-document" :project directory :purpose purpose)
                           (if source (format " Source reference: %s." source) "")
                           (if selection (concat "\n" selection) ""))))
     (unless (fboundp '+noema--ensure-server) (user-error "Noema host integration is unavailable"))
@@ -479,12 +480,11 @@ it and its provider is authenticated."
     (when (eq (+agent-session-kind session) 'pi)
       (noema-pi-router--apply-permissions (plist-get session :buffer)))))
 
-(defcustom noema-pi-system-prompt
-  (with-temp-buffer
-    (insert-file-contents (expand-file-name "SYSTEM.md" noema-pi-router--resource-directory))
-    (buffer-string))
-  "System prompt; the versioned default is linked, local overrides stay private."
-  :type 'string :group 'noema-pi-router)
+(defcustom noema-pi-system-prompt nil
+  "A private system prompt, or nil for the versioned resources/pi/SYSTEM.md.
+Nil is the default on purpose: a copy read at load time goes stale the moment
+the file changes under a running Emacs, and would then be deployed as an override."
+  :type '(choice (const :tag "Versioned prompt" nil) string) :group 'noema-pi-router)
 
 (defcustom noema-pi-router-minimum-pi-acp "0.8.0"
   "Oldest pi-acp version validated with Noema's ACP, MCP and permission flow."
@@ -785,7 +785,7 @@ not rewritten and settings Noema does not own are kept."
     (noema-pi-router--private-file directory "auth.json")
     (noema-pi-router--private-file directory "models.json")
     (noema-pi-router--write-file settings (noema-pi-router--json (noema-pi-router--settings settings)))
-    (if (equal (string-trim noema-pi-system-prompt) (string-trim (noema-pi-router--read-file builtin-prompt)))
+    (if (null noema-pi-system-prompt)
         (noema-pi-router--link-file builtin-prompt (expand-file-name "SYSTEM.md" directory))
       (let ((private (expand-file-name "SYSTEM.md" noema-pi-config-directory)))
         (noema-pi-router--write-file private (concat (string-trim noema-pi-system-prompt) "\n"))

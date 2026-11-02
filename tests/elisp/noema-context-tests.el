@@ -66,13 +66,23 @@
       (should-not (string-match-p "<selection>"
                                   (noema-md-bridge--review-instructions (current-buffer) 7 9))))))
 
-(ert-deftest noema-md-bridge-c23-bootstrap-gives-the-whole-call ()
-  (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) "/x/lisp/noema-md-bridge.el")))
-    (let ((text (cdr (noema-md-bridge--review-bootstrap))))
-      (should (string-match-p "agent:document:propose" text))
-      (should (string-match-p "oldText" text))
-      (should-not (string-match-p "help` for\\|baseVersion" text))
-      (should (<= (length text) 800)))))
+(ert-deftest noema-md-bridge-c26-bootstrap-is-the-guide-plus-its-transport ()
+  (let ((text (cdr (noema-md-bridge--review-bootstrap))))
+    (should (string-match-p "agent:document:edit" text))
+    (should (string-match-p "agent:document:propose" text))
+    (should (string-match-p "scripts/agent-api.mjs" text))
+    (should (<= (length text) 1600))))
+
+(ert-deftest noema-agent-text-c26-a-prompt-is-data-read-when-used ()
+  (let* ((noema-agent-text-directory (file-name-as-directory (make-temp-file "noema-text" t)))
+         (file (expand-file-name "t.md" noema-agent-text-directory)))
+    (unwind-protect
+        (progn
+          (write-region "Hello {name}.\n" nil file nil 'silent)
+          (should (equal (noema-agent-text "t" :name "Pi") "Hello Pi."))
+          (write-region "Bye {name}.\n" nil file nil 'silent)
+          (should (equal (noema-agent-text "t" :name "Pi") "Bye Pi.")))
+      (delete-directory noema-agent-text-directory t))))
 
 (ert-deftest noema-md-prompt-create-and-task-send-are-separate-actions ()
   (with-temp-buffer
@@ -478,7 +488,7 @@ the next open of the note (which would then show raw Markdown)."
                  (lambda (&rest arguments) (setq sent arguments) nil)))
         (noema-md-bridge-run "related" buffer 1 4))
       (should-not (plist-get sent :instructions))
-      (should (equal (plist-get sent :prompt) noema-context-related-prompt)))))
+      (should (equal (plist-get sent :prompt) (noema-agent-text "related"))))))
 
 (ert-deftest noema-md-bridge-hidden-copy-hands-a-later-open-to-noema ()
   "A kept hidden copy (it holds Agent context) sends a later open to Noema."

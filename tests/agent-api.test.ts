@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { ApiRouter } from "../server/infrastructure/api-router.mjs";
-import { createAgentApiHandlers, proposeMarkdown } from "../server/Features/Agent/api.mjs";
+import { createAgentApiHandlers, editMarkdown, lineHunks, proposeMarkdown } from "../server/Features/Agent/api.mjs";
 import { scanEdiffBlocks, ediffSide, approvedEdiffMarkdown } from "../shared/ediff-source.mjs";
 import { createAgentMcp } from "../scripts/agent-mcp.mjs";
 import { main } from "../scripts/agent-api.mjs";
@@ -185,6 +185,48 @@ describe("progressive live API", () => {
     expect(saved).toHaveLength(1);
   });
 
+  test("C25 a proposal keeps unchanged lines out: each changed run is its own card", () => {
+    const source = Array.from({ length: 30 }, (_, i) => `line ${i}\n`).join("");
+    const content = source.replace("line 2\n", "two\n").replace("line 20\n", "twenty\n");
+    const whole = { from: 0, to: source.length, oldText: source, newText: content };
+    const blocks = scanEdiffBlocks(proposeMarkdown(source, [whole]));
+    expect(blocks.map((block) => block.changes.map((line) => line.text)))
+      .toEqual([["line 2", "two"], ["line 20", "twenty"]]);
+    expect(lineHunks("a\nb\n", "a\nb\nc\n")).toEqual([{ from: 4, to: 4, oldText: "", newText: "c\n" }]);
+    expect(lineHunks("a\n", "b\n")).toEqual([{ from: 0, to: 2, oldText: "a\n", newText: "b\n" }]);
+    // Two changes around one unchanged line read as one card.
+    expect(lineHunks("a\nb\nc\n", "x\nb\ny\n")).toHaveLength(1);
+  });
+
+  test("C25 a request too large to review is refused and names the way out", () => {
+    const source = Array.from({ length: 100 }, (_, i) => `line ${i}\n`).join("");
+    const rewrite = source.replace(/line/g, "row");
+    const scattered = source.split("\n").map((line, i) => i % 3 === 0 && line ? `${line}!` : line).join("\n");
+    for (const newText of [rewrite, scattered])
+      expect(() => proposeMarkdown(source, [{ from: 0, to: source.length, oldText: source, newText }]))
+        .toThrow("agent:document:edit");
+  });
+
+  test("C25 document:edit applies directly, by edits or whole content, and leaves proposals to the person", async () => {
+    const saved: any[] = [];
+    let source = "# t\n\nbody\n";
+    const router = new ApiRouter();
+    const call = async (channel: string, args: any[] = []): Promise<any> => {
+      if (channel === "noema:api:notes:open") return { ok: true, file: args[0], content: source, version: "v1" };
+      if (channel === "noema:api:notes:save") { saved.push(args[0]); return { ok: true }; }
+      return router.call(channel, args);
+    };
+    router.register(createAgentApiHandlers({ router, call }));
+    await call("noema:api:agent:document:edit", [{ file: "/tmp/a.md", content: "# t\n\nnew\n" }]);
+    expect(saved[0]).toMatchObject({ content: "# t\n\nnew\n", baseVersion: "v1" });
+    expect(await call("noema:api:agent:document:edit", [{ file: "/tmp/a.md", baseVersion: "old", content: "x\n" }]))
+      .toMatchObject({ conflict: true });
+    expect(editMarkdown("ab\n", [{ from: 0, to: 1, oldText: "a", newText: "x" }, { from: 1, to: 2, oldText: "b", newText: "y" }])).toBe("xy\n");
+    source = "#+begin ediff x\n-a\n+b\n#+end ediff\n";
+    await expect(call("noema:api:agent:document:edit", [{ file: "/tmp/a.md", content: "b\n" }])).rejects.toThrow("person's");
+    expect(saved).toHaveLength(1);
+  });
+
   test("C24 a failed request says what happened, and a sandbox is not a dead host", async () => {
     const failing = (code: string) => async () => { throw Object.assign(new TypeError("fetch failed"), { cause: { code } }); };
     const connection = async () => "http://127.0.0.1:1";
@@ -220,7 +262,7 @@ describe("progressive live API", () => {
   test("discovers names without implementations, and describes one actual handler", async () => {
     const { router, call } = fixture();
     const result = await call("noema:api:agent:discover", [{ query: "agent document", limit: 1 }]);
-    expect(result.total).toBe(2);
+    expect(result.total).toBe(3);
     expect(result.nextOffset).toBe(1);
     expect(JSON.stringify(result)).not.toContain("implementation");
     const detail = await call("noema:api:agent:describe", [{ channel: "noema:api:agent:document:propose" }]);
@@ -228,7 +270,7 @@ describe("progressive live API", () => {
     expect((await call("noema:api:agent:describe", [{ channel: "agent:document:propose" }])).channel).toBe("noema:api:agent:document:propose");
     expect(detail.arguments).toContain("[{");
     expect(detail.implementation).toBeUndefined();
-    expect((await call("noema:api:agent:describe", [{ channel: "agent:document:propose", source: true }])).implementation).toContain("baseVersion");
+    expect((await call("noema:api:agent:describe", [{ channel: "agent:document:propose", source: true }])).implementation).toContain("saveDocument");
     expect((await call("noema:api:agent:describe", [{ channel: "noema:api:agent:call", source: true }])).agentCallable).toBe(true);
     const areas = await call("noema:api:agent:discover", [{}]);
     expect(areas.areas.agent).toBeGreaterThan(1);

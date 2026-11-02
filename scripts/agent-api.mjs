@@ -1,20 +1,9 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
 import { realpathSync } from "node:fs";
-import { callAgentApi } from "../server/lib/agent-api-client.mjs";
+import { agentToolGuide, callAgentApi } from "../server/lib/agent-api-client.mjs";
 
-const HELP = {
-  usage: ["call CHANNEL - < args.json", "describe CHANNEL [{\"source\":true}]", "discover [words] [pagination JSON]"],
-  guidance: "args is a JSON array, usually one object. Call directly when the arguments are known; describe a channel only when unsure, discover only when the name is unknown.",
-  common: {
-    "agent:document:propose": [{ file: "absolute path", edits: [{ from: { line: 1, column: 0 }, to: { line: 1, column: 5 }, oldText: "exact current text", newText: "text", title: "optional" }] }],
-    "agent:document:read": [{ file: "absolute path", range: "optional {from,to}" }],
-    "agent:project:status": [{ root: "absolute path" }],
-    "agent:skill:list": [{ root: "optional absolute path" }],
-    "agent:skill:read": [{ id: "Skill id", root: "optional absolute path" }],
-    "emacs:open": [{ file: "absolute path", placement: "other" }],
-  },
-};
+const usage = ["call CHANNEL - < args.json", "describe CHANNEL [{\"source\":true}]", "discover [words] [pagination JSON]"];
 
 export async function main(argv, invoke = callAgentApi, input = async () => {
   let text = "";
@@ -29,7 +18,7 @@ export async function main(argv, invoke = callAgentApi, input = async () => {
     const text = await input();
     return invoke(name, text.trim() ? JSON.parse(text) : []);
   }
-  if (command === "help" || !command) return HELP;
+  if (command === "help" || !command) return { usage, guide: agentToolGuide() };
   throw new Error(`Unknown command: ${command}`);
 }
 

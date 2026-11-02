@@ -140,7 +140,7 @@
     (let ((text (noema-agent-entry--text "/tmp/p/" (current-buffer) "native")))
       (should (string-match-p "not needed for ordinary work" text))
       (should-not (string-match-p "read it before" text))
-      (should (<= (length text) 700)))))
+      (should (<= (length text) 900)))))
 
 (ert-deftest noema-agent-entry-c51-command-encodes-paths-as-shell-and-json ()
   (require 'noema-agent-entry)

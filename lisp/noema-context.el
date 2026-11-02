@@ -2,11 +2,24 @@
 (require 'tools/agent/context)
 (require 'noema-md-bridge)
 
-(defconst noema-context-related-prompt
-  (concat "Find up to eight notes related to this passage in the current Noema project. "
-          "Use Noema semantic search when it is configured; otherwise search the project notes. "
-          "For each result, give the file path and the specific connection. Do not edit files.")
-  "Prompt shared by the Markdown pane and ordinary Emacs buffers.")
+(defconst noema-agent-text-directory
+  (expand-file-name "../resources/agent/"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "Where Agent-facing text lives.  It is data, read when used, so changing a
+prompt needs no compilation, reload or restart.")
+
+(defun noema-agent-text (name &rest values)
+  "Return the text resources/agent/NAME.md with VALUES filled in.
+VALUES is a plist of field names and strings: `:project' fills {project}."
+  (let ((text (string-trim
+               (with-temp-buffer
+                 (insert-file-contents (expand-file-name (concat name ".md")
+                                                         noema-agent-text-directory))
+                 (buffer-string)))))
+    (while values
+      (setq text (string-replace (format "{%s}" (substring (symbol-name (pop values)) 1))
+                                 (pop values) text)))
+    text))
 
 
 
@@ -27,7 +40,7 @@ Markdown pane reports its selection through the saved-range bridge."
                          (+agent-context--file-references file))))
       (+agent-context--send
        :pick pick
-       :prompt noema-context-related-prompt
+       :prompt (noema-agent-text "related")
        :references references))))
 
 (defun noema-context-send-noema-selection (file line-start line-end)

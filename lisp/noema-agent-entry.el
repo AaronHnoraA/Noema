@@ -13,6 +13,8 @@
 (defvar +agent-acp-session-origin)
 (defvar agent-shell--state)
 
+(require 'noema-context)
+
 (defconst noema-agent-entry--source
   (file-name-directory (directory-file-name
                         (file-name-directory (or load-file-name buffer-file-name))))
@@ -35,12 +37,15 @@
 
 (defun noema-agent-entry--text (root buffer session)
   "Return the entry for Project ROOT, told to BUFFER's native SESSION."
-  (let ((project (directory-file-name root)))
-    (format "Noema Project %s. Available when useful, not needed for ordinary work: the Skill noema-project-maintenance covers its shared cache, memory, context, sub-Agents and ACP facts, and the Skill noema-pi covers talking to Pi, its long-lived manager Agent. Read one with:\n%s\n(Host down: %s.) Your session is buffer=%s nativeSessionId=%s. This is a reference, not a task."
-            project (noema-agent-entry--command root)
-            (expand-file-name "resources/skills/noema-project-maintenance/SKILL.md"
-                              noema-agent-entry--source)
-            (buffer-name buffer) session)))
+  (noema-agent-text
+   "project-entry"
+   :project (directory-file-name root)
+   :api (shell-quote-argument (expand-file-name "scripts/agent-api.mjs" noema-agent-entry--source))
+   :command (noema-agent-entry--command root)
+   :skill-file (expand-file-name "resources/skills/noema-project-maintenance/SKILL.md"
+                                 noema-agent-entry--source)
+   :buffer (buffer-name buffer)
+   :session session))
 
 (defun noema-agent-entry--pending-for (buffer prompt)
   "Return (SESSION . TEXT) when BUFFER's turn with PROMPT should carry the entry.

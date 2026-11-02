@@ -52,11 +52,91 @@ function proposal(title, oldText, newText) {
   return `#+begin ediff ${label}\n${diffLines(oldText, "-")}${diffLines(newText, "+")}#+end ediff\n`;
 }
 
-/** Build review source, retaining the original old side when revising feedback. */
-export function proposeMarkdown(source, edits) {
+/** Past these a card stops being reviewable; the refusal names the way out. */
+const MAX_PROPOSAL_CARDS = 12;
+const MAX_CARD_CHANGED_LINES = 60;
+const MAX_DIFF_CELLS = 4_000_000;
+
+const keepEnds = (text) => text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+
+/** Changed line runs of OLD against NEXT as {from,to,oldText,newText}, offsets into OLD. */
+export function lineHunks(oldText, newText) {
+  const a = keepEnds(oldText), b = keepEnds(newText);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const n = a.length - head - tail, m = b.length - head - tail;
+  const matches = [];
+  if (n && m && n * m <= MAX_DIFF_CELLS) {
+    const lcs = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+      lcs[i][j] = a[head + i] === b[head + j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    for (let i = 0, j = 0; i < n && j < m;) {
+      if (a[head + i] === b[head + j]) matches.push([head + i++, head + j++]);
+      else if (lcs[i + 1][j] >= lcs[i][j + 1]) i++;
+      else j++;
+    }
+  }
+  matches.push([a.length - tail, b.length - tail]);
+  const spans = [];
+  let i = head, j = head;
+  for (const [x, y] of matches) {
+    if (x > i || y > j) {
+      const last = spans.at(-1);
+      // One unchanged line between two changes reads better inside one card.
+      if (last && i - last.i2 <= 1) { last.i2 = x; last.j2 = y; }
+      else spans.push({ i1: i, i2: x, j1: j, j2: y });
+    }
+    i = x + 1; j = y + 1;
+  }
+  const offsets = [0];
+  for (const line of a) offsets.push(offsets.at(-1) + line.length);
+  return spans.map(({ i1, i2, j1, j2 }) => ({ from: offsets[i1], to: offsets[i2],
+    oldText: a.slice(i1, i2).join(""), newText: b.slice(j1, j2).join("") }));
+}
+
+/** The edits of a request: `content` is the whole new document, costing one copy, not two. */
+function requestedEdits(source, { edits, content }) {
+  if (content === undefined) return edits;
+  if (typeof content !== "string") bad("content must be the whole new document as a string");
+  if (edits !== undefined) bad("Give edits or content, not both");
+  return [{ from: 0, to: source.length, oldText: source, newText: content }];
+}
+
+function tooLarge(detail) {
+  bad(`${detail} is too much to review as cards. If the person asked for this change, apply it with agent:document:edit; otherwise propose only the few changes that need their judgement.`);
+}
+
+/** Apply EDITS directly. A pending proposal is the person's to decide, so none is touched. */
+export function editMarkdown(source, edits) {
   if (!Array.isArray(edits) || !edits.length) bad("edits must be a non-empty array");
   const blocks = scanEdiffBlocks(source);
   const changes = edits.map((edit) => {
+    const from = position(source, edit.from);
+    const to = position(source, edit.to);
+    if (from === undefined || to === undefined || to < from) bad("Each edit needs an ordered from/to range");
+    if (typeof edit.oldText !== "string" || source.slice(from, to) !== edit.oldText)
+      bad("oldText differs from the saved source; read it again");
+    if (typeof edit.newText !== "string") bad("newText must be a string");
+    if (blocks.some((block) => from < block.end && to > block.from))
+      bad("A pending proposal is in this range; it is the person's to accept or reject");
+    return { from, to, insert: edit.newText };
+  }).sort((a, b) => a.from - b.from);
+  for (let i = 1; i < changes.length; i++)
+    if (changes[i].from < changes[i - 1].to) bad("Edits overlap");
+  let result = source;
+  for (const change of changes.reverse()) result = result.slice(0, change.from) + change.insert + result.slice(change.to);
+  if (result === source) bad("The edit changes nothing");
+  return result;
+}
+
+/** Build review source, retaining the original old side when revising feedback.
+ * A new edit is split into one card per changed run: unchanged lines stay out. */
+export function proposeMarkdown(source, edits) {
+  if (!Array.isArray(edits) || !edits.length) bad("edits must be a non-empty array");
+  const blocks = scanEdiffBlocks(source);
+  const changes = edits.flatMap((edit) => {
     const from = position(source, edit.from);
     const to = position(source, edit.to);
     if (from === undefined || to === undefined || to < from) bad("Each edit needs an ordered from/to range");
@@ -71,7 +151,7 @@ export function proposeMarkdown(source, edits) {
         bad("Revise an existing proposal using its whole from/end range");
       if (to < source.length && edit.newText && !edit.newText.endsWith("\n"))
         bad("A proposal before another line must retain its final newline");
-      return { from, to, insert: proposal(edit.title || block.title, ediffSide(block, "old"), edit.newText) };
+      return [{ from, to, insert: proposal(edit.title || block.title, ediffSide(block, "old"), edit.newText) }];
     }
     const start = from === 0 ? 0 : source.lastIndexOf("\n", from - 1) + 1;
     let end = to > from && source[to - 1] === "\n" ? to : source.indexOf("\n", to) + 1;
@@ -87,8 +167,15 @@ export function proposeMarkdown(source, edits) {
     }
     if (blocks.some((block) => start < block.end && end > block.from))
       bad("Expanded line range touches another proposal; revise it explicitly");
-    return { from: start, to: end, insert: proposal(edit.title, source.slice(start, end), next) };
+    const region = source.slice(start, end);
+    if (region === next) bad("A proposal must change the text");
+    return lineHunks(region, next).map((hunk) => {
+      const changed = keepEnds(hunk.oldText).length + keepEnds(hunk.newText).length;
+      if (changed > MAX_CARD_CHANGED_LINES) tooLarge(`One card of ${changed} changed lines`);
+      return { from: start + hunk.from, to: start + hunk.to, insert: proposal(edit.title, hunk.oldText, hunk.newText) };
+    });
   }).sort((a, b) => a.from - b.from);
+  if (changes.length > MAX_PROPOSAL_CARDS) tooLarge(`${changes.length} separate changes`);
   for (let i = 1; i < changes.length; i++) {
     if (changes[i].from < changes[i - 1].to || changes[i].from === changes[i - 1].from)
       bad("Edits overlap after line expansion; combine edits on the same line");
@@ -105,6 +192,16 @@ const apiAreas = (channels) => Object.fromEntries(Map.groupBy(channels, (name) =
 
 export function createAgentApiHandlers({ router, call }) {
   const documented = (handler, apiDoc) => Object.assign(handler, { apiDoc });
+  // Without a version, each edit's oldText is the check: it must match at its position.
+  const saveDocument = async ({ file, baseVersion, edits, content: whole } = {}, transform, client) => {
+    if (baseVersion !== undefined && (typeof baseVersion !== "string" || !baseVersion)) bad("baseVersion must be a document:read version");
+    if (typeof file !== "string" || !/\.(md|markdown)$/i.test(file)) bad("A saved Markdown file is required");
+    const opened = await call("noema:api:notes:open", [file]);
+    if (baseVersion !== undefined && opened?.version !== baseVersion) return { ok: false, conflict: true, version: opened?.version, message: "Document changed; read it again before revising" };
+    const content = transform(opened.content, requestedEdits(opened.content, { edits, content: whole }));
+    return call("noema:api:notes:save", [{ file: opened.file || file, content, baseVersion: opened.version,
+      clientId: `${client}-${randomUUID()}`, seq: 1, mode: "source", refresh: "deferred" }]);
+  };
   return {
     "noema:api:agent:skill:list": documented((body) => listAgentSkills(body), {
       description: "Read the existing Skill/Packs manager's effective catalog. Packs marked agent_catalog there are the default; no Skill body is returned.",
@@ -198,17 +295,11 @@ export function createAgentApiHandlers({ router, call }) {
             proposed: ediffSide(block, "new"), comments: block.comments, rejected: block.rejected, error: block.error })) };
     }, { description: "Read current Markdown, its exact version and optional range, including saved review feedback.",
       parameters: [{ file: "absolute Markdown path", range: "optional {from,to}; UTF-16 offsets or {line:1-based,column:0-based}" }] }),
-    "noema:api:agent:document:propose": documented(async ({ file, baseVersion, edits } = {}) => {
-      if (baseVersion !== undefined && (typeof baseVersion !== "string" || !baseVersion)) bad("baseVersion must be a document:read version");
-      if (typeof file !== "string" || !/\.(md|markdown)$/i.test(file)) bad("A saved Markdown file is required");
-      const opened = await call("noema:api:notes:open", [file]);
-      // Without a version, each edit's oldText is the check: it must match at its position.
-      if (baseVersion !== undefined && opened?.version !== baseVersion) return { ok: false, conflict: true, version: opened?.version, message: "Document changed; read it again before revising" };
-      const content = proposeMarkdown(opened.content, edits);
-      return call("noema:api:notes:save", [{ file: opened.file || file, content, baseVersion: opened.version,
-        clientId: `agent-proposal-${randomUUID()}`, seq: 1, mode: "source", refresh: "deferred" }]);
-    }, { description: "Create or revise in-place review proposals through the canonical save and UI notification path. Never accepts proposals. Preserves unselected text and the original side; clears resolved feedback on revision. Conflicts require rereading, never force/retry a mutation blindly.",
+    "noema:api:agent:document:propose": documented((body) => saveDocument(body, proposeMarkdown, "agent-proposal"), { description: "Create or revise in-place review cards for the few changes the person should weigh; each changed run becomes its own card, and a request too large to review is refused in favour of document:edit. Never accepts proposals. Preserves unselected text and the original side; clears resolved feedback on revision. Conflicts require rereading, never force/retry a mutation blindly.",
       parameters: [{ file: "absolute Markdown path", baseVersion: "optional document:read version; without it oldText alone guards each edit",
-        edits: "[{from,to,oldText,newText,title?}]; UTF-16 offsets or line/column positions. Existing proposals must use their whole from/end range; newText is the replacement proposed side." }] }),
+        edits: "[{from,to,oldText,newText,title?}]; UTF-16 offsets or line/column positions. Existing proposals must use their whole from/end range; newText is the replacement proposed side.", content: "instead of edits: the whole new document" }] }),
+    "noema:api:agent:document:edit": documented((body) => saveDocument(body, editMarkdown, "agent-edit"), { description: "Apply a change the person asked for directly, through the canonical save and UI notification path, so an open page updates. For mechanical or whole-document work; pending proposals in the range are refused, not touched.",
+      parameters: [{ file: "absolute Markdown path", baseVersion: "optional document:read version; use it with content so a concurrent edit is not overwritten",
+        edits: "[{from,to,oldText,newText}]; UTF-16 offsets or line/column positions", content: "instead of edits: the whole new document" }] }),
   };
 }

@@ -4,7 +4,7 @@ import { realpathSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
-import { callAgentApi, fullChannel } from "../server/lib/agent-api-client.mjs";
+import { agentToolGuide, callAgentApi, fullChannel } from "../server/lib/agent-api-client.mjs";
 
 const PI_MARK = "[From Pi, not the person] ";
 
@@ -19,7 +19,7 @@ export function markPiMessage(channel, args, caller = process.env.NOEMA_CALLER) 
 
 export function createAgentMcp(invoke = callAgentApi) {
   const server = new McpServer({ name: "Noema API", version: "1.0.0" }, {
-    instructions: "noema_call runs a Noema backend API; args is a JSON array, usually one object: args=[{\"field\":value}]. Call directly when the arguments are known, use noema_api only when the name or fields are unknown. Revise Markdown with agent:document:propose: the person accepts its review cards, so do not replace it with direct file edits. After a transport interruption inspect current state before retrying a mutation.",
+    instructions: agentToolGuide(),
   });
   const wrap = (fn) => async (args) => {
     try {

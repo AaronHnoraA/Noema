@@ -35,7 +35,7 @@ Session 管理与文件打开是不同操作。已有工具可执行时直接操
 ## 读文档与其他界面
 
 - 只需读 Markdown 时用 `noema:api:agent:document:read`，参数 `[{"file":"绝对路径"}]`；
-  用户要求显示时才打开 UI。修改或提案遵循原有授权与版本契约。
+  用户要求显示时才打开 UI。用户明确要的改动用 `agent:document:edit` 直接应用，需要用户斟酌的才用提案卡片。
 - 打开现有 Wiki、Agenda 或配置界面，用 `noema:api:emacs:surface`，参数
   `[{"path":"/wiki"}]`、`/agenda` 或 `/config`。排队通知不等于已显示。
 - 会话操作使用 `noema-agent-operations`；`emacs:current-file`、`emacs:ui-state`、

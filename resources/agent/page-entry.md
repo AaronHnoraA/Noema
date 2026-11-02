@@ -1,0 +1,1 @@
+Reach them through noema_call, or by piping the JSON to `node {api} call CHANNEL -`, whose `help` shows the rest. Stay inside a selection. An empty request with saved review feedback means revise that proposal.

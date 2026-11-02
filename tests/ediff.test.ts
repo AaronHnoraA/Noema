@@ -89,6 +89,25 @@ describe("in-place ediff semantics", () => {
   });
 });
 
+describe("C25 a proposal arriving under the caret", () => {
+  test("stays a card, while one already being edited keeps the caret", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: "one\ntwo\nthree\n" });
+    editor.view.dispatch({ selection: { anchor: 5 } });
+    const proposed = "one\n#+begin ediff x\n-two\n+2\n#+end ediff\nthree\n";
+    editor.setMarkdown(proposed, { history: "reset", preserveView: true });
+    const block = scanEdiffBlocks(proposed)[0];
+    const caret = editor.view.state.selection.main.head;
+    expect(caret > block.from && caret < block.to).toBe(false);
+    editor.view.dispatch({ selection: { anchor: block.from + 3 } });
+    editor.setMarkdown(`${proposed}four\n`, { history: "reset", preserveView: true });
+    expect(editor.view.state.selection.main.head).toBe(block.from + 3);
+    editor.destroy?.();
+    host.remove();
+  });
+});
+
 describe("inline ediff card", () => {
   function mount(content: string, readOnly = false) {
     const host = document.createElement("div");

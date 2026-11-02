@@ -1,0 +1,1 @@
+Find up to eight notes related to this passage in the current Noema project. Use the Noema API's knowledge:search when you can reach it; otherwise search the project notes. For each result, give the file path and the specific connection. Do not edit files.

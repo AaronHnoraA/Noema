@@ -204,7 +204,7 @@ test("C19 dependency aliases use canonical ids even when already globally enable
 test("what Pi carries on every turn stays small", async () => {
   const { readFile } = await import("node:fs/promises");
   const prompt = await readFile(join(process.cwd(), "resources/pi/SYSTEM.md"), "utf8");
-  expect(prompt.length).toBeLessThanOrEqual(4_300);
+  expect(prompt.length).toBeLessThanOrEqual(4_000);
 });
 
 test("a Skill's body stays small enough to read for one question", async () => {
@@ -214,6 +214,21 @@ test("a Skill's body stays small enough to read for one question", async () => {
     const text = await readFile(join(skills, id, "SKILL.md"), "utf8").catch(() => "");
     expect([id, text.length <= 3_200]).toEqual([id, true]);
   }
+});
+
+test("C26 one tool guide: small, and every entry carries it instead of its own copy", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const guide = await readFile(join(process.cwd(), "resources/agent/tools.md"), "utf8");
+  expect(guide.length).toBeLessThanOrEqual(1_300);
+  for (const [name, limit] of [["page-entry", 300], ["project-entry", 600], ["related", 300], ["task", 120], ["prompt-document", 160]] as const)
+    expect([name, (await readFile(join(process.cwd(), `resources/agent/${name}.md`), "utf8")).length <= limit]).toEqual([name, true]);
+  const { main } = await import("../scripts/agent-api.mjs");
+  expect((await main(["help"]) as any).guide).toBe(guide.trim());
+  const entries = await Promise.all(["scripts/agent-mcp.mjs", "scripts/agent-api.mjs", "lisp/noema-md-bridge.el",
+    "lisp/noema-agent-entry.el", "resources/pi/SYSTEM.md"].map((file) => readFile(join(process.cwd(), file), "utf8")));
+  for (const entry of entries) expect(entry).not.toContain("WHOLE_NEW_DOCUMENT");
+  // Prompts are data: no sentence of guidance sits in compiled code.
+  for (const entry of entries.slice(2, 4)) expect(entry).not.toMatch(/"[^"\n]*(Available when useful|Carry out the task|Reach them through)/);
 });
 
 test("the catalog stays small: descriptions and preambles have budgets", async () => {

@@ -11,6 +11,7 @@
  * converts them to UTF-8 byte offsets when it applies an incremental save.
  */
 
+import { scanEdiffBlocks } from "../ediff.ts";
 import { Compartment, EditorSelection, EditorState, findClusterBreak, Transaction, type Extension, type SelectionRange, type Text as CMText } from "@codemirror/state";
 import {
   EditorView,
@@ -833,11 +834,18 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
           // save from another pane that carried no change) replaces nothing,
           // so the undo history is still the history of this text.
           if (md === source) return;
+          // A proposal that just arrived stays a card: a caret inside would open its source.
+          const arrived = md.includes("#+begin ediff") ? scanEdiffBlocks(md)
+            .filter((block) => !source.includes(md.slice(block.from, block.end))) : [];
+          const outsideArrived = (position: number) =>
+            arrived.find((block) => position > block.from && position < block.to)?.from ?? position;
           const selection = EditorSelection.create(
             view.state.selection.ranges.map((range) => {
               const anchorAssoc = range.empty ? range.assoc : range.anchor <= range.head ? -1 : 1;
               const headAssoc = range.empty ? range.assoc : -anchorAssoc;
-              const anchor = mapPositionAcrossText(source, md, range.anchor, anchorAssoc);
+              const anchor = range.empty
+                ? outsideArrived(mapPositionAcrossText(source, md, range.anchor, anchorAssoc))
+                : mapPositionAcrossText(source, md, range.anchor, anchorAssoc);
               const head = mapPositionAcrossText(source, md, range.head, headAssoc);
               return range.empty
                 ? EditorSelection.cursor(

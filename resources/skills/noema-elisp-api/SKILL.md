@@ -49,7 +49,7 @@ to change the configuration or connect an MCP.
 
 Pi has its own history and active pointers. Open `noema-pi-sessions` for the
 Emacs companion and project conversations; do not promote or bind them into
-Research. Use the progressively disclosed `emacs:pi` API when coordinating
+Research. Use the `emacs:pi` API when coordinating
 children. Read `docs/design/pi-sessions.md` for lifecycle details, including
 unsaved empty conversations and strict native restore. Prompt documents use
 the `noema-prompt-document` Skill and ordinary Markdown.

@@ -46,7 +46,7 @@
 (declare-function +agent/compose "tools/agent/compose" (&optional name))
 (declare-function +agent-context--send "tools/agent/context" (&rest arguments))
 (declare-function +agent-context--region-references "tools/agent/context" (buffer begin end))
-(defvar noema-context-related-prompt)
+(declare-function noema-agent-text "noema-context" (name &rest values))
 
 (defgroup noema-md-bridge nil
   "Running Emacs tools on the text of a Noema Markdown pane."
@@ -356,13 +356,16 @@ The pane keeps its window; focus moves to Emacs so the region can be used."
 A longer one stays a reference for the Agent to read.")
 
 (defun noema-md-bridge--review-bootstrap ()
-  "Return a small capability entry for an Agent, enough for one direct call."
-  (cons 'noema-api-review-v2
-        (format
-         "Noema review: answer questions normally. A requested Markdown revision is a review card the person accepts, not a direct file edit: call agent:document:propose with [{\"file\":F,\"edits\":[{\"from\":{\"line\":L,\"column\":C},\"to\":{\"line\":L,\"column\":C},\"oldText\":OLD,\"newText\":NEW,\"title\":T}]}], through noema_call when you have it, otherwise by piping that JSON to `node %s call CHANNEL -` (`help` lists more). When the selected text is shown, that one call is enough; agent:document:read is for text not shown or a reported mismatch. Stay inside the selection. An empty request with saved review feedback means revise that proposal."
-         (shell-quote-argument
-          (expand-file-name "../scripts/agent-api.mjs"
-                            (file-name-directory (locate-library "noema-md-bridge")))))))
+  "Return the capability entry for an Agent: the tool guide and this entry's facts.
+Its key follows the text, so a changed guide reaches sessions that had the old one."
+  (require 'noema-context)
+  (let ((text (concat (noema-agent-text "tools") "\n"
+                      (noema-agent-text
+                       "page-entry" :api
+                       (shell-quote-argument
+                        (expand-file-name "../scripts/agent-api.mjs"
+                                          noema-agent-text-directory))))))
+    (cons (intern (concat "noema-tools-" (substring (sha1 text) 0 8))) text)))
 
 (defun noema-md-bridge--column (position)
   "Return POSITION's zero-based UTF-16 column."
@@ -414,7 +417,8 @@ A short selection carries its text, which saves the Agent a read."
      (require 'tools/agent/context)
      (let ((session (with-current-buffer buffer
                       (+agent-context--send
-                       :prompt noema-context-related-prompt
+                       :prompt (noema-agent-text "related")
+                       :session-instructions (noema-md-bridge--review-bootstrap)
                        :references (+agent-context--region-references buffer begin end)))))
        (when-let* ((window (and (buffer-live-p session)
                                 (get-buffer-window session 'visible))))
@@ -428,7 +432,7 @@ A short selection carries its text, which saves the Agent a read."
      (require 'tools/agent/context)
      (with-current-buffer buffer
        (+agent-context--send
-        :prompt "Carry out the task in this Markdown document, using its referenced project context."
+        :prompt (noema-agent-text "task")
         :session-instructions (noema-md-bridge--review-bootstrap)
         :references (+agent-context--file-references buffer-file-name)))
      (noema-md-bridge--drop-hidden buffer))

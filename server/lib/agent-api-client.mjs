@@ -1,7 +1,11 @@
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+/** The one text saying which tool fits which request; every entry adds only its own transport. */
+export const agentToolGuide = () => readFileSync(join(import.meta.dirname, "../../resources/agent/tools.md"), "utf8").trim();
 
 /** Only ESRCH means the process is gone: a sandboxed Agent gets EPERM for a live host. */
 function processExists(pid) {
