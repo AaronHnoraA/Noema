@@ -218,11 +218,12 @@ test("a Skill's body stays small enough to read for one question", async () => {
 
 test("the catalog stays small: descriptions and preambles have budgets", async () => {
   const { readFile, readdir } = await import("node:fs/promises");
-  const skills = join(process.cwd(), "resources/skills");
-  for (const id of await readdir(skills)) {
-    const text = await readFile(join(skills, id, "SKILL.md"), "utf8").catch(() => "");
-    const description = /^description: (.*)$/m.exec(text)?.[1] ?? "";
-    expect([id, description.length <= 260]).toEqual([id, true]);
+  for (const skills of [join(process.cwd(), "resources/skills"), join(process.cwd(), "../../.agents/skills")]) {
+    for (const id of await readdir(skills).catch(() => [])) {
+      const text = await readFile(join(skills, id, "SKILL.md"), "utf8").catch(() => "");
+      const description = /^description: (.*)$/m.exec(text)?.[1] ?? "";
+      expect([id, description.length <= 280]).toEqual([id, true]);
+    }
   }
   const config = await readFile(join(process.cwd(), "../../etc/noema/capabilities.json"), "utf8").catch(() => null);
   if (config === null) return;
