@@ -345,6 +345,17 @@ describe("server save API", () => {
     }
   });
 
+  test("a new note writes its template and supplied body together", async () => {
+    const { notes } = await setupRoot();
+    const opened = await createNode({
+      nodeType: "roam", id: "filed-answer", title: "Filed answer",
+      path: "filed-answer.md", appendContent: "  Evidence **here**.  ",
+    });
+    const file = join(notes, "filed-answer.md");
+    expect(opened.file).toBe(file);
+    expect(await readFile(file, "utf8")).toContain("# Filed answer\n\nEvidence **here**.\n");
+  });
+
   test("new note templates distinguish roam nodes from regular documents", async () => {
     const { root, notes } = await setupRoot();
     const templates = join(root, "templates", "noema", "markdown-mode");

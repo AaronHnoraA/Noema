@@ -8253,6 +8253,13 @@ export async function createNode(body) {
       "",
     ].join("\n");
   }
+  if (body.appendContent !== undefined && typeof body.appendContent !== "string") {
+    const err = new Error("New note body must be text");
+    err.statusCode = 400;
+    throw err;
+  }
+  const appended = body.appendContent?.trim();
+  if (appended) content += `\n${appended}\n`;
   await mkdir(dir, { recursive: true });
   await writeMarkdownFile(file, content);
   markNotesDirty(file);
