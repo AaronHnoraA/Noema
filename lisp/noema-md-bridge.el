@@ -32,7 +32,7 @@
 
 (declare-function noema--xwidget-buffer-p "noema-xwidget-keys" (&optional buffer))
 (declare-function noema--jupyter-xwidget-buffer-p "noema-xwidget-keys" (&optional buffer))
-(declare-function +noema-portal-buffer-p "noema/bridge/portal" (&optional buffer))
+(declare-function +noema-portal-buffer-p "noema/bridge/portal" (buffer))
 (declare-function portal-input-unfocus "portal-input" ())
 (declare-function +noema--buffer-for-client "noema/bridge/config" (client))
 (declare-function +noema--host-file "noema/bridge/config" (file))
