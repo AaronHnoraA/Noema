@@ -101,7 +101,7 @@ export function normalizeServerRuntimeConfig(raw, options = {}) {
     configFile,
     configDir,
     listen: Object.freeze({ host, port }),
-    appearance: Object.freeze({ theme: String(appearance.theme || "claude").trim() || "claude" }),
+    appearance: Object.freeze({ theme: String(appearance.theme || "daylight").trim() || "daylight" }),
     reader: Object.freeze({
       showSource: optionalBoolean(reader.showSource, false, "reader.showSource"),
       showGraph: optionalBoolean(reader.showGraph, true, "reader.showGraph"),

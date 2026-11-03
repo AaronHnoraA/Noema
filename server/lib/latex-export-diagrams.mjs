@@ -182,6 +182,16 @@ export async function prepareLatexDiagrams(markdown, {
     if (signal?.aborted) break;
     const svg = rendered.get(diagramKey(fence.lang, fence.source));
     if (!svg) {
+      if ((fence.lang === "marmind" || fence.lang === "markmind")
+          && !/^\s*(?:mindmap|---config---)\b/im.test(fence.source)) {
+        const outline = fence.source.split("\n").filter((line) => line.trim())
+          .map((line) => `${line.match(/^\s*/)?.[0] || ""}- ${line.trim()}`);
+        if (outline.length > 0) {
+          lines.splice(fence.start, fence.end - fence.start + 1, "", ...outline, "");
+          warnings.push(`A ${fence.lang} diagram was exported as an outline: the editor did not supply a rendered picture.`);
+          continue;
+        }
+      }
       warnings.push(`A ${fence.lang} diagram was exported as source: the editor did not supply a rendered picture.`);
       continue;
     }
@@ -212,6 +222,10 @@ export async function prepareLatexDiagrams(markdown, {
       const result = await drawioExportSVG(file, { page, format: "pdf", cacheDir });
       if (result.error || !result.data) {
         warnings.push(`draw.io diagram "${path}" was not exported: ${result.error || "no output"}`);
+        // Leaving the .drawio image in Markdown makes LaTeX try to read an
+        // unsupported file and abort the whole export. Preserve its visible
+        // source label while reporting the missing picture.
+        line = `${line.slice(0, link.from)}${link.alt || path}${line.slice(link.to)}`;
         continue;
       }
       figure += 1;

@@ -37,7 +37,7 @@ describe("Server configuration and read-only policy", () => {
     expect(config.noteRoot).toBe("/srv/noema/server-config/repos");
     expect(config.repositories.map((repository) => repository.id)).toEqual(["public/math", "private/journal"]);
     expect(config.listen.port).toBe(6180);
-    expect(config.appearance.theme).toBe("claude");
+    expect(config.appearance.theme).toBe("daylight");
     expect(config.reader).toMatchObject({
       showSource: false,
       showGraph: false,

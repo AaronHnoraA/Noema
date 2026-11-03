@@ -258,8 +258,9 @@ export function layoutLatexEnvironment(layout, lines) {
   if (layout.wrap && layout.align !== "center") {
     const side = layout.align === "left" ? "l" : "r";
     const width = layoutLatexLength(layout.width) || "0.45\\textwidth";
+    const boundedWidth = `\\ifdim ${width}>\\linewidth \\linewidth\\else ${width}\\fi`;
     return {
-      lines: [`\\begin{wrapfigure}{${side}}{${width}}`, "\\centering", ...body, "\\end{wrapfigure}"],
+      lines: [`\\begin{wrapfigure}{${side}}{${boundedWidth}}`, "\\centering", ...body, "\\end{wrapfigure}"],
       packages: ["wrapfig"],
     };
   }
@@ -279,8 +280,9 @@ export function layoutLatexFigure(layout, lines) {
   // Inside wrapfigure, \linewidth is the width chosen by the outer environment.
   // Using it avoids resolving the same percentage against \textwidth twice.
   const width = layout.wrap && (requestedWidth || !requestedHeight) ? "\\linewidth" : requestedWidth;
+  const boundedWidth = width ? `\\ifdim ${width}>\\linewidth \\linewidth\\else ${width}\\fi` : "!";
   const sized = width || requestedHeight
-    ? [`\\resizebox{${width || "!"}}{${requestedHeight || "!"}}{%`, ...body, "}"]
+    ? [`\\resizebox{${boundedWidth}}{${requestedHeight || "!"}}{%`, ...body, "}"]
     : body;
   const placed = layoutLatexEnvironment(layout, sized);
   return {

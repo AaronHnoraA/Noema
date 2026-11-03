@@ -10,7 +10,7 @@ import { changedRoamFilesSince, fileHistory, restoreFileFromCommit, discardFileC
 import { buildWikiIndex, wikiIndexStatus } from "./wiki-workspace.mjs";
 import { configureTmpRoot, noemaTmpRoot, runtimeMkdtemp, runtimeTmpFile } from "./tmp.mjs";
 import { prepareLatexDiagrams } from "./latex-export-diagrams.mjs";
-import { applyLatexTemplate, bibliographyReferencesToLatex, defaultLatexOutputPath, escapeLatexText, escapeLatexTitle, escapeLatexUrl, latexLogDiagnostics, latexMacrosPackage, latexNeedsAnotherPass, readLatexTemplate, writeLatexExport } from "./latex-export.mjs";
+import { applyLatexTemplate, bibliographyReferencesToLatex, defaultLatexOutputPath, escapeLatexText, escapeLatexTitle, escapeLatexUrl, latexLogDiagnostics, latexMacrosPackage, latexNeedsAnotherPass, latexOpeningDropCap, readLatexTemplate, writeLatexExport } from "./latex-export.mjs";
 import { noemaMarkdownToLatexPandoc, extractNoemaMetadata } from "./latex-export-pandoc.mjs";
 import { agentAvailable, loadAgentRules, normalizeAgentTitle, polishBodyWithAgent } from "./latex-export-codex.mjs";
 import { loadKatexMacros } from "./katex-macros.mjs";
@@ -6616,6 +6616,19 @@ export async function listLatexTemplates() {
   return { type: "latex-templates", ok: true, templates, root: latexTemplatesRoot };
 }
 
+// A remembered template can outlive its file: the Aaronnote → Noema rename
+// moved `aaronnote-*.tex` to `noema-*.tex`, and a template may be deleted.
+// Offering a dead path makes the next export fail on "could not be read", so
+// map it to the renamed or same-named shipped file, else to the default.
+export function rememberedLatexTemplate(path, templatesRoot = latexTemplatesRoot) {
+  const remembered = String(path || "").trim();
+  if (!remembered || existsSync(remembered)) return remembered;
+  const name = basename(remembered).replace(/^aaronnote-/, "noema-");
+  const candidates = [join(dirname(remembered), name)];
+  if (templatesRoot) candidates.push(join(templatesRoot, "latex", name), join(templatesRoot, "tex", name));
+  return candidates.find((candidate) => existsSync(candidate)) || "";
+}
+
 export async function latexExportDefaults(body = {}) {
   const sourceFile = latexExportSourceFile(body.file || body.sourceFile || "");
   const state = await readLatexExportState();
@@ -6629,7 +6642,7 @@ export async function latexExportDefaults(body = {}) {
     file: sourceFile,
     outputPath: paths[sourceFile] || defaultLatexOutputPath(sourceFile, title),
     templateRoot: latexTemplatesRoot,
-    template: remembered?.templatePath || "",
+    template: rememberedLatexTemplate(remembered?.templatePath),
     vars: remembered?.vars && typeof remembered.vars === "object" ? remembered.vars : {},
   };
 }
@@ -6839,7 +6852,7 @@ export async function exportLatex(body = {}) {
       title: escapeLatexTitle(String(titleOverride || docTitle)),
       date: escapeLatexTitle(documentMeta.date || converted.meta.date || todayDateValue()),
       source: escapeLatexTitle(sourceFile ? displayPathForFile(sourceFile) : ""),
-      body: bodyLatex,
+      body: templateText.includes("% noema-opening-initial: latin") ? latexOpeningDropCap(bodyLatex) : bodyLatex,
     };
     return templatePlan && typeof latexProvider?.renderTemplate === "function"
       ? latexProvider.renderTemplate(templatePlan, vars)

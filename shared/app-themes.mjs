@@ -32,8 +32,13 @@ export const NOEMA_APP_THEMES = Object.freeze(entries.map((theme) => Object.free
 
 const themeIds = new Set(NOEMA_APP_THEMES.map((theme) => theme.id));
 
-// Theme id saved in user config before the Noema rename.
-const LEGACY_THEME_IDS = { aaronnote: "noema" };
+// Preserve saved selections after consolidating the renderer to day and night.
+const LEGACY_THEME_IDS = {
+  aaronnote: "noema",
+  midnight: "noema",
+  claude: "daylight",
+  mediki: "daylight",
+};
 
 export function canonicalNoemaAppThemeId(themeId) {
   const id = String(themeId || "").trim().toLowerCase();

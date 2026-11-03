@@ -9,6 +9,16 @@ import {
 } from "../src/render-html.ts";
 
 describe("shared markdown HTML renderer", () => {
+  test("marks only the opening Latin paragraph for a decorative initial", () => {
+    const english = renderMarkdownHTML("# Introduction\n\nWe study graphs.\n\nAnother paragraph.", { openingInitial: true });
+    expect(english).toContain('<p class="noema-opening-paragraph">We study graphs.</p>');
+    expect(english).toContain("<p>Another paragraph.</p>");
+    const chinese = renderMarkdownHTML("# 引言\n\n中文开头。", { openingInitial: true });
+    expect(chinese).not.toContain("noema-opening-paragraph");
+    const withMeta = renderMarkdownHTML("#+begin meta\ntitle: Study\n#+end meta\n\n# Introduction\n\nWe study graphs.", { openingInitial: true });
+    expect(withMeta).toContain('class="noema-opening-paragraph"');
+    expect(renderMarkdownHTML("# Introduction\n\nWe study graphs.")).not.toContain("noema-opening-paragraph");
+  });
   test("renders highlight, superscript and subscript as the editor does", () => {
     const html = renderMarkdownHTML("==key **idea**== x^2^ H~2~O ~~gone~~");
     expect(html).toContain("<mark>key <strong>idea</strong></mark>");
@@ -737,7 +747,7 @@ Body.
     expect(html).toContain('data-noema-katex-css="embedded"');
     expect(html).toContain('href="data:text/css;charset=utf-8,');
     expect(html).not.toContain("cdn.jsdelivr.net");
-    expect(html).toContain("<p>Body</p>");
+    expect(html).toContain('<p class="noema-opening-paragraph">Body</p>');
   });
 
   test("routes printable note assets and absolute note CSS through an explicit resolver", () => {

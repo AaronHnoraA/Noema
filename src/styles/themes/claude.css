@@ -1,5 +1,6 @@
 /*
- * Claude — a warm editorial light theme.
+ * Original warm light palette. The selectable theme is daylight; the
+ * claude selector keeps previously exported pages readable.
  */
 @import "../../../kernel-resources/appearance/themes/daylight/theme.css";
 

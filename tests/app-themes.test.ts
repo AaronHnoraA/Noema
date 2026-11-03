@@ -18,6 +18,25 @@ describe("Noema renderer themes", () => {
     expect(NOEMA_DEFAULT_THEME_ID).toBe(manifest.defaultTheme);
     expect(noemaAppTheme("missing").id).toBe(manifest.defaultTheme);
     expect(validNoemaAppThemeId(manifest.defaultTheme)).toBe(true);
+    expect(NOEMA_APP_THEMES.map((theme) => theme.colorScheme).sort()).toEqual(["dark", "light"]);
+    expect(noemaAppTheme("claude").id).toBe("daylight");
+    expect(noemaAppTheme("mediki").id).toBe("daylight");
+    expect(noemaAppTheme("midnight").id).toBe("noema");
+  });
+
+  test("keeps the original day and night palettes", () => {
+    for (const [id, background, ink, accent] of [
+      ["daylight", "#f4f0e8", "#2f2c28", "#c15f3c"],
+      ["noema", "#141a27", "#e2eaff", "#7ee7ff"],
+    ] as const) {
+      expect(noemaAppTheme(id).backgroundColor).toBe(background);
+      const css = effectiveThemeCss(resolve(themeRoot, `${id}.css`));
+      expect(css).toContain(`--noema-bg: ${background};`);
+      expect(css).toContain(`--noema-window-background: ${background};`);
+      expect(css).toContain(`--b3-theme-background: ${background};`);
+      expect(css).toContain(`--aaron-ink: ${ink};`);
+      expect(css).toContain(`--aaron-accent: ${accent};`);
+    }
   });
 
   test("has one packaged CSS file and a complete token palette for every manifest entry", () => {

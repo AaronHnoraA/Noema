@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 // @ts-ignore The converter is a Node ESM module outside the TS app graph.
-import { noemaMarkdownToLatex, applyLatexTemplate, escapeLatexText, escapeLatexTitle, latexMacrosPackage, latexSideCommentPreamble, writeLatexExport } from "../server/lib/latex-export.mjs";
+import { noemaMarkdownToLatex, applyLatexTemplate, escapeLatexText, escapeLatexTitle, latexMacrosPackage, latexOpeningDropCap, latexSideCommentPreamble, writeLatexExport } from "../server/lib/latex-export.mjs";
 // @ts-ignore Node ESM module outside the TS app graph.
 import { academicLatexPostprocess, noemaMarkdownToLatexPandoc, extractNoemaMetadata, preprocessNoemaForPandoc } from "../server/lib/latex-export-pandoc.mjs";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
@@ -50,6 +50,12 @@ async function setupRoot() {
 }
 
 describe("LaTeX export", () => {
+  test("adds one opening initial only to an opening Latin paragraph", () => {
+    const body = "\\section{Introduction}\\label{intro}\n\nWe study graphs.\n\nAnother paragraph.\n";
+    expect(latexOpeningDropCap(body)).toBe("\\section{Introduction}\\label{intro}\n\n\\NoemaOpeningInitial{W}{e} study graphs.\n\nAnother paragraph.\n");
+    expect(latexOpeningDropCap("\\section{引言}\n\n中文开头。\n")).toBe("\\section{引言}\n\n中文开头。\n");
+    expect(latexOpeningDropCap("\\begin{itemize}\n\\item Start\n\\end{itemize}\n\nLater prose.\n")).not.toContain("\\NoemaOpeningInitial");
+  });
   test("uses Pandoc for broad native Markdown and academic list structure", async () => {
     const result = await noemaMarkdownToLatexPandoc([
       "Setext heading",
@@ -85,11 +91,31 @@ describe("LaTeX export", () => {
     expect(result.body).toContain("中文第一行继续第二行");
   });
 
+  test("preserves adjacent CommonMark headings and lists in PDF source", async () => {
+    const result = await noemaMarkdownToLatexPandoc("![Map](map.png)\n### Tensor notation\n- First\n- Second\n");
+    expect(result.body).toContain("\\subsubsection{Tensor notation}");
+    expect(result.body).toContain("\\begin{itemize}");
+    expect(result.body).toMatch(/\\item\s+First/);
+    expect(result.body).not.toContain("\\#\\#\\# Tensor notation");
+  });
+
   test("preserves portable Markdown image widths in LaTeX", async () => {
     const result = await noemaMarkdownToLatexPandoc("![plot](plot.png){width=50%}");
 
     expect(result.body).toContain("\\includegraphics[width=0.5\\linewidth");
     expect(result.body).toContain("{plot.png}");
+  });
+
+  test("maps a remembered Aaronnote template to its installed Noema file", async () => {
+    const { root, notes } = await setupRoot();
+    const note = join(notes, "legacy.md");
+    const stateDir = join(root, "var", "noema");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(join(stateDir, "export-latex.json"), JSON.stringify({
+      templates: { [note]: { templatePath: join(root, "templates", "latex", "aaronnote-article.tex") } },
+    }));
+    const defaults = await latexExportDefaults({ file: note }) as { template: string };
+    expect(defaults.template).toBe(join(root, "templates", "latex", "noema-article.tex"));
   });
 
   test("balances Noema privacy, semantic blocks, math, and visible anchors", async () => {

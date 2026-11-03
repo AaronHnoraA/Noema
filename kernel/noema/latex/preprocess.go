@@ -293,6 +293,8 @@ func tikzLatexBlock(source, title string, line int) ([]string, error) {
 	if width != "" || requestedHeight != "" {
 		if width == "" {
 			width = "!"
+		} else {
+			width = "\\ifdim " + width + ">\\linewidth \\linewidth\\else " + width + "\\fi"
 		}
 		if requestedHeight == "" {
 			requestedHeight = "!"
@@ -309,6 +311,7 @@ func tikzLatexBlock(source, title string, line int) ([]string, error) {
 		if measure == "" {
 			measure = "0.45\\textwidth"
 		}
+		measure = "\\ifdim " + measure + ">\\linewidth \\linewidth\\else " + measure + "\\fi"
 		body = append([]string{"\\begin{wrapfigure}{" + side + "}{" + measure + "}", "\\centering"}, body...)
 		body = append(body, "\\end{wrapfigure}")
 	} else {
@@ -506,6 +509,47 @@ func protectedInlineRanges(line string) []sourceRange {
 		}
 	}
 	return ranges
+}
+
+func readableWikiLinks(line string) string {
+	ranges := protectedInlineRanges(line)
+	var output strings.Builder
+	cursor := 0
+	for cursor < len(line) {
+		open := strings.Index(line[cursor:], "[[")
+		if open < 0 {
+			output.WriteString(line[cursor:])
+			break
+		}
+		open += cursor
+		close := strings.Index(line[open+2:], "]]")
+		if close < 0 {
+			output.WriteString(line[cursor:])
+			break
+		}
+		close += open + 2
+		inner := line[open+2 : close]
+		label := inner
+		if divider := strings.Index(inner, "|"); divider >= 0 {
+			label = inner[divider+1:]
+		}
+		label = strings.TrimSpace(label)
+		protected := strings.ContainsAny(inner, "[]\n") || label == ""
+		for _, r := range ranges {
+			if open < r.To && close+2 > r.From {
+				protected = true
+				break
+			}
+		}
+		output.WriteString(line[cursor:open])
+		if protected {
+			output.WriteString(line[open : close+2])
+		} else {
+			output.WriteString(label)
+		}
+		cursor = close + 2
+	}
+	return output.String()
 }
 
 type linkSpan struct {
@@ -1373,7 +1417,7 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 		if err != nil {
 			return PrepareResult{}, err
 		}
-		output = append(output, canonicalMathForPandoc(transformed))
+		output = append(output, canonicalMathForPandoc(readableWikiLinks(transformed)))
 	}
 	if fence != nil {
 		output = append(output, fence.Prefix+strings.Repeat(string(fence.Char), fence.Length))

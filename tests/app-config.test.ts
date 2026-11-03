@@ -90,6 +90,19 @@ describe("Noema app config", () => {
     expect((await readdir(configDir)).filter((name) => name.includes(".tmp-"))).toEqual([]);
   });
 
+  test.each([
+    ["claude", "daylight"],
+    ["mediki", "daylight"],
+    ["midnight", "noema"],
+  ])("maps saved %s theme to %s", async (saved, expected) => {
+    const configDir = await tempConfigDir();
+    await writeFile(join(configDir, "config.json"), JSON.stringify({
+      schemaVersion: 5,
+      appearance: { theme: saved },
+    }), "utf8");
+    expect((await getNoemaAppConfig({ configDir })).config.appearance.theme).toBe(expected);
+  });
+
   test("updates workspace layout and Wiki creation defaults", async () => {
     const configDir = await tempConfigDir();
     const initial = await ensureNoemaAppConfig({ configDir });

@@ -62,6 +62,8 @@ declare global {
 
 export type RenderMarkdownHTMLOptions = {
   assetResolver?: (src: string) => string;
+  /** Style the first plain Latin paragraph of a published article as an opening initial. */
+  openingInitial?: boolean;
   /** Source note path for other note-relative assets. */
   noteFile?: string;
   /** Allow authored HTML, then pass it through the normal Noema sanitizer. */
@@ -1746,6 +1748,16 @@ export function renderMarkdownHTML(
   if (topLevelBlocks) topLevelBlocks.push(...topLevelBlocksFromTokens(markdown, tokens));
   const protectedHtml = protectIframeNavigationAttrsForDom(md.renderer.render(tokens, md.options, env));
   root.innerHTML = protectedHtml.html;
+  if (options?.openingInitial) {
+    for (const block of root.children) {
+      if (block.matches("h1, h2, h3, h4, h5, h6, .noema-section-heading, .cm-org-env-block[data-kind='meta']")) continue;
+      if (block.tagName === "P" && block.firstChild?.nodeType === Node.TEXT_NODE
+          && /^[\s]*[A-Za-z]/.test(block.firstChild.textContent || "")) {
+        block.classList.add("noema-opening-paragraph");
+      }
+      break;
+    }
+  }
   const firstImage = markdown.indexOf("![");
   if (firstImage >= 0 && markdown.indexOf("![", firstImage + 2) >= 0) root.querySelectorAll<HTMLParagraphElement>("p").forEach((paragraph) => {
     const elements = [...paragraph.childNodes].filter((node) => node.nodeType === Node.ELEMENT_NODE) as HTMLElement[];
@@ -1792,7 +1804,7 @@ export function renderPublishedNoteHTML(
   const hidden = Boolean(options.private && !options.includePrivateContent);
   const contentHtml = hidden
     ? '<p class="sealed-note-message">This note has been sealed by the administrator.</p>'
-    : renderMarkdownHTML(markdown, { assetResolver: options.assetResolver, noteFile: options.noteFile });
+    : renderMarkdownHTML(markdown, { assetResolver: options.assetResolver, noteFile: options.noteFile, openingInitial: true });
   const shellClass = classList(
     "noema-shell",
     "published-note-page",

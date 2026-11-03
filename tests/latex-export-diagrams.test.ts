@@ -50,17 +50,19 @@ describe("diagram fences an export has to turn into pictures", () => {
 });
 
 describe("preparing a LaTeX export", () => {
-  test("a fence with no supplied picture stays source and is reported", async () => {
+  test("a plain mindmap without a picture becomes a readable outline", async () => {
     const result = await prepareLatexDiagrams(NOTE, { sourceDir: "/nowhere" });
-    expect(result.markdown).toContain("```marmind");
+    expect(result.markdown).toContain("- Root\n  - Branch");
+    expect(result.markdown).not.toContain("```marmind");
+    expect(result.markdown).toContain("~~~mermaid");
     expect(result.files).toHaveLength(0);
-    expect(result.warnings.join("\n")).toContain("marmind");
+    expect(result.warnings.join("\n")).toContain("marmind diagram was exported as an outline");
     expect(result.warnings.join("\n")).toContain("mermaid");
   });
 
   test("a draw.io file that cannot be exported is reported, not silently dropped", async () => {
     const result = await prepareLatexDiagrams("![Map](missing.drawio)\n", { sourceDir: "/nowhere" });
-    expect(result.markdown).toContain("missing.drawio");
+    expect(result.markdown.trim()).toBe("Map");
     expect(result.warnings.join("\n")).toContain("missing.drawio");
   });
 

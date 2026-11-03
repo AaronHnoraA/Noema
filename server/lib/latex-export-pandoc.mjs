@@ -247,6 +247,15 @@ function protectedInlineRanges(line) {
   return ranges;
 }
 
+function readableWikiLinks(line) {
+  const protectedRanges = protectedInlineRanges(line);
+  return line.replace(/\[\[([^\[\]\n]+)\]\]/g, (match, inner, offset) => {
+    if (protectedRanges.some((range) => offset < range.to && offset + match.length > range.from)) return match;
+    const label = inner.includes("|") ? inner.slice(inner.indexOf("|") + 1).trim() : inner.trim();
+    return label || match;
+  });
+}
+
 function markdownLinkRanges(line) {
   return markdownLinkSpans(line).map((span) => ({ from: span.destinationFrom, to: span.destinationTo }));
 }
@@ -682,7 +691,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
       continue;
     }
     const transformed = transformInlineCommands(line, conversionOptions, markContext);
-    output.push(canonicalMathForPandoc(transformed));
+    output.push(canonicalMathForPandoc(readableWikiLinks(transformed)));
   }
   if (fence) output.push(`${fence.prefix}${fence.char.repeat(fence.length)}`);
   if (displayMath) throw new Error("Unclosed display math");
@@ -723,6 +732,9 @@ export function academicLatexPostprocess(latex) {
 function runPandoc(bin, args, input, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { cwd: options.cwd || process.cwd(), stdio: ["pipe", "pipe", "pipe"] });
+    // Preserve UTF-8 characters split across process-output chunks.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -745,11 +757,11 @@ function runPandoc(bin, args, input, options = {}) {
       finish(new Error("Pandoc timed out"));
     }, options.timeoutMs || 120_000);
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout += chunk;
       if (stdout.length > limit) child.kill("SIGKILL");
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr += chunk;
       if (stderr.length > limit) stderr = stderr.slice(-limit);
     });
     child.on("error", (error) => finish(error));
@@ -794,9 +806,13 @@ export async function noemaMarkdownToLatexPandoc(markdown, options = {}) {
     "markdown", "fancy_lists", "task_lists", "definition_lists", "footnotes",
     "strikeout", "pipe_tables", "table_captions", "raw_attribute", "raw_tex",
     "tex_math_dollars", "autolink_bare_uris", "bracketed_spans", "link_attributes",
-    "superscript", "subscript", "east_asian_line_breaks", ...maintainedExtensions,
+    "superscript", "subscript", "east_asian_line_breaks",
+    // The editor parses CommonMark: a heading, list or quote may follow a line
+    // directly.  Pandoc's own Markdown wants a blank line first and otherwise
+    // folds the block into the paragraph above, printing its `#` and `-`.
+    "lists_without_preceding_blankline", ...maintainedExtensions,
   ].join("+");
-  const from = `${extensions}-implicit_figures-smart-citations`;
+  const from = `${extensions}-implicit_figures-smart-citations-blank_before_header-blank_before_blockquote`;
   let stdout;
   try {
     stdout = await runPandoc(pandocBin, [

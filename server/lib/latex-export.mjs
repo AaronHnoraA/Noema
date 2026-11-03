@@ -590,6 +590,25 @@ export function applyLatexTemplate(template, vars) {
   });
 }
 
+// The article template requests one initial at the very start of the body.
+// Only an immediately opening Latin paragraph qualifies; later prose, CJK,
+// lists, math and code are left alone. The author's letters stay unchanged.
+export function latexOpeningDropCap(body) {
+  const source = String(body || "");
+  let offset = 0;
+  const blank = /^\s*\n/;
+  while (blank.test(source.slice(offset))) offset += blank.exec(source.slice(offset))[0].length;
+  const heading = /^\\(?:section|subsection|subsubsection)\*?\{[^\n]*\}(?:\\label\{[^\n]*\})?[^\S\n]*\n/;
+  const firstHeading = heading.exec(source.slice(offset));
+  if (firstHeading) {
+    offset += firstHeading[0].length;
+    while (blank.test(source.slice(offset))) offset += blank.exec(source.slice(offset))[0].length;
+  }
+  const opening = /^([A-Za-z])([A-Za-z]*)(?=\b)/.exec(source.slice(offset));
+  if (!opening) return source;
+  return `${source.slice(0, offset)}\\NoemaOpeningInitial{${opening[1]}}{${opening[2]}}${source.slice(offset + opening[0].length)}`;
+}
+
 export function latexMacrosPreamble(macros) {
   const lines = ["% Noema global math macros"];
   for (const [rawName, rawBody] of Object.entries(macros || {}).sort(([a], [b]) => a.localeCompare(b))) {
@@ -758,12 +777,50 @@ export function latexAnnotationPreamble() {
   return lines.join("\n");
 }
 
+// Prose often carries symbols a text font may lack (Latin Modern has no ↔ or
+// ′), and a missing glyph is a fatal export diagnostic. Each one prints from
+// the current font when it has the glyph and falls back to its math symbol.
+const LATEX_TEXT_SYMBOL_FALLBACKS = [
+  ["→", "\\rightarrow"], ["←", "\\leftarrow"], ["↔", "\\leftrightarrow"], ["↦", "\\mapsto"],
+  ["⇒", "\\Rightarrow"], ["⇐", "\\Leftarrow"], ["⇔", "\\Leftrightarrow"], ["↑", "\\uparrow"], ["↓", "\\downarrow"],
+  ["′", "{}^{\\prime}"], ["″", "{}^{\\prime\\prime}"], ["≤", "\\le"], ["≥", "\\ge"], ["≠", "\\neq"],
+  ["≈", "\\approx"], ["≡", "\\equiv"], ["≅", "\\cong"], ["∼", "\\sim"], ["∈", "\\in"], ["∉", "\\notin"],
+  ["⊂", "\\subset"], ["⊆", "\\subseteq"], ["⊇", "\\supseteq"], ["∪", "\\cup"], ["∩", "\\cap"],
+  ["∅", "\\emptyset"], ["∞", "\\infty"], ["∀", "\\forall"], ["∃", "\\exists"], ["¬", "\\neg"],
+  ["∧", "\\wedge"], ["∨", "\\vee"], ["⊕", "\\oplus"], ["⊗", "\\otimes"], ["∘", "\\circ"],
+  ["⋅", "\\cdot"], ["√", "\\surd"], ["∑", "\\sum"], ["∏", "\\prod"], ["∂", "\\partial"], ["∇", "\\nabla"],
+  ["⟨", "\\langle"], ["⟩", "\\rangle"], ["≪", "\\ll"], ["≫", "\\gg"], ["⊥", "\\perp"], ["∥", "\\parallel"],
+];
+
+export function latexTextSymbolFallbacks() {
+  const hex = (char) => char.codePointAt(0).toString(16).toUpperCase();
+  return [
+    "% Text symbols the font may lack print from math instead of vanishing",
+    // unicode-math already owns Unicode math characters. Redefining those
+    // characters here can recurse through its own symbol commands.
+    "\\makeatletter",
+    "\\@ifpackageloaded{unicode-math}{}{%",
+    "\\RequirePackage{newunicodechar}",
+    "\\newcommand{\\NoemaTextSymbol}[2]{\\ifmmode#2\\else\\iffontchar\\font\"#1\\relax\\char\"#1\\relax\\else\\ensuremath{#2}\\fi\\fi}",
+    ...LATEX_TEXT_SYMBOL_FALLBACKS.map(([char, math]) =>
+      `\\newunicodechar{${char}}{\\NoemaTextSymbol{${hex(char)}}{${math}}}`),
+    "}",
+    "\\makeatother",
+  ].join("\n");
+}
+
 export function latexMacrosPackage(macros, features = {}) {
   return [
     "\\NeedsTeXFormat{LaTeX2e}",
     "\\ProvidesPackage{noema-macros}[2026/07/12 Noema shared macros]",
     latexMarginLayoutPreamble(),
     "\\RequirePackage{graphicx}",
+    String.raw`% Source image dimensions may exceed the PDF text block.
+\RequirePackage{adjustbox}
+\let\NoemaOriginalIncludeGraphics\includegraphics
+\RenewDocumentCommand{\includegraphics}{O{} m}{%
+  \adjustbox{max width=\dimexpr\linewidth-\parindent\relax,max totalheight=\textheight}{%
+    \NoemaOriginalIncludeGraphics[#1]{#2}}}`,
     "\\RequirePackage{booktabs,longtable,array,calc,etoolbox}",
     "\\RequirePackage{footnote}",
     "\\RequirePackage{needspace}",
@@ -794,6 +851,7 @@ export function latexMacrosPackage(macros, features = {}) {
 \displaywidowpenalty=10000
 \interfootnotelinepenalty=10000
 \setlength{\emergencystretch}{2em}`,
+    latexTextSymbolFallbacks(),
     latexAnnotationPreamble(),
     latexMacrosPreamble(macros).trim(),
     // Keep this capability stable across every document in the same directory:
