@@ -1,6 +1,6 @@
 ---
 name: noema-project-docs
-description: 管理 Noema 项目的 AGENTS.md、Markdown 工作记录、文档入口、项目 Skill 和能力 patch，并保持流程与产物可接续。用于项目指导或文档结构维护，普通单篇编辑无需建立项目框架。
+description: 管理 Noema 项目的 AGENTS.md、Markdown 工作记录、Wiki 知识、文档入口、项目 Skill 和能力 patch，并保持流程与产物可接续。用于项目级知识或文档结构维护，普通单篇编辑无需建立项目框架。
 ---
 
 # 项目文档与 Skill
@@ -25,6 +25,20 @@ description: 管理 Noema 项目的 AGENTS.md、Markdown 工作记录、文档�
 - 项目工作较大时使用 `project-agent-management` 的分工与交接指导；已有流程
   与运行 owner 保持权威。不把工作方法宣称为已实现的自动运行机制。
 
+## 来源推动的 Wiki 维护
+
+项目 Pi 接到新论文、数据、代码变更或其他来源时，按项目问题判断影响范围。保留
+可重读的来源路径或 URL、相关版本和未核实处；原始材料是依据，Wiki 页面是可修订
+的解释。`[project]` 决定工作范围，Wiki 仓库和 namespace 决定页面所在处，两者
+不必相同。
+
+用 `knowledge:search` 找已有主题、实体和综述页，读相关 Markdown 后决定更新哪些
+旧页；出现值得独立维护的主题时可新建页。让页间链接和来源引用说明变化，矛盾的
+结论写出差异，待核查的仍标待核查。Pi 读不到的原始文件可交给执行 Agent 核对。
+明确授权的整理沿用 `agent:document:edit`，需要人判断的表述用
+`agent:document:propose`；每篇独立保存和处理冲突。结束时简述已改页面、依据和
+未解决项，供下一次项目维护接续。这是按任务取用的工作方法，不是自动 ingest。
+
 按任务读这些入口：
 
 | 主题 | 权威文档 |
@@ -33,6 +47,7 @@ description: 管理 Noema 项目的 AGENTS.md、Markdown 工作记录、文档�
 | Skill、pack、patch、来源与依赖 | `~/.config/emacs/docs/noema/design/capabilities.md` |
 | Markdown 扩展语法、公式、环境与属性 | `~/.config/emacs/docs/noema/design/syntax.md` |
 | 版本化修改、反馈与原位审阅 | `~/.config/emacs/docs/noema/design/interaction-plan.md` |
+| Wiki 搜索、页面身份和来源维护 | `~/.config/emacs/docs/noema/design/wiki-workspace.md` |
 
 写 Noema 语法前读当前规范或 `noema-authoring-syntax`。通过文档 API 读取最新
 版本；需要审阅时提出版本化修改并处理冲突。用户已授权的普通直接编辑照常

@@ -40,6 +40,8 @@ maintain it through `agent:project:graph`; a one-step request does not need it.
 Reuse Hy Memory, context selection, project documents, Sessions and capability services
 rather than building another. Hy Memory is unverified background, not a reviewed Finding
 or permission. Pass references and bounded handoffs, not whole conversations.
+For a new source that affects project knowledge, use noema-project-docs when useful
+to reconcile relevant Wiki pages; report what changed and what remains uncertain.
 
 Skills
 The catalog below lists what is available. Read one with `agent:skill:read`, using the
