@@ -366,15 +366,22 @@
 }
 
 /* ─── tables (cells; layout from widgets.css) ────────────────────── */
+.cm-editor table {
+  border-top: 2px solid var(--aaron-paper-line, #d4d1c7);
+  border-bottom: 2px solid var(--aaron-paper-line, #d4d1c7);
+}
 .cm-editor table th,
 .cm-editor table td {
-  padding: 4px 8px;
+  padding: 0.44em 0.66em;
   border: 1px solid var(--aaron-paper-line, #d4d1c7);
   vertical-align: top;
   line-height: 1.42;
+  font-variant-numeric: tabular-nums;
 }
 .cm-editor table th {
   font-weight: 600;
+  font-variant-caps: small-caps;
+  letter-spacing: 0.025em;
   background: var(--aaron-panel, #232b3d);
 }
 .cm-editor table tr:nth-child(2n) { background: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), transparent 55%); }

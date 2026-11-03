@@ -1515,6 +1515,8 @@ iframe.noema-embed-fullscreen {
 .cm-editor .cm-image-caption {
   max-width: min(100%, var(--note-image-max, 100%));
   margin: 0.45em auto 0;
+  border-top: 1px solid color-mix(in srgb, var(--aaron-paper-line, #d8d0c2), transparent 35%);
+  padding-top: 0.35em;
   color: color-mix(in srgb, var(--aaron-muted, #a9bed3), var(--aaron-ink, #e4ecff) 18%);
   font: 600 0.82em/1.35 var(--aaron-font-sans, system-ui, sans-serif);
   text-align: center;
@@ -1522,6 +1524,8 @@ iframe.noema-embed-fullscreen {
 .noema-visual-attachment .cm-image-caption {
   max-width: min(100%, var(--note-image-max, 100%));
   margin: 0.45em auto 0;
+  border-top: 1px solid color-mix(in srgb, var(--aaron-paper-line, #d8d0c2), transparent 35%);
+  padding-top: 0.35em;
   color: color-mix(in srgb, var(--aaron-muted, #a9bed3), var(--aaron-ink, #e4ecff) 18%);
   font: 600 0.82em/1.35 var(--aaron-font-sans, system-ui, sans-serif);
   text-align: center;
@@ -2051,8 +2055,10 @@ iframe.noema-embed-fullscreen {
 .cm-editor .cm-org-env-block .noema-meta-date {
   width: min(420px, 100%);
   margin: 0;
-  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--aaron-paper-line, #d8d0c2), transparent 35%);
+  border-bottom: 1px solid color-mix(in srgb, var(--aaron-paper-line, #d8d0c2), transparent 35%);
   outline: none;
+  padding: 0.5em 0.8em;
   background: transparent;
   color: color-mix(in srgb, var(--aaron-muted, #6f6a61), var(--aaron-ink, #24201a) 10%);
   font: 650 12px/1.35 var(--aaron-font-sans, system-ui);

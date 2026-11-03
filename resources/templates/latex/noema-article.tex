@@ -28,6 +28,10 @@
 \IfFileExists{lettrine.sty}{\usepackage{lettrine}}{}
 \IfFileExists{fvextra.sty}{\usepackage{fvextra}}{}
 \IfFileExists{xurl.sty}{\usepackage{xurl}}{}
+\IfFileExists{caption.sty}{%
+  \usepackage{caption}
+  \captionsetup{font=small,labelfont=sc,labelsep=period,skip=6pt}%
+}{}
 \usepackage{hyperref}
 \definecolor{NoemaInk}{HTML}{272521}
 \definecolor{NoemaAccent}{HTML}{465B68}
@@ -92,13 +96,17 @@
 \renewcommand{\headrule}{\hbox to\headwidth{\color{NoemaRule}\leaders\hrule height \headrulewidth\hfill}}
 \fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\footnotesize\thepage}\renewcommand{\headrulewidth}{0pt}}
 
+\newtheoremstyle{noema-statement}{.8em}{.8em}{\itshape}{}%
+  {\scshape\mdseries}{.}{.55em}{}
+\newtheoremstyle{noema-definition}{.8em}{.8em}{}{}%
+  {\scshape\mdseries}{.}{.55em}{}
+\theoremstyle{noema-statement}
 \newtheorem{theorem}{Theorem}
 \newtheorem{lemma}{Lemma}
 \newtheorem{proposition}{Proposition}
 \newtheorem{corollary}{Corollary}
-\theoremstyle{definition}
+\theoremstyle{noema-definition}
 \newtheorem{definition}{Definition}
-\theoremstyle{remark}
 \newtheorem{remark}{Remark}
 \newtheorem{example}{Example}
 

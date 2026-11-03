@@ -19,6 +19,14 @@ revision authorities. The hidden-output adapter belongs to
 Each source tree retains its own license, documentation, tests and layout.
 Upstream symbols remain intact; Noema-specific adapters live in `lisp/`.
 
+## Visual reference
+
+[Foadsf/vintage-latex](https://github.com/Foadsf/vintage-latex) is indexed in
+`../../docs/noema/design/aesthetic-reference-library.md` as a reference for
+Noema CSS and academic PDF layout. The catalog pins the reviewed revision and
+maps individual examples to specific design mechanisms. Its CC BY-SA source
+and previews are not copied into Noema.
+
 ## MarginNote API reference
 
 MarginNote's public API declarations are indexed in
