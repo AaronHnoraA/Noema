@@ -24,9 +24,14 @@ Interactive model preferences never override this export-only selection."
     copy))
 
 (defun noema-agent-export-session-p (session)
-  "Whether SESSION is a private LaTeX export turn, including older side turns."
-  (let ((origin (plist-get session :origin))
-        (root (plist-get session :root)))
+  "Whether SESSION is a private LaTeX export turn, including older side turns.
+SESSION may be a live physical buffer or a full registry snapshot."
+  (let ((origin (if (bufferp session)
+                    (buffer-local-value '+agent-acp-session-origin session)
+                  (plist-get session :origin)))
+        (root (if (bufferp session)
+                  (buffer-local-value '+agent-acp-session-root session)
+                (plist-get session :root))))
     (or (eq origin 'latex-export)
         (and (eq origin 'side)
              (stringp root)
@@ -152,7 +157,9 @@ leaves the session registered on the Emacs side alone."
 (add-hook '+agent-session-operation-functions #'noema-agent--operation-supported-p)
 (add-hook '+agent-session-action-functions #'noema-agent--action)
 (add-hook '+agent-session-attention-functions #'noema-agent--attention)
-(add-hook '+agent-session-private-functions #'noema-agent-export-session-p)
+;; Retire the snapshot registration too when this adapter is reloaded live.
+(remove-hook '+agent-session-private-functions #'noema-agent-export-session-p)
+(add-hook '+agent-session-private-buffer-functions #'noema-agent-export-session-p)
 
 ;; Preserve the existing model/quota preferences while their owner moves.
 (dolist (pair `(("var/noema/agent-models.json" . ,+agent-acp-model-preferences-file)
