@@ -67,4 +67,23 @@ describe('Noema official client',()=>{
     expect(page.result('__proto__')).toMatchObject({state:'completed',value:{ok:true}});expect(nativeCalls).toBe(1);
     expect(()=>page.request('large','submit',{code:'字'.repeat(300000)})).toThrow('600 KiB');
   });
+  it('evicts completed receipts for new calls while retaining duplicates and protecting pending calls',async()=>{
+    const html=readFileSync(new URL('../plugins/marginnote/panel.html',import.meta.url),'utf8');
+    let nativeCalls=0, pending=false;
+    const context:any=vm.createContext({window:{},TextEncoder,AbortController,setTimeout:()=>1,clearTimeout:()=>{},
+      fetch:async()=>{nativeCalls++;if(pending)return new Promise(()=>{});return {ok:true,json:async()=>({ok:true})};}});
+    vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)![1],context);
+    const page=context.window.noema;
+    for(let i=0;i<40;i++){
+      page.request('done'+i,'status',{});await new Promise(resolve=>setImmediate(resolve));
+      expect(page.result('done'+i)).toMatchObject({state:'completed'});
+      page.request('done'+i,'status',{});
+    }
+    expect(nativeCalls).toBe(40);expect(page.result('done0')).toMatchObject({state:'unknown'});
+    pending=true;
+    for(let i=0;i<16;i++)page.request('pending'+i,'status',{});
+    expect(()=>page.request('overflow','status',{})).toThrow('Too many pending');
+    expect(page.result('pending0')).toMatchObject({state:'pending'});
+    expect(nativeCalls).toBe(56);
+  });
 });

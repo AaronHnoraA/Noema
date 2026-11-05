@@ -7,11 +7,13 @@ import { createOfficialClient } from "../plugins/marginnote/official-client.mjs"
 const source = readFileSync(new URL("../plugins/marginnote/main.js", import.meta.url), "utf8");
 function host(config: {url:string;token:string} | null = { url: "http://127.0.0.1:3212/v1/marginnote", token: "t".repeat(43) }) {
   const requests: any[] = [], timers: any[] = [], documents = [{ docMd5: "pdf1", docTitle: "Native PDF" }];
-  let methods: any, classMethods: any, sequence = 0;
+  let methods: any, classMethods: any, sequence = 0, allowed = true, loads = 0;
   const db = { allDocuments: () => documents };
   const app = { appVersion: "4.4.6", build: "test", osType: 2, studyController: () => ({ notebookController: { notebookId: "book1" }, readerController: {} }), nativeValue: () => 7 };
   const owner: any = { window: { nativeWindow: true } };
-  const panel: any = {loadPanel: () => true, showFloatingIn() {}, teardown() {this.tornDown=true;} };
+  const panel: any = {view: {}, tornDown: false, floatingVisible: false,
+    loadPanel() { loads++; return true; }, showFloatingIn() { throw new Error("Must never present UI"); },
+    teardown() {this.tornDown=true;} };
   const context: any = vm.createContext({
     JSB: { log() {}, defineClass: (_name: string, instance: any, classes: any) => { methods = instance; classMethods = classes; return instance; } },
     NSString: { stringWithContentsOfFile: () => config === null ? null : JSON.stringify(config),
@@ -26,7 +28,7 @@ function host(config: {url:string;token:string} | null = { url: "http://127.0.0.
       const timer = { callback, invalid: false, invalidate() { this.invalid = true; } }; timers.push(timer); return timer;
     } },
     Application: { sharedInstance: () => app }, Database: { sharedInstance: () => db },
-    Note: { customHostAPI: () => "all-native-APIs" }, self: owner, AddonWebPanel: {panel: () => panel},
+    Note: { customHostAPI: () => "all-native-APIs" }, self: owner, AddonWebPanel: {panel: () => { if (!allowed) return null; panel.tornDown=false; return panel; }},
   });
   vm.runInContext(source, context);
   vm.runInContext("JSB.newAddon('/addon')", context);
@@ -41,7 +43,7 @@ function host(config: {url:string;token:string} | null = { url: "http://127.0.0.
     await new Promise<void>((resolve) => setImmediate(resolve));
     return requests.at(-1).body.completed;
   }
-  return { context, owner, requests, timers, methods, classMethods, execute, complete, documents, panel };
+  return { context, owner, requests, timers, methods, classMethods, execute, complete, documents, panel, loads: () => loads, authorize: (value: boolean) => {allowed=value;} };
 }
 
 describe("MarginNote plugin execution", () => {
@@ -117,7 +119,7 @@ describe("MarginNote plugin execution", () => {
 
 describe("MarginNote official panel execution", () => {
   function official() {
-    const h = host(null); h.methods.openNoemaPanel();
+    const h = host(null);
     const sessionId = h.panel.onMessage('status', {}).sessions[0].id;
     const submit = (requestId: string, code: string, extra = {}) => h.panel.onMessage('submit', {requestId,code,sessionId,...extra});
     const result = (requestId: string) => h.panel.onMessage('result', {requestId,sessionId});
@@ -125,7 +127,41 @@ describe("MarginNote official panel execution", () => {
   }
   it("uses no host connection or recurring timer while idle", () => {
     const h = official(); expect(h.requests).toHaveLength(0); expect(h.timers).toHaveLength(0);
-    expect(h.panel.onMessage('status', {})).toMatchObject({protocol:1,scope:'active-panel',sessions:[{info:{transport:'official',addonVersion:'1.0.6'}}]});
+    expect(h.panel.onMessage('status', {})).toMatchObject({protocol:1,scope:'active-panel',sessions:[{info:{transport:'official',addonVersion:'1.0.8',ui:'none',backgroundReady:true}}]});
+  });
+  it("starts ready without a click and reuses the invisible page on activation and capsule", () => {
+    const h = official();
+    expect(h.loads()).toBe(1); expect(h.panel.floatingVisible).toBe(false);
+    h.methods.sceneDidBecomeActive(); h.classMethods.applicationWillEnterForeground(); h.methods.openNoemaPanel();
+    expect(h.loads()).toBe(1); expect(h.timers).toHaveLength(0);
+    expect(h.methods.queryAddonCommandStatus().checked).toBe(true);
+  });
+  it("rebuilds a torn-down page and defers denied activation to a later host lifecycle event", () => {
+    const h = official(); h.panel.teardown(); h.authorize(false);
+    h.methods.sceneDidBecomeActive();
+    expect(h.owner._noemaPanel).toBeNull(); expect(h.loads()).toBe(1);
+    expect(h.owner._noemaRuntime.lastError).toMatch(/authorize/);
+    expect(h.timers).toHaveLength(0); expect(h.methods.queryAddonCommandStatus().checked).toBe(false);
+    h.authorize(true); h.methods.sceneDidBecomeActive();
+    expect(h.loads()).toBe(2); expect(h.panel.floatingVisible).toBe(false);
+    expect(h.owner._noemaRuntime.lastError).toBe("");
+  });
+  it("releases the iPad background session and restores it without UI on foreground", () => {
+    const h = official(); vm.runInContext("Application.sharedInstance().osType=1",h.context);
+    h.classMethods.applicationDidEnterBackground();
+    expect(h.panel.tornDown).toBe(true); expect(h.owner._noemaRuntime.dead).toBe(true);
+    h.classMethods.applicationWillEnterForeground();
+    expect(h.owner._noemaRuntime.dead).toBe(false); expect(h.loads()).toBe(2);
+    expect(h.owner._noemaRuntime.id).not.toBe(h.sessionId);
+    expect(h.panel.floatingVisible).toBe(false); expect(h.requests).toHaveLength(0);
+  });
+  it("rejects addon-wide fallback routing when multiple native windows are connected", () => {
+    const h = official();
+    h.context.self = {window: {nativeWindow: "second"}};
+    h.methods.sceneWillConnect();
+    expect(h.panel.onMessage('status', {})).toMatchObject({ok:false,state:'not_started'});
+    expect(h.submit('wrong-window','bridge.state.n=1;')).toMatchObject({ok:false,state:'not_started'});
+    expect(h.timers).toHaveLength(0);
   });
   it("pins the native session and does not execute code in the URL callback", () => {
     const h = official();
@@ -181,6 +217,7 @@ describe("MarginNote official panel execution", () => {
     });
     const payload={sessionId:h.sessionId,requestId:'real-contract',code:'bridge.state.n=(bridge.state.n||0)+1; return await Promise.resolve(bridge.state.n);'};
     expect(await client.call('/execute',payload)).toMatchObject({state:'completed',value:1});
+    for (let i=0;i<24;i++) expect(await client.status()).toMatchObject({ok:true});
     expect(await client.call('/execute',payload)).toMatchObject({state:'completed',value:1});
     expect(await client.call('/requests/real-contract',{sessionId:h.sessionId})).toMatchObject({value:1});
     expect(h.owner._noemaRuntime.state.n).toBe(1); expect(h.requests).toHaveLength(0);

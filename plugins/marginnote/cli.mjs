@@ -24,7 +24,7 @@ try {
     const args = rest[1] ? JSON.parse(await readFile(rest[1], "utf8")) : {};
     result = await invoke("/execute", { code, args, sessionId: rest[2] });
     if (!result.ok) process.exitCode = 1;
-  } else result = { options: "[--device mac|ipad] [--legacy] (official Bridge by default)", usage: ["open (show Noema panel)", "status", "api [QUERY] [OFFSET]", "exec CODE.js|- [ARGS.json] [SESSION_ID]", "result REQUEST_ID [SESSION_ID]"],
+  } else result = { options: "[--device mac|ipad] [--legacy] (official Bridge by default)", usage: ["open (ensure background connection; no UI)", "status", "api [QUERY] [OFFSET]", "exec CODE.js|- [ARGS.json] [SESSION_ID]", "result REQUEST_ID [SESSION_ID]"],
     code: "JavaScript function body; return JSON, await supported. Native JSB globals plus app, db, window, study, reader, notebook, args, bridge, console." };
   process.stdout.write(JSON.stringify(result, null, 2) + "\n");
 } catch (error) { process.stderr.write(String(error.message || error) + "\n"); process.exitCode = 1; }

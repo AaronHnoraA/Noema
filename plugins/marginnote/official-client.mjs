@@ -69,7 +69,7 @@ export function createOfficialClient(config, { fetchImpl = fetch, pause = sleep 
   async function status() { return { ...await rpc("status", {}), device: config.device, transport: "official" }; }
   async function open() {
     const pressed = await post(addon + "/capsule", {});
-    if (!pressed.pressed) throw new Error("MarginNote did not open the Noema panel");
+    if (!pressed.pressed) throw new Error("MarginNote did not activate the Noema background channel");
     // The native command can return before WKWebView has loaded the document.
     let last;
     for (let i = 0; i < 12; i++) {

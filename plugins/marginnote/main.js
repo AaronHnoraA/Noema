@@ -25,7 +25,8 @@ JSB.newAddon = function (mainPath) {
     var c = nativeContext(owner);
     var document = c.reader && c.reader.currentDocumentController;
     return { appVersion: String(get(c.app, "appVersion") || ""), build: String(get(c.app, "build") || ""),
-      addonVersion: "1.0.6", transport: bundled ? "legacy" : "official", stage: owner._noemaRuntime && owner._noemaRuntime.stage,
+      addonVersion: "1.0.8", transport: bundled ? "legacy" : "official", stage: owner._noemaRuntime && owner._noemaRuntime.stage,
+      ui: "none", backgroundReady: !!(owner._noemaPanel && !owner._noemaPanel.tornDown),
       lastError: owner._noemaRuntime && owner._noemaRuntime.lastError,
       osType: get(c.app, "osType"), notebookId: get(c.notebook, "notebookId"), docMd5: get(document, "docMd5") };
   }
@@ -194,6 +195,10 @@ JSB.newAddon = function (mainPath) {
   function officialMessage(owner, action, payload) {
     var runtime = owner._noemaRuntime;
     if (!runtime || runtime.dead || bundled) return { ok: false, error: "Official runtime is unavailable" };
+    // Unpresented panels use MN's addon-wide fallback registration. Until the
+    // host exposes window binding without presentation, fail closed on ambiguity.
+    if (instances.filter(function (item) { return item._noemaRuntime && !item._noemaRuntime.dead; }).length !== 1)
+      return { ok: false, error: "Background Noema requires one connected MarginNote window", state: "not_started" };
     payload = payload || {};
     pruneJobs(runtime);
     if (action === "status") return { ok: true, protocol: 1, scope: "active-panel", sessions: [{ id: runtime.id,
@@ -231,9 +236,11 @@ JSB.newAddon = function (mainPath) {
     });
     return jobView(runtime, job);
   }
-  function openPanel(owner) {
+  function ensureReady(owner) {
     if (!enabled()) return;
     start(owner);
+    if (bundled) return;
+    if (owner._noemaPanel && owner._noemaPanel.tornDown) owner._noemaPanel = null;
     if (!owner._noemaPanel) {
       if (typeof AddonWebPanel === "undefined") throw new Error("This MarginNote version has no AddonWebPanel");
       var panel = AddonWebPanel.panel();
@@ -242,19 +249,31 @@ JSB.newAddon = function (mainPath) {
         try { return officialMessage(owner, action, payload); }
         catch (error) { return { ok: false, error: String(error.message || error).slice(0, 16384), execution: "unknown" }; }
       };
-      if (!panel.loadPanel()) { panel.teardown(); throw new Error("Noema panel could not be loaded"); }
+      try {
+        if (!panel.loadPanel()) throw new Error("Noema transport page could not be loaded");
+        // UIViewController.view loads WKWebView without presenting any UI.
+        // hideFloating() is not a background mode: MN tears the page down.
+        if (!panel.view) throw new Error("Noema transport view could not be initialized");
+      } catch (error) { panel.teardown(); throw error; }
       owner._noemaPanel = panel;
     }
-    owner._noemaPanel.showFloatingIn(Application.sharedInstance().studyController(owner.window));
+    owner._noemaRuntime.lastError = "";
+  }
+  function activate(owner) {
+    try { ensureReady(owner); }
+    catch (error) {
+      if (owner._noemaRuntime) owner._noemaRuntime.lastError = String(error.message || error).slice(0, 16384);
+      JSB.log("Noema: %@", String(error.message || error));
+    }
   }
   function enabled() { return !bundled || NSUserDefaults.standardUserDefaults().objectForKey(enabledKey) !== false; }
   return JSB.defineClass("NoemaAgentAddon : JSExtension", {
-    sceneWillConnect: function () { instances.push(self); if (enabled()) start(self); },
+    sceneWillConnect: function () { instances.push(self); activate(self); },
     sceneDidDisconnect: function () { var owner = self; stop(owner); instances = instances.filter(function (item) { return item !== owner; }); },
-    sceneDidBecomeActive: function () { if (enabled()) start(self); },
+    sceneDidBecomeActive: function () { activate(self); },
     queryAddonCommandStatus: function () { return { image: "icon.png", object: self, selector: bundled ? "toggleNoemaAgent:" : "openNoemaPanel:",
-      checked: bundled ? !!(self._noemaRuntime && !self._noemaRuntime.dead) : !!(self._noemaPanel && self._noemaPanel.floatingVisible) }; },
-    openNoemaPanel: function () { openPanel(self); },
+      checked: bundled ? !!(self._noemaRuntime && !self._noemaRuntime.dead) : !!(self._noemaPanel && !self._noemaPanel.tornDown) }; },
+    openNoemaPanel: function () { ensureReady(self); },
     toggleNoemaAgent: function () {
       var owner = self, active = owner._noemaRuntime && !owner._noemaRuntime.dead;
       NSUserDefaults.standardUserDefaults().setObjectForKey(!active, enabledKey);
@@ -268,6 +287,6 @@ JSB.newAddon = function (mainPath) {
     applicationDidEnterBackground: function () {
       if (Number(get(Application.sharedInstance(), "osType")) !== 2) instances.forEach(stop);
     },
-    applicationWillEnterForeground: function () { if (enabled()) instances.forEach(start); },
+    applicationWillEnterForeground: function () { instances.forEach(activate); },
   });
 };
