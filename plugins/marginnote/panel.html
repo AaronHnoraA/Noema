@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<title>Noema</title>
+<style>body{font:15px system-ui;padding:16px;color:CanvasText;background:Canvas}p{line-height:1.6}small{opacity:.7}</style>
+<h3>Noema</h3>
+<p>已连接 MarginNote 官方 Agent 通道。</p>
+<small>此面板允许已获授权的 Agent 调用原生功能。可在 MarginNote 插件管理中暂停或停用。</small>
+<script>
+(function () {
+  'use strict';
+  var calls = Object.create(null), ids = [], bytes = 0;
+  function prune() {
+    ids.slice().forEach(function (id) {
+      var item = calls[id];
+      if (item.state === 'pending') return;
+      if (ids.length <= 16 && bytes <= 4 * 1024 * 1024 && Date.now() - item.created < 60000) return;
+      bytes -= item.bytes || 0; delete calls[id]; ids = ids.filter(function (key) { return key !== id; });
+    });
+  }
+  window.noema = {
+    protocol: 1,
+    request: function (id, action, payload) {
+      prune();
+      if (!/^[\w-]{1,100}$/.test(id) || ['status','submit','result'].indexOf(action) < 0) throw new Error('Invalid RPC envelope');
+      if (calls[id]) return {state:calls[id].state};
+      if (ids.length >= 16) throw new Error('Too many pending calls');
+      var body = JSON.stringify(payload);
+      if (new TextEncoder().encode(body).length > 600 * 1024) throw new Error('RPC envelope exceeds 600 KiB');
+      calls[id] = {state:'pending',created:Date.now()}; ids.push(id);
+      var controller = new AbortController(), timer = setTimeout(function () { controller.abort(); }, 10000);
+      fetch('/addon/' + action, {method:'POST',headers:{'Content-Type':'application/json'},body:body,signal:controller.signal})
+        .then(function (r) { if (!r.ok) throw new Error('Native HTTP ' + r.status); return r.json(); })
+        .then(function (value) { var size = new TextEncoder().encode(JSON.stringify(value)).length;
+          calls[id] = {state:'completed',value:value,bytes:size,created:Date.now()}; bytes += size; prune(); })
+        .catch(function (e) { calls[id] = {state:'failed',error:String(e).slice(0,4096),created:Date.now()}; prune(); })
+        .finally(function () { clearTimeout(timer); });
+      return {state:'pending'};
+    },
+    result: function (id) { return calls[id] || {state:'unknown'}; }
+  };
+}());
+</script>
+</html>

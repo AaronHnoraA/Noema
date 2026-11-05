@@ -338,8 +338,9 @@ const liuGongQuanFontCandidates = [
 mkdirSync(noteRoot, { recursive: true });
 mkdirSync(tmpRoot, { recursive: true });
 const captureToken = hostMode === "server" ? "" : await ensureCaptureToken(stateRoot);
-const marginNoteToken = hostMode === "server" ? "" : await ensureMarginNoteToken(stateRoot);
-const marginNoteBridge = hostMode === "server" ? null : createMarginNoteBridge();
+const legacyMarginNote = hostMode !== "server" && process.env.NOEMA_MN_LEGACY === "1";
+const marginNoteToken = legacyMarginNote ? await ensureMarginNoteToken(stateRoot) : "";
+const marginNoteBridge = legacyMarginNote ? createMarginNoteBridge() : null;
 const handleMarginNote = marginNoteBridge ? createMarginNoteHttpHandler({ bridge: marginNoteBridge, token: marginNoteToken }) : null;
 let marginNoteListener = null;
 
@@ -4227,7 +4228,7 @@ server.listen(bindPort, bindHost, () => {
   if (hostMode !== "server") {
     try {
       writeHostDescriptor(stateRoot, { url: `http://${bindHost}:${port}`, noteRoot,
-        marginnote: { url: marginNoteListener?.url || `http://${bindHost}:${port}/v1/marginnote`, token: marginNoteToken } });
+        ...(marginNoteBridge ? { marginnote: { url: marginNoteListener?.url || `http://${bindHost}:${port}/v1/marginnote`, token: marginNoteToken } } : {}) });
     } catch (error) {
       process.stderr.write(`[noema-web] host descriptor update failed: ${error?.message || error}\n`);
     }

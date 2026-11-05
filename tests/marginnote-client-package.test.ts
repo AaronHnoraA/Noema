@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
+import { execFileSync } from "node:child_process";
 import { call, validateConnection } from "../plugins/marginnote/client.mjs";
 import { buildAddon } from "../scripts/build-marginnote-addon.mjs";
 const cleanups: (() => unknown)[] = [];
@@ -13,6 +14,12 @@ async function temp() { const dir = await mkdtemp(join(tmpdir(), "noema-mn-audit
 const token = "t".repeat(43);
 
 describe("MarginNote private client and package", () => {
+  it("packages the official panel with no host credentials", async () => {
+    const dir = await temp(), target = join(dir, "noema.mnaddon");
+    await buildAddon(null, fileURLToPath(new URL("../plugins/marginnote", import.meta.url)), target);
+    const names = JSON.parse(execFileSync("python3", ["-c", "import json,zipfile,sys;print(json.dumps(zipfile.ZipFile(sys.argv[1]).namelist()))", target], {encoding:"utf8"}));
+    expect(names).toContain("panel.html"); expect(names).not.toContain("connection.json");
+  });
   it("MN-C5: rejects remote, credential-bearing and non-bridge destinations", () => {
     for (const url of ["https://example.com/v1/marginnote", "http://127.0.0.1.example.com:3212/v1/marginnote", "http://user@127.0.0.1:3212/v1/marginnote", "http://127.0.0.1:3212/api", "http://127.0.0.1:3212/v1/marginnote?secret=1"]) {
       expect(() => validateConnection({ url, token })).toThrow();
@@ -27,7 +34,7 @@ describe("MarginNote private client and package", () => {
     const dir = await temp(), descriptor = join(dir, "host.json"), port = (server.address() as any).port;
     await writeFile(descriptor, JSON.stringify({ pid: process.pid, marginnote: { url: `http://127.0.0.1:${port}/v1/marginnote`, token } }), { mode: 0o600 });
     vi.stubEnv("NOEMA_HOST_DESCRIPTOR", descriptor);
-    await expect(call("/sessions")).rejects.toThrow();
+    await expect(call("/sessions", undefined, {transport:"legacy"})).rejects.toThrow();
     expect(requests).toBe(1);
   });
   it("MN-C5: atomically replaces an archive without following an existing output symlink", async () => {

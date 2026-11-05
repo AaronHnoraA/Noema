@@ -31,11 +31,12 @@ print(json.dumps({'source':'https://github.com/marginnoteapp/Addon','revision':r
     const parsed = JSON.parse(catalog);
     process.stdout.write(`Indexed ${parsed.interfaces.length} native API interfaces at ${parsed.revision}\n`);
   } else {
-    const config = await connection();
+    if (process.argv[2] && process.argv[2] !== "--legacy") throw new Error("Expected --legacy or --refresh-api");
+    const config = process.argv[2] === "--legacy" ? await connection() : null;
     const target = join(root, "build/marginnote/noema.mnaddon");
     await buildAddon(config, addon, target);
     const metadata = JSON.parse(await readFile(join(addon, "mnaddon.json"), "utf8"));
-    process.stdout.write(`${target}\n${metadata.title} ${metadata.version}; connection configuration included privately\n`);
+    process.stdout.write(`${target}\n${metadata.title} ${metadata.version}; ${config ? "private legacy connection included" : "official Bridge; no credentials included"}\n`);
   }
 }
 
@@ -49,8 +50,8 @@ import json,sys,zipfile,os
 from pathlib import Path
 source=Path(sys.argv[1]);target=Path(sys.argv[2]);config=json.loads(sys.stdin.read())
 with os.fdopen(os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'wb') as private, zipfile.ZipFile(private,'w',zipfile.ZIP_DEFLATED) as z:
- for name in ['main.js','mnaddon.json']:z.write(source/name,name)
- z.writestr('connection.json',json.dumps(config))
+ for name in ['main.js','mnaddon.json','panel.html']:z.write(source/name,name)
+ if config is not None:z.writestr('connection.json',json.dumps(config))
  # Small neutral toolbar glyph, generated from PNG primitives (no asset dependency).
  import struct,zlib
  def chunk(kind,data):return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data)&0xffffffff)

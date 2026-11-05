@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { callOfficial } from "./official-client.mjs";
 
 export function validateConnection(config) {
   const url = new URL(config?.url);
@@ -30,7 +31,10 @@ export async function connection() {
   throw new Error("Live Noema host has no MarginNote bridge. Start/restart Noema in Emacs.");
 }
 
-export async function call(path, body) {
+export async function call(path, body, { device = process.env.NOEMA_MN_DEVICE || "mac", transport = process.env.NOEMA_MN_TRANSPORT || "official" } = {}) {
+  if (transport === "official") return callOfficial(path, body, { device });
+  if (transport !== "legacy" || device !== "mac") throw new Error("Legacy transport is available only for Mac");
+  if (path === "/sessions" || path.startsWith("/requests/")) body = undefined;
   const config = await connection();
   if (path === "/execute") body = { ...body, requestId: body.requestId || randomUUID() };
   let response;
