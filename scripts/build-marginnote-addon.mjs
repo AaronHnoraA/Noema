@@ -33,7 +33,7 @@ print(json.dumps({'source':'https://github.com/marginnoteapp/Addon','revision':r
   const config = await connection();
   const out = join(root, "build/marginnote");
   await mkdir(out, { recursive: true });
-  const target = join(out, "noema-agent.mnaddon");
+  const target = join(out, "noema.mnaddon");
   // Packaging through Python's stdlib keeps the native addon dependency-free.
   const script = String.raw`
 import json,sys,zipfile

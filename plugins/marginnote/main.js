@@ -22,7 +22,7 @@ JSB.newAddon = function (mainPath) {
     var c = nativeContext(owner);
     var document = c.reader && c.reader.currentDocumentController;
     return { appVersion: String(get(c.app, "appVersion") || ""), build: String(get(c.app, "build") || ""),
-      addonVersion: "1.0.3", stage: owner._noemaRuntime && owner._noemaRuntime.stage,
+      addonVersion: "1.0.4", stage: owner._noemaRuntime && owner._noemaRuntime.stage,
       lastError: owner._noemaRuntime && owner._noemaRuntime.lastError,
       osType: get(c.app, "osType"), notebookId: get(c.notebook, "notebookId"), docMd5: get(document, "docMd5") };
   }
@@ -120,7 +120,7 @@ JSB.newAddon = function (mainPath) {
     var completed = runtime.completed;
     function retry(error) {
       var message = String(error.message || error);
-      if (runtime.lastError !== message) JSB.log("Noema Agent: %@", message);
+      if (runtime.lastError !== message) JSB.log("Noema: %@", message);
       runtime.lastError = message;
       later(runtime, 3000, function () { poll(owner, runtime); });
     }
@@ -173,7 +173,7 @@ JSB.newAddon = function (mainPath) {
       var owner = self, active = owner._noemaRuntime && !owner._noemaRuntime.dead;
       NSUserDefaults.standardUserDefaults().setObjectForKey(!active, enabledKey);
       instances.forEach(function (item) { if (active) stop(item); else start(item); });
-      Application.sharedInstance().showHUD(active ? "Noema Agent 已断开" : "Noema Agent 正在连接", owner.window, 2);
+      Application.sharedInstance().showHUD(active ? "Noema 已断开" : "Noema 正在连接", owner.window, 2);
       var study = Application.sharedInstance().studyController(owner.window);
       if (study) study.refreshAddonCommands();
     },
