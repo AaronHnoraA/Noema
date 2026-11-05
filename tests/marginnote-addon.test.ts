@@ -4,7 +4,7 @@ import vm from "node:vm";
 import { describe, expect, it } from "@voidzero-dev/vite-plus-test";
 
 const source = readFileSync(new URL("../plugins/marginnote/main.js", import.meta.url), "utf8");
-function host() {
+function host(config = { url: "http://127.0.0.1:3212/v1/marginnote", token: "t".repeat(43) }) {
   const requests: any[] = [], timers: any[] = [], documents = [{ docMd5: "pdf1", docTitle: "Native PDF" }];
   let methods: any, classMethods: any, sequence = 0;
   const db = { allDocuments: () => documents };
@@ -12,12 +12,12 @@ function host() {
   const owner: any = { window: { nativeWindow: true } };
   const context: any = vm.createContext({
     JSB: { log() {}, defineClass: (_name: string, instance: any, classes: any) => { methods = instance; classMethods = classes; return instance; } },
-    NSString: { stringWithContentsOfFile: () => JSON.stringify({ url: "http://127.0.0.1:3212/v1/marginnote", token: "test" }),
+    NSString: { stringWithContentsOfFile: () => JSON.stringify(config),
       stringWithContentsOfData: (data: unknown) => data, stringWithString: (value: string) => value },
-    NSData: { dataWithStringEncoding: (value: string) => value },
+    NSData: { dataWithStringEncoding: (value: string) => ({ text: value, length: () => Buffer.byteLength(value) }) },
     NSUUID: { UUID: () => ({ UUIDString: () => "session-" + ++sequence }) },
     NSUserDefaults: { standardUserDefaults: () => ({ objectForKey: () => true, setObjectForKey: () => {} }) },
-    NSMutableURLRequest: { requestWithURL: (url: string) => ({ url, setHTTPMethod() {}, setTimeoutInterval() {}, setAllHTTPHeaderFields() {}, setHTTPBody(body: string) { requests.push({ url, body: JSON.parse(body) }); } }) },
+    NSMutableURLRequest: { requestWithURL: (url: string) => ({ url, setHTTPMethod() {}, setTimeoutInterval() {}, setAllHTTPHeaderFields() {}, setHTTPBody(body: { text: string }) { requests.push({ url, body: JSON.parse(body.text) }); } }) },
     NSURLConnection: { sendAsynchronousRequestQueueCompletionHandler: (_request: any, _queue: any, callback: any) => { requests[requests.length - 1].callback = callback; } },
     NSOperationQueue: { mainQueue: () => ({}) }, NSURL: { URLWithString: (url: string) => url },
     NSTimer: { scheduledTimerWithTimeInterval: (_delay: number, _repeat: boolean, callback: any) => {
@@ -43,6 +43,27 @@ function host() {
 }
 
 describe("MarginNote plugin execution", () => {
+  it("MN-C5: refuses remote connection configuration before issuing requests", () => {
+    expect(() => host({ url: "http://example.com/v1/marginnote", token: "t".repeat(43) })).toThrow("Invalid local");
+  });
+  it("MN-C3: request IDs that name prototype properties still execute exactly once", async () => {
+    const h = host();
+    const code = "bridge.state.n=(bridge.state.n||0)+1; return bridge.state.n;";
+    for (const id of ["constructor", "__proto__", "toString"]) {
+      const first = await h.execute(code, {}, id);
+      expect(first.ok).toBe(true);
+      expect(await h.execute(code, {}, id)).toEqual(first);
+    }
+    expect(h.owner._noemaRuntime.state.n).toBe(3);
+  });
+  it("MN-C2: applies the result limit to UTF-8 bytes and bounds thrown errors", async () => {
+    const h = host();
+    expect(await h.execute("return '字'.repeat(400000)")).toMatchObject({ ok: false, error: { name: "SerializationError" } });
+    expect(await h.execute("return '字'.repeat(100000)", {}, "small")).toMatchObject({ ok: true });
+    const result = await h.execute("throw new Error('字'.repeat(1000000))", {}, "error");
+    expect(result.ok).toBe(false);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(200000);
+  });
   it("MN-C1/C2: exposes every host global and direct native objects", async () => {
     const h = host();
     const result = await h.execute("console.log('native', app.nativeValue()); return { value: Note.customHostAPI(), docs: db.allDocuments(), args };", { test: true });

@@ -4,13 +4,15 @@ export const MARGINNOTE_ROUTE = "/v1/marginnote";
 
 export function createMarginNoteHttpHandler({ bridge, token }) {
   return async function handle(req, res) {
-    const url = new URL(req.url, "http://localhost");
-    if (!url.pathname.startsWith(MARGINNOTE_ROUTE + "/")) return false;
     const send = (status, value) => {
       if (res.destroyed) return;
       res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
       res.end(JSON.stringify(value));
     };
+    let url;
+    try { url = new URL(req.url, "http://localhost"); }
+    catch { send(400, { ok: false, error: "Invalid request URL" }); return true; }
+    if (!url.pathname.startsWith(MARGINNOTE_ROUTE + "/")) return false;
     const local = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
     if (!local || req.headers.origin || !captureRequestAuthorized(req.headers.authorization, token)) {
       send(401, { ok: false, error: "MarginNote bearer token required; browser origins are not accepted" });
@@ -21,11 +23,14 @@ export function createMarginNoteHttpHandler({ bridge, token }) {
       else if (req.method === "GET" && url.pathname.startsWith(MARGINNOTE_ROUTE + "/requests/")) {
         send(200, bridge.request(url.pathname.slice((MARGINNOTE_ROUTE + "/requests/").length)));
       } else if (req.method === "POST" && ["poll", "execute", "disconnect", "heartbeat"].some((name) => url.pathname === MARGINNOTE_ROUTE + "/" + name)) {
-        let text = "";
+        const chunks = [];
+        let bytes = 0;
         for await (const chunk of req) {
-          text += chunk;
-          if (Buffer.byteLength(text) > 2 * 1024 * 1024) throw Object.assign(new Error("Request exceeds 2 MiB; return files by path or base64 chunks"), { statusCode: 413 });
+          bytes += chunk.length;
+          if (bytes > 2 * 1024 * 1024) throw Object.assign(new Error("Request exceeds 2 MiB; return files by path or base64 chunks"), { statusCode: 413 });
+          chunks.push(chunk);
         }
+        const text = Buffer.concat(chunks, bytes).toString("utf8");
         const body = JSON.parse(text || "{}");
         if (url.pathname.endsWith("/execute")) send(200, await bridge.submit(body));
         else if (url.pathname.endsWith("/heartbeat")) send(200, bridge.heartbeat(body));

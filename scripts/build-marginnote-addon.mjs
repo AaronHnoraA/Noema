@@ -1,16 +1,17 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
+import { mkdir, readFile, writeFile, mkdtemp, rename, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
 import { connection } from "../plugins/marginnote/client.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const addon = join(root, "plugins/marginnote");
-if (process.argv[2] === "--refresh-api") {
-  const source = resolve(process.argv[3]);
-  // Only API declarations; no upstream implementation is shipped.
-  const script = String.raw`
+async function main() {
+  if (process.argv[2] === "--refresh-api") {
+    const source = resolve(process.argv[3]);
+    // Only API declarations; no upstream implementation is shipped.
+    const script = String.raw`
 import json,re,sys,subprocess
 from pathlib import Path
 root=Path(sys.argv[1]); interfaces=[]
@@ -25,21 +26,29 @@ for p in sorted((root/'API').rglob('*.h')):
 revision=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
 print(json.dumps({'source':'https://github.com/marginnoteapp/Addon','revision':revision,'interfaces':interfaces},ensure_ascii=False,indent=2))
 `;
-  const catalog = execFileSync("python3", ["-c", script, source], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
-  await writeFile(join(addon, "api-catalog.json"), catalog);
-  const parsed = JSON.parse(catalog);
-  process.stdout.write(`Indexed ${parsed.interfaces.length} native API interfaces at ${parsed.revision}\n`);
-} else {
-  const config = await connection();
-  const out = join(root, "build/marginnote");
-  await mkdir(out, { recursive: true });
-  const target = join(out, "noema.mnaddon");
+    const catalog = execFileSync("python3", ["-c", script, source], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+    await writeFile(join(addon, "api-catalog.json"), catalog);
+    const parsed = JSON.parse(catalog);
+    process.stdout.write(`Indexed ${parsed.interfaces.length} native API interfaces at ${parsed.revision}\n`);
+  } else {
+    const config = await connection();
+    const target = join(root, "build/marginnote/noema.mnaddon");
+    await buildAddon(config, addon, target);
+    const metadata = JSON.parse(await readFile(join(addon, "mnaddon.json"), "utf8"));
+    process.stdout.write(`${target}\n${metadata.title} ${metadata.version}; connection configuration included privately\n`);
+  }
+}
+
+export async function buildAddon(config, source, target) {
+  await mkdir(dirname(target), { recursive: true });
+  const staging = await mkdtemp(join(dirname(target), ".noema-package-"));
+  const staged = join(staging, "noema.mnaddon");
   // Packaging through Python's stdlib keeps the native addon dependency-free.
   const script = String.raw`
-import json,sys,zipfile
+import json,sys,zipfile,os
 from pathlib import Path
 source=Path(sys.argv[1]);target=Path(sys.argv[2]);config=json.loads(sys.stdin.read())
-with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED) as z:
+with os.fdopen(os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'wb') as private, zipfile.ZipFile(private,'w',zipfile.ZIP_DEFLATED) as z:
  for name in ['main.js','mnaddon.json']:z.write(source/name,name)
  z.writestr('connection.json',json.dumps(config))
  # Small neutral toolbar glyph, generated from PNG primitives (no asset dependency).
@@ -49,8 +58,10 @@ with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED) as z:
  png=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',48,48,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(pixels))+chunk(b'IEND',b'')
  z.writestr('icon.png',png)
 `;
-  execFileSync("python3", ["-c", script, addon, target], { input: JSON.stringify(config), stdio: ["pipe", "pipe", "pipe"] });
-  await chmod(target, 0o600);
-  const metadata = JSON.parse(await readFile(join(addon, "mnaddon.json"), "utf8"));
-  process.stdout.write(`${target}\n${metadata.title} ${metadata.version}; connection configuration included privately\n`);
+  try {
+    execFileSync("python3", ["-c", script, source, staged], { input: JSON.stringify(config), stdio: ["pipe", "pipe", "pipe"] });
+    await rename(staged, target);
+  } finally { await rm(staging, { recursive: true, force: true }); }
 }
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

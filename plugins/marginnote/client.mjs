@@ -4,6 +4,16 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+export function validateConnection(config) {
+  const url = new URL(config?.url);
+  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port ||
+      url.username || url.password || url.search || url.hash || url.pathname !== "/v1/marginnote" ||
+      typeof config.token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(config.token)) {
+    throw new Error("MarginNote connection must use a private token and the local loopback bridge");
+  }
+  return { url: url.href, token: config.token };
+}
+
 export async function connection() {
   const candidates = process.env.NOEMA_HOST_DESCRIPTOR ? [process.env.NOEMA_HOST_DESCRIPTOR] : [
     process.env.NOEMA_STATE_DIR && join(process.env.NOEMA_STATE_DIR, "host.json"),
@@ -14,7 +24,7 @@ export async function connection() {
     try {
       const host = JSON.parse(await readFile(file, "utf8"));
       process.kill(host.pid, 0);
-      if (host.marginnote?.url && host.marginnote?.token) return host.marginnote;
+      if (host.marginnote?.url && host.marginnote?.token) return validateConnection(host.marginnote);
     } catch {}
   }
   throw new Error("Live Noema host has no MarginNote bridge. Start/restart Noema in Emacs.");
@@ -28,6 +38,7 @@ export async function call(path, body) {
     method: body === undefined ? "GET" : "POST",
     headers: { Authorization: "Bearer " + config.token, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
+    redirect: "error",
     signal: AbortSignal.timeout((body?.timeoutMs || 30_000) + 5000),
   }); } catch (error) {
     throw new Error(body?.requestId ? `Request ${body.requestId}: transport interrupted; execution outcome unknown. Query result before retrying. ${error.message}` : error.message);

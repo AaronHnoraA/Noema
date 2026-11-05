@@ -2,7 +2,7 @@
   "addonid": "noema.extension.agent",
   "author": "Noema",
   "title": "Noema",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "marginnote_version_min": "4.0",
   "cert_key": ""
 }

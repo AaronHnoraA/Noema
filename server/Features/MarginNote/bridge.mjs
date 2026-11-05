@@ -43,6 +43,8 @@ export function createMarginNoteBridge({ pollMs = 20_000, staleMs = 60_000 } = {
       if (job.session !== session || job.result) continue;
       finish(job, { ok: false, state: "disconnected", execution: job.claimed ? "unknown" : "not_started" });
     }
+    session.running = null;
+    session.queue = [];
     sessions.delete(id);
   }
   function prune() {
@@ -51,7 +53,11 @@ export function createMarginNoteBridge({ pollMs = 20_000, staleMs = 60_000 } = {
       const expectedAliveUntil = Math.max(session.lastSeen, session.running?.deadline || 0);
       if (now - expectedAliveUntil > staleMs) disconnect(session.id);
     }
-    for (const [id, job] of requests) if (job.result && now - job.created > 15 * 60_000) requests.delete(id);
+    for (const [id, job] of requests) {
+      // A timeout is not cancellation. Retain the identity until the native
+      // window acknowledges completion, otherwise a late result cannot unlock it.
+      if (job.result && job.session.running !== job && now - job.created > 15 * 60_000) requests.delete(id);
+    }
     if (requests.size >= 256) {
       for (const [id, job] of requests) {
         if (job.result && job.session.running !== job) requests.delete(id);

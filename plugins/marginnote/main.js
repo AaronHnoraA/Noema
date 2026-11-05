@@ -3,6 +3,8 @@ JSB.newAddon = function (mainPath) {
   var instances = [];
   var globalObject = Function("return this")();
   var bundled = JSON.parse(String(NSString.stringWithContentsOfFile(mainPath + "/connection.json")));
+  if (!/^http:\/\/127\.0\.0\.1:[0-9]{1,5}\/v1\/marginnote$/.test(bundled.url) ||
+      !/^[A-Za-z0-9_-]{43}$/.test(bundled.token)) throw new Error("Invalid local Noema connection configuration");
   var enabledKey = "noema.agent.enabled";
   function nil(value) { return value === null || value === undefined || String(value) === "[object NSNull]"; }
 
@@ -22,7 +24,7 @@ JSB.newAddon = function (mainPath) {
     var c = nativeContext(owner);
     var document = c.reader && c.reader.currentDocumentController;
     return { appVersion: String(get(c.app, "appVersion") || ""), build: String(get(c.app, "build") || ""),
-      addonVersion: "1.0.4", stage: owner._noemaRuntime && owner._noemaRuntime.stage,
+      addonVersion: "1.0.5", stage: owner._noemaRuntime && owner._noemaRuntime.stage,
       lastError: owner._noemaRuntime && owner._noemaRuntime.lastError,
       osType: get(c.app, "osType"), notebookId: get(c.notebook, "notebookId"), docMd5: get(document, "docMd5") };
   }
@@ -77,10 +79,12 @@ JSB.newAddon = function (mainPath) {
       settled = true;
       runtime.stage = "result-ready";
       try {
+        if (error) error = { name: String(error.name || "Error").slice(0, 256),
+          message: String(error.message || error).slice(0, 16384), stack: String(error.stack || "").slice(0, 16384) };
         var clean = value === undefined ? null : JSON.parse(JSON.stringify(value));
-        if (JSON.stringify(clean).length > 1024 * 1024) throw new Error("Result exceeds 1 MiB; return file paths or read data in chunks");
+        if (Number(get(NSData.dataWithStringEncoding(JSON.stringify(clean), 4), "length")) > 1024 * 1024) throw new Error("Result exceeds 1 MiB UTF-8; return file paths or read data in chunks");
         done({ id: task.id, ok: ok, value: clean, error: error || null, logs: logs });
-      } catch (failure) { done({ id: task.id, ok: false, error: { name: "SerializationError", message: String(failure.message || failure) }, logs: logs }); }
+      } catch (failure) { done({ id: task.id, ok: false, error: { name: "SerializationError", message: String(failure.message || failure).slice(0, 16384) }, logs: logs }); }
     }
     try {
       if (Date.now() >= task.deadline) { done({ id: task.id, ok: false, error: { name: "Expired", message: "Task expired before execution" }, logs: logs }); return; }
@@ -151,7 +155,7 @@ JSB.newAddon = function (mainPath) {
   }
   function start(owner) {
     if (owner._noemaRuntime && !owner._noemaRuntime.dead) return;
-    var runtime = { id: uuid(), timers: [], results: {}, resultIds: [], state: {}, dead: false, completed: null };
+    var runtime = { id: uuid(), timers: [], results: Object.create(null), resultIds: [], state: {}, dead: false, completed: null };
     owner._noemaRuntime = runtime;
     poll(owner, runtime);
   }
@@ -160,7 +164,7 @@ JSB.newAddon = function (mainPath) {
     if (!runtime || runtime.dead) return;
     runtime.dead = true;
     runtime.timers.forEach(function (timer) { timer.invalidate(); });
-    runtime.timers = []; runtime.state = {}; runtime.results = {}; runtime.completed = null;
+    runtime.timers = []; runtime.state = {}; runtime.results = Object.create(null); runtime.completed = null;
     try { request("/disconnect", { sessionId: runtime.id }, function () {}); } catch (_) {}
   }
   function enabled() { return NSUserDefaults.standardUserDefaults().objectForKey(enabledKey) !== false; }
