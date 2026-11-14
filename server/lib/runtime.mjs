@@ -6644,6 +6644,8 @@ export async function latexExportDefaults(body = {}) {
     templateRoot: latexTemplatesRoot,
     template: rememberedLatexTemplate(remembered?.templatePath),
     vars: remembered?.vars && typeof remembered.vars === "object" ? remembered.vars : {},
+    // Whether the last export kept its .tex beside the PDF; a global choice.
+    keepTex: state.settings?.keepTex !== false,
   };
 }
 
@@ -6961,20 +6963,26 @@ export async function exportLatex(body = {}) {
   if (verified.warnings.length > 0) warnings.push(...verified.warnings.map((line) => `LaTeX layout: ${line}`));
 
   // Commit only after staging completed both compiler passes and log linting.
-  // Thus a failed export leaves the previous .tex/PDF untouched.
-  emit("Committing verified .tex and PDF…");
-  const sharedFileState = await syncLatexSharedFiles(sharedFiles, dirname(verified.texFile));
-  const file = await writeLatexExport(verified.texFile, latex);
+  // Thus a failed export leaves the previous .tex/PDF untouched.  With
+  // keepTex false only the PDF is committed: the .tex and the support files it
+  // needs (noema-macros.sty, figures) stay in the staging directory.
+  const keepTex = body.keepTex !== false;
+  emit(keepTex ? "Committing verified .tex and PDF…" : "Committing verified PDF…");
+  const sharedFileState = keepTex ? await syncLatexSharedFiles(sharedFiles, dirname(verified.texFile)) : [];
+  const file = keepTex ? await writeLatexExport(verified.texFile, latex) : "";
   await atomicWriteFile(verified.pdfFile, verified.pdf);
   const pdfFile = verified.pdfFile;
   throwIfAborted(signal);
 
   await updateLatexExportState((state) => {
     const paths = { ...(state.paths && typeof state.paths === "object" ? state.paths : {}) };
-    if (sourceFile) paths[sourceFile] = file;
+    if (sourceFile) paths[sourceFile] = verified.texFile;
     const templates = { ...(state.templates && typeof state.templates === "object" ? state.templates : {}) };
     if (sourceFile) templates[sourceFile] = { templatePath: template.file, vars: rawTemplateVars };
-    return { ...state, schemaVersion: 1, paths, templates, updatedAt: new Date().toISOString() };
+    const settings = typeof body.keepTex === "boolean"
+      ? { ...(state.settings && typeof state.settings === "object" ? state.settings : {}), keepTex: body.keepTex }
+      : state.settings;
+    return { ...state, schemaVersion: 1, paths, templates, ...(settings ? { settings } : {}), updatedAt: new Date().toISOString() };
   });
 
   emit("Done");
@@ -6983,6 +6991,7 @@ export async function exportLatex(body = {}) {
     ok: true,
     file,
     pdfFile,
+    keepTex,
     sourceFile,
     title: docTitle,
     template: template.file,

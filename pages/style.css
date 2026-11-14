@@ -4525,6 +4525,22 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   font: 650 11px/1.3 var(--aaron-font-sans);
 }
 
+.noema-modal-panel label.noema-latex-export-keep-tex {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  color: var(--aaron-muted);
+  font: 650 12px/1.3 var(--aaron-font-sans);
+  cursor: pointer;
+  user-select: none;
+}
+
+.noema-latex-export-keep-tex input {
+  margin: 0;
+  accent-color: var(--aaron-red-dark);
+}
+
 .noema-modal-panel h2 {
   margin: 0 0 4px;
   color: var(--aaron-red-dark);

@@ -3,6 +3,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 
 // @ts-ignore The converter is a Node ESM module outside the TS app graph.
 import { noemaMarkdownToLatex, applyLatexTemplate, escapeLatexText, escapeLatexTitle, latexMacrosPackage, latexOpeningDropCap, latexSideCommentPreamble, writeLatexExport } from "../server/lib/latex-export.mjs";
@@ -657,6 +658,31 @@ describe("LaTeX export", () => {
 
     const defaults = await latexExportDefaults({ file: note }) as { outputPath?: string };
     expect(defaults.outputPath).toBe(out);
+  });
+
+  test("writes only the PDF when keepTex is off and remembers the choice", async () => {
+    const { notes } = await setupRoot();
+    const note = join(notes, "p.md");
+    const out = join(notes, "pdf-only", "p.tex");
+    await writeFile(note, "# P\n\nBody with \\(x\\).\n", "utf8");
+    expect((await latexExportDefaults({ file: note }) as { keepTex?: boolean }).keepTex).toBe(true);
+
+    const exported = await exportLatex({ file: note, outputPath: out, keepTex: false }) as
+      { ok?: boolean; file?: string; pdfFile?: string; keepTex?: boolean };
+    expect(exported.ok).toBe(true);
+    expect(exported.keepTex).toBe(false);
+    expect(exported.file).toBe("");
+    expect((await readFile(exported.pdfFile!, "utf8")).slice(0, 4)).toBe("%PDF");
+    expect(existsSync(out)).toBe(false);
+    expect(existsSync(join(notes, "pdf-only", "noema-macros.sty"))).toBe(false);
+    const defaults = await latexExportDefaults({ file: note }) as { keepTex?: boolean; outputPath?: string };
+    expect(defaults.keepTex).toBe(false);
+    expect(defaults.outputPath).toBe(out);
+
+    // A request that does not say keeps the .tex and leaves the remembered choice alone.
+    await exportLatex({ file: note, outputPath: out });
+    expect(existsSync(out)).toBe(true);
+    expect((await latexExportDefaults({ file: note }) as { keepTex?: boolean }).keepTex).toBe(false);
   });
 
   test("keeps long side notes, footnotes, and revision notes in the compiled PDF", async () => {
