@@ -714,6 +714,13 @@ const ARROW_KEYS: Record<string, string> = {
   ArrowDown: "<down>",
 };
 
+/** Ctrl chords Emacs binds with Shift (C-S-t), forwarded with it. */
+const CTRL_SHIFT_CODES = new Set(["KeyT"]);
+
+function ctrlShiftChord(event: KeyboardEvent): boolean {
+  return event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey && CTRL_SHIFT_CODES.has(event.code);
+}
+
 function codeToBaseKey(code: string, shifted: boolean): string | null {
   // Arrows complete `C-x <left>` and form the Cmd+Arrow window chords.
   if (ARROW_KEYS[code]) return ARROW_KEYS[code];
@@ -729,6 +736,7 @@ function codeToBaseKey(code: string, shifted: boolean): string | null {
  * Used to capture the second key of a C-x / C-c prefix sequence.
  */
 function keyStringFromEvent(event: KeyboardEvent): string | null {
+  if (ctrlShiftChord(event)) return `C-S-${event.code.slice(3).toLowerCase()}`;
   const plainCtrl = event.ctrlKey && !event.metaKey && !event.altKey;
   const base = codeToBaseKey(event.code, event.shiftKey && !plainCtrl);
   if (!base) return null;
@@ -777,6 +785,8 @@ export function shouldForwardToEmacs(event: KeyboardEvent): boolean {
   if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
     return event.code === "KeyX" || event.code === "KeyW" || event.code === "KeyQ";
   }
+  // Ctrl-Shift-T is Emacs' agent switcher (C-S-t); it keeps its Shift.
+  if (ctrlShiftChord(event)) return true;
   // Only host-level Ctrl chords leave the renderer. Shift is ignored so
   // xwidget/browser variants such as C-X still become Emacs' C-x.
   if (event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -917,6 +927,7 @@ export function hostOwnedKeyFromEvent(event: KeyboardEvent): HostOwnedKey | null
     return { key: prefix + (event.shiftKey ? "S-" : "") + named };
   }
   if (chord) {
+    if (ctrlShiftChord(event)) return { key: `C-S-${event.code.slice(3).toLowerCase()}` };
     // Physical key, as the Emacs chord gate does: Option turns letters into
     // diacritics.  Other printable keys keep their character.
     const plainCtrl = event.ctrlKey && !event.metaKey && !event.altKey;

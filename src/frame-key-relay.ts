@@ -27,6 +27,7 @@ export const FRAME_KEY_RELAY_SOURCE = `(function () {
     if (m && !c && !a && k === "KeyO") return true;
     if (m && !c && !a && s && k === "KeyW") return true;
     if (m && !c && !a && !s) return k === "KeyX" || k === "KeyW" || k === "KeyQ";
+    if (c && s && !m && !a && k === "KeyT") return true;
     if (c && !m && !a) return k === "KeyX" || k === "KeyC" || k === "KeyG";
     return false;
   }

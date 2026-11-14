@@ -1485,6 +1485,21 @@ describe("xwidget key guard", () => {
     });
   });
 
+  test("forwards Ctrl-Shift-T as C-S-t, keeping plain Ctrl-T in the page", () => {
+    withForwardedEmacsKeys((forwarded) => {
+      const switcher = new KeyboardEvent("keydown", {
+        key: "T", code: "KeyT", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true,
+      });
+      expect(handleXwidgetEmacsKeydown(switcher)).toBe(true);
+      expect(switcher.defaultPrevented).toBe(true);
+      const plain = new KeyboardEvent("keydown", {
+        key: "t", code: "KeyT", ctrlKey: true, bubbles: true, cancelable: true,
+      });
+      expect(handleXwidgetEmacsKeydown(plain)).toBe(false);
+      expect(forwarded).toEqual(["C-S-t"]);
+    });
+  });
+
   test("forwards only the explicit Ctrl host boundary", () => {
     withForwardedEmacsKeys((forwarded) => {
       const quit = new KeyboardEvent("keydown", {

@@ -49,6 +49,8 @@ const SEQUENCES: Init[][] = [
   [{ key: "c", code: "KeyC", metaKey: true }],
   [{ key: "a", code: "KeyA", ctrlKey: true }],
   [{ key: "g", code: "KeyG", ctrlKey: true }],
+  [{ key: "T", code: "KeyT", ctrlKey: true, shiftKey: true }],
+  [{ key: "t", code: "KeyT", ctrlKey: true }],
 ];
 
 describe("output frame key relay", () => {
