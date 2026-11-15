@@ -16,6 +16,39 @@ import { agentApiConnection, callAgentApi } from "../server/lib/agent-api-client
 import { createEmacsApiHandlers } from "../server/Features/Emacs/api.mjs";
 
 describe("Pi global butler API", () => {
+  test("C62 discloses task options and forwards them through Pi MCP to the Emacs gateway", async () => {
+    const requests: any[] = [];
+    const router = new ApiRouter().register(createEmacsApiHandlers({
+      apiAgent: (body: any) => { requests.push(body); return { ok: true }; },
+    } as any));
+    const call = async (channel: string, args: any[] = []): Promise<any> => router.call(channel, args);
+    router.register(createAgentApiHandlers({ router, call }));
+    const wire: any[] = [];
+    const invoke = (channel: string, args: any[]) => callAgentApi(channel, args, {
+      connection: async () => "http://127.0.0.1:1",
+      fetcher: async (_url: any, options: any) => {
+        const request = JSON.parse(options.body);
+        wire.push(request);
+        return new Response(JSON.stringify(await call(request.channel, request.args)));
+      },
+    });
+    const server = createAgentMcp(invoke);
+    const client = new Client({ name: "c62-test", version: "1" });
+    const [left, right] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(left), client.connect(right)]);
+    try {
+      const detail: any = await client.callTool({ name: "noema_api", arguments: { channel: "emacs:agent" } });
+      const doc = JSON.parse(detail.content[0].text);
+      expect(doc.parameters[0].modelId).toContain("task session");
+      expect(doc.parameters[0].effort).toContain("first task prompt");
+      const body = { action: "spawn", root: "/tmp/project", agent: "codex", prompt: "task",
+        modelId: "task-model", effort: "xhigh", worktree: "trial" };
+      const result: any = await client.callTool({ name: "noema_call", arguments: { channel: "emacs:agent", args: [body] } });
+      expect(result.isError).not.toBe(true);
+      expect(requests).toEqual([body]);
+      expect(wire.at(-1).args[0].args).toEqual([body]);
+    } finally { await client.close(); await server.close(); }
+  });
   test("discovers file opening by purpose and alias, describes it, then preserves the chat by default", async () => {
     const opened: any[] = [];
     const router = new ApiRouter().register(createEmacsApiHandlers({
@@ -353,4 +386,8 @@ test("what Pi tells an Agent is marked by code, once, and only for Pi", async ()
   expect(markPiMessage("emacs:agent", send, undefined)).toBe(send);
   expect(markPiMessage("emacs:pi", send, "pi")).toBe(send);
   expect(markPiMessage("emacs:agent", [{ action: "read" }], "pi")[0]).toEqual({ action: "read" });
+  const spawn = [{ action: "spawn", prompt: "OCR", modelId: "task-model", effort: "xhigh", notify: { buffer: "*Pi*", nativeSessionId: "pi-id" } }];
+  expect(markPiMessage("emacs:agent", spawn, "pi")[0]).toEqual({
+    ...spawn[0], prompt: "[From Pi, not the person] OCR",
+  });
 });

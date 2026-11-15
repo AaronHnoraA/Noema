@@ -52,9 +52,11 @@ host 不在时这些调用失败：说明限制，继续能独立完成的工作
 
 ## 子 Agent 与能力
 
-用 `noema:api:emacs:agent`：`list` 看可复用的会话，`create` 建（会写同一批文件时带
-`worktree`，并行尝试加 `group`），`send` 派任务，`read` 取有界输出，`status` 看真实状态。
-结果由主 Agent 检查后合并。
+用 `noema:api:emacs:agent`：`list` 看可复用的会话，`spawn` 一次创建后台 worker 并派任务，
+`send` 复用会话。保存 `requestId`，用 `result` 取该任务的输出和终态；`read` 是整段聊天。
+`notify:{buffer,nativeSessionId}` 让 Emacs 完成后自动通知父 Agent，它可结束回合等待。
+会写同一批文件时带 `worktree`，并行尝试加 `group`。结果由主 Agent 检查后合并。
+后台 buffer 可在 Agent Manager 手动打开；统一运行机制与完整参数见 `noema-agent-operations`。
 
 能力以 `status` 的 `capabilities` 为准，不按 Agent 名字猜：`steer` 生成中输入进入当前回合，
 `fork` 可由用户 `/fork`，`list`／`load`／`resume` 可恢复历史。只有回合以 `end_turn` 结束才

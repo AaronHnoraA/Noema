@@ -12,7 +12,7 @@ const PI_MARK = "[From Pi, not the person] ";
  * as soon as a request says to answer with nothing else. */
 export function markPiMessage(channel, args, caller = process.env.NOEMA_CALLER) {
   const [body, ...rest] = args;
-  if (caller !== "pi" || fullChannel(channel) !== "noema:api:emacs:agent" || body?.action !== "send"
+  if (caller !== "pi" || fullChannel(channel) !== "noema:api:emacs:agent" || !["send", "spawn"].includes(body?.action)
       || typeof body.prompt !== "string" || body.prompt.startsWith(PI_MARK)) return args;
   return [{ ...body, prompt: PI_MARK + body.prompt }, ...rest];
 }

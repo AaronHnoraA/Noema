@@ -18,8 +18,7 @@
 (declare-function +agent-acp-start "tools/agent/acp" (&rest args))
 (declare-function +agent-acp-subscribe "tools/agent/acp" (&rest args))
 (declare-function +agent-acp-unsubscribe "tools/agent/acp" (&rest args))
-(declare-function +agent-acp-export-model-id "tools/agent/acp" (model-id &optional buffer))
-(declare-function +agent-acp-current-model-id "tools/agent/acp" (&optional buffer))
+(declare-function +agent-acp-verify-task-options "tools/agent/acp" ())
 (declare-function +agent-acp-draft "tools/agent/acp" (buffer text))
 (declare-function +agent-acp-prompt "tools/agent/acp" (&rest args))
 (declare-function +agent-acp-show-buffer "tools/agent/acp" (buffer))
@@ -102,10 +101,10 @@ name the Noema syntax document rather than inlining it."
 The pin never becomes the remembered model of ordinary sessions."
   :type 'string)
 
-(defcustom noema-marginnote-sync-effort "high"
-  "Reasoning effort pinned for ordinary `noema-marginnote-sync' sessions.
-Dense derivations take `noema-marginnote-sync-dense-effort', chosen with a
-prefix argument when the task starts."
+(defcustom noema-marginnote-sync-effort "xhigh"
+  "Reasoning effort pinned only for `noema-marginnote-sync' OCR sessions.
+A prefix argument chooses a different effort when the task starts.
+This setting never changes ordinary Agent sessions."
   :type 'string)
 
 (defcustom noema-marginnote-sync-dense-effort "xhigh"
@@ -181,8 +180,13 @@ EFFORT defaults to `noema-marginnote-sync-effort'."
                   base noema-marginnote-sync-model
                   (or effort noema-marginnote-sync-effort)))
          (directory (file-name-as-directory (expand-file-name noema-marginnote-work-root)))
-         (model noema-marginnote-sync-model)
          buffer subscription)
+    (setf (alist-get :agent-task-options config)
+          (list :model (and (stringp noema-marginnote-sync-model)
+                            (not (string-empty-p noema-marginnote-sync-model))
+                            noema-marginnote-sync-model)
+                :effort (let ((value (or effort noema-marginnote-sync-effort)))
+                          (and (stringp value) (not (string-empty-p value)) value))))
     (make-directory directory t)
     (setq buffer (+agent-acp-start :config config :directory directory
                                         :origin 'marginnote
@@ -194,16 +198,16 @@ EFFORT defaults to `noema-marginnote-sync-effort'."
            (lambda (_event)
              (+agent-acp-unsubscribe :buffer buffer :subscription subscription)
              (when (buffer-live-p buffer)
-               (let ((selected (and (stringp model) (not (string-empty-p model))
-                                    (+agent-acp-export-model-id model buffer))))
-                 (if (and (stringp model) (not (string-empty-p model))
-                          (not (and selected
-                                    (equal selected (+agent-acp-current-model-id buffer)))))
-                     ;; Never run the task on a model the person did not pick.
-                     (progn
-                       (+agent-acp-draft buffer text)
-                       (message "MarginNote sync: model %s unavailable; task left as a draft"
-                                model))
+               (with-current-buffer buffer
+                 (when (condition-case error-data
+                           (progn (+agent-acp-verify-task-options) t)
+                         (error
+                          (+agent-acp-draft buffer text)
+                          (message "MarginNote sync: %s; task left as a draft"
+                                   (error-message-string error-data))
+                          nil))
+                   ;; After dispatch an error may mean an unknown outcome;
+                   ;; never turn that into a new, apparently unsent draft.
                    (+agent-acp-prompt
                     :buffer buffer
                     :content (list `((type . "text") (text . ,text))))))))))

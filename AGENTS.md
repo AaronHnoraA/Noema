@@ -239,7 +239,10 @@ whatever started it: a Run, the popup pool, `+agent/start' or a bare
 `:origin'. Root resolution (`+agent-acp-project-root') is a query and
 must stay one: registering a session never creates a Project. A project
 that already has one also gets a durable `session:promote' + `session:name:bind'
-for ordinary task Agents; Pi is explicitly excluded. Elsewhere the session is
+for ordinary task Agents; Pi and session-local temporary workers are excluded.
+Background task model/effort overrides stay on a private configuration copy and
+are verified before the first task prompt. They never change ordinary session
+preferences, including when a worker is manually opened. Elsewhere the session is
 listed from Emacs alone.
 
 ## Agent lifecycle and attention (adopted from Pisper, 2026-09-28)

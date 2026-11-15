@@ -1,19 +1,21 @@
 ---
 name: noema-pi
-description: 和 Pi 直接沟通。Pi 是 Emacs 里常驻的管理 Agent：项目 Pi 掌握本项目全局，主 Pi 管编辑器和跨项目。用于问全局情况、转交工作、请它安排别的 Agent；普通单步任务不需要。
+description: 和 Pi 沟通：主 Pi 是 Emacs 的全局管家，管理后台执行 Agent、编辑器和跨项目任务；项目 Pi 保留项目上下文。用于转交工作、查询全局情况或安排协作。
 ---
 
 # 和 Pi 沟通
 
-Pi 是真实的 ACP 会话，比你活得久，也管得宽。它没有 shell，代码和测试留给执行 Agent。
+全局 Pi 用 `companion:true`，有目录也不自动改派项目 Pi。它通过 `emacs:agent`
+`spawn/send/result` 管理后台 worker，Emacs 自动送回结果；见 `noema-agent-operations`。
+Pi 没有 shell，代码和测试交给执行 Agent。
 
 发送用 `noema:api:emacs:pi`：
 
 `[{"action":"send","root":"<项目根>","prompt":"...","from":{"buffer":"<你的 buffer>","nativeSessionId":"<你的 ID>"}}]`
 
-- 你的身份在进入项目时收到的提示里。编辑器和跨项目的事用 `"companion":true` 代替 `root`。
+- 你的身份在项目入口提示里；全局管家用 `"companion":true` 代替 `root`。
 - 项目 Pi 没开时会创建；受理不等于完成。
-- 带 `from`，Pi 会把回复发到你的会话，开头是 `[From Pi, not the person]`，忙时排队。说清你要什么，然后结束回合等它，不用轮询。
+- 带 `from`，Pi 回复到你的会话，开头是 `[From Pi, not the person]`，忙时排队；结束回合等待即可。
 - 要主动看：`status` 取 Pi 的 `buffer` 和 `nativeSessionId`，再用 `emacs:agent` `read`。
 
 ## 观察项
