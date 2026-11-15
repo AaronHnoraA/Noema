@@ -170,8 +170,11 @@ function publicView(x, now) {
 // Markdown files: problem, notebooks, summary
 // ---------------------------------------------------------------------------
 
-const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, "").slice(0, 15);
-const meta = (title, at, id) => `#+begin meta\ntitle: ${title}\ndate: ${new Date(at).toISOString().slice(0, 10)}\ntags: exploration\nid: ${id}\nkind: default\n#+end meta\n\n`;
+// Dates in ids and meta are the person's local ones, as Noema writes note ids.
+const two = (value) => String(value).padStart(2, "0");
+const localDate = (ms, separator = "-") => { const d = new Date(ms); return [d.getFullYear(), two(d.getMonth() + 1), two(d.getDate())].join(separator); };
+const stamp = (ms) => { const d = new Date(ms); return `${localDate(ms, "")}T${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`; };
+const meta = (title, at, id) => `#+begin meta\ntitle: ${title}\ndate: ${localDate(at)}\ntags: exploration\nid: ${id}\nkind: default\n#+end meta\n\n`;
 
 function problemMarkdown(x) {
   const source = x.note ? `See [${x.note.split("/").at(-1)}](${relative(x.dir, x.note)}).\n\n` : "";
@@ -340,7 +343,7 @@ async function identified(deps, who, name) {
 
 function freshId(root, title, now) {
   const slug = title.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "problem";
-  const base = `${new Date(now).toISOString().slice(0, 10).replace(/-/g, "")}-${slug}`;
+  const base = `${localDate(now, "")}-${slug}`;
   for (let n = 1; ; n += 1) {
     const id = n === 1 ? base : `${base}-${n}`;
     if (!existsSync(directoryOf(root, id))) return id;
