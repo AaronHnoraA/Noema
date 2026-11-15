@@ -1,0 +1,13 @@
+export const LIMITS: Readonly<Record<string, number>>;
+export const ADVICE: Record<string, string>;
+export const CLI: string;
+export const JUDGE_CLI: string;
+export const directoryOf: (root: string, id: string) => string;
+export function render(template: string, vars: Record<string, unknown>): string;
+export function fold(events: any[], now?: number): any;
+export function boardMarkdown(exploration: any, now?: number): string;
+export const supervisor: { timers: Map<string, any>; arm(dir: string, delay: number, run: () => Promise<any>): void; disarm(dir: string): void };
+export function tick(dir: string, deps: any): Promise<any>;
+export function exploration(body: any, deps: any): Promise<any>;
+export function modelDuplicateCheck(callOneTool: (request: any) => Promise<any>): (input: { proposal: string; directions: any[] }) => Promise<{ duplicateOf: string | null; reason: string }>;
+export function explorationSummary(root: string): Promise<{ total: number; running: number; interrupted: number; waitingReports: number } | null>;

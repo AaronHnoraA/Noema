@@ -3,14 +3,9 @@
 // actual model call goes through the same Pi runtime and Codex login that
 // Noema's project Pi uses; no OpenAI Platform key is involved.
 import http from "node:http";
-import { existsSync, realpathSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { createPiModel } from "../server/lib/pi-model.mjs";
 
 const MAX_BODY = 128 * 1024;
-const agentDir = process.env.NOEMA_PI_AGENT_DIR
-  || path.resolve(import.meta.dirname, "../../../var/noema/pi");
 const modelId = process.env.NOEMA_HY_MEMORY_PI_MODEL || "gpt-5.6-luna";
 const parentPid = process.ppid;
 // A caller timeout can kill Python before its finally block runs. Do not
@@ -18,15 +13,6 @@ const parentPid = process.ppid;
 setInterval(() => {
   if (process.ppid !== parentPid) process.exit(0);
 }, 1000).unref();
-
-function piPackage() {
-  const override = process.env.NOEMA_PI_CODING_AGENT_PACKAGE;
-  if (override) return override;
-  const candidate = path.resolve(import.meta.dirname,
-    "../../../var/agent/pi/runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js");
-  if (existsSync(candidate)) return candidate;
-  throw new Error("Noema Pi runtime is unavailable");
-}
 
 function contentText(content) {
   if (typeof content === "string") return content;
@@ -94,15 +80,7 @@ function send(res, status, payload) {
 }
 
 async function main() {
-  const { ModelRuntime } = await import(pathToFileURL(piPackage()).href);
-  const runtime = await ModelRuntime.create({
-    authPath: path.join(agentDir, "auth.json"),
-    modelsPath: path.join(agentDir, "models.json"),
-    allowModelNetwork: false,
-  });
-  const model = runtime.getModel("openai-codex", modelId);
-  if (!model || !runtime.hasConfiguredAuth("openai-codex"))
-    throw new Error("Noema Pi Codex Luna is not configured");
+  const model = await createPiModel({ modelId });
   const server = http.createServer(async (req, res) => {
     if (req.method !== "POST" || req.url !== "/v1/chat/completions")
       return send(res, 404, { error: { message: "not found" } });
@@ -117,7 +95,7 @@ async function main() {
       const context = contextFromMessages(input.messages);
       const tools = piTools(input.tools);
       if (tools?.length) context.tools = tools;
-      const result = await runtime.completeSimple(model, context, {
+      const result = await model.complete(context, {
         reasoning: "off", toolChoice: tools?.length ? "auto" : "none",
         timeoutMs: 120000, transport: "sse",
       });

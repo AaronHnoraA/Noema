@@ -4,6 +4,10 @@ import { listAgentSkills, readAgentSkill } from "../../lib/agent-skills.mjs";
 import { agentMemorySearch, agentProjectMaintain, agentProjectStatus } from "../../lib/agent-project.mjs";
 import { projectGraph } from "../../lib/project-graph.mjs";
 import { piWatch } from "../../lib/pi-watch.mjs";
+import { exploration, modelDuplicateCheck } from "../../lib/exploration.mjs";
+import { leanJudge } from "../../lib/lean-judge.mjs";
+import { callOneTool } from "../../lib/pi-model.mjs";
+import { join } from "node:path";
 import { fullChannel } from "../../lib/agent-api-client.mjs";
 
 const bad = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
@@ -190,8 +194,14 @@ export function proposeMarkdown(source, edits) {
 const apiAreas = (channels) => Object.fromEntries(Map.groupBy(channels, (name) => name.split(":")[2]).entries()
   .map(([area, names]) => [area, names.length]));
 
+// Pristine Lean types, one file per frozen text, under Emacs var/.
+const leanJudgeCache = join(import.meta.dirname, "../../../../../var/noema/lean-judge");
+
 export function createAgentApiHandlers({ router, call }) {
   const documented = (handler, apiDoc) => Object.assign(handler, { apiDoc });
+  // An exploration's members are Emacs sessions; Lean and one model call judge.
+  const explorationDeps = { call, duplicate: modelDuplicateCheck(callOneTool),
+    judge: (body) => leanJudge(body, { cache: leanJudgeCache }) };
   // Without a version, each edit's oldText is the check: it must match at its position.
   const saveDocument = async ({ file, baseVersion, edits, content: whole } = {}, transform, client) => {
     if (baseVersion !== undefined && (typeof baseVersion !== "string" || !baseVersion)) bad("baseVersion must be a document:read version");
@@ -212,7 +222,7 @@ export function createAgentApiHandlers({ router, call }) {
       parameters: [{ id: "Skill id", root: "optional absolute project root", scope: "global or project" }],
     }),
     "noema:api:agent:project:status": documented((body) => agentProjectStatus(body, { call }), {
-      description: "Read a Project's shared resources: root, workspace, the `.agent/` cache's size and pressure, the task graph, Pi's watches and Hy Memory's state. Starts nothing and creates no Project or store.",
+      description: "Read a Project's shared resources: root, workspace, the `.agent/` cache's size and pressure, the task graph, Pi's watches, its explorations and Hy Memory's state. Starts nothing and creates no Project or store.",
       parameters: [{ root: "absolute path in the Project" }],
     }),
     "noema:api:agent:project:maintain": documented((body) => agentProjectMaintain(body, { call }), {
@@ -229,6 +239,19 @@ export function createAgentApiHandlers({ router, call }) {
         when: "add: exactly one of {after:'20m'} {every:'10m',times} {on:{kind,task,agent}} {on:{task,phase}}",
         do: "add: {prompt, to?: 'pi'|'companion'|{buffer,nativeSessionId}} or {script: Project file, args?: strings, report?: same as to}",
         id: "cancel; optional name on add" }],
+    }),
+    "noema:api:agent:exploration": documented((body) => exploration(body, explorationDeps), {
+      description: "Several background Agents work one mathematical problem at once, each on a direction no other holds; the session that starts it judges their reports. Its Markdown lives in the Project's `explorations/<id>/`: problem.md, one notebook per member, summary.md. Starter: start, status, board, verdict, stop, resume, list. Member: board, register, post, abandon, submit. With a Lean statement, Lean verifies a proof before the judge hears of it. Agents with a shell can run scripts/exploration.mjs.",
+      parameters: [{ root: "absolute path in the Project", op: "status (default) | board | list | start | verdict | stop | resume | register | post | abandon | submit", id: "the exploration, except for start and list",
+        coordinator: "start: {buffer, nativeSessionId} of the judging session (yours)", title: "start", note: "start: absolute Markdown file stating the problem", problem: "start: the problem as text, instead of or beside note",
+        standard: "start: what a solution must meet", lean: "start: absolute .lean frozen statement (theorem := sorry); Lean then verifies every proof", members: "start: 1..8, default 4", minutes: "start/resume: 10..1440, default 120",
+        agent: "start: provider id, default the coordinator's", modelId: "start: optional", effort: "start: optional", member: "member operations and verdict: m1, m2, …", text: "register/post", kind: "post: lemma | partial | counterexample | dead-end | note",
+        reason: "abandon, and verdict when rejecting", report: "submit: at most 1500 bytes", files: "submit: files inside the exploration's directory", proof: "submit: the Lean proof file when the judge is Lean",
+        accept: "verdict: true or false", finish: "verdict: true ends the exploration solved", by: "verdict/stop: person when a person decides" }],
+    }),
+    "noema:api:agent:lean:judge": documented((body) => leanJudge(body, { cache: leanJudgeCache }), {
+      description: "Lean decides whether a proof proves a frozen statement: the person's .lean file with one `theorem NAME … := sorry`. statement vets that file; check grades a partial proof (invalid, errors, sorries, complete); verify decides a solve (statement and preamble kept byte for byte, Lean elaborates, axioms only propext/Classical.choice/Quot.sound, pp.all type equal). Runs `lake env lean` in the nearest Lake project; takes minutes. Agents with a shell can run scripts/lean-judge.mjs.",
+      parameters: [{ op: "statement | check | verify (default)", statement: "absolute frozen .lean file", candidate: "absolute proof .lean file (check, verify)", lake: "optional Lake project directory", timeoutMs: "optional, default 300000" }],
     }),
     "noema:api:agent:memory:search": documented((body) => agentMemorySearch(body), {
       description: "Search Hy Memory in the Project's scope with a query of your own; ordinary turns already recall by their prompt. `state` other than ok means unknown, not empty. Results are unverified background.",

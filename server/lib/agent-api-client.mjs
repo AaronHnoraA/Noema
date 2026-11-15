@@ -46,7 +46,7 @@ function transportError(error, origin) {
   return new Error(`API transport interrupted; outcome may be unknown. Read current state before retrying a mutation. ${error.message}`);
 }
 
-export async function callAgentApi(given, args = [], { connection = agentApiConnection, fetcher = fetch } = {}) {
+export async function callAgentApi(given, args = [], { connection = agentApiConnection, fetcher = fetch, timeoutMs = 120_000 } = {}) {
   const channel = fullChannel(given);
   if (typeof channel !== "string" || !Array.isArray(args))
     throw new Error("A channel and a JSON args array are required");
@@ -55,7 +55,7 @@ export async function callAgentApi(given, args = [], { connection = agentApiConn
   try {
     response = await fetcher(`${origin}/api`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ channel: "noema:api:agent:call", args: [{ channel, args }] }), signal: AbortSignal.timeout(120_000),
+      body: JSON.stringify({ channel: "noema:api:agent:call", args: [{ channel, args }] }), signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) { throw transportError(error, origin); }
   const result = await response.json();

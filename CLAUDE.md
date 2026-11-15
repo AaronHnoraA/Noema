@@ -74,6 +74,8 @@ separate editor implementation.
 | `server/lib/latex-export.mjs` | Template rendering, escaping, shared macro package generation, legacy pure helpers, and atomic `.tex` writes. |
 | `server/lib/latex-export-codex.mjs` | Agent polish of the Pandoc draft: repository skills, mandatory review candidates, strict fidelity gate, compile-verify retry loop, and agent-maintained rules. |
 | `agents/latex-export/` | Codex export contract (`AGENTS.md`), the agent-maintained `mechanical/rules.json` (envMap/commentBlocks merged into the base converter), and `notes.md`. Edited only on a maintenance pass, never during a normal export. |
+| `server/lib/lean-judge.mjs`, `scripts/lean-judge.mjs` | Lean decides whether a proof proves the person's frozen statement: textual protocol and strict verify (axioms, `pp.all` type) translated from Open Math Harness. See `../../docs/noema/design/math-exploration.md`. |
+| `server/lib/exploration.mjs`, `lisp/noema-exploration.el` | Explorations: background Agents on one problem, one direction each, judged by the starting session; Markdown notebooks under the Project's `explorations/<id>/`, journal facts beside them, a host-side clock. |
 | `server/lib/watch.mjs` | Recursive fs watcher for vault freshness; SSE broadcast on batch change. |
 | `server/lib/tmp.mjs` | Runtime temp staging (`mkdtemp`, atomic writes, TTL orphan sweep). |
 | `server/lib/copilot.mjs` | Re-export barrel for Copilot LSP bridge (uses Emacs-managed binary). |

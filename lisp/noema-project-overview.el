@@ -19,6 +19,7 @@
 (declare-function noema-sessions-open-reference "noema-sessions" (root &optional name session-id))
 (declare-function noema-orchestration "noema-orchestration" (&optional directory))
 (declare-function noema-project-graph "noema-project-graph" (&optional directory))
+(declare-function noema-exploration "noema-exploration" (&optional directory))
 (declare-function noema-capability-manager "noema-capability-ui" (&optional project type))
 (declare-function noema-research-attention "noema-research-inspector" (&optional origin))
 (declare-function +noema/agenda "noema/bridge/config" (&optional query))
@@ -142,6 +143,10 @@
     (noema-project-overview--button "Agent cache" (lambda () (noema-project-overview--open
                                                                  (lambda () (require 'noema-project-graph)
                                                                    (noema-project-graph root)))))
+    (insert "   ")
+    (noema-project-overview--button "Explorations" (lambda () (noema-project-overview--open
+                                                                  (lambda () (require 'noema-exploration)
+                                                                    (noema-exploration root)))))
     (insert "   ")
     (noema-project-overview--button "Attention" (lambda () (noema-project-overview--open
                                                                (lambda () (require 'noema-research-inspector)

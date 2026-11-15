@@ -17,7 +17,7 @@ Pi 用 `noema_api`／`noema_call`。有 shell 的 Agent 用
 host 不在时这些调用失败：说明限制，继续能独立完成的工作，不要启动 host 或直接读写数据库。
 
 想知道全貌时调 `agent:project:status`（`[{"root":"<项目内绝对路径>"}]`），只读。返回
-`project`、`cache`、`graph`、`watches`、`memory`；`project` 为 null 表示不是 Noema 项目，
+`project`、`cache`、`graph`、`watches`、`explorations`、`memory`；`project` 为 null 表示不是 Noema 项目，
 只有按目录分区的 Hy Memory，不要为此创建项目。项目根和 `workspace` 可以不同：记忆、
 缓存和 Session 归项目根，命令在 `workspace` 里跑。
 
@@ -29,6 +29,8 @@ host 不在时这些调用失败：说明限制，继续能独立完成的工作
 | 任务图谱 `.agent/tasks/` | `agent:project:graph`，见 `noema-project-graph` |
 | Pi 的观察项 `.agent/pi/` | `agent:pi:watch`，见 `noema-pi` |
 | 交接 `.agent/handoffs/` | Markdown，见 `project-agent-management` |
+| 并行探索 `explorations/<id>/` | `agent:exploration`，Markdown 笔记本；见 `noema-math-research` |
+| 证明是否成立 | `agent:lean:judge`，由 Lean 判定；见 `noema-math-research` |
 | 未核实记忆 | Hy Memory，见下 |
 | 已审核知识 | `research:finding:list`、`research:memory:propose-from-run` |
 | 历史会话 | `research:history:search`、`research:history:read` |
