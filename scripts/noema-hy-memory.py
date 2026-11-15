@@ -105,6 +105,12 @@ def bounded(value: object, limit: int) -> str:
     return str(value or "").strip()[:limit]
 
 
+# Hy Memory answers a search whose embedding failed with an empty result and no
+# error.  An empty answer must mean "nothing", never "could not look", so the
+# transport counts its failures and `search` reports them as a failure.
+EMBEDDING_FAILURES = []
+
+
 def curl_transport_factory(embed_url: str):
     """Use macOS curl for the private NAS endpoint; keep loopback on httpx.
 
@@ -146,7 +152,10 @@ def curl_transport_factory(embed_url: str):
                 output, _ = await process.communicate()
             response_body, separator, status = output.rpartition(b"\n")
             if process.returncode or not separator or not status.isdigit() or len(response_body) > 16_000_000:
+                EMBEDDING_FAILURES.append("unreachable")
                 raise httpx.ConnectError("embedding service unavailable", request=request)
+            if int(status) >= 400:
+                EMBEDDING_FAILURES.append(status.decode())
             return httpx.Response(int(status), content=response_body,
                                   headers={"content-type": "application/json"}, request=request)
 
@@ -156,31 +165,83 @@ def curl_transport_factory(embed_url: str):
     return Transport()
 
 
+# The read path closes the loop the way Open Math Harness's memory does: a
+# recalled memory the model cites is kept in front, and one recalled again and
+# again that nothing ever cited stops being injected.  Emacs appends the facts
+# (`recall`, `cite`) to the Project's ledger; this is the one place they count.
+CITATION_LEDGER = Path(".agent") / "memory" / "citations.jsonl"
+STALE_RECALLS = 6
+MAX_ITEMS = 4
+MAX_TEXT = 3600
+
+
+def citation_counts(root: str) -> dict:
+    """{memory id: (recalled, cited)} from ROOT's ledger; empty without one."""
+    counts: dict = {}
+    if not root:
+        return counts
+    try:
+        lines = (Path(root) / CITATION_LEDGER).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return counts
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue  # a torn last line
+        kind = event.get("kind") if isinstance(event, dict) else None
+        if kind not in ("recall", "cite"):
+            continue
+        for memory_id in event.get("ids") or []:
+            if not isinstance(memory_id, str):
+                continue
+            recalled, cited = counts.get(memory_id, (0, 0))
+            counts[memory_id] = (recalled + (kind == "recall"), cited + (kind == "cite"))
+    return counts
+
+
+def apply_citations(candidates: list, counts: dict) -> list:
+    """Drop stale memories, put cited ones first, then bound count and size."""
+    ranked = []
+    for order, item in enumerate(candidates):
+        recalled, cited = counts.get(item.get("id"), (0, 0))
+        if recalled >= STALE_RECALLS and cited == 0:
+            continue
+        ranked.append((-cited, order, {**item, "recalled": recalled, "cited": cited}))
+    items = []
+    total = 0
+    for _, _, item in sorted(ranked, key=lambda entry: entry[:2]):
+        if total + len(item["content"]) > MAX_TEXT:
+            continue
+        items.append(item)
+        total += len(item["content"])
+        if len(items) >= MAX_ITEMS:
+            break
+    return items
+
+
 def search(client, request: dict, user_id: str) -> dict:
     query = bounded(request.get("query"), 8192)
     if not query:
         return {"items": []}
     result = client.search(
         query, user_ids=[user_id], agent_ids=["shared"], scene="chat",
-        limit=5, min_score=0.4, intention_limit=0,
+        limit=8, min_score=0.4, intention_limit=0,
     )
     channels = result.get("memories")
     if not isinstance(channels, dict):
         raise ValueError("unexpected Hy Memory search response")
-    items = []
-    total = 0
+    candidates = []
     for channel in ("normal", "profile", "schema"):
         for entry in channels.get(channel, []):
             if not isinstance(entry, dict):
                 continue
             content = bounded(entry.get("content"), 1400)
-            if not content or total + len(content) > 3600:
-                continue
-            items.append({"content": content, "id": bounded(entry.get("memory_id"), 128)})
-            total += len(content)
-            if len(items) >= 4:
-                return {"items": items}
-    return {"items": items}
+            if content:
+                candidates.append({"content": content, "id": bounded(entry.get("memory_id"), 128)})
+    if not candidates and EMBEDDING_FAILURES:
+        raise RuntimeError("embedding service unavailable")
+    return {"items": apply_citations(candidates, citation_counts(str(request.get("root") or "")))}
 
 
 def remember(client, request: dict, user_id: str) -> dict:

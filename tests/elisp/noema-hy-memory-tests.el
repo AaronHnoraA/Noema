@@ -175,4 +175,65 @@
     (noema-agent-entry--prompt-request-a #'list :session-id "native" :prompt [])
     (should (gethash "native" noema-agent-entry--sent))))
 
+;; The citation loop (docs/noema/design/hy-memory.md M1-M4).
+
+(ert-deftest noema-hy-memory-m1-recalled-memories-are-citable ()
+  (let ((context (noema-hy-memory--text
+                  '(((content . "Prefers Lean 4 with Mathlib") (id . "0123456789abcdef"))
+                    ((content . "No id here"))))))
+    (should (string-match-p "\\[mem:01234567\\] Prefers Lean 4 with Mathlib" context))
+    (should (string-match-p "cite it as \\[mem:ID\\]" context))
+    (should (string-match-p "^No id here$" context))))
+
+(ert-deftest noema-hy-memory-m2-only-given-memories-count-as-cited ()
+  (let ((recalled '(("01234567" . "0123456789abcdef") ("feedbeef" . "feedbeef-full"))))
+    (should (equal (noema-hy-memory--cited "Used [mem:01234567] and [mem:01234567], invented [mem:99999999]." recalled)
+                   '("0123456789abcdef")))
+    (should-not (noema-hy-memory--cited "No citation." recalled))))
+
+(ert-deftest noema-hy-memory-m3-the-ledger-is-written-only-in-a-project ()
+  (let ((dir (file-name-as-directory (make-temp-file "memory-ledger" t))))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'noema-project-root) (lambda (_) nil)))
+            (noema-hy-memory--append dir '((kind . "recall") (ids . ["a"])))
+            (should-not (file-exists-p (expand-file-name ".agent" dir))))
+          (cl-letf (((symbol-function 'noema-project-root) (lambda (_) dir)))
+            (noema-hy-memory--append dir '((kind . "recall") (ids . ["a"])))
+            (should (equal (with-temp-buffer
+                             (insert-file-contents (expand-file-name ".agent/memory/citations.jsonl" dir))
+                             (buffer-string))
+                           "{\"kind\":\"recall\",\"ids\":[\"a\"]}\n"))
+            (should (file-exists-p (expand-file-name ".agent/.gitignore" dir)))))
+      (delete-directory dir t))))
+
+(ert-deftest noema-hy-memory-m4-a-turn-records-what-it-recalled-and-cited ()
+  (let ((dir (file-name-as-directory (make-temp-file "memory-loop" t)))
+        (continuation nil) (sent nil))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local agent-shell--state nil)
+          (cl-letf (((symbol-function 'noema-project-root) (lambda (_) dir))
+                    ((symbol-function 'noema-hy-memory--ready-p) (lambda () t))
+                    ((symbol-function 'noema-hy-memory--local-root) (lambda (_) dir))
+                    ((symbol-function 'noema-hy-memory--request)
+                     (lambda (operation _body callback)
+                       (when (equal operation "search") (setq continuation callback)))))
+            (noema-hy-memory--send-command-a (lambda (&rest args) (push args sent))
+                                             :shell-buffer (current-buffer) :prompt "Prove the lemma again")
+            (funcall continuation '((items . (((content . "Use induction on n") (id . "aaaaaaaa-1"))
+                                               ((content . "Unrelated") (id . "bbbbbbbb-2"))))))
+            (should sent)
+            (noema-hy-memory--event (current-buffer) '((:event . input-submitted) (:data . ((:prompt . "Prove the lemma again")))))
+            (noema-hy-memory--event (current-buffer) '((:event . agent-message-chunk) (:data . ((:text-chunk . "By induction [mem:aaaaaaaa].")))))
+            (noema-hy-memory--event (current-buffer) '((:event . turn-complete) (:data . ((:stop-reason . "end_turn")))))
+            (let ((lines (with-temp-buffer
+                           (insert-file-contents (expand-file-name ".agent/memory/citations.jsonl" dir))
+                           (split-string (buffer-string) "\n" t))))
+              (should (= (length lines) 2))
+              (should (string-match-p "\"kind\":\"recall\".*\"aaaaaaaa-1\",\"bbbbbbbb-2\"" (nth 0 lines)))
+              (should (string-match-p "\"kind\":\"cite\".*\"ids\":\\[\"aaaaaaaa-1\"\\]" (nth 1 lines))))
+            (should-not noema-hy-memory--recalled)))
+      (delete-directory dir t))))
+
 (provide 'noema-hy-memory-tests)
