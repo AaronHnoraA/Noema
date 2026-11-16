@@ -20,6 +20,8 @@
 (declare-function noema-capability-lookup "noema-capability-actions" (&optional type buffer))
 (declare-function noema-capability-lookup--agent-buffer "noema-capability-actions" ())
 (autoload 'noema-skill-upstream "noema-skill-upstream-ui" nil t)
+(autoload 'noema-skill-agents "noema-skill-agents-ui" nil t)
+(autoload 'noema-skill-agents-sync "noema-skill-agents-ui" nil t)
 
 (defvar-local noema-capability-ui--project nil)
 (defvar-local noema-capability-ui--view 'global)
@@ -279,6 +281,7 @@ A pack member row stands for its flat Skill record."
                 (noema-capability-ui--toolbar-button "Refine · Agent" #'noema-capability-ui-edit-with-agent)
                 (noema-capability-ui--toolbar-button "Folder" #'noema-capability-ui-open-directory)
                 (noema-capability-ui--toolbar-button "Upstream" #'noema-skill-upstream)
+                (noema-capability-ui--toolbar-button "Agents" #'noema-skill-agents)
                 (noema-capability-ui--toolbar-button "Edit" #'noema-capability-ui-open-source)
                 (noema-capability-ui--toolbar-button "Actions C-c C-a" #'noema-capability-ui-menu))))
   (tabulated-list-print t)
@@ -541,7 +544,7 @@ A pack member row stands for its flat Skill record."
                    ("3" . noema-capability-ui-local-skills) ("4" . noema-capability-ui-packs)
                    ("C-a" . noema-capability-ui-menu)
                    ("N" . noema-capability-ui-create-pack) ("m" . noema-capability-ui-edit-pack-members)
-                   ("U" . noema-skill-upstream)
+                   ("U" . noema-skill-upstream) ("A" . noema-skill-agents)
                    ("a" . noema-capability-ui-add) ("n" . noema-capability-ui-create-skill)
                    ("I" . noema-capability-ui-import-skill) ("p" . noema-capability-ui-create-project-patch)
                    ("y" . noema-capability-ui-copy-global-skill) ("s" . noema-capability-ui-edit-with-agent)
@@ -571,6 +574,8 @@ A pack member row stands for its flat Skill record."
 C-c 1: global library.  C-c 2: project patches.  C-c 3: local Skills.
 C-c 4: Skill packs; RET expands a pack's member links, and RET on a member
 shows that Skill in the flat library.  C-c U: upstream versions of Skills.
+C-c A: the agent catalog in every native Agent library (official Skills are
+listed, never touched).
 C-c C-a opens the action menu.  Evil's normal navigation and editing keys
 are preserved; no state or mode is disabled.
 C-c q closes the manager and restores the buffer it temporarily covered.

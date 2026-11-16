@@ -37,6 +37,9 @@ const METHODS = Object.freeze({
   "capability:global:skill:upstream:status": "skillUpstreamStatus",
   "capability:global:skill:upstream:install": "installUpstreamSkill",
   "capability:global:skill:upstream:update": "updateUpstreamSkill",
+  // The agent catalog, linked into every native Agent library (`export: true` sources).
+  "capability:global:agents:status": "agentLibraryStatus",
+  "capability:global:agents:sync": "syncAgentLibraries",
   "run:prepare": "prepareRun",
   "run:context-preview": "previewRunContext",
 	"run:project-file": "runProjectFile",

@@ -18,6 +18,7 @@ import {
   resolvedSkillsForRun,
 } from "./noema-capabilities.mjs";
 import { installUpstreamSkill, skillUpstreamStatus, updateUpstreamSkill } from "./noema-skill-upstream.mjs";
+import { agentLibraries } from "./noema-agent-libraries.mjs";
 import {
   deriveSessionRoute,
   parseSessionDirective,
@@ -1773,6 +1774,14 @@ export function createResearchRuntimeService({
         sourceDirectory: valueString(body.sourceDirectory) });
       return { root, skill, capabilities: await resolveProjectCapabilities({ root, scope,
         runtimeDescriptor: object(getRuntimeDescriptor()) }) };
+    },
+
+    async agentLibraryStatus() {
+      return { agentLibraries: await agentLibraries() };
+    },
+
+    async syncAgentLibraries() {
+      return { agentLibraries: await agentLibraries({ apply: true }) };
     },
 
     async skillUpstreamStatus(body = {}) {

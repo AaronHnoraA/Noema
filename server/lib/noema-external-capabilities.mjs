@@ -13,8 +13,9 @@ export function validateExternalSources(sources) {
   for (const source of sources) {
     if (!/^[A-Za-z][A-Za-z0-9._-]*$/.test(source?.id || "") || ids.has(source.id)
         || !formats.has(source.format) || (source.config !== undefined && typeof source.config !== "string")
-        || !Array.isArray(source.skills || []) || list(source.skills).some((path) => typeof path !== "string" || !path)) {
-      throw new Error("Each capability source needs a unique id, native format, optional config path and Skill directories");
+        || !Array.isArray(source.skills || []) || list(source.skills).some((path) => typeof path !== "string" || !path)
+        || (source.export !== undefined && typeof source.export !== "boolean")) {
+      throw new Error("Each capability source needs a unique id, native format, optional config path, Skill directories and an optional boolean export");
     }
     ids.add(source.id);
   }

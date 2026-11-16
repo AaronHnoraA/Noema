@@ -4,7 +4,7 @@ import { resolveProjectCapabilities } from "./noema-capabilities.mjs";
 
 // Project-chosen and explicitly requested Skills stay in the catalog; a Skill
 // that is only globally enabled is available to Runs, not disclosed on every turn.
-function catalogSkills(resolution) {
+export function catalogSkills(resolution) {
   const { skills, scopes } = resolution;
   const globalIndex = scopes.findIndex((scope) => scope.name === "global");
   const selections = new Set(["catalog", "run", ...scopes.slice(globalIndex + 1).map((scope) => scope.name)]);

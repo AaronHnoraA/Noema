@@ -9,6 +9,7 @@
 (declare-function +agent-acp-start "tools/agent/acp" (&rest args))
 (declare-function +agent-acp-draft "tools/agent/acp" (buffer text))
 (declare-function noema-capability-ui--switch "noema-capability-ui" (view))
+(declare-function noema-skill-agents-sync "noema-skill-agents-ui" (&optional quiet))
 (defvar noema-capability-ui--project)
 (defvar noema-capability-ui--resolution)
 (defvar noema-capability-ui--filter)
@@ -280,7 +281,10 @@ selections; a pack outside it stays available by id and to Runs."
                                           (noema--value definition "agent_catalog"))
                                    t))))
             :scope 'global
-            :callback (apply-partially #'noema-capability-ui--after-mutation manager))))))))
+            :callback (lambda (result error-object)
+                        (noema-capability-ui--after-mutation manager result error-object)
+                        ;; The catalog is what every Agent sees: follow it at once.
+                        (unless error-object (noema-skill-agents-sync t))))))))))
 
 (defun noema-capability-ui--pack-project-patch (record)
   "Edit this project's membership patch for pack RECORD."
