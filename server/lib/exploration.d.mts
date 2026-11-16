@@ -11,3 +11,4 @@ export function tick(dir: string, deps: any): Promise<any>;
 export function exploration(body: any, deps: any): Promise<any>;
 export function modelDuplicateCheck(callOneTool: (request: any) => Promise<any>): (input: { proposal: string; directions: any[] }) => Promise<{ duplicateOf: string | null; reason: string }>;
 export function explorationSummary(root: string): Promise<{ total: number; running: number; interrupted: number; waitingReports: number } | null>;
+export function explorationView(body?: any, now?: number): Promise<any>;

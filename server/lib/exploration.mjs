@@ -21,6 +21,8 @@ export const LIMITS = Object.freeze({
   members: 8, defaultMembers: 4, minMinutes: 10, maxMinutes: 24 * 60, defaultMinutes: 120,
   title: 120, problem: 8_000, standard: 1_000, direction: 600, finding: 800, report: 1_500,
   reason: 2_000, directions: 40, findings: 32, files: 10,
+  // A member whose run ends with time left is woken again, at most this often (E15).
+  nudges: 3, nudgeMinutes: 3,
 });
 const KINDS = new Set(["lemma", "partial", "counterexample", "dead-end", "note"]);
 const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -77,7 +79,7 @@ export function fold(events, now = Date.now()) {
   for (const event of events) {
     if (event.kind === "start") {
       x = { ...event, kind: undefined, state: "running", outcome: null, directions: [], refused: 0,
-        members: new Map(event.members.map((name) => [name, { name, direction: null, requestId: null, buffer: null, done: false, idle: false, lost: false }])) };
+        members: new Map(event.members.map((name) => [name, { name, direction: null, requestId: null, buffer: null, done: false, idle: false, lost: false, nudges: 0, askedToRegister: false }])) };
       continue;
     }
     if (!x) continue;
@@ -87,7 +89,12 @@ export function fold(events, now = Date.now()) {
     const d = direction(event.direction ?? m?.direction);
     switch (event.kind) {
       case "task": Object.assign(m, { requestId: event.requestId, buffer: event.buffer ?? m.buffer, idle: false, lost: false }); break;
+      case "nudge":
+        Object.assign(m, { requestId: event.requestId, buffer: event.buffer ?? m.buffer, idle: false, lost: false, nudges: m.nudges + 1 });
+        if (event.reason === "register") m.askedToRegister = true;
+        break;
       case "register":
+        m.askedToRegister = false;
         x.directions.push({ id: event.direction, member: event.member, text: event.text, state: "open", rejections: 0, findings: [], reports: [], at: event.at });
         m.direction = event.direction;
         break;
@@ -297,6 +304,27 @@ export const supervisor = {
   disarm(dir) { clearTimeout(this.timers.get(dir)); this.timers.delete(dir); },
 };
 
+/** A member whose run ended with time left is woken once more (E15): one that
+ * holds an open direction continues it, one that holds none is asked once to
+ * read the board and register another.  Otherwise, or when the wake is not
+ * accepted, it is idle.  Persistence is the loop's, not the prompt's. */
+async function nudgeOrIdle(x, m, session, deps) {
+  const now = deps.now();
+  const minutes = Math.floor((x.deadline - now) / MINUTE);
+  const held = x.directions.find((d) => d.id === m.direction && d.state === "open");
+  const canRegister = !held && !m.askedToRegister && x.directions.length < LIMITS.directions;
+  const idle = { kind: "idle", at: now, member: m.name };
+  if (minutes < LIMITS.nudgeMinutes || m.nudges >= LIMITS.nudges || (!held && !canRegister)) return idle;
+  const head = `[From exploration ${x.id}, not the person] Your run ended with ${minutes} minutes left.`;
+  const message = held
+    ? `${head} You still hold direction ${held.id}. Read your notebook's State and continue at the unresolved step: submit when it is solved, post what others can use, and abandon only when the direction is refuted or exhausted, saying why.`
+    : `${head} You hold no direction. Read the board: if an approach nobody has tried is worth the remaining time, register it and work it; otherwise end your turn.`;
+  try {
+    const answer = await agentCall(deps, { action: "send", buffer: session.buffer, nativeSessionId: session.nativeSessionId, prompt: message });
+    return { kind: "nudge", at: now, member: m.name, reason: held ? "continue" : "register", requestId: answer.requestId, buffer: session.buffer };
+  } catch { return idle; }
+}
+
 /** Look at X's members and clock once: mark ended runs idle, vanished ones
  * lost; end it at its deadline or when nothing can still happen; an
  * exploration whose every live member vanished is interrupted (E10, E11). */
@@ -308,7 +336,7 @@ export async function tick(dir, deps) {
     if (m.done || m.idle || m.lost || m.state === "waiting") continue;
     const session = await memberSession(deps, m);
     if (!session) facts.push({ kind: "lost", at: deps.now(), member: m.name });
-    else if (session.terminal) facts.push({ kind: "idle", at: deps.now(), member: m.name });
+    else if (session.terminal) facts.push(await nudgeOrIdle(x, m, session, deps));
   }
   for (const fact of facts) await appendEvent(journalOf(dir), fact);
   x = await load(dir, deps.now());
@@ -461,9 +489,11 @@ function filesInside(dir, list, name) {
   const items = Array.isArray(list) ? list : String(list ?? "").split(",").map((item) => item.trim()).filter(Boolean);
   if (items.length > LIMITS.files) fail(`At most ${LIMITS.files} ${name}`);
   const real = realpathSync(dir);
+  // A relative path names a file of the exploration, or of the Project around it.
+  const root = resolve(dir, "../..");
   return items.map((item) => {
-    const path = isAbsolute(item) ? item : join(dir, item);
-    if (!existsSync(path)) fail(`No such file: ${item}`, 404);
+    const path = isAbsolute(item) ? item : [join(dir, item), join(root, item)].find(existsSync);
+    if (!path || !existsSync(path)) fail(`No such file: ${item}`, 404);
     const rest = relative(real, realpathSync(path));
     if (!rest || rest.startsWith("..") || isAbsolute(rest)) fail(`${item} is outside the exploration's directory`, 403);
     return realpathSync(path);
@@ -595,6 +625,40 @@ async function list(root, deps) {
   return rows.sort((a, b) => b.at - a.at);
 }
 
+/** What `status`, `board` and `list` answer, read from the journal alone: no
+ * Emacs query, no clock, no host.  The command line serves its reads with it,
+ * so a sandboxed member reads the board without loopback access (E16). */
+export async function explorationView(body = {}, now = Date.now()) {
+  const op = String(body.op || "status");
+  const root = await resolveGraphRoot(body.root);
+  if (op === "list") {
+    const base = join(root, "explorations");
+    const rows = [];
+    for (const id of existsSync(base) ? readdirSync(base) : []) {
+      if (!existsSync(journalOf(directoryOf(root, id)))) continue;
+      const x = await load(directoryOf(root, id), now).catch(() => null);
+      if (x) rows.push({ id, title: x.title, state: x.state, outcome: x.outcome, deadline: x.deadline, waiting: x.waiting.length,
+        members: x.members.size, directions: x.directions.length, at: x.at, dir: x.dir });
+    }
+    return { root, explorations: rows.sort((a, b) => b.at - a.at) };
+  }
+  if (op !== "status" && op !== "board") fail(`Not a read: ${op}`);
+  if (!ID.test(String(body.id ?? ""))) fail("id is required");
+  const dir = directoryOf(root, body.id);
+  if (!existsSync(journalOf(dir))) fail(`No exploration ${body.id} in ${root}`, 404);
+  return viewOf(await load(dir, now), body, op, now);
+}
+
+function viewOf(x, body, op, now) {
+  const view = publicView(x, now);
+  if (body.member) {
+    const m = memberOf(x, body.member);
+    view.you = { name: m.name, state: m.state, direction: m.direction, notebook: notebookOf(x.dir, m.name),
+      minutesLeft: view.minutesLeft, advice: x.overdue ? ADVICE.time : ADVICE[m.state] ?? null };
+  }
+  return op === "board" ? { ...view, markdown: boardMarkdown(x, now) } : view;
+}
+
 /** A Project's explorations in a few fields for `agent:project:status`, or
  * null when it has none.  Reads only; arms no clock. */
 export async function explorationSummary(root) {
@@ -632,13 +696,7 @@ export async function exploration(body = {}, deps) {
   if (op !== "status" && op !== "board") fail(`Unknown operation: ${op}`);
   let x = await load(dir, now());
   if (x.state === "running") x = await tick(dir, deps);
-  const view = publicView(x, now());
-  if (body.member) {
-    const m = memberOf(x, body.member);
-    view.you = { name: m.name, state: m.state, direction: m.direction, notebook: notebookOf(dir, m.name),
-      advice: x.overdue ? ADVICE.time : ADVICE[m.state] ?? null };
-  }
-  return op === "board" ? { ...view, markdown: boardMarkdown(x, now()) } : view;
+  return viewOf(x, body, op, now());
 }
 
 /** The duplicate check as one bounded model call (E5). */

@@ -5,8 +5,8 @@ import { afterEach, beforeEach, expect, test } from "@voidzero-dev/vite-plus-tes
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exploration, fold, render, supervisor } from "../server/lib/exploration.mjs";
-import { bodyOf, parseFlags } from "../scripts/exploration.mjs";
+import { exploration, explorationView, fold, render, supervisor } from "../server/lib/exploration.mjs";
+import { bodyOf, main, parseFlags } from "../scripts/exploration.mjs";
 
 const MINUTE = 60_000;
 let root: string;
@@ -180,6 +180,8 @@ test("E9 two rejections end a direction; an accept with finish ends it solved", 
 test("E10 members that end their runs leave the exploration exhausted; the deadline ends it", async () => {
   const { id, dir } = await startOne();
   await op({ op: "register", id, member: "m1", text: "Descent." });
+  // Each member is woken until its nudges are spent (E15); then it is idle.
+  for (let round = 0; round < 4; round += 1) { finish(); await op({ op: "status", id }); }
   finish();
   const status = await op({ op: "status", id });
   expect(status).toMatchObject({ state: "ended", outcome: "exhausted" });
@@ -236,6 +238,49 @@ test("E12 the board folds from the journal alone", async () => {
   const folded = fold(journal(dir), now);
   expect(folded.directions[0].findings).toHaveLength(1);
   expect((await op({ op: "list" })).explorations.map((row: any) => row.id)).toEqual([id]);
+});
+
+test("E15 a member whose run ends with time left is woken, a bounded number of times", async () => {
+  const { id, dir } = await startOne();
+  await op({ op: "register", id, member: "m1", text: "Descent." });
+  finish();
+  expect((await op({ op: "status", id })).state).toBe("running");
+  const nudges = () => journal(dir).filter((event) => event.kind === "nudge");
+  expect(nudges().map((event) => [event.member, event.reason])).toEqual([["m1", "continue"], ["m2", "register"]]);
+  expect(sent.find((body) => body.buffer === `*explore-${id}-m1*`).prompt).toContain("You still hold direction d1");
+  expect(sent.find((body) => body.buffer === `*explore-${id}-m2*`).prompt).toContain("You hold no direction");
+  // m2 was asked once to register and did not: it is idle; m1 keeps being woken up to the bound.
+  finish(); await op({ op: "status", id });
+  expect(nudges().filter((event) => event.member === "m2")).toHaveLength(1);
+  expect(journal(dir).some((event) => event.kind === "idle" && event.member === "m2")).toBe(true);
+  finish(); await op({ op: "status", id }); finish(); await op({ op: "status", id });
+  expect(nudges().filter((event) => event.member === "m1")).toHaveLength(3);
+  // Too little time left: no wake, the member is idle.
+  const late = await startOne({ title: "Late" });
+  await op({ op: "register", id: late.id, member: "m1", text: "x" });
+  now += 58 * MINUTE;
+  finish();
+  await op({ op: "status", id: late.id });
+  expect(journal(late.dir).some((event) => event.kind === "nudge")).toBe(false);
+});
+
+test("E16 reads need no host: the command line folds the journal itself", async () => {
+  const { id, dir } = await startOne();
+  await op({ op: "register", id, member: "m1", text: "Descent." });
+  const view = await explorationView({ root, op: "board", id, member: "m1" }, now);
+  expect(view.you).toMatchObject({ state: "holding", direction: "d1" });
+  expect(view.markdown).toContain("## d1 · m1 · open");
+  expect((await explorationView({ root, op: "list" }, now)).explorations.map((row: any) => row.id)).toEqual([id]);
+  await expect(explorationView({ root, op: "register", id })).rejects.toThrow(/Not a read/);
+  const calls: any[] = [];
+  const noHost = async (...args: any[]) => { calls.push(args); throw new Error("blocked"); };
+  const printed = await main(["board", "--root", root, "--id", id, "--text"], noHost);
+  expect(printed.text).toContain("## d1 · m1 · open");
+  expect(calls).toHaveLength(0);
+  // A path relative to the Project root names the same file as one relative to the exploration.
+  writeFileSync(join(dir, "m1", "proof.md"), "proof");
+  expect(await op({ op: "submit", id, member: "m1", report: "Done", files: [`explorations/${id}/m1/proof.md`] })).toMatchObject({ submitted: true });
+  expect(bodyOf("submit", parseFlags(["--proof", "m1/P.lean", "--files", "a.md,b.py"]), "/w").body).toMatchObject({ proof: "/w/m1/P.lean", files: ["/w/a.md", "/w/b.py"] });
 });
 
 test("E14 the command line maps flags to the API body", () => {

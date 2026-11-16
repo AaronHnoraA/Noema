@@ -1,12 +1,17 @@
 #!/usr/bin/env node
-// Command line of an exploration, for Agents with a shell.  Every call goes to
-// the Noema host (`noema:api:agent:exploration`): the host starts members
-// through Emacs, keeps each running exploration's clock, and holds the one
-// writer of its journal.  See docs/noema/design/math-exploration.md.
+// Command line of an exploration, for Agents with a shell.  Reads (board,
+// status, list) fold the journal on disk here, so a sandboxed member reads the
+// board without loopback access.  Every write goes to the Noema host
+// (`noema:api:agent:exploration`): the host starts members through Emacs, keeps
+// each running exploration's clock, and holds the one writer of its journal.
+// See docs/noema/design/math-exploration.md (E16).
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { callAgentApi } from "../server/lib/agent-api-client.mjs";
+import { explorationView } from "../server/lib/exploration.mjs";
+
+const READS = new Set(["board", "status", "list"]);
 
 const USAGE = `node scripts/exploration.mjs OP --root DIR [--id ID] [--member mN] [flags] [--text]
 
@@ -43,15 +48,20 @@ export function bodyOf(op, fields, cwd = process.cwd()) {
   const body = { ...rest, op, root: resolve(String(fields.root || cwd)) };
   if (accept || reject) body.accept = Boolean(accept);
   if (buffer || session) body.coordinator = { buffer, nativeSessionId: session };
-  for (const key of ["note", "lean"]) if (body[key]) body[key] = resolve(body[key]);
-  if (body.files) body.files = String(body.files).split(",").map((file) => file.trim()).filter(Boolean);
+  // Paths are the caller's, relative to where it runs.
+  for (const key of ["note", "lean", "proof"]) if (body[key]) body[key] = resolve(cwd, body[key]);
+  if (body.files) body.files = String(body.files).split(",").map((file) => file.trim()).filter(Boolean).map((file) => resolve(cwd, file));
   return { body, markdown: Boolean(markdown) };
 }
 
-export async function main(argv, call = callAgentApi) {
+export async function main(argv, call = callAgentApi, read = explorationView) {
   const [op, ...rest] = argv;
   if (!op || op === "help") return { text: USAGE };
   const { body, markdown } = bodyOf(op, parseFlags(rest));
+  if (READS.has(op)) {
+    const result = await read(body);
+    return markdown && result?.markdown ? { text: result.markdown } : { json: result };
+  }
   // A submission may wait for Lean; the host bounds that run itself.
   const result = await call("noema:api:agent:exploration", [body], { timeoutMs: op === "submit" ? 35 * 60_000 : 120_000 });
   if (markdown && result?.markdown) return { text: result.markdown };
