@@ -13042,10 +13042,11 @@ async function sendSelectionToEmacs(
     await fail("This Noema pane has no saved note to send");
     return;
   }
-  if (from === to && scope !== "document") {
-    await fail(scope === "line"
-      ? "Place the cursor in the note first"
-      : "No selection in the Noema page; select text first (C-c A @ sends the cursor line)");
+  // The cursor line is a place even when it is empty: send-at-point reports
+  // where the cursor stands, and a blank line between paragraphs is a fine
+  // place to ask about.  Only a plain selection request needs text.
+  if (from === to && scope !== "document" && scope !== "line") {
+    await fail("No selection in the Noema page; select text first (C-c A @ sends the cursor line)");
     return;
   }
   const lineStart = doc.lineAt(from).number;
