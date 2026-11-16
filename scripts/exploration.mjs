@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 // Command line of an exploration, for Agents with a shell.  Reads (board,
 // status, list) fold the journal on disk here, so a sandboxed member reads the
-// board without loopback access.  Every write goes to the Noema host
+// board without loopback access; a member's writes that a sandbox keeps from
+// the host travel as request files through the exploration's directory (E17).
+// Every write is done by the Noema host
 // (`noema:api:agent:exploration`): the host starts members through Emacs, keeps
 // each running exploration's clock, and holds the one writer of its journal.
 // See docs/noema/design/math-exploration.md (E16).
-import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { callAgentApi } from "../server/lib/agent-api-client.mjs";
-import { explorationView } from "../server/lib/exploration.mjs";
+import { directoryOf, explorationView, FILE_OPS, REQUESTS } from "../server/lib/exploration.mjs";
+import { resolveGraphRoot } from "../server/lib/project-graph.mjs";
 
 const READS = new Set(["board", "status", "list"]);
 
@@ -54,7 +58,32 @@ export function bodyOf(op, fields, cwd = process.cwd()) {
   return { body, markdown: Boolean(markdown) };
 }
 
-export async function main(argv, call = callAgentApi, read = explorationView) {
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
+/** Leave BODY as a request in the exploration's directory and wait for the
+ * host's answer (E17): the path for a member whose sandbox blocks loopback. */
+export async function requestThroughDirectory(op, body, { timeoutMs, poll = 250 } = {}) {
+  const dir = directoryOf(await resolveGraphRoot(body.root), String(body.id ?? ""));
+  if (!existsSync(join(dir, REQUESTS))) throw new Error("This exploration takes no requests through its directory; allow the command loopback access");
+  const name = randomUUID();
+  const request = join(dir, REQUESTS, `${name}.json`);
+  const answer = join(dir, REQUESTS, `${name}.answer.json`);
+  const { root: _root, id: _id, ...rest } = body;
+  writeFileSync(`${request}.tmp`, JSON.stringify({ op, body: rest, at: Date.now() }));
+  renameSync(`${request}.tmp`, request);
+  for (const end = Date.now() + timeoutMs; Date.now() < end; await sleep(poll)) {
+    if (!existsSync(answer)) continue;
+    const reply = JSON.parse(readFileSync(answer, "utf8"));
+    rmSync(answer, { force: true });
+    if (reply.ok) return reply.result;
+    throw Object.assign(new Error(reply.message), { statusCode: reply.statusCode });
+  }
+  // Unanswered: take the request back if the host has not claimed it, so it never runs late.
+  try { renameSync(request, `${request}.withdrawn`); rmSync(`${request}.withdrawn`, { force: true }); return Promise.reject(new Error("The Noema host did not answer through the exploration's directory; nothing was done")); }
+  catch { throw new Error("The Noema host took the request but has not answered; its outcome is unknown, so read the board before retrying"); }
+}
+
+export async function main(argv, call = callAgentApi, read = explorationView, through = requestThroughDirectory) {
   const [op, ...rest] = argv;
   if (!op || op === "help") return { text: USAGE };
   const { body, markdown } = bodyOf(op, parseFlags(rest));
@@ -63,7 +92,16 @@ export async function main(argv, call = callAgentApi, read = explorationView) {
     return markdown && result?.markdown ? { text: result.markdown } : { json: result };
   }
   // A submission may wait for Lean; the host bounds that run itself.
-  const result = await call("noema:api:agent:exploration", [body], { timeoutMs: op === "submit" ? 35 * 60_000 : 120_000 });
+  const timeoutMs = op === "submit" ? 35 * 60_000 : 120_000;
+  let result;
+  try {
+    result = await call("noema:api:agent:exploration", [body], { timeoutMs });
+  } catch (error) {
+    // Nothing was sent: a sandbox blocks loopback.  A member's own operation
+    // goes through the exploration's directory instead.
+    if (!(FILE_OPS.has(op) && /sandbox blocks the Noema host/.test(error.message))) throw error;
+    result = await through(op, body, { timeoutMs });
+  }
   if (markdown && result?.markdown) return { text: result.markdown };
   return { json: result };
 }

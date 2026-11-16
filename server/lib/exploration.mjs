@@ -11,7 +11,7 @@
 // happened (register, post, submit, verdict, …); state is folded on read, like
 // the task graph.  Members are ordinary background agent-shell sessions,
 // started and reached through `noema:api:emacs:agent`.
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, watch as watchDirectory, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { appendEvent, readJournal, withLock } from "./agent-journal.mjs";
 import { frozenObjection, lakeRootOf, theoremName } from "./lean-judge.mjs";
@@ -295,14 +295,73 @@ async function end(dir, x, outcome, deps, { wake = true } = {}) {
 
 export const supervisor = {
   timers: new Map(),
+  watchers: new Map(),
   arm(dir, delay, run) {
     clearTimeout(this.timers.get(dir));
     const timer = setTimeout(() => { this.timers.delete(dir); run().catch(() => {}); }, Math.max(1_000, delay));
     timer.unref?.();
     this.timers.set(dir, timer);
   },
-  disarm(dir) { clearTimeout(this.timers.get(dir)); this.timers.delete(dir); },
+  /** Serve DIR's request directory while it runs (E17); one watcher per exploration. */
+  watch(dir, deps) {
+    if (this.watchers.has(dir) || !existsSync(join(dir, REQUESTS))) return;
+    try {
+      const watcher = watchDirectory(join(dir, REQUESTS), () => { serveRequests(dir, deps).catch(() => {}); });
+      watcher.on?.("error", () => { watcher.close(); this.watchers.delete(dir); });
+      watcher.unref?.();
+      this.watchers.set(dir, watcher);
+    } catch {}
+  },
+  disarm(dir) {
+    clearTimeout(this.timers.get(dir)); this.timers.delete(dir);
+    this.watchers.get(dir)?.close(); this.watchers.delete(dir);
+  },
 };
+
+// ---------------------------------------------------------------------------
+// Requests through the exploration's directory (E17)
+// ---------------------------------------------------------------------------
+
+/** A sandboxed member may write its workspace but not reach the host on
+ * 127.0.0.1.  Its command line then leaves the request as a file here, and the
+ * host, which watches the directory while the exploration runs, answers beside
+ * it.  Only a member's own operations travel this way: a verdict, a stop or a
+ * resume never does, so writing a file cannot judge. */
+export const REQUESTS = ".requests";
+export const FILE_OPS = new Set(["register", "post", "abandon", "submit"]);
+const REQUEST_NAME = /^[a-z0-9-]{8,64}\.json$/;
+const serving = new Map();
+
+/** Answer every waiting request of DIR, in turn. */
+export function serveRequests(dir, deps) {
+  const previous = serving.get(dir) ?? Promise.resolve();
+  const next = previous.then(async () => {
+    const box = join(dir, REQUESTS);
+    if (!existsSync(box)) return 0;
+    let answered = 0;
+    for (const name of readdirSync(box).filter((file) => REQUEST_NAME.test(file)).sort()) {
+      const file = join(box, name);
+      const claimed = `${file}.claimed`;
+      // Claim first: a second scan never runs the same request twice.
+      try { renameSync(file, claimed); } catch { continue; }
+      let answer;
+      try {
+        const request = JSON.parse(readFileSync(claimed, "utf8"));
+        if (!FILE_OPS.has(request.op)) fail(`${request.op} is not a member operation; use the Noema API`, 403);
+        const x = await load(dir, deps.now());
+        answer = { ok: true, result: await exploration({ ...request.body, op: request.op, root: x.root, id: x.id }, deps) };
+      } catch (error) { answer = { ok: false, message: error.message, statusCode: error.statusCode ?? 500 }; }
+      const reply = join(box, name.replace(/\.json$/, ".answer.json"));
+      writeFileSync(`${reply}.tmp`, JSON.stringify(answer));
+      renameSync(`${reply}.tmp`, reply);
+      rmSync(claimed, { force: true });
+      answered += 1;
+    }
+    return answered;
+  });
+  serving.set(dir, next.catch(() => 0));
+  return next;
+}
 
 /** A member whose run ended with time left is woken once more (E15): one that
  * holds an open direction continues it, one that holds none is asked once to
@@ -330,6 +389,10 @@ async function nudgeOrIdle(x, m, session, deps) {
  * exploration whose every live member vanished is interrupted (E10, E11). */
 export async function tick(dir, deps) {
   let x = await load(dir, deps.now());
+  if (x.state !== "running") { supervisor.disarm(dir); return x; }
+  supervisor.watch(dir, deps);
+  await serveRequests(dir, deps);
+  x = await load(dir, deps.now());
   if (x.state !== "running") { supervisor.disarm(dir); return x; }
   const facts = [];
   for (const m of x.members.values()) {
@@ -421,10 +484,13 @@ async function start(body, deps) {
   const x = { ...event, dir };
   writeFileSync(join(dir, "problem.md"), problemMarkdown(x));
   for (const name of names) { writeFileSync(notebookOf(dir, name), notebookMarkdown(x, name)); mkdirSync(join(dir, name), { recursive: true }); }
+  mkdirSync(join(dir, REQUESTS), { recursive: true });
   await appendEvent(journalOf(dir), event);
   const { started, failures } = await spawnMembers(x, names, deps);
   for (const fact of started) await appendEvent(journalOf(dir), fact);
   supervisor.arm(dir, TICK, () => tick(dir, deps));
+  mkdirSync(join(dir, REQUESTS), { recursive: true });
+  supervisor.watch(dir, deps);
   const coordinatorText = render(prompt("coordinator"), { title, id, members, deadline: isoMinute(event.deadline), cli: CLI, root,
     lean_note: lean ? "A report on this problem carries a proof Lean already accepted against the frozen statement: whether that proof holds is settled; judge whether it answers the problem and its standard." : "" });
   return { id, dir, problem: join(dir, "problem.md"), deadline: event.deadline, members: names, failures, instructions: coordinatorText };
@@ -605,6 +671,8 @@ async function resume(dir, body, deps) {
   const { started, failures } = await spawnMembers(resumed, names, deps, held);
   for (const fact of started) await appendEvent(journalOf(dir), fact);
   supervisor.arm(dir, TICK, () => tick(dir, deps));
+  mkdirSync(join(dir, REQUESTS), { recursive: true });
+  supervisor.watch(dir, deps);
   return { resumed: true, deadline, members: names, failures };
 }
 
