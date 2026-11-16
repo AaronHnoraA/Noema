@@ -34,6 +34,7 @@ export function layoutClasses(kind: string, layout: LayoutAttrs): string;
 export function layoutStyle(kind: string, layout: LayoutAttrs): string;
 export function layoutIsDefault(layout: LayoutAttrs): boolean;
 export function layoutLatexLength(value: string, relativeTo?: string): string;
+export function boundedLatexWidth(width: string): string;
 export function layoutLatexEnvironment(
   layout: LayoutAttrs,
   lines: string[] | string,

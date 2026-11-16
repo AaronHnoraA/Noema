@@ -294,7 +294,7 @@ func tikzLatexBlock(source, title string, line int) ([]string, error) {
 		if width == "" {
 			width = "!"
 		} else {
-			width = "\\ifdim " + width + ">\\linewidth \\linewidth\\else " + width + "\\fi"
+			width = boundedLatexWidth(width)
 		}
 		if requestedHeight == "" {
 			requestedHeight = "!"
@@ -311,7 +311,7 @@ func tikzLatexBlock(source, title string, line int) ([]string, error) {
 		if measure == "" {
 			measure = "0.45\\textwidth"
 		}
-		measure = "\\ifdim " + measure + ">\\linewidth \\linewidth\\else " + measure + "\\fi"
+		measure = boundedLatexWidth(measure)
 		body = append([]string{"\\begin{wrapfigure}{" + side + "}{" + measure + "}", "\\centering"}, body...)
 		body = append(body, "\\end{wrapfigure}")
 	} else {
@@ -325,6 +325,15 @@ func tikzLatexBlock(source, title string, line int) ([]string, error) {
 		body = append(body, "\\end{"+env+"}")
 	}
 	return append([]string{"", "```{=latex}"}, append(body, "```", "")...), nil
+}
+
+// boundedLatexWidth keeps WIDTH within the current line; `\linewidth` itself
+// needs no bound.  Shared contract: shared/layout-attrs.mjs.
+func boundedLatexWidth(width string) string {
+	if width == "\\linewidth" {
+		return width
+	}
+	return "\\ifdim " + width + ">\\linewidth \\linewidth\\else " + width + "\\fi"
 }
 
 func yamlScalar(value string) string {

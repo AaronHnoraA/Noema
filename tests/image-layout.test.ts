@@ -54,7 +54,8 @@ describe("LaTeX figure layout", () => {
     );
 
     expect(figure.lines).toEqual([
-      "\\begin{wrapfigure}{l}{0.4\\textwidth}",
+      // The wrap measure never exceeds the current line; the picture fills it.
+      "\\begin{wrapfigure}{l}{\\ifdim 0.4\\textwidth>\\linewidth \\linewidth\\else 0.4\\textwidth\\fi}",
       "\\centering",
       "\\resizebox{\\linewidth}{!}{%",
       "\\begin{tikzpicture}",

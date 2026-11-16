@@ -253,12 +253,17 @@ export function layoutLatexLength(value, relativeTo = "\\textwidth") {
  * `wrapfigure`, and a plain alignment to the matching centring environment.
  * Returns the wrapped lines plus the packages the result needs.
  */
+/** WIDTH, never wider than the current line: `\linewidth` itself needs no bound. */
+export function boundedLatexWidth(width) {
+  return width === "\\linewidth" ? width : `\\ifdim ${width}>\\linewidth \\linewidth\\else ${width}\\fi`;
+}
+
 export function layoutLatexEnvironment(layout, lines) {
   const body = Array.isArray(lines) ? lines : [String(lines)];
   if (layout.wrap && layout.align !== "center") {
     const side = layout.align === "left" ? "l" : "r";
     const width = layoutLatexLength(layout.width) || "0.45\\textwidth";
-    const boundedWidth = `\\ifdim ${width}>\\linewidth \\linewidth\\else ${width}\\fi`;
+    const boundedWidth = boundedLatexWidth(width);
     return {
       lines: [`\\begin{wrapfigure}{${side}}{${boundedWidth}}`, "\\centering", ...body, "\\end{wrapfigure}"],
       packages: ["wrapfig"],
@@ -280,7 +285,7 @@ export function layoutLatexFigure(layout, lines) {
   // Inside wrapfigure, \linewidth is the width chosen by the outer environment.
   // Using it avoids resolving the same percentage against \textwidth twice.
   const width = layout.wrap && (requestedWidth || !requestedHeight) ? "\\linewidth" : requestedWidth;
-  const boundedWidth = width ? `\\ifdim ${width}>\\linewidth \\linewidth\\else ${width}\\fi` : "!";
+  const boundedWidth = width ? boundedLatexWidth(width) : "!";
   const sized = width || requestedHeight
     ? [`\\resizebox{${boundedWidth}}{${requestedHeight || "!"}}{%`, ...body, "}"]
     : body;
