@@ -998,6 +998,30 @@ func fenceRun(content string, closeOnly bool) (byte, int, bool) {
 	return ch, end - i, true
 }
 
+// thematicBreak reports a CommonMark thematic break: up to three spaces, then
+// three or more of one of - * _ with optional spaces or tabs between them.
+func thematicBreak(content string) bool {
+	trimmed := strings.TrimLeft(content, " ")
+	if len(content)-len(trimmed) > 3 || trimmed == "" {
+		return false
+	}
+	marker := trimmed[0]
+	if marker != '-' && marker != '*' && marker != '_' {
+		return false
+	}
+	count := 0
+	for i := 0; i < len(trimmed); i++ {
+		switch trimmed[i] {
+		case marker:
+			count++
+		case ' ', '\t':
+		default:
+			return false
+		}
+	}
+	return count >= 3
+}
+
 func displayMathBoundary(content string, open bool) bool {
 	trimmed := strings.TrimSpace(content)
 	if open {
@@ -1296,8 +1320,22 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 			output = append(output, container.Prefix+"$$")
 			continue
 		}
+		// A blank line means nothing inside display math, and KaTeX draws past
+		// it, but it ends Pandoc's `$$` block (and is an error in TeX), leaving
+		// the rest of the formula as text: `\begin{aligned}` outside math mode.
 		if displayMathDepth >= 0 {
-			output = append(output, line)
+			if strings.TrimSpace(container.Content) != "" {
+				output = append(output, line)
+			}
+			continue
+		}
+		// A thematic break is a rule in the editor's CommonMark.  Pandoc reads a
+		// `---` line followed by text as a YAML metadata block or a multiline
+		// table, so a break after a blank line becomes the unambiguous `* * *`
+		// with a blank line after it.  A `---` directly under a paragraph line
+		// is a setext heading and stays.
+		if thematicBreak(container.Content) && (index == 0 || strings.TrimSpace(markdownContainerLine(lines[index-1]).Content) == "") {
+			output = append(output, container.Prefix+"* * *", strings.TrimRight(container.Prefix, " "))
 			continue
 		}
 		if strings.HasPrefix(container.Content, "    ") || strings.HasPrefix(container.Content, "\t") {

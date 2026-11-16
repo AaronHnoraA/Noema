@@ -595,7 +595,21 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
       output.push(`${container.prefix}$$`);
       continue;
     }
-    if (displayMath) { output.push(line); continue; }
+    // A blank line means nothing inside display math, and KaTeX draws past it,
+    // but it ends Pandoc's `$$` block (and is an error in TeX), leaving the
+    // rest of the formula as text: `\begin{aligned}` outside math mode.
+    if (displayMath) { if (container.content.trim()) output.push(line); continue; }
+
+    // A thematic break is a rule in the editor's CommonMark.  Pandoc reads a
+    // `---` line followed by text as a YAML metadata block or a multiline table
+    // and fails or swallows the text, so a break after a blank line becomes
+    // the unambiguous `* * *` with a blank line after it.  A `---` directly
+    // under a paragraph line is a setext heading and stays.
+    if (/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(container.content)
+        && (index === 0 || !markdownContainerLine(lines[index - 1]).content.trim())) {
+      output.push(`${container.prefix}* * *`, container.prefix.trimEnd());
+      continue;
+    }
 
     // Pandoc owns indented code/list continuation parsing. Never execute an
     // Noema command merely because its literal text occurs after 4 spaces.
@@ -812,7 +826,9 @@ export async function noemaMarkdownToLatexPandoc(markdown, options = {}) {
     // folds the block into the paragraph above, printing its `#` and `-`.
     "lists_without_preceding_blankline", ...maintainedExtensions,
   ].join("+");
-  const from = `${extensions}-implicit_figures-smart-citations-blank_before_header-blank_before_blockquote`;
+  // Noema keeps metadata in `#+begin meta` and front matter is read above, so
+  // no `---` in the body may become a YAML block.
+  const from = `${extensions}-implicit_figures-smart-citations-blank_before_header-blank_before_blockquote-yaml_metadata_block`;
   let stdout;
   try {
     stdout = await runPandoc(pandocBin, [

@@ -6796,7 +6796,10 @@ export async function exportLatex(body = {}) {
     throw new Error(`Selected LaTeX template could not be read: ${resolve(requestedTemplate)}`);
   }
   const header = parseLatexTemplateHeader(template.text, template.file);
-  const engine = String(body.engine || header.engine || "xelatex").toLowerCase();
+  // `engine: "mechanical"` names the conversion (no agent polish, below), not a
+  // TeX engine; the template's engine then compiles.
+  const requestedEngine = String(body.engine || "").toLowerCase();
+  const engine = String((requestedEngine !== "mechanical" && requestedEngine) || header.engine || "xelatex").toLowerCase();
   if (!["pdflatex", "xelatex", "lualatex"].includes(engine)) throw new Error(`Unsupported LaTeX engine: ${engine}`);
   const macroResult = await loadDocumentKatexMacros(sourceFile, documentContent);
   const declaredSharedFiles = await latexTemplateSharedFiles(template.file, header.sharedFiles);

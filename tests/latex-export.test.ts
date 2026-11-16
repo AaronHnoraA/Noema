@@ -57,6 +57,21 @@ describe("LaTeX export", () => {
     expect(latexOpeningDropCap("\\section{引言}\n\n中文开头。\n")).toBe("\\section{引言}\n\n中文开头。\n");
     expect(latexOpeningDropCap("\\begin{itemize}\n\\item Start\n\\end{itemize}\n\nLater prose.\n")).not.toContain("\\NoemaOpeningInitial");
   });
+  test("a thematic break followed by text stays a rule, never YAML or a table", async () => {
+    // SAI.md failed with "Error parsing YAML metadata … unexpected 'r'": a `---`
+    // rule with text right under it.  The editor reads CommonMark: it is a rule.
+    const source = ["Para one.", "", "---", "**One reference family per correspondence; distinct: sizes**", "",
+      "More text.", "", "---", "", "End.", "", "Setext", "---", "", "```", "---", "code: x", "```"].join("\n");
+    const prepared = preprocessNoemaForPandoc(source).markdown;
+    expect(prepared).toContain("* * *\n\n**One reference family");
+    expect(prepared).toContain("Setext\n---");
+    expect(prepared).toContain("```\n---\ncode: x\n```");
+    const result = await noemaMarkdownToLatexPandoc(source);
+    expect(result.body).toContain("\\textbf{One reference family per correspondence; distinct: sizes}");
+    expect(result.body).not.toContain("longtable");
+    expect(result.body.match(/\\rule\{0\.5\\linewidth\}\{0\.5pt\}/g)).toHaveLength(2);
+    expect(result.body).toContain("\\subsection{Setext}");
+  });
   test("uses Pandoc for broad native Markdown and academic list structure", async () => {
     const result = await noemaMarkdownToLatexPandoc([
       "Setext heading",
@@ -498,6 +513,26 @@ describe("LaTeX export", () => {
     expect(tex).toContain("\\usetikzlibrary{calc}");
     expect(tex).toContain("\\node at ($(a)+(1,0)$) {B};");
     expect(tex).not.toContain(".svg");
+  });
+
+  test("a blank line inside display math does not break the formula", async () => {
+    // SAI.md: `\\[`, a blank line, then `\\begin{aligned}` — KaTeX draws it, but
+    // Pandoc's `$$` ended at the blank line and TeX saw aligned outside math.
+    const source = ["Constraints:", "\\[", "", "\\begin{aligned}", "a&=b,\\\\", "", "c&=d.", "\\end{aligned}", "\\]", "", "After."].join("\n");
+    const result = await noemaMarkdownToLatexPandoc(source);
+    expect(result.body).not.toContain("\\$\\$");
+    expect(result.body).toMatch(/\\\[\s*\\begin\{aligned\}[\s\S]*c&=d\.\s*\\end\{aligned\}\s*\\\]/);
+  });
+
+  test("engine mechanical names the conversion, not a TeX engine", async () => {
+    // "Unsupported LaTeX engine: mechanical" was what a no-agent export got.
+    const { notes } = await setupRoot();
+    const note = join(notes, "plain.md");
+    await writeFile(note, "# Plain\n\nText with a rule below.\n\n---\n**Bold after the rule.**\n");
+    const out = join(notes, "plain.tex");
+    await exportLatex({ file: note, outputPath: out, engine: "mechanical" });
+    const tex = await readFile(out, "utf8");
+    expect(tex).toContain("\\textbf{Bold after the rule.}");
   });
 
   test("exports Noema todo titles as annotations and omits their planning attributes", () => {

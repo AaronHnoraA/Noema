@@ -277,6 +277,32 @@
           "usesTikz": false
         }
       }
+    },
+    {
+      "name": "thematic-break-before-text",
+      "markdown": "Para one.\n\n---\n**One reference family per correspondence; distinct: sizes**\n\nSetext\n---\n\n> quoted\n>\n> ***\n> after\n\n```\n---\ncode: x\n```",
+      "expected": {
+        "meta": {},
+        "markdown": "Para one.\n\n* * *\n\n**One reference family per correspondence; distinct: sizes**\n\nSetext\n---\n\n> quoted\n>\n> * * *\n>\n> after\n\n```\n---\ncode: x\n```",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "blank-line-inside-display-math",
+      "markdown": "Constraints:\n\\[\n\n\\begin{aligned}\na&=b,\\\\\n\nc&=d.\n\\end{aligned}\n\\]\nAfter.",
+      "expected": {
+        "meta": {},
+        "markdown": "Constraints:\n$$\n\\begin{aligned}\na&=b,\\\\\nc&=d.\n\\end{aligned}\n$$\nAfter.",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
     }
   ],
   "errorCases": [
