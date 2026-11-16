@@ -264,6 +264,13 @@ def remember(client, request: dict, user_id: str) -> dict:
 def main() -> int:
     if len(sys.argv) != 2 or sys.argv[1] not in {"status", "search", "remember"}:
         return 2
+    # Only the one JSON answer leaves this process.  The SDK's background tasks
+    # print tracebacks to stderr while it shuts down, and Emacs reads stderr and
+    # stdout from one buffer, so any of it would make every answer unreadable;
+    # it could also carry conversation text.
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 2)
+    os.close(devnull)
     configured = load_config()
     if sys.argv[1] == "status":
         print(json.dumps({"configured": configured}))
