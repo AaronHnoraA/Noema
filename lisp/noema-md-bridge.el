@@ -394,18 +394,37 @@ A short selection carries its text, which saves the Agent a read."
          (format "\nSelected text as saved (this is oldText; no need to open the reference):\n<selection>%s</selection>"
                  (buffer-substring-no-properties begin end)))))))
 
+(declare-function +agent-collab-thread-deliver "tools/agent/collab" (&rest args))
+(declare-function +agent-context--deliver "tools/agent/context" (buffer blocks &optional instructions no-focus))
+
+(defun noema-md-bridge--thread-delivery (buffer begin end)
+  "Return a delivery that opens a thread on BEGIN..END of note BUFFER."
+  (let ((file (buffer-file-name buffer))
+        (line (with-current-buffer buffer (line-number-at-pos begin t)))
+        (anchor (with-current-buffer buffer
+                  (buffer-substring-no-properties begin (min end (+ begin 200))))))
+    (lambda (session blocks instructions question)
+      (+agent-collab-thread-deliver
+       :file file :line line :anchor anchor :session session
+       :text (if (string-empty-p (string-trim (or question ""))) "Revise the proposal" question)
+       :send (lambda () (+agent-context--deliver session blocks instructions))))))
+
 (defun noema-md-bridge-run (action buffer begin end)
   "Run ACTION on BEGIN..END of note BUFFER."
   (pcase action
     ("agent"
      (require 'tools/agent/context)
+     (require 'tools/agent/collab)
      (let ((session (with-current-buffer buffer
                       (+agent-context--send
                        :instructions (noema-md-bridge--review-instructions
                                       buffer begin end)
                        :session-instructions (noema-md-bridge--review-bootstrap)
                        :references (+agent-context--region-references
-                                    buffer begin end)))))
+                                    buffer begin end)
+                       ;; The request is a thread of the note: its reply comes
+                       ;; back to the note's threads (C67).
+                       :deliver (noema-md-bridge--thread-delivery buffer begin end)))))
        ;; Asked from a Noema page: continue in the session, not the page.
        (when-let* ((window (and (buffer-live-p session)
                                 (get-buffer-window session 'visible))))

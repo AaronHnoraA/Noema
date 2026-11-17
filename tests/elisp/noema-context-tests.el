@@ -452,6 +452,27 @@ the next open of the note (which would then show raw Markdown)."
           (noema-md-bridge-run "agent" buffer begin end)))
       (should-not (find-buffer-visiting file)))))
 
+(ert-deftest noema-md-bridge-c67-agent-request-is-a-thread-of-the-note ()
+  "A page request is delivered as a thread of the note, so its reply comes back."
+  (+agent-context-tests--with-project '(("a.md" . "one\ntwo\n"))
+    (let ((file (alist-get "a.md" files nil nil #'equal))
+          deliver threads)
+      (cl-letf (((symbol-function '+agent-context--send)
+                 (lambda (&rest arguments) (setq deliver (plist-get arguments :deliver)) nil))
+                ((symbol-function '+agent-collab-thread-deliver)
+                 (lambda (&rest arguments) (push arguments threads))))
+        (pcase-let ((`(,buffer ,begin . ,end)
+                     (noema-md-bridge-region file '(:line-start 2 :line-end 2))))
+          (noema-md-bridge-run "agent" buffer begin end))
+        (should (functionp deliver))
+        (funcall deliver 'session '(block) nil "Is this right?")
+        (should (equal (file-truename (plist-get (car threads) :file)) (file-truename file)))
+        (should (equal (plist-get (car threads) :line) 2))
+        (should (equal (plist-get (car threads) :anchor) "two\n"))
+        (should (equal (plist-get (car threads) :text) "Is this right?"))
+        (funcall deliver 'session '(block) nil "")
+        (should (equal (plist-get (car threads) :text) "Revise the proposal"))))))
+
 (ert-deftest noema-md-bridge-agent-choice-can-copy-to-clipboard ()
   "A Markdown pane's agent action can copy its line reference for vterm."
   (+agent-context-tests--with-project '(("a.md" . "one\ntwo\n"))
