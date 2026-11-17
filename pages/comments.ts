@@ -536,6 +536,16 @@ export function installComments(host: CommentsHost): CommentsController {
     else if (active && !draft) activate(null);
   };
   view.dom.addEventListener("click", onEditorClick);
+  // ⌘⌥M, as in Google Docs.  The key guard forwards single-modifier chords to
+  // Emacs only, so this one reaches the page.
+  const onKey = (event: KeyboardEvent) => {
+    if (event.metaKey && event.altKey && !event.ctrlKey && event.code === "KeyM") {
+      event.preventDefault();
+      event.stopPropagation();
+      controller.startComment();
+    }
+  };
+  view.dom.addEventListener("keydown", onKey, true);
   const resize = typeof ResizeObserver === "function" ? new ResizeObserver(() => schedule()) : null;
   resize?.observe(scroller);
   resize?.observe(view.contentDOM);
@@ -593,6 +603,7 @@ export function installComments(host: CommentsHost): CommentsController {
       if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame);
       resize?.disconnect();
       view.dom.removeEventListener("click", onEditorClick);
+      view.dom.removeEventListener("keydown", onKey, true);
       rail.remove();
       style.remove();
       scroller.classList.remove("noema-comments-on", "noema-review-rail");

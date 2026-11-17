@@ -394,21 +394,16 @@ A short selection carries its text, which saves the Agent a read."
          (format "\nSelected text as saved (this is oldText; no need to open the reference):\n<selection>%s</selection>"
                  (buffer-substring-no-properties begin end)))))))
 
-(declare-function +agent-collab-thread-deliver "tools/agent/collab" (&rest args))
+(declare-function +agent-collab-task-delivery "tools/agent/collab" (file line anchor))
 (declare-function +agent-context--deliver "tools/agent/context"
                   (buffer blocks &optional instructions no-focus on-failure))
 
 (defun noema-md-bridge--thread-delivery (buffer begin end)
-  "Return a delivery that opens a thread on BEGIN..END of note BUFFER."
-  (let ((file (buffer-file-name buffer))
-        (line (with-current-buffer buffer (line-number-at-pos begin t)))
-        (anchor (with-current-buffer buffer
-                  (buffer-substring-no-properties begin (min end (+ begin 200))))))
-    (lambda (session blocks instructions question)
-      (+agent-collab-thread-deliver
-       :file file :line line :anchor anchor :session session
-       :text (if (string-empty-p (string-trim (or question ""))) "Revise the proposal" question)
-       :send (lambda () (+agent-context--deliver session blocks instructions))))))
+  "Return a delivery making the request a task on BEGIN..END of note BUFFER (C76)."
+  (with-current-buffer buffer
+    (+agent-collab-task-delivery
+     (buffer-file-name buffer) (line-number-at-pos begin t)
+     (buffer-substring-no-properties begin (min end (+ begin 200))))))
 
 (defun noema-md-bridge-run (action buffer begin end)
   "Run ACTION on BEGIN..END of note BUFFER."
@@ -426,13 +421,8 @@ A short selection carries its text, which saves the Agent a read."
                        ;; The request is a thread of the note: its reply comes
                        ;; back to the note's threads (C67).
                        :deliver (noema-md-bridge--thread-delivery buffer begin end)))))
-       ;; Asked from a Noema page: continue in the session, not the page.
-       (when-let* ((window (and (buffer-live-p session)
-                                (get-buffer-window session 'visible))))
-         (if (fboundp 'noema--select-emacs-window)
-             (noema--select-emacs-window window)
-           (select-window window))
-         (with-current-buffer session (goto-char (point-max))))
+       ;; A task: the person stays on the page; the chat is theirs to open.
+       (ignore session)
        ;; References name the file; the agent needs no Emacs buffer.
        (noema-md-bridge--drop-hidden buffer)))
     ("related"

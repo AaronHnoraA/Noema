@@ -115,7 +115,8 @@ import { createAgendaAttentionStore } from "./server/lib/agenda-attention-store.
 import { createAgendaAttention } from "./server/lib/agenda-attention.mjs";
 import { createAgendaAttentionSources } from "./server/lib/agenda-attention-source.mjs";
 import { webAgendaProjection } from "./server/lib/agenda-projection.mjs";
-import { agendaMarkdownDocument, buildAgendaFromPlanning, inspectAgendaDocument } from "./server/lib/runtime.mjs";
+import { agendaMarkdownDocument, buildAgendaFromPlanning, extractPlanningItems, inspectAgendaDocument } from "./server/lib/runtime.mjs";
+import { commentAnchorLines, commentPatchAction, commentTodos } from "./server/lib/agenda-comments.mjs";
 import { createRendererBuildWatcher } from "./server/lib/renderer-build-watch.mjs";
 import {
   clientLifecycleReplay,
@@ -243,7 +244,7 @@ import { virtualReferencesPayload } from "./server/lib/virtual-references.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
 import { createAgentApiHandlers } from "./server/Features/Agent/api.mjs";
 import { createCommentApiHandlers } from "./server/Features/Comments/api.mjs";
-import { moveThreads } from "./server/lib/note-comments.mjs";
+import { listThreads, moveThreads, setThreadStatus } from "./server/lib/note-comments.mjs";
 import { readJson, readText } from "./server/infrastructure/http-body.mjs";
 import { foreignPage } from "./server/infrastructure/local-boundary.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
@@ -1415,10 +1416,26 @@ const agendaIndex = createAgendaService({
       if (validation.errors.length) throw new Error(validation.errors.map((entry) => entry.message).join("; "));
       return workAgendaPlanning(notebook, document);
     }
-    return agendaMarkdownDocument(document);
+    const planning = await agendaMarkdownDocument(document);
+    // Where the note's comments are anchored, for their Agenda items (C77).
+    planning.commentLines = commentAnchorLines(document.content);
+    planning.commentNote = { file: document.file, path: relative(document.root, document.file), key: document.file,
+      id: "", title: basename(document.file), project: "", tags: [] };
+    return planning;
   },
   evaluate: (planning, body, options) => buildAgendaFromPlanning(planning, body, options),
   ...agendaWriters,
+  // Open comment threads are Agenda tasks; done resolves, todo reopens (C77).
+  comments: async (file, planning) => planning.commentNote
+    ? commentTodos(file, await listThreads(file), { extract: extractPlanningItems, note: planning.commentNote, lines: planning.commentLines })
+    : [],
+  async mutate(todo, patch) {
+    if (todo.sourceKind !== "comment") return agendaWriters.mutate(todo, patch);
+    const action = commentPatchAction(patch);
+    await setThreadStatus({ file: todo.file, id: todo.commentId, resolved: action === "resolve" });
+    noteCommentsChanged(todo.file);
+    return { ok: true, changed: false, file: todo.file };
+  },
   // Only knowledge-vault mutations invalidate its Wiki index. An ordinary
   // project (including one on this machine) owns a separate source scope.
   onMutation: (result) => result.file && isWithin(noteRoot, result.file)
@@ -2958,13 +2975,14 @@ if (hostMode !== "server") apiRouter.register(createAgentApiHandlers({ router: a
   onComment: (file) => apiRouter.call("noema:api:comments:changed", [{ file }])
     .then(() => gatewayNotify("noema.event", { type: "comments-changed", payload: { file: String(file) } })),
 }), "Agent");
-// Comments (C70): pages and Emacs's task panel (C73) hear every change.
-if (hostMode !== "server") apiRouter.register(createCommentApiHandlers({
-  changed: (file, origin) => {
-    broadcast("command", { command: "comments-changed", file: String(file) });
-    if (!origin?.fromEmacs) gatewayNotify("noema.event", { type: "comments-changed", payload: { file: String(file) } });
-  },
-}), "Comments");
+// Comments (C70): pages, Emacs's task panel (C75) and the Agenda (C77) hear
+// every change.
+function noteCommentsChanged(file, origin) {
+  broadcast("command", { command: "comments-changed", file: String(file) });
+  if (!origin?.fromEmacs) gatewayNotify("noema.event", { type: "comments-changed", payload: { file: String(file) } });
+  agendaIndex.invalidate([String(file)]);
+}
+if (hostMode !== "server") apiRouter.register(createCommentApiHandlers({ changed: noteCommentsChanged }), "Comments");
 
 async function handleEmacsCommand(body = {}) {
   if (body.type === "command" || body.command) {

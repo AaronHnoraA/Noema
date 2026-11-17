@@ -415,16 +415,12 @@ The Magent session is created lazily when needed."
       (message "Compose: edit then press C-c C-c to send to %s" backend))))
 
 (defun noema-interaction-resend-last-prompt ()
-  "Resend the last prompt for the current project."
+  "Send this project's last prompt again, to an agent of the pool (C76)."
   (interactive)
-  (let* ((project-root (noema-interaction-project-root))
-         (backend (noema-interaction-session-backend project-root))
-         (prompt (noema-interaction-session-last-prompt project-root)))
-    (unless prompt
-      (user-error "No previous prompt for this project"))
-    (unless (noema-interaction--backend-session-live-p project-root)
-      (user-error "No active session. Start one first with `noema-interaction-open'"))
-    (noema-interaction-send-string backend prompt project-root)))
+  (let ((prompt (noema-interaction-session-last-prompt (noema-interaction-project-root))))
+    (unless prompt (user-error "No previous prompt for this project"))
+    (require 'tools/agent/context)
+    (+agent-context-send-prompt prompt)))
 
 (defun noema-interaction-clear-session ()
   "Clear transient runtime state for the current project."
@@ -437,49 +433,33 @@ The Magent session is created lazily when needed."
 
 ;; ── Public: context senders ───────────────────────────────────────────────────
 
-(defun noema-interaction-send-region (start end)
-  "Send a reference to the active region to the current backend as a draft."
-  (interactive "r")
-  (unless (use-region-p)
-    (user-error "No active region"))
-  (let* ((project-root (noema-interaction-project-root))
-         (backend (noema-interaction-session-backend project-root))
-         (source-file (or (buffer-file-name)
-                          (user-error "Current buffer is not visiting a file")))
-         (prompt (noema-interaction--context-block
-                  "Reference: region"
-                  (noema-interaction--range-reference
-                   source-file start end project-root "selection"))))
-    (noema-interaction-draft-string backend prompt project-root)))
+;; The senders are the editor's one send path (C76): a send that names a
+;; place of a document becomes a task there, handed to an agent of the pool.
 
-(defun noema-interaction-send-current-buffer ()
-  "Send a reference to the current buffer to the current backend as a draft."
-  (interactive)
-  (let* ((project-root (noema-interaction-project-root))
-         (backend (noema-interaction-session-backend project-root))
-         (source-file (or (buffer-file-name)
-                          (user-error "Current buffer is not visiting a file")))
-         (prompt (noema-interaction--context-block
-                  "Reference: current buffer"
-                  (format "@file %s"
-                          (noema-interaction--context-relative-path
-                           source-file project-root)))))
-    (noema-interaction-draft-string backend prompt project-root)))
+(declare-function +agent-context-send-region "tools/agent/context" (&optional pick))
+(declare-function +agent-context-send-buffer "tools/agent/context" (&optional pick))
+(declare-function +agent-context-send-file "tools/agent/context" (file &optional pick))
+(declare-function +agent-context-send-prompt "tools/agent/context" (prompt &rest args))
 
-(defun noema-interaction-send-file (file)
-  "Send a reference to FILE to the current backend as a draft."
-  (interactive
-   (list (read-file-name "Send file: " (noema-interaction-project-root) nil t)))
-  (let* ((project-root (noema-interaction-project-root))
-         (backend (noema-interaction-session-backend project-root))
-         (expanded (expand-file-name file))
-         (prompt (noema-interaction--context-block
-                  "Reference: file"
-                  (format "@file %s"
-                          (noema-interaction--context-relative-path
-                           expanded project-root)))))
-    (noema-interaction--save-file-buffer-if-open expanded)
-    (noema-interaction-draft-string backend prompt project-root)))
+(defun noema-interaction-send-region (&optional pick)
+  "Make the active region a task and hand it to an agent (C76).
+PICK chooses the session."
+  (interactive "P")
+  (require 'tools/agent/context)
+  (+agent-context-send-region pick))
+
+(defun noema-interaction-send-current-buffer (&optional pick)
+  "Make the current file a task and hand it to an agent (C76).
+PICK chooses the session."
+  (interactive "P")
+  (require 'tools/agent/context)
+  (+agent-context-send-buffer pick))
+
+(defun noema-interaction-send-file (file &optional pick)
+  "Send FILE to an agent (C76).  PICK chooses the session."
+  (interactive (list (read-file-name "Send file: " nil nil t) current-prefix-arg))
+  (require 'tools/agent/context)
+  (+agent-context-send-file file pick))
 
 (provide 'noema-interaction)
 ;;; noema-interaction.el ends here

@@ -155,4 +155,16 @@ describe("C70 comment rail", () => {
       expect(view.state.doc.toString()).toContain("@@ediff-status rejected");
     } finally { done(); }
   });
+
+  test("C75 Cmd-Option-M starts a comment on the selection, in the page", async () => {
+    const content = "The fixed field here.\n";
+    const { view, scroller, comments, done } = mount(content, []);
+    try {
+      await comments.refresh();
+      const from = content.indexOf("fixed");
+      view.dispatch({ selection: { anchor: from, head: from + 5 } });
+      view.dom.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyM", key: "µ", metaKey: true, altKey: true, bubbles: true }));
+      expect(scroller.querySelector(".noema-comment-draft")).toBeTruthy();
+    } finally { done(); }
+  });
 });

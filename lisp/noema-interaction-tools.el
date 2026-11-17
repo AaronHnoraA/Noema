@@ -498,10 +498,14 @@ Requires an active backend session."
   (interactive)
   (noema-interaction-tools--context-dispatch nil))
 
-(defun noema-interaction-context-send ()
-  "Send a reference-style prompt directly to the current AI backend."
-  (interactive)
-  (noema-interaction-tools--context-dispatch t))
+(declare-function +agent-context-send "tools/agent/context" (&optional pick))
+
+(defun noema-interaction-context-send (&optional pick)
+  "Send the gathered editor context to an agent of the pool (C76).
+PICK chooses the session."
+  (interactive "P")
+  (require 'tools/agent/context)
+  (+agent-context-send pick))
 
 (provide 'noema-interaction-tools)
 ;;; noema-interaction-tools.el ends here

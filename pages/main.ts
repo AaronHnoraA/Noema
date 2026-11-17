@@ -972,8 +972,6 @@ selectionTool.innerHTML = `
   <span aria-hidden="true"></span>
   <button type="button" data-selection-command="comment" title="Comment (⌘⌥M)">Comment</button>
   <button type="button" data-selection-command="copy" title="Copy">Copy</button>
-  <button type="button" data-selection-command="send-to-agent" data-emacs-only title="Ask an agent session about the selection (C-c A v)">Agent</button>
-  <button type="button" data-selection-command="ai-rewrite" data-emacs-only title="Ask an Agent to propose changes in Noema (C-c A r)">Rewrite</button>
   <button type="button" data-selection-command="more" title="More actions">...</button>
   <div class="noema-selection-more" data-selection-more hidden>
     <button type="button" data-selection-command="ai-context" data-emacs-only>Add to AI context (C-c A .)</button>
@@ -13132,13 +13130,10 @@ function runSelectionCommand(command: string): void {
     comments?.startComment();
     return;
   }
-  if (command === "send-to-agent") {
-    void sendSelectionToAgent();
-    return;
-  }
-  if (command === "ai-rewrite" || command === "ai-context" || command === "ai-compose" || command === "ai-related" || command === "emacs-source") {
-    const action: EmacsSelectionAction = command === "ai-rewrite" ? "rewrite"
-      : command === "ai-context" ? "context"
+  // No button in the page opens an agent (C75): a comment is handed to one
+  // from Emacs' collaboration panel.
+  if (command === "ai-context" || command === "ai-compose" || command === "ai-related" || command === "emacs-source") {
+    const action: EmacsSelectionAction = command === "ai-context" ? "context"
         : command === "ai-compose" ? "compose"
           : command === "ai-related" ? "related" : "source";
     void sendSelectionToEmacs(action, "selection");
