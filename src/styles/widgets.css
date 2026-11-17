@@ -5779,3 +5779,11 @@ body.has-diagram-fullscreen {
 .cm-editor .cm-footnote-reference button.cm-footnote-undefined {
   text-decoration: underline wavy color-mix(in srgb, #d14 60%, transparent);
 }
+
+/* Comment anchors (C70): Google Docs' pale highlight, darker for the active thread. */
+.cm-editor .noema-comment-anchor {
+  background: color-mix(in srgb, #f7c948 26%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, #f7c948 70%, transparent);
+  border-radius: 2px;
+  cursor: pointer;
+}

@@ -24,7 +24,7 @@ describe("Pi global butler API", () => {
     const call = async (channel: string, args: any[] = []): Promise<any> => router.call(channel, args);
     router.register(createAgentApiHandlers({ router, call }));
     const wire: any[] = [];
-    const invoke = (channel: string, args: any[]) => callAgentApi(channel, args, {
+    const invoke = (channel: string, args: any[] = []) => callAgentApi(channel, args, {
       connection: async () => "http://127.0.0.1:1",
       fetcher: async (_url: any, options: any) => {
         const request = JSON.parse(options.body);

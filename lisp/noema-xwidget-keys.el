@@ -818,6 +818,11 @@ by at most its autosave delay."
   (interactive)
   (+noema/command "find"))
 
+(defun noema-add-comment ()
+  "Comment on the Noema page's selection, as Google Docs' Cmd-Option-M (C70)."
+  (interactive)
+  (+noema/command "add-comment"))
+
 (defun noema-select-all ()
   "Select the whole note in the Noema page."
   (interactive)

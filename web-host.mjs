@@ -242,6 +242,8 @@ import { knowledgeSearchResponse } from "./server/lib/knowledge-search.mjs";
 import { virtualReferencesPayload } from "./server/lib/virtual-references.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
 import { createAgentApiHandlers } from "./server/Features/Agent/api.mjs";
+import { createCommentApiHandlers } from "./server/Features/Comments/api.mjs";
+import { moveThreads } from "./server/lib/note-comments.mjs";
 import { readJson, readText } from "./server/infrastructure/http-body.mjs";
 import { foreignPage } from "./server/infrastructure/local-boundary.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
@@ -1145,6 +1147,9 @@ function withWikiMutationHooks(handlers, { full = [], only = null } = {}) {
               && (result?.type === "fs-moved" || result?.type === "fs-renamed")
               && /\.(?:md|markdown)$/i.test(String(result.oldFile || ""))) {
             broadcast("command", { command: "note-file-moved", oldFile: result.oldFile, file: result.file });
+            // Its comments follow the note (C70).
+            await moveThreads(String(result.oldFile), String(result.file)).catch((error) =>
+              console.warn("[comments] could not move threads:", error?.message || error));
             gatewayNotify("noema.event", {
               type: "note-moved",
               payload: { oldFile: result.oldFile, file: result.file },
@@ -2946,6 +2951,11 @@ async function callApi(channel, args = []) {
 // The local Agent surface discovers the live registry and reuses the same
 // dispatch/save/notification path as pages. Server mode retains its allowlist.
 if (hostMode !== "server") apiRouter.register(createAgentApiHandlers({ router: apiRouter, call: callApi }), "Agent");
+// Comments (C70): pages hear every change; a question for a collaborator goes to Emacs.
+if (hostMode !== "server") apiRouter.register(createCommentApiHandlers({
+  changed: (file) => broadcast("command", { command: "comments-changed", file: String(file) }),
+  ask: (payload) => gatewayNotify("noema.event", { type: "comment-asked", payload }),
+}), "Comments");
 
 async function handleEmacsCommand(body = {}) {
   if (body.type === "command" || body.command) {

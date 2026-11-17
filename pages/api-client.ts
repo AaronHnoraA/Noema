@@ -1,4 +1,5 @@
 import type {CaptureCatalog} from "./agenda-capture-view.ts";
+import type { CommentThread } from "../server/lib/note-comments.mjs";
 import type { CursorPosition, GraphPayload, Inbound, SnippetSummary, UnusedAsset } from "./types.ts";
 import type { CoreConnectionStatus, CoreReconnectReason } from "./active-core-reconnect.ts";
 
@@ -1636,6 +1637,21 @@ export const api = {
       const call = requireMethod(nativeApi().slides?.mirror, "Slides mirror");
       return ensureOk(await call(body) as { ok: boolean; jsFile: string; cssFile: string; js: string; css: string }, "Slides mirror failed");
     },
+  },
+  /** Comment threads of a note (C70), kept beside it by the host. */
+  comments: {
+    list: (file: string) =>
+      callHttpApi<{ ok: boolean; threads: CommentThread[] }>("noema:api:comments:list", [{ file }], "Loading comments failed"),
+    create: (body: { file: string; id: string; quote: string; text: string; ask?: boolean }) =>
+      callHttpApi<{ ok: boolean; thread: CommentThread }>("noema:api:comments:create", [body], "Comment failed"),
+    reply: (body: { file: string; id: string; text: string; ask?: boolean }) =>
+      callHttpApi<{ ok: boolean; thread: CommentThread }>("noema:api:comments:reply", [body], "Reply failed"),
+    resolve: (body: { file: string; id: string; resolved: boolean }) =>
+      callHttpApi<{ ok: boolean; thread: CommentThread }>("noema:api:comments:resolve", [body], "Resolve failed"),
+    edit: (body: { file: string; id: string; mid?: string; text: string }) =>
+      callHttpApi<{ ok: boolean; thread: CommentThread }>("noema:api:comments:edit", [body], "Edit failed"),
+    remove: (body: { file: string; id: string; mid?: string }) =>
+      callHttpApi<{ ok: boolean; thread: CommentThread | null }>("noema:api:comments:delete", [body], "Delete failed"),
   },
   emacs: {
     async openSurface(body: { path: string; client?: string }): Promise<void> {
