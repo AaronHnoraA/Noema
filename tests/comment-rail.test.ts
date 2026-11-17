@@ -1,7 +1,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import type { EditorView } from "@codemirror/view";
 import { createEditor } from "../src/editor-api.ts";
-import { collaboratorState, installComments, layoutCards, mentionAt, type CommentsApi } from "../pages/comments.ts";
+import { installComments, layoutCards, type CommentsApi } from "../pages/comments.ts";
 import type { CommentThread } from "../server/lib/note-comments.mjs";
 
 const thread = (id: string, text: string, extra: Partial<CommentThread> = {}): CommentThread => ({
@@ -11,7 +11,7 @@ const thread = (id: string, text: string, extra: Partial<CommentThread> = {}): C
   ...extra,
 });
 
-function mount(content: string, threads: CommentThread[], collaborators: any[] = []) {
+function mount(content: string, threads: CommentThread[]) {
   const scroller = document.createElement("div");
   document.body.append(scroller);
   const editor = createEditor(scroller, { kernel: "cm6", initialContent: content });
@@ -25,11 +25,6 @@ function mount(content: string, threads: CommentThread[], collaborators: any[] =
     resolve: async (body) => { calls.push(["resolve", body]); },
     edit: async (body) => { calls.push(["edit", body]); },
     remove: async (body) => { calls.push(["remove", body]); },
-    collaborators: {
-      list: async () => collaborators,
-      show: async (who) => { calls.push(["show", who.buffer]); },
-      create: async (agent, file) => { calls.push(["create-collaborator", agent, file]); },
-    },
   };
   const comments = installComments({
     view, scroller, api, currentFile: () => "/notes/SAI.md", readOnly: () => false,
@@ -113,12 +108,11 @@ describe("C70 comment rail", () => {
     } finally { done(); }
   });
 
-  test("C70 resolving hides the card; a waiting collaborator is shown", async () => {
+  test("C70 resolving hides the card", async () => {
     const threads = [thread("c-1111", "Why?", { assignee: { name: "claude·SAI" } })];
     const { scroller, comments, calls, done } = mount("The {==fixed field==}{>>#c-1111<<} here.\n", threads);
     try {
       await comments.refresh();
-      expect(scroller.querySelector(".noema-comment-waiting")?.textContent).toBe("claude·SAI is replying…");
       scroller.querySelector<HTMLButtonElement>(".noema-comment-resolve")!.click();
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(calls[0]).toEqual(["resolve", { file: "/notes/SAI.md", id: "c-1111", resolved: true }]);
@@ -129,53 +123,14 @@ describe("C70 comment rail", () => {
     } finally { done(); }
   });
 
-  test("C71 the note's collaborators show at the top with their state; + starts one", async () => {
-    const claude = { buffer: "*Agent claude*", nativeSessionId: "n1", name: "claude·SAI", agent: "claude", busy: true };
-    const { comments, calls, done } = mount("Text.\n", [], [claude]);
+  test("C73 the page shows no agents: no header, no mention picker", async () => {
+    const { scroller, comments, done } = mount("The {==fixed field==}{>>#c-1111<<} here.\n",
+      [thread("c-1111", "Why?", { assignee: { name: "claude·SAI" } })]);
     try {
       await comments.refresh();
-      const chip = document.querySelector<HTMLElement>(".noema-collab-chip")!;
-      expect(chip.textContent).toContain("claude·SAI");
-      expect(chip.dataset.state).toBe("working");
-      chip.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(calls).toContainEqual(["show", "*Agent claude*"]);
-      document.querySelector<HTMLButtonElement>(".noema-collab-add")!.click();
-      [...document.querySelectorAll<HTMLButtonElement>(".noema-collab-menu button")]
-        .find((item) => item.textContent === "New Codex collaborator")!.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(calls).toContainEqual(["create-collaborator", "codex", "/notes/SAI.md"]);
-      expect(collaboratorState({ ...claude, busy: false, attention: "permission" } as any)).toBe("needs you");
-      expect(collaboratorState({ ...claude, busy: false, processState: "disconnected" } as any)).toBe("disconnected");
-    } finally { done(); }
-  });
-
-  test("C71 typing @ offers the collaborators and the chosen one answers", async () => {
-    expect(mentionAt("Why @cla", 8)).toEqual({ start: 4, query: "cla" });
-    expect(mentionAt("mail a@b", 8)).toBeNull();
-    const claude = { buffer: "*Agent claude*", nativeSessionId: "n1", name: "claude·SAI", agent: "claude" };
-    const content = "The fixed field here.\n";
-    const { view, scroller, comments, calls, done } = mount(content, [], [claude]);
-    try {
-      await comments.refresh();
-      const from = content.indexOf("fixed field");
-      view.dispatch({ selection: { anchor: from, head: from + "fixed field".length } });
-      comments.selectionChanged();
-      comments.startComment();
-      const input = scroller.querySelector<HTMLTextAreaElement>(".noema-comment-draft textarea")!;
-      expect(input.placeholder).toBe("Comment, or @mention a collaborator");
-      input.value = "Why? @cla";
-      input.setSelectionRange(9, 9);
-      input.dispatchEvent(new Event("input"));
-      const picker = scroller.querySelector<HTMLElement>(".noema-comment-mentions")!;
-      expect(picker.hidden).toBe(false);
-      expect(picker.textContent).toContain("claude·SAI");
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      expect(input.value).toBe("Why? @claude·SAI ");
-      scroller.querySelector<HTMLFormElement>(".noema-comment-draft form")!.requestSubmit();
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      const [, body] = calls.find(([kind]) => kind === "create")!;
-      expect(body.to).toEqual({ buffer: "*Agent claude*", nativeSessionId: "n1" });
+      expect(document.querySelector(".noema-collab-bar")).toBeNull();
+      expect(scroller.querySelector(".noema-comment-waiting")).toBeNull();
+      expect(scroller.querySelector(".noema-comment-assignee")).toBeNull();
     } finally { done(); }
   });
 

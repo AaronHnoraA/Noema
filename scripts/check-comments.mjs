@@ -73,10 +73,8 @@ try {
   const text = "# Notation\n\nThe {==fixed field==}{>>#c-20261117000000-aaaaaa<<} is \\(\\mathbb F\\), and [s] is a set.\n\nA subspace is identified with the column space of its basis matrix.\n\n\n\n\n\n\n\n\n\n#+begin ediff Clarify the oracle\n@@ediff-author {\"name\":\"codex·SAI\"}\n-The decision oracle answers this question.\n+The decision oracle answers exactly this yes/no question.\n#+end ediff\n";
   await page.evaluate((value) => window.commentProbe.setup(value), text);
   await page.waitForSelector('.noema-comment-card[data-comment-id="c-20261117000000-aaaaaa"]');
-  // Collaborators at the top, with their state (C71).
-  await page.waitForSelector(".noema-collab-chip");
-  assert.deepEqual(await page.locator(".noema-collab-chip").evaluateAll((chips) => chips.map((chip) => chip.dataset.state)),
-    ["working", "needs you"]);
+  // The page shows no agents (C73).
+  assert.equal(await page.locator(".noema-collab-bar").count(), 0);
   // A proposal reads in place and has its card on the rail (C72).
   await page.waitForSelector(".noema-suggestion-card");
   assert.equal(await page.locator(".noema-ediff-inline ins").first().textContent(), "exactly ");

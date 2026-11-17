@@ -2950,12 +2950,17 @@ async function callApi(channel, args = []) {
 
 // The local Agent surface discovers the live registry and reuses the same
 // dispatch/save/notification path as pages. Server mode retains its allowlist.
-if (hostMode !== "server") apiRouter.register(createAgentApiHandlers({ router: apiRouter, call: callApi }), "Agent");
-// Comments (C70): pages hear every change; a question for a collaborator goes to Emacs.
+if (hostMode !== "server") apiRouter.register(createAgentApiHandlers({ router: apiRouter, call: callApi,
+  // An agent's comment is a comment like any other: pages and Emacs hear it.
+  onComment: (file) => apiRouter.call("noema:api:comments:changed", [{ file }])
+    .then(() => gatewayNotify("noema.event", { type: "comments-changed", payload: { file: String(file) } })),
+}), "Agent");
+// Comments (C70): pages and Emacs's task panel (C73) hear every change.
 if (hostMode !== "server") apiRouter.register(createCommentApiHandlers({
-  changed: (file) => broadcast("command", { command: "comments-changed", file: String(file) }),
-  ask: (payload) => gatewayNotify("noema.event", { type: "comment-asked", payload }),
-  collaborators: (file) => broadcast("command", { command: "collaborators-changed", file: String(file) }),
+  changed: (file, origin) => {
+    broadcast("command", { command: "comments-changed", file: String(file) });
+    if (!origin?.fromEmacs) gatewayNotify("noema.event", { type: "comments-changed", payload: { file: String(file) } });
+  },
 }), "Comments");
 
 async function handleEmacsCommand(body = {}) {

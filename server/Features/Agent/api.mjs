@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { fullChannel } from "../../lib/agent-api-client.mjs";
 import { proposeSuggestions } from "../../lib/collab-suggestions.mjs";
 import { commentAnchor, newCommentId } from "../../../shared/comment-anchors.mjs";
-import { createThread, replyThread } from "../../lib/note-comments.mjs";
+import { createThread, replyThread, setThreadStatus } from "../../lib/note-comments.mjs";
 
 const bad = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
 const humanDecisions = new Set([
@@ -202,7 +202,7 @@ const apiAreas = (channels) => Object.fromEntries(Map.groupBy(channels, (name) =
 // Pristine Lean types, one file per frozen text, under Emacs var/.
 const leanJudgeCache = join(import.meta.dirname, "../../../../../var/noema/lean-judge");
 
-export function createAgentApiHandlers({ router, call }) {
+export function createAgentApiHandlers({ router, call, onComment = () => {} }) {
   const documented = (handler, apiDoc) => Object.assign(handler, { apiDoc });
   // An exploration's members are Emacs sessions; Lean and one model call judge.
   const explorationDeps = { call, duplicate: modelDuplicateCheck(callOneTool),
@@ -238,12 +238,22 @@ export function createAgentApiHandlers({ router, call }) {
   };
   // An agent's comment (C71): wrap the text it names in an anchor through the
   // canonical save, so an open page follows, then open its thread; or reply.
-  const commentDocument = async ({ file, id, text, from, to, oldText, authorSession } = {}) => {
+  const commentDocument = async ({ file, id, text, from, to, oldText, resolve, authorSession } = {}) => {
     if (typeof file !== "string" || !/\.(md|markdown)$/i.test(file)) bad("A saved Markdown file is required");
+    if (id && resolve === true && (typeof text !== "string" || !text.trim())) {
+      const thread = await setThreadStatus({ file, id, resolved: true });
+      onComment(file);
+      return { ok: true, thread };
+    }
     if (typeof text !== "string" || !text.trim()) bad("A comment needs text");
     const who = await authorOf(authorSession);
     const author = { name: who?.name ?? "agent", kind: "agent", ...(who?.session ? { session: who.session } : {}) };
-    if (id) return { ok: true, thread: await replyThread({ file, id, text, author }) };
+    if (id) {
+      let thread = await replyThread({ file, id, text, author });
+      if (resolve === true) thread = await setThreadStatus({ file, id, resolved: true, author });
+      onComment(file);
+      return { ok: true, thread };
+    }
     const opened = await call("noema:api:notes:open", [file]);
     const start = position(opened.content, from), end = position(opened.content, to);
     if (start === undefined || end === undefined || end <= start) bad("A comment needs an ordered from/to range");
@@ -251,15 +261,17 @@ export function createAgentApiHandlers({ router, call }) {
     const threadId = newCommentId();
     const anchored = opened.content.slice(0, start) + commentAnchor(oldText, threadId) + opened.content.slice(end);
     const thread = await createThread({ file: opened.file || file, id: threadId, quote: oldText, text, author });
+    onComment(opened.file || file);
     const saved = await call("noema:api:notes:save", [{ file: opened.file || file, content: anchored, baseVersion: opened.version,
       clientId: `agent-comment-${randomUUID()}`, seq: 1, mode: "source", refresh: "deferred" }]);
     return { ok: saved?.ok !== false, thread, ...(saved?.ok === false ? { save: saved } : {}) };
   };
   return {
     "noema:api:agent:document:comment": documented((body) => commentDocument(body), {
-      description: "Leave a comment on the text you name, as a collaborator does in Google Docs: the person sees it beside the text and answers in the thread. With id, reply in that thread instead. For a question or a note to the person, not for a change (that is document:propose).",
+      description: "Leave a comment on the text you name, as a collaborator does in Google Docs: the person sees it beside the text and answers in the thread. With id, reply in that thread instead; resolve:true also marks it done (a task you finished). For a question or a note to the person, not for a change (that is document:propose).",
       parameters: [{ file: "absolute Markdown path", from: "UTF-16 offset or {line,column}", to: "end, same form",
-        oldText: "the exact text from..to (one line)", text: "the comment", id: "optional thread id to reply in" }] }),
+        oldText: "the exact text from..to (one line)", text: "the comment", id: "optional thread id to reply in",
+        resolve: "optional true with id: the task is done" }] }),
     "noema:api:agent:skill:list": documented((body) => listAgentSkills(body), {
       description: "Read the existing Skill/Packs manager's effective catalog. Packs marked agent_catalog there are the default; no Skill body is returned.",
       parameters: [{ root: "optional absolute project root", scope: "global or project", requestedSkills: "optional explicit ids", requestedPacks: "optional existing pack ids" }],

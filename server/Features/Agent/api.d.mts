@@ -5,5 +5,5 @@ export function proposeMarkdown(source: string, edits: readonly ProposalEdit[], 
 export function editMarkdown(source: string, edits: readonly ProposalEdit[]): string;
 export function lineHunks(oldText: string, newText: string): Array<{ from: number; to: number; oldText: string; newText: string }>;
 export function createAgentApiHandlers(deps: {
-  router: ApiRouter; call: (channel: string, args?: any[]) => Promise<any>;
+  router: ApiRouter; call: (channel: string, args?: any[]) => Promise<any>; onComment?: (file: string) => void;
 }): Record<string, (...args: any[]) => any>;

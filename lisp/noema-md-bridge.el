@@ -395,7 +395,6 @@ A short selection carries its text, which saves the Agent a read."
                  (buffer-substring-no-properties begin end)))))))
 
 (declare-function +agent-collab-thread-deliver "tools/agent/collab" (&rest args))
-(declare-function +agent-collab--turn-failed "tools/agent/collab" (buffer))
 (declare-function +agent-context--deliver "tools/agent/context"
                   (buffer blocks &optional instructions no-focus on-failure))
 
@@ -409,8 +408,7 @@ A short selection carries its text, which saves the Agent a read."
       (+agent-collab-thread-deliver
        :file file :line line :anchor anchor :session session
        :text (if (string-empty-p (string-trim (or question ""))) "Revise the proposal" question)
-       :send (lambda () (+agent-context--deliver session blocks instructions nil
-                                                 (lambda () (+agent-collab--turn-failed session))))))))
+       :send (lambda () (+agent-context--deliver session blocks instructions))))))
 
 (defun noema-md-bridge-run (action buffer begin end)
   "Run ACTION on BEGIN..END of note BUFFER."
