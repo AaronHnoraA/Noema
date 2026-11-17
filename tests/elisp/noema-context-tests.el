@@ -71,6 +71,10 @@
     (should (string-match-p "agent:document:edit" text))
     (should (string-match-p "agent:document:propose" text))
     (should (string-match-p "scripts/agent-api.mjs" text))
+    ;; The command it names must exist: `node <that path> call ...' is the
+    ;; fallback when the MCP tool is missing.
+    (should (string-match "node \\([^ `]+agent-api\\.mjs\\)" text))
+    (should (file-exists-p (match-string 1 text)))
     (should (<= (length text) 1600))))
 
 (ert-deftest noema-agent-text-c26-a-prompt-is-data-read-when-used ()

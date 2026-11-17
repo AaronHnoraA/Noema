@@ -9,6 +9,7 @@ import { leanJudge } from "../../lib/lean-judge.mjs";
 import { callOneTool } from "../../lib/pi-model.mjs";
 import { join } from "node:path";
 import { fullChannel } from "../../lib/agent-api-client.mjs";
+import { proposeSuggestions } from "../../lib/collab-suggestions.mjs";
 
 const bad = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
 const humanDecisions = new Set([
@@ -48,12 +49,13 @@ function diffLines(text, prefix) {
     + (newline ? "" : "\\ No newline at end of file\n");
 }
 
-function proposal(title, oldText, newText) {
+function proposal(title, oldText, newText, author) {
   if (oldText === newText) bad("A proposal must change the text");
   const label = String(title || "Proposed edit").trim();
   if (/[\r\n]/.test(label)) bad("Proposal title must be one line");
   if (scanEdiffBlocks(newText).length) bad("Proposals cannot contain nested review blocks");
-  return `#+begin ediff ${label}\n${diffLines(oldText, "-")}${diffLines(newText, "+")}#+end ediff\n`;
+  const by = author ? `@@ediff-author ${JSON.stringify(author)}\n` : "";
+  return `#+begin ediff ${label}\n${by}${diffLines(oldText, "-")}${diffLines(newText, "+")}#+end ediff\n`;
 }
 
 /** Past these a card stops being reviewable; the refusal names the way out. */
@@ -137,7 +139,7 @@ export function editMarkdown(source, edits) {
 
 /** Build review source, retaining the original old side when revising feedback.
  * A new edit is split into one card per changed run: unchanged lines stay out. */
-export function proposeMarkdown(source, edits) {
+export function proposeMarkdown(source, edits, author) {
   if (!Array.isArray(edits) || !edits.length) bad("edits must be a non-empty array");
   const blocks = scanEdiffBlocks(source);
   const changes = edits.flatMap((edit) => {
@@ -155,7 +157,8 @@ export function proposeMarkdown(source, edits) {
         bad("Revise an existing proposal using its whole from/end range");
       if (to < source.length && edit.newText && !edit.newText.endsWith("\n"))
         bad("A proposal before another line must retain its final newline");
-      return [{ from, to, insert: proposal(edit.title || block.title, ediffSide(block, "old"), edit.newText) }];
+      return [{ from, to, insert: proposal(edit.title || block.title, ediffSide(block, "old"), edit.newText,
+        block.author ?? author) }];
     }
     const start = from === 0 ? 0 : source.lastIndexOf("\n", from - 1) + 1;
     let end = to > from && source[to - 1] === "\n" ? to : source.indexOf("\n", to) + 1;
@@ -176,7 +179,7 @@ export function proposeMarkdown(source, edits) {
     return lineHunks(region, next).map((hunk) => {
       const changed = keepEnds(hunk.oldText).length + keepEnds(hunk.newText).length;
       if (changed > MAX_CARD_CHANGED_LINES) tooLarge(`One card of ${changed} changed lines`);
-      return { from: start + hunk.from, to: start + hunk.to, insert: proposal(edit.title, hunk.oldText, hunk.newText) };
+      return { from: start + hunk.from, to: start + hunk.to, insert: proposal(edit.title, hunk.oldText, hunk.newText, author) };
     });
   }).sort((a, b) => a.from - b.from);
   if (changes.length > MAX_PROPOSAL_CARDS) tooLarge(`${changes.length} separate changes`);
@@ -203,12 +206,31 @@ export function createAgentApiHandlers({ router, call }) {
   const explorationDeps = { call, duplicate: modelDuplicateCheck(callOneTool),
     judge: (body) => leanJudge(body, { cache: leanJudgeCache }) };
   // Without a version, each edit's oldText is the check: it must match at its position.
-  const saveDocument = async ({ file, baseVersion, edits, content: whole } = {}, transform, client) => {
+  // The collaborator behind a call, named by Emacs from the session token its
+  // API client sends; an unreachable Emacs still leaves an attributable card.
+  const authorOf = async (session) => {
+    if (typeof session !== "string" || !session) return undefined;
+    try {
+      const reply = await call("noema:api:emacs:agent", [{ action: "identify", session }]);
+      const name = reply?.session?.name;
+      return { name: typeof name === "string" && name ? name : "agent", session };
+    } catch { return { name: "agent", session }; }
+  };
+  const saveDocument = async ({ file, baseVersion, edits, content: whole, authorSession } = {}, transform, client) => {
     if (baseVersion !== undefined && (typeof baseVersion !== "string" || !baseVersion)) bad("baseVersion must be a document:read version");
-    if (typeof file !== "string" || !/\.(md|markdown)$/i.test(file)) bad("A saved Markdown file is required");
+    if (typeof file !== "string" || !file.startsWith("/")) bad("An absolute saved file is required");
+    const markdown = /\.(md|markdown)$/i.test(file);
+    if (!markdown && client === "agent-proposal") {
+      if (whole !== undefined) bad("A suggestion for a file that is not Markdown takes edits, not content");
+      const suggestions = await proposeSuggestions({ file, edits, author: await authorOf(authorSession),
+        resolve: (source, value) => position(source, value) });
+      return { ok: true, suggestion: suggestions[0], suggestions };
+    }
+    if (!markdown) bad("A saved Markdown file is required; for other files propose a suggestion");
     const opened = await call("noema:api:notes:open", [file]);
     if (baseVersion !== undefined && opened?.version !== baseVersion) return { ok: false, conflict: true, version: opened?.version, message: "Document changed; read it again before revising" };
-    const content = transform(opened.content, requestedEdits(opened.content, { edits, content: whole }));
+    const author = client === "agent-proposal" ? await authorOf(authorSession) : undefined;
+    const content = transform(opened.content, requestedEdits(opened.content, { edits, content: whole }), author);
     return call("noema:api:notes:save", [{ file: opened.file || file, content, baseVersion: opened.version,
       clientId: `${client}-${randomUUID()}`, seq: 1, mode: "source", refresh: "deferred" }]);
   };

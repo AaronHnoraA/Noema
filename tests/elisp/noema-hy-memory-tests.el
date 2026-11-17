@@ -142,6 +142,16 @@
       (should-not (string-match-p "read it before" text))
       (should (<= (length text) 900)))))
 
+(ert-deftest noema-agent-entry-c66-names-the-document-tools ()
+  "A session that did not start from a page still learns how to change a note
+so its open page follows and the change is attributed (C66)."
+  (require 'noema-agent-entry)
+  (with-temp-buffer
+    (let ((text (noema-agent-entry--text "/tmp/p/" (current-buffer) "native")))
+      (should (string-match-p "agent:document:propose" text))
+      (should (string-match-p "agent:document:edit" text))
+      (should (<= (length text) 900)))))
+
 (ert-deftest noema-agent-entry-c51-command-encodes-paths-as-shell-and-json ()
   (require 'noema-agent-entry)
   (let* ((directory (make-temp-file "entry command ' " t))

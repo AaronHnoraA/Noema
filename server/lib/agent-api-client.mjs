@@ -46,10 +46,22 @@ function transportError(error, origin) {
   return new Error(`API transport interrupted; outcome may be unknown. Read current state before retrying a mutation. ${error.message}`);
 }
 
+const AUTHORED = new Set(["noema:api:agent:document:propose", "noema:api:agent:document:edit"]);
+
+/** Name the calling session on document writes (C66).  Emacs gives each Agent
+ * process NOEMA_AGENT_SESSION; the model never has to pass it. */
+export function withCallerIdentity(given, args, session = process.env.NOEMA_AGENT_SESSION) {
+  const [body, ...rest] = args;
+  if (!session || !AUTHORED.has(fullChannel(given)) || !body || typeof body !== "object" || Array.isArray(body)
+      || body.authorSession !== undefined) return args;
+  return [{ ...body, authorSession: session }, ...rest];
+}
+
 export async function callAgentApi(given, args = [], { connection = agentApiConnection, fetcher = fetch, timeoutMs = 120_000 } = {}) {
   const channel = fullChannel(given);
   if (typeof channel !== "string" || !Array.isArray(args))
     throw new Error("A channel and a JSON args array are required");
+  args = withCallerIdentity(channel, args);
   const origin = await connection();
   let response;
   try {

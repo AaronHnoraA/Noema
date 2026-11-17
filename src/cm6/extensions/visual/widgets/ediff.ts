@@ -79,7 +79,16 @@ export class EdiffWidget extends MeasuredWidget {
     counts.textContent = block
       ? `−${deletions} +${additions}${block.comments.length ? ` · ${block.comments.length} comment${block.comments.length === 1 ? "" : "s"}` : ""}`
       : "";
-    heading.append(title, counts);
+    heading.append(title);
+    if (block?.author) {
+      // The collaborator that proposed it (C66).
+      const author = document.createElement("span");
+      author.className = "noema-ediff-author";
+      author.textContent = block.author.name;
+      author.title = `Proposed by ${block.author.name}`;
+      heading.append(author);
+    }
+    heading.append(counts);
     const details = button(detailsLabel, "Show line numbers and full context", () => {
       const expanded = root.classList.toggle("noema-ediff-expanded");
       details.textContent = expanded ? "Less" : detailsLabel;

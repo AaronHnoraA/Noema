@@ -363,8 +363,9 @@ Its key follows the text, so a changed guide reaches sessions that had the old o
   (let ((text (concat (noema-agent-text "tools") "\n"
                       (noema-agent-text
                        "page-entry" :api
+                       ;; resources/agent/ -> the checkout's scripts/.
                        (shell-quote-argument
-                        (expand-file-name "../scripts/agent-api.mjs"
+                        (expand-file-name "../../scripts/agent-api.mjs"
                                           noema-agent-text-directory))))))
     (cons (intern (concat "noema-tools-" (substring (sha1 text) 0 8))) text)))
 

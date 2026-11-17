@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -12,7 +12,7 @@ import { createAgentApiHandlers, editMarkdown, lineHunks, proposeMarkdown } from
 import { scanEdiffBlocks, ediffSide, approvedEdiffMarkdown } from "../shared/ediff-source.mjs";
 import { createAgentMcp } from "../scripts/agent-mcp.mjs";
 import { main } from "../scripts/agent-api.mjs";
-import { agentApiConnection, callAgentApi } from "../server/lib/agent-api-client.mjs";
+import { agentApiConnection, callAgentApi, withCallerIdentity } from "../server/lib/agent-api-client.mjs";
 import { createEmacsApiHandlers } from "../server/Features/Emacs/api.mjs";
 
 describe("Pi global butler API", () => {
@@ -389,5 +389,107 @@ test("what Pi tells an Agent is marked by code, once, and only for Pi", async ()
   const spawn = [{ action: "spawn", prompt: "OCR", modelId: "task-model", effort: "xhigh", notify: { buffer: "*Pi*", nativeSessionId: "pi-id" } }];
   expect(markPiMessage("emacs:agent", spawn, "pi")[0]).toEqual({
     ...spawn[0], prompt: "[From Pi, not the person] OCR",
+  });
+});
+
+describe("C66 collaborator authorship and suggestions", () => {
+  const authored = "#+begin ediff Clarify\n@@ediff-status rejected\n@@ediff-author {\"name\":\"claude·SAI\",\"session\":\"tok\"}\n@@ediff-comment \"why?\"\n-a\n+b\n#+end ediff\n";
+
+  test("C66 an author line is review metadata in any order with status and comments", () => {
+    const [block] = scanEdiffBlocks(authored);
+    expect(block.error).toBeUndefined();
+    expect(block.author).toEqual({ name: "claude·SAI", session: "tok" });
+    expect(block.rejected).toBe(true);
+    expect(block.comments).toEqual(["why?"]);
+    expect(ediffSide(block, "old")).toBe("a\n");
+    expect(approvedEdiffMarkdown(authored)).toBe("a\n");
+    const [bad] = scanEdiffBlocks("#+begin ediff x\n@@ediff-author nope\n-a\n+b\n#+end ediff\n");
+    expect(bad.error).toBe("Invalid author JSON");
+  });
+
+  function authorRouter(source: string, identify: (body: any) => any) {
+    const saved: any[] = [];
+    const router = new ApiRouter().register(createEmacsApiHandlers({ apiAgent: identify } as any));
+    const call = async (channel: string, args: any[] = []): Promise<any> => {
+      if (channel === "noema:api:notes:open") return { ok: true, file: args[0], content: source, version: "v1" };
+      if (channel === "noema:api:notes:save") { saved.push(args[0]); return { ok: true }; }
+      return router.call(channel, args);
+    };
+    router.register(createAgentApiHandlers({ router, call }));
+    return { call, saved };
+  }
+
+  test("C66 propose names the calling session as the author of new cards", async () => {
+    const asked: any[] = [];
+    const { call, saved } = authorRouter("alpha\nbeta\n", (body: any) => {
+      asked.push(body);
+      return { ok: true, session: { name: "claude·SAI", buffer: "*Agent*", nativeSessionId: "n1" } };
+    });
+    await call("noema:api:agent:document:propose", [{ file: "/tmp/a.md", authorSession: "tok",
+      edits: [{ from: { line: 2, column: 0 }, to: { line: 2, column: 4 }, oldText: "beta", newText: "gamma" }] }]);
+    expect(asked[0]).toMatchObject({ action: "identify", session: "tok" });
+    expect(saved[0].content).toContain('@@ediff-author {"name":"claude·SAI","session":"tok"}\n-beta\n+gamma\n');
+    expect(scanEdiffBlocks(saved[0].content)[0].author).toEqual({ name: "claude·SAI", session: "tok" });
+  });
+
+  test("C66 an unknown caller still gets a card, named only as an agent", async () => {
+    const { call, saved } = authorRouter("alpha\n", () => { throw new Error("Emacs is not answering"); });
+    await call("noema:api:agent:document:propose", [{ file: "/tmp/a.md", authorSession: "tok",
+      edits: [{ from: 0, to: 5, oldText: "alpha", newText: "omega" }] }]);
+    expect(scanEdiffBlocks(saved[0].content)[0].author).toEqual({ name: "agent", session: "tok" });
+    const plain = authorRouter("alpha\n", () => ({ ok: true }));
+    await plain.call("noema:api:agent:document:propose", [{ file: "/tmp/a.md", edits: [{ from: 0, to: 5, oldText: "alpha", newText: "omega" }] }]);
+    expect(scanEdiffBlocks(plain.saved[0].content)[0].author).toBeUndefined();
+  });
+
+  test("C66 revising a card keeps its original author", () => {
+    const source = "#+begin ediff t\n@@ediff-author {\"name\":\"first\"}\n-a\n+b\n#+end ediff\n";
+    const [block] = scanEdiffBlocks(source);
+    const output = proposeMarkdown(source, [{ from: block.from, to: block.end, oldText: source, newText: "c\n" }],
+      { name: "second" });
+    expect(scanEdiffBlocks(output)[0].author).toEqual({ name: "first" });
+  });
+
+  test("C66 a proposal for a file that is not Markdown is kept beside the Project, not written into it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "noema-collab-"));
+    try {
+      writeFileSync(join(root, "noema.toml"), "[project]\nid = \"p\"\n");
+      mkdirSync(join(root, "src"));
+      const file = join(root, "src", "main.py");
+      writeFileSync(file, "x = 1\ny = 2\n");
+      const { call, saved } = authorRouter("", () => ({ ok: true, session: { name: "codex·main" } }));
+      const reply = await call("noema:api:agent:document:propose", [{ file, authorSession: "tok", edits: [
+        { from: { line: 2, column: 0 }, to: { line: 2, column: 5 }, oldText: "y = 2", newText: "y = 3", title: "Bump" }] }]);
+      expect(saved).toHaveLength(0);
+      expect(readFileSync(file, "utf8")).toBe("x = 1\ny = 2\n");
+      expect(reply).toMatchObject({ ok: true, suggestion: { file, status: "pending" } });
+      const dir = join(root, ".agent", "collab", "suggestions");
+      const [name] = readdirSync(dir);
+      const record = JSON.parse(readFileSync(join(dir, name), "utf8"));
+      expect(record).toMatchObject({ id: reply.suggestion.id, file, title: "Bump", oldText: "y = 2", newText: "y = 3",
+        from: { line: 2, column: 0 }, to: { line: 2, column: 5 }, status: "pending",
+        author: { name: "codex·main", session: "tok" } });
+      await expect(call("noema:api:agent:document:propose", [{ file, edits: [
+        { from: { line: 2, column: 0 }, to: { line: 2, column: 5 }, oldText: "stale", newText: "z" }] }])).rejects.toThrow("oldText");
+      const outside = join(mkdtempSync(join(tmpdir(), "noema-loose-")), "a.py");
+      writeFileSync(outside, "a\n");
+      await expect(call("noema:api:agent:document:propose", [{ file: outside, edits: [{ from: 0, to: 1, oldText: "a", newText: "b" }] }]))
+        .rejects.toThrow("Project");
+      await expect(call("noema:api:agent:document:edit", [{ file, edits: [{ from: 0, to: 1, oldText: "x", newText: "z" }] }]))
+        .rejects.toThrow("Markdown");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("C66 the API client names its session on document calls only", () => {
+    expect(withCallerIdentity("noema:api:agent:document:propose", [{ file: "/a.md" }], "tok"))
+      .toEqual([{ file: "/a.md", authorSession: "tok" }]);
+    expect(withCallerIdentity("agent:document:edit", [{ file: "/a.md" }], "tok"))
+      .toEqual([{ file: "/a.md", authorSession: "tok" }]);
+    expect(withCallerIdentity("noema:api:agent:document:read", [{ file: "/a.md" }], "tok"))
+      .toEqual([{ file: "/a.md" }]);
+    expect(withCallerIdentity("noema:api:agent:document:propose", [{ file: "/a.md" }], undefined))
+      .toEqual([{ file: "/a.md" }]);
+    expect(withCallerIdentity("noema:api:agent:document:propose", [{ file: "/a.md", authorSession: "own" }], "tok"))
+      .toEqual([{ file: "/a.md", authorSession: "own" }]);
   });
 });

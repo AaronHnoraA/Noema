@@ -27,15 +27,25 @@ export function scanEdiffBlocks(value) {
     let body = i + 1;
     let rejected = false;
     const comments = [];
+    let author;
     let error;
-    if (lines[body]?.text === "@@ediff-status rejected") { rejected = true; body++; }
-    while (body < close && lines[body].text.startsWith("@@ediff-comment ")) {
-      try {
-        const comment = JSON.parse(lines[body].text.slice("@@ediff-comment ".length));
-        if (typeof comment !== "string") throw new Error("Invalid comment");
-        comments.push(comment);
-      } catch { error = "Invalid comment JSON"; }
-      body++;
+    // Review metadata precedes the diff lines, in any order (C66).
+    for (; body < close; body++) {
+      const text = lines[body].text;
+      if (text === "@@ediff-status rejected") rejected = true;
+      else if (text.startsWith("@@ediff-comment ")) {
+        try {
+          const comment = JSON.parse(text.slice("@@ediff-comment ".length));
+          if (typeof comment !== "string") throw new Error("Invalid comment");
+          comments.push(comment);
+        } catch { error ||= "Invalid comment JSON"; }
+      } else if (text.startsWith("@@ediff-author ")) {
+        try {
+          const value = JSON.parse(text.slice("@@ediff-author ".length));
+          if (!value || typeof value !== "object" || typeof value.name !== "string") throw new Error("Invalid author");
+          author = { name: value.name, ...(typeof value.session === "string" ? { session: value.session } : {}) };
+        } catch { error ||= "Invalid author JSON"; }
+      } else break;
     }
     const changes = [];
     for (let j = body; j < close; j++) {
@@ -59,7 +69,7 @@ export function scanEdiffBlocks(value) {
     }
     blocks.push({
       from: lines[i].from, to: lines[close].to, end,
-      title: open[1] || "Proposed edit", rejected, comments, changes,
+      title: open[1] || "Proposed edit", rejected, comments, changes, ...(author ? { author } : {}),
       oldLines, newLines, error,
     });
     i = close;

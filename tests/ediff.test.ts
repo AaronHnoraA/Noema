@@ -188,6 +188,19 @@ describe("inline ediff card", () => {
     } finally { widget.destroy(oldCard); done(); }
   });
 
+  test("C66 a card names its author, and comments land among the review metadata", () => {
+    const content = "Intro\n#+begin ediff Clarify\n@@ediff-author {\"name\":\"claude·SAI\"}\n-old\n+new\n#+end ediff\n";
+    const { host, done } = mount(content);
+    try {
+      expect(host.querySelector(".noema-ediff-author")?.textContent).toBe("claude·SAI");
+      const [block] = scanEdiffBlocks(content);
+      const edit = ediffActionEdit(content, block.from, "comment", "why?");
+      const next = content.slice(0, edit.from) + edit.insert + content.slice(edit.to);
+      expect(next).toContain('@@ediff-author {"name":"claude·SAI"}\n@@ediff-comment "why?"\n-old');
+      expect(scanEdiffBlocks(next)[0]).toMatchObject({ comments: ["why?"], author: { name: "claude·SAI" } });
+    } finally { done(); }
+  });
+
   test("read-only review permits inspection and disables every editing or feedback action", () => {
     const content = "Intro\n#+begin ediff Clarify\n@@ediff-comment \"Keep meaning\"\n-old\n+new\n#+end ediff\n";
     const { host, view, done } = mount(content, true);

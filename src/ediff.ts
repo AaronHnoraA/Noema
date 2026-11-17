@@ -37,7 +37,8 @@ export function ediffActionEdit(
     const end = source.indexOf("\n", at);
     if (end < 0) break;
     const line = source.slice(at, end);
-    if (line !== "@@ediff-status rejected" && !line.startsWith("@@ediff-comment ")) break;
+    if (line !== "@@ediff-status rejected" && !line.startsWith("@@ediff-comment ")
+        && !line.startsWith("@@ediff-author ")) break;
     at = end + 1;
   }
   return { from: at, to: at, insert: `@@ediff-comment ${JSON.stringify(comment)}\n` };

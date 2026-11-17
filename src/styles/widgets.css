@@ -2463,6 +2463,8 @@ iframe.noema-embed-fullscreen {
 }
 .cm-editor .noema-ediff-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: .6em; min-width: 0; }
 .cm-editor .noema-ediff-heading > span { font-weight: 600; overflow-wrap: anywhere; }
+.cm-editor .noema-ediff-heading > .noema-ediff-author { font-weight: 400; font-size: .85em; color: var(--aaron-muted, #777); }
+.cm-editor .noema-ediff-heading > .noema-ediff-author::before { content: "· "; }
 .cm-editor .noema-ediff-heading small,
 .cm-editor .noema-ediff-state { color: var(--aaron-muted, #777); font-size: inherit; }
 .cm-editor .noema-ediff-display,

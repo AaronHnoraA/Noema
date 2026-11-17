@@ -10,6 +10,8 @@ export interface EdiffBlock {
   title: string;
   rejected: boolean;
   comments: string[];
+  /** The collaborator that proposed it (C66). */
+  author?: { name: string; session?: string };
   changes: EdiffLine[];
   oldLines: EdiffLine[];
   newLines: EdiffLine[];
