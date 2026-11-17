@@ -906,6 +906,10 @@ Never starts one; use `noema-pi-router-open' for that."
         (when (eq noema-pi-router--emacs-buffer buffer) (setq noema-pi-router--emacs-buffer nil))
       (when (eq (gethash scope noema-pi-router--buffers) buffer) (remhash scope noema-pi-router--buffers)))))
 
+(defvar noema-pi-router-project-display-function nil
+  "Function showing a project Pi buffer, or nil for the ordinary agent views.
+Emacs's collaboration panel sets it: a project Pi lives in the panel (C78).")
+
 (defun noema-pi-router--attach (scope buffer)
   "Attach one physical BUFFER to SCOPE, including after native restart."
   (if (equal scope "emacs")
@@ -918,6 +922,8 @@ Never starts one; use `noema-pi-router-open' for that."
     (puthash scope buffer noema-pi-router--buffers))
   (with-current-buffer buffer
     (setq-local +agent-acp-strict-restore t)
+    (when (and noema-pi-router-project-display-function (not (equal scope "emacs")))
+      (setq-local +agent-acp-display-buffer-function noema-pi-router-project-display-function))
     (noema-pi-router--apply-permissions buffer)
     (unless (and (equal noema-pi-router--scope scope) noema-pi-router--subscriptions
                  (eq noema-pi-router--attached-state (+agent-acp-state-value buffer nil)))
