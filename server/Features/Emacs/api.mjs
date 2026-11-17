@@ -10,6 +10,7 @@ export function createEmacsApiHandlers({
   apiEmacsSelection = () => ({ ok: false, message: "Emacs selection bridge unavailable" }),
   apiPi = () => ({ ok: false, message: "Emacs Pi bridge unavailable" }),
   apiAgent = () => ({ ok: false, message: "Emacs Agent bridge unavailable" }),
+  apiFile = () => ({ ok: false, message: "Emacs file bridge unavailable" }),
   apiSystemOpen,
   apiEmacsZotero,
   apiChooseNotePath,
@@ -53,6 +54,12 @@ export function createEmacsApiHandlers({
         from: "send: optional {buffer, nativeSessionId} of the calling Agent session; Pi sees who is asking and can reply to it",
         focus: "optional true for ensure/send; default preserves focus", offset: "list pagination, default 0", limit: "list page size 1..100, default 20" }],
     } }),
+    // A text file as Emacs holds it (C74): read gives its buffer's text when it
+    // is visited, unsaved edits included; apply changes that text in place.
+    "noema:api:emacs:text": Object.assign((body) => apiFile(body), { apiDoc: {
+      description: "Internal to agent:file:edit: read a file's current text from Emacs (its buffer when visited) or apply resolved edits to it. Agents call agent:file:edit instead.",
+      parameters: [{ action: "read | apply", file: "absolute path", version: "apply: the version read returned",
+        edits: "apply: [{from,to,oldText,newText}] in code points" }] } }),
     "noema:api:emacs:agent": Object.assign((body) => apiAgent(body), { apiDoc: {
       description: "Emacs owns all ACP sessions. spawn creates a background worker and sends its task after initialization; spawn/send return requestId. result reads only that task, with terminal state and stopReason. Optional notify sends one completion message to the exact parent (busy parents queue it). Background buffers remain manually openable in Agent Manager. create initializes without a prompt; read reads the session transcript excluding drafts; status reports capabilities and usage. bind sets a session's primary document file (the document it collaborates on), or project level with file null. Accepted is not completed. No automatic reconnect or permission decisions.",
       parameters: [{ action: "list | tasks | status | create | spawn | send | result | read | stop | show | bind",

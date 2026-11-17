@@ -2849,6 +2849,7 @@ const apiRouter = new ApiRouter().register({
     apiEmacsSelection,
     apiPi: (body) => gatewayRequest("noema.pi", body || {}, 30_000),
     apiAgent: (body) => gatewayRequest("noema.agent", body || {}, 30_000),
+    apiFile: (body) => gatewayRequest("noema.file", body || {}, 30_000),
     apiSystemOpen,
     apiEmacsZotero,
     apiChooseNotePath,
@@ -2951,6 +2952,8 @@ async function callApi(channel, args = []) {
 // The local Agent surface discovers the live registry and reuses the same
 // dispatch/save/notification path as pages. Server mode retains its allowlist.
 if (hostMode !== "server") apiRouter.register(createAgentApiHandlers({ router: apiRouter, call: callApi,
+  // A change too large or too contested goes to the person (C74).
+  onNeedsPerson: (payload) => gatewayNotify("noema.event", { type: "agent-needs-person", payload }),
   // An agent's comment is a comment like any other: pages and Emacs hear it.
   onComment: (file) => apiRouter.call("noema:api:comments:changed", [{ file }])
     .then(() => gatewayNotify("noema.event", { type: "comments-changed", payload: { file: String(file) } })),

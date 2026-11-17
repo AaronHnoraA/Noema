@@ -12,6 +12,7 @@ import { fullChannel } from "../../lib/agent-api-client.mjs";
 import { proposeSuggestions } from "../../lib/collab-suggestions.mjs";
 import { commentAnchor, newCommentId } from "../../../shared/comment-anchors.mjs";
 import { createThread, replyThread, setThreadStatus } from "../../lib/note-comments.mjs";
+import { largeChange, resolveEdits } from "../../lib/edit-forms.mjs";
 
 const bad = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
 const humanDecisions = new Set([
@@ -202,7 +203,7 @@ const apiAreas = (channels) => Object.fromEntries(Map.groupBy(channels, (name) =
 // Pristine Lean types, one file per frozen text, under Emacs var/.
 const leanJudgeCache = join(import.meta.dirname, "../../../../../var/noema/lean-judge");
 
-export function createAgentApiHandlers({ router, call, onComment = () => {} }) {
+export function createAgentApiHandlers({ router, call, onComment = () => {}, onNeedsPerson = () => {} }) {
   const documented = (handler, apiDoc) => Object.assign(handler, { apiDoc });
   // An exploration's members are Emacs sessions; Lean and one model call judge.
   const explorationDeps = { call, duplicate: modelDuplicateCheck(callOneTool),
@@ -218,7 +219,14 @@ export function createAgentApiHandlers({ router, call, onComment = () => {} }) {
       return { name: typeof name === "string" && name ? name : "agent", session };
     } catch { return { name: "agent", session }; }
   };
-  const saveDocument = async ({ file, baseVersion, edits, content: whole, authorSession } = {}, transform, client) => {
+  /** Refuse a change the person should see, and tell them which session asks (C74). */
+  const needsPerson = (file, authorSession, reason) => {
+    onNeedsPerson({ file, session: authorSession ?? null, reason });
+    return { ok: false, needsPerson: true, message: `${reason} This is for the person: they have been told and will open your session. Do not retry it.` };
+  };
+  const changedLines = (before, after) => lineHunks(before, after)
+    .reduce((sum, hunk) => sum + keepEnds(hunk.oldText).length + keepEnds(hunk.newText).length, 0);
+  const saveDocument = async ({ file, baseVersion, edits, content: whole, authorSession, allowLarge } = {}, transform, client) => {
     if (baseVersion !== undefined && (typeof baseVersion !== "string" || !baseVersion)) bad("baseVersion must be a document:read version");
     if (typeof file !== "string" || !file.startsWith("/")) bad("An absolute saved file is required");
     const markdown = /\.(md|markdown)$/i.test(file);
@@ -228,13 +236,44 @@ export function createAgentApiHandlers({ router, call, onComment = () => {} }) {
         resolve: (source, value) => position(source, value) });
       return { ok: true, suggestion: suggestions[0], suggestions };
     }
-    if (!markdown) bad("A saved Markdown file is required; for other files propose a suggestion");
-    const opened = await call("noema:api:notes:open", [file]);
-    if (baseVersion !== undefined && opened?.version !== baseVersion) return { ok: false, conflict: true, version: opened?.version, message: "Document changed; read it again before revising" };
+    if (!markdown) bad("A saved Markdown file is required; for other files use agent:file:edit or propose a suggestion");
     const author = client === "agent-proposal" ? await authorOf(authorSession) : undefined;
-    const content = transform(opened.content, requestedEdits(opened.content, { edits, content: whole }), author);
-    return call("noema:api:notes:save", [{ file: opened.file || file, content, baseVersion: opened.version,
-      clientId: `${client}-${randomUUID()}`, seq: 1, mode: "source", refresh: "deferred" }]);
+    // The person may type meanwhile: edits that name their text rebase onto
+    // the latest version, so a lost save race is simply tried again.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const opened = await call("noema:api:notes:open", [file]);
+      if (baseVersion !== undefined && opened?.version !== baseVersion) return { ok: false, conflict: true, version: opened?.version, message: "Document changed; read it again before revising" };
+      const requested = requestedEdits(opened.content, { edits, content: whole });
+      const content = transform(opened.content, resolveEdits(opened.content, requested, position), author);
+      if (client === "agent-edit" && allowLarge !== true && largeChange(opened.content, content, changedLines(opened.content, content)))
+        return needsPerson(file, authorSession, `This edit rewrites most of ${file.split("/").pop()}.`);
+      const saved = await call("noema:api:notes:save", [{ file: opened.file || file, content, baseVersion: opened.version,
+        clientId: `${client}-${randomUUID()}`, seq: 1, mode: "source", refresh: "deferred" }]);
+      if (!saved?.conflict || baseVersion !== undefined) return saved;
+    }
+    return needsPerson(file, authorSession, "The note kept changing while this edit was saved.");
+  };
+  // A text file that is not a note (C74), through Emacs so an open buffer,
+  // unsaved edits included, is what changes.
+  const editFile = async (body = {}) => {
+    const { file, edits, content: whole, authorSession, allowLarge } = body;
+    if (typeof file !== "string" || !file.startsWith("/")) bad("An absolute file is required");
+    if (/\.(md|markdown)$/i.test(file)) return saveDocument(body, editMarkdown, "agent-edit");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const read = await call("noema:api:emacs:text", [{ action: "read", file }]);
+      if (!read || read.ok === false) return read ?? { ok: false, message: "Emacs could not read the file" };
+      const source = String(read.content ?? "");
+      const resolved = resolveEdits(source, requestedEdits(source, { edits, content: whole }), position);
+      const after = editMarkdown(source, resolved);
+      if (allowLarge !== true && largeChange(source, after, changedLines(source, after)))
+        return needsPerson(file, authorSession, `This edit rewrites most of ${file.split("/").pop()}.`);
+      // Emacs counts characters, not UTF-16 units.
+      const cp = (offset) => Array.from(source.slice(0, offset)).length;
+      const applied = await call("noema:api:emacs:text", [{ action: "apply", file, version: read.version,
+        edits: resolved.map((edit) => ({ from: cp(edit.from), to: cp(edit.to), oldText: edit.oldText, newText: edit.newText })) }]);
+      if (!applied?.conflict) return applied;
+    }
+    return needsPerson(file, authorSession, "The file kept changing while this edit was applied.");
   };
   // An agent's comment (C71): wrap the text it names in an anchor through the
   // canonical save, so an open page follows, then open its thread; or reply.
@@ -380,8 +419,11 @@ export function createAgentApiHandlers({ router, call, onComment = () => {} }) {
     "noema:api:agent:document:propose": documented((body) => saveDocument(body, proposeMarkdown, "agent-proposal"), { description: "Create or revise in-place review cards for the few changes the person should weigh; each changed run becomes its own card, and a request too large to review is refused in favour of document:edit. Never accepts proposals. Preserves unselected text and the original side; clears resolved feedback on revision. Conflicts require rereading, never force/retry a mutation blindly.",
       parameters: [{ file: "absolute Markdown path", baseVersion: "optional document:read version; without it oldText alone guards each edit",
         edits: "[{from,to,oldText,newText,title?}]; UTF-16 offsets or line/column positions. Existing proposals must use their whole from/end range; newText is the replacement proposed side.", content: "instead of edits: the whole new document" }] }),
-    "noema:api:agent:document:edit": documented((body) => saveDocument(body, editMarkdown, "agent-edit"), { description: "Apply a change the person asked for directly, through the canonical save and UI notification path, so an open page updates. For mechanical or whole-document work; pending proposals in the range are refused, not touched.",
+    "noema:api:agent:document:edit": documented((body) => saveDocument(body, editMarkdown, "agent-edit"), { description: "Apply a change the person asked for directly, through the canonical save and UI notification path, so an open page updates at once and only where it changed. Edits name their text, so they land on the newest version even while the person types; a lost race is retried. Pending proposals in the range are refused, not touched. A change rewriting most of the note is refused and the person is told (needsPerson): do not retry it.",
       parameters: [{ file: "absolute Markdown path", baseVersion: "optional document:read version; use it with content so a concurrent edit is not overwritten",
-        edits: "[{from,to,oldText,newText}]; UTF-16 offsets or line/column positions", content: "instead of edits: the whole new document" }] }),
+        edits: "[E]: {oldText,newText} (oldText unique), {lines:[a,b],newText}, {after|before:LINE_TEXT,newText}, {append:TEXT}, or {from,to,oldText,newText}",
+        content: "instead of edits: the whole new document", allowLarge: "true only after the person said so in your chat" }] }),
+    "noema:api:agent:file:edit": documented((body) => editFile(body), { description: "Change any text file the way document:edit changes a note: the same edit forms, applied through Emacs to its open buffer when there is one (unsaved edits are kept and not saved for the person), otherwise to the file. A note goes to document:edit.",
+      parameters: [{ file: "absolute path", edits: "as document:edit", content: "instead of edits: the whole new text", allowLarge: "true only after the person said so" }] }),
   };
 }
