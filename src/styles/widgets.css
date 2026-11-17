@@ -5787,3 +5787,33 @@ body.has-diagram-fullscreen {
   border-radius: 2px;
   cursor: pointer;
 }
+
+/* Google Docs-style suggestions (C72): with a comment rail the proposal reads
+ * in place, the deleted words struck and the new ones underlined in the
+ * author's colour; the controls live on the rail's card.  Details opens the
+ * full card again. */
+.cm-editor .noema-ediff-inline { display: none; }
+.noema-review-rail .cm-editor .noema-ediff:not(.noema-ediff-expanded) {
+  padding: 2px 0 2px 10px;
+  border: 0;
+  border-left: 3px solid var(--noema-ediff-author, var(--aaron-accent, #7aa2f7));
+  border-radius: 0;
+  background: color-mix(in srgb, var(--noema-ediff-author, #7aa2f7) 7%, transparent);
+  box-shadow: none;
+}
+.noema-review-rail .cm-editor .noema-ediff:not(.noema-ediff-expanded) .noema-ediff-inline { display: block; white-space: pre-wrap; }
+.noema-review-rail .cm-editor .noema-ediff:not(.noema-ediff-expanded) :is(.noema-ediff-preview, .noema-ediff-diff, .noema-ediff-actions, .noema-ediff-modes, .noema-ediff-footer, .noema-ediff-comments) { display: none !important; }
+.noema-review-rail .cm-editor .noema-ediff:not(.noema-ediff-expanded) .noema-ediff-header { font-size: 11px; opacity: .8; }
+.cm-editor .noema-ediff-inline del {
+  color: color-mix(in srgb, #e5534b 85%, var(--aaron-ink, #fff));
+  text-decoration: line-through;
+  text-decoration-color: #e5534b;
+}
+.cm-editor .noema-ediff-inline ins {
+  color: var(--noema-ediff-author, #5fd38d);
+  text-decoration: underline;
+  text-decoration-color: var(--noema-ediff-author, #5fd38d);
+  text-underline-offset: 3px;
+}
+.cm-editor .noema-ediff-inline-rendered del, .cm-editor .noema-ediff-inline-rendered ins { display: block; }
+.cm-editor .noema-ediff-inline-rendered del { opacity: .6; }

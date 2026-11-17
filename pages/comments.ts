@@ -12,14 +12,46 @@
 import { EditorView } from "@codemirror/view";
 import { commentAnchor, newCommentId, scanCommentAnchors, type CommentAnchor } from "../shared/comment-anchors.mjs";
 import type { CommentMessage, CommentThread } from "../server/lib/note-comments.mjs";
+import type { Collaborator, CollaboratorRef } from "./api-client.ts";
+import { authorColor } from "../src/author-color.ts";
+import { ediffActionEdit, ediffSide, scanEdiffBlocks, EDIFF_FEEDBACK_EVENT, type EdiffBlock, type EdiffFeedbackDetail } from "../src/ediff.ts";
+import { dispatchConstructEdit } from "../src/cm6/extensions/visual/constructs/index.ts";
+import { needsRenderedComparison, wordDiff } from "../src/word-diff.ts";
 
 export interface CommentsApi {
   list(file: string): Promise<{ threads: CommentThread[] }>;
-  create(body: { file: string; id: string; quote: string; text: string }): Promise<unknown>;
-  reply(body: { file: string; id: string; text: string }): Promise<unknown>;
+  create(body: { file: string; id: string; quote: string; text: string; to?: CollaboratorRef }): Promise<unknown>;
+  reply(body: { file: string; id: string; text: string; to?: CollaboratorRef }): Promise<unknown>;
   resolve(body: { file: string; id: string; resolved: boolean }): Promise<unknown>;
   edit(body: { file: string; id: string; mid?: string; text: string }): Promise<unknown>;
   remove(body: { file: string; id: string; mid?: string }): Promise<unknown>;
+  /** The note's collaborators (C71); absent where there is no Emacs. */
+  collaborators?: {
+    list(file: string): Promise<Collaborator[]>;
+    show(who: Collaborator): Promise<unknown>;
+    create(agent: string, file: string): Promise<unknown>;
+  };
+}
+
+/** Agents a page can start as a collaborator of the note. */
+export const COLLABORATOR_AGENTS = [["claude", "Claude"], ["codex", "Codex"]] as const;
+
+export function collaboratorName(who: Collaborator): string {
+  return who.name || who.agent || who.buffer;
+}
+
+/** A short word for what a collaborator is doing. */
+export function collaboratorState(who: Collaborator): "working" | "needs you" | "idle" | "disconnected" {
+  if (who.processState === "disconnected" || who.processState === "dead") return "disconnected";
+  if (who.attention) return "needs you";
+  if (who.busy || who.turnState === "running" || who.turnState === "stopping") return "working";
+  return "idle";
+}
+
+/** The mention being typed before CARET in TEXT: its start and query, or null. */
+export function mentionAt(text: string, caret: number): { start: number; query: string } | null {
+  const match = /(?:^|\s)@([^\s@]*)$/u.exec(text.slice(0, caret));
+  return match ? { start: caret - match[1].length - 1, query: match[1] } : null;
 }
 
 export interface CommentsHost {
@@ -40,6 +72,8 @@ export interface CommentsController {
   startComment(): void;
   /** The host said FILE's threads changed. */
   changed(file: string): void;
+  /** The host said FILE's collaborators changed. */
+  collaboratorsChanged(file: string): void;
   /** The document text changed (the editor's onChange). */
   documentChanged(): void;
   /** The selection settled (the editor's onSelectionChange). */
@@ -56,12 +90,7 @@ function initials(name: string): string {
   return (name.match(/[\p{L}\p{N}]/u)?.[0] ?? "?").toUpperCase();
 }
 
-/** A stable colour per author, as Google Docs gives each collaborator one. */
-export function authorColor(name: string): string {
-  let hash = 0;
-  for (const char of name) hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
-  return `hsl(${hash % 360} 62% 58%)`;
-}
+export { authorColor };
 
 export function relativeTime(at: string, now = Date.now()): string {
   const then = Date.parse(at);
@@ -113,6 +142,13 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: stri
   return node;
 }
 
+function avatarFor(name: string, size = 28): HTMLElement {
+  const node = element("span", "noema-comment-avatar", initials(name));
+  node.style.background = authorColor(name);
+  if (size !== 28) Object.assign(node.style, { width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.46)}px` });
+  return node;
+}
+
 function button(label: string, title: string, action: () => void, className = ""): HTMLButtonElement {
   const node = element("button", className, label);
   node.type = "button";
@@ -132,10 +168,19 @@ export function installComments(host: CommentsHost): CommentsController {
   const style = element("style");
   document.head.append(style);
   if (getComputedStyle(scroller).position === "static") scroller.style.position = "relative";
+  // Proposals read in place, Google-style, with their controls on the rail (C72).
+  scroller.classList.add("noema-review-rail");
   scroller.append(rail);
 
   let threads: CommentThread[] = [];
+  let collaborators: Collaborator[] = [];
+  const bar = element("div", "noema-collab-bar");
+  bar.setAttribute("aria-label", "Collaborators");
+  bar.hidden = true;
+  document.body.append(bar);
   let anchors = new Map<string, CommentAnchor>();
+  // Agents' proposals (`ediff` blocks), shown as suggestion cards (C72).
+  let suggestions: EdiffBlock[] = [];
   let active: string | null = null;
   let draft: Draft | null = null;
   let showResolved = false;
@@ -146,7 +191,89 @@ export function installComments(host: CommentsHost): CommentsController {
   const file = () => host.currentFile();
 
   function scanAnchors(): void {
-    anchors = new Map(scanCommentAnchors(view.state.doc.toString()).map((anchor) => [anchor.id, anchor]));
+    const source = view.state.doc.toString();
+    anchors = new Map(scanCommentAnchors(source).map((anchor) => [anchor.id, anchor]));
+    suggestions = source.includes("#+begin ediff") ? scanEdiffBlocks(source).filter((block) => !block.error) : [];
+  }
+
+  const suggestionKey = (block: EdiffBlock) => `s:${block.from}`;
+  const suggestionSignature = () => suggestions.map((block) => `${block.from}:${block.end}:${block.rejected}:${block.comments.length}`).join(",");
+
+  /** Apply ACTION to the proposal at FROM, one undo step like the card's own buttons. */
+  function actOnSuggestion(from: number, action: "accept" | "reject" | "comment", message = ""): void {
+    try {
+      const edit = ediffActionEdit(view.state.doc.toString(), from, action, message);
+      dispatchConstructEdit(view, {
+        changes: edit,
+        selection: action === "accept" ? { anchor: edit.from + edit.insert.length } : undefined,
+      }, `ediff.${action}`);
+      host.save();
+    } catch (error) { report(error); }
+  }
+
+  function summaryNode(block: EdiffBlock): HTMLElement {
+    const node = element("div", "noema-suggestion-summary");
+    const before = ediffSide(block, "old").replace(/\n$/, "");
+    const after = ediffSide(block, "new").replace(/\n$/, "");
+    const changes = needsRenderedComparison(before + after) ? null : wordDiff(before, after);
+    const clip = (text: string) => text.length > 160 ? `${text.slice(0, 157)}…` : text;
+    if (changes) {
+      for (const change of changes) {
+        if (change.kind === "same" && change.text.length > 40) {
+          node.append(element("span", "", `${change.text.slice(0, 18)}…${change.text.slice(-18)}`));
+        } else {
+          node.append(element(change.kind === "del" ? "del" : change.kind === "ins" ? "ins" : "span", "", clip(change.text)));
+        }
+      }
+    } else {
+      if (before.trim()) node.append(element("del", "", clip(before)));
+      if (after.trim()) node.append(element("ins", "", clip(after)));
+    }
+    return node;
+  }
+
+  function suggestionCard(block: EdiffBlock): HTMLElement {
+    const key = suggestionKey(block);
+    const card = element("article", "noema-comment-card noema-suggestion-card");
+    card.dataset.commentId = key;
+    const name = block.author?.name ?? "Suggestion";
+    card.style.setProperty("--noema-suggestion-author", authorColor(name));
+    if (block.rejected) card.classList.add("noema-comment-resolved");
+    const isActive = active === key;
+    card.classList.toggle("noema-comment-active", isActive);
+    const head = element("div", "noema-comment-head");
+    const who = element("div", "noema-comment-who");
+    who.append(element("strong", "", name), element("small", "", block.rejected ? "Rejected suggestion" : `Suggested: ${block.title}`));
+    head.append(avatarFor(name), who);
+    if (!host.readOnly() && !block.rejected) {
+      const tools = element("div", "noema-comment-tools");
+      tools.append(
+        button("✓", "Accept suggestion", () => actOnSuggestion(block.from, "accept"), "noema-comment-resolve"),
+        button("✕", "Reject suggestion", () => actOnSuggestion(block.from, "reject"), "noema-suggestion-reject"),
+      );
+      head.append(tools);
+    }
+    card.append(head, summaryNode(block));
+    for (const message of block.comments) card.append(element("div", "noema-comment-body noema-suggestion-comment", message));
+    if (isActive && !host.readOnly()) {
+      card.append(composer("", "Comment", (text) => {
+        actOnSuggestion(block.from, "comment", text);
+        // The saved comment goes back to the proposing agent, as Send feedback does.
+        const fresh = scanEdiffBlocks(view.state.doc.toString()).find((item) => item.from === block.from);
+        if (fresh) {
+          const detail: EdiffFeedbackDetail = { from: fresh.from, to: fresh.end, source: view.state.doc.sliceString(fresh.from, fresh.end) };
+          view.dom.dispatchEvent(new CustomEvent<EdiffFeedbackDetail>(EDIFF_FEEDBACK_EVENT, { bubbles: true, cancelable: true, detail }));
+        }
+        active = null;
+        render();
+      }, () => { active = null; render(); }, `Reply to ${name}`));
+    }
+    card.addEventListener("mousedown", (event) => {
+      if ((event.target as HTMLElement).closest("textarea,button")) return;
+      activate(key, false);
+      view.dispatch({ effects: EditorView.scrollIntoView(block.from, { y: "nearest" }) });
+    });
+    return card;
   }
 
   /** Top of document position POS in the scroller's content, valid off screen too. */
@@ -215,10 +342,42 @@ export function installComments(host: CommentsHost): CommentsController {
   }
 
   /** A text box with a primary button and Cancel; Cmd/Ctrl-Enter submits, Escape cancels. */
-  function composer(initial: string, label: string, submit: (text: string) => Promise<unknown> | void, cancel: () => void,
-    placeholder = "Reply"): HTMLElement {
+  function composer(initial: string, label: string, submit: (text: string, to?: CollaboratorRef) => Promise<unknown> | void,
+    cancel: () => void, placeholder = "Reply"): HTMLElement {
     const form = element("form", "noema-comment-composer");
     const input = element("textarea");
+    // @-mentions, as in Google Docs: the chosen collaborator answers (C71).
+    let mentioned: Collaborator | null = null;
+    const picker = element("div", "noema-comment-mentions");
+    picker.hidden = true;
+    let choices: Collaborator[] = [];
+    let chosen = 0;
+    const showPicker = () => {
+      const mention = mentionAt(input.value, input.selectionStart ?? input.value.length);
+      choices = mention
+        ? collaborators.filter((who) => collaboratorName(who).toLowerCase().includes(mention.query.toLowerCase()))
+        : [];
+      picker.replaceChildren(...choices.map((who, index) => {
+        const item = button(collaboratorName(who), `Ask ${collaboratorName(who)}`, () => choose(index), "noema-comment-mention");
+        item.prepend(avatarFor(collaboratorName(who), 18));
+        if (index === chosen) item.classList.add("noema-comment-mention-active");
+        return item;
+      }));
+      picker.hidden = !choices.length;
+    };
+    const choose = (index: number) => {
+      const who = choices[index];
+      const caret = input.selectionStart ?? input.value.length;
+      const mention = mentionAt(input.value, caret);
+      if (!who || !mention) return;
+      const name = collaboratorName(who);
+      input.value = `${input.value.slice(0, mention.start)}@${name} ${input.value.slice(caret)}`;
+      const at = mention.start + name.length + 2;
+      input.setSelectionRange(at, at);
+      mentioned = who;
+      picker.hidden = true;
+      input.dispatchEvent(new Event("input"));
+    };
     input.value = initial;
     input.placeholder = placeholder;
     input.rows = 2;
@@ -227,6 +386,8 @@ export function installComments(host: CommentsHost): CommentsController {
     go.disabled = !initial.trim();
     const stop = button("Cancel", "Cancel", cancel, "noema-comment-cancel");
     input.addEventListener("input", () => {
+      chosen = 0;
+      showPicker();
       go.disabled = !input.value.trim();
       input.style.height = "auto";
       input.style.height = `${Math.min(input.scrollHeight, 220)}px`;
@@ -234,6 +395,16 @@ export function installComments(host: CommentsHost): CommentsController {
     });
     input.addEventListener("keydown", (event) => {
       event.stopPropagation();
+      if (!picker.hidden && choices.length) {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          chosen = (chosen + (event.key === "ArrowDown" ? 1 : choices.length - 1)) % choices.length;
+          showPicker();
+          return;
+        }
+        if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); choose(chosen); return; }
+        if (event.key === "Escape") { event.preventDefault(); picker.hidden = true; return; }
+      }
       if (event.key === "Escape") { event.preventDefault(); cancel(); }
       if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); form.requestSubmit(); }
     });
@@ -242,11 +413,15 @@ export function installComments(host: CommentsHost): CommentsController {
       const text = input.value.trim();
       if (!text) return;
       go.disabled = true;
-      void Promise.resolve(submit(text)).finally(() => { go.disabled = false; });
+      // A mention still in the text names who answers.
+      const who = mentioned && text.includes(`@${collaboratorName(mentioned)}`) ? mentioned
+        : collaborators.find((candidate) => text.includes(`@${collaboratorName(candidate)}`)) ?? null;
+      const to = who ? { buffer: who.buffer, nativeSessionId: who.nativeSessionId } : undefined;
+      void Promise.resolve(submit(text, to)).finally(() => { go.disabled = false; });
     });
     const actions = element("div", "noema-comment-actions");
     actions.append(stop, go);
-    form.append(input, actions);
+    form.append(input, picker, actions);
     return form;
   }
 
@@ -270,13 +445,17 @@ export function installComments(host: CommentsHost): CommentsController {
         card.append(element("div", "noema-comment-folded", `${messages.length - 2} more replies`));
       }
     });
+    if (thread.assignee) {
+      const assignee = element("div", "noema-comment-assignee", `→ ${thread.assignee.name}`);
+      card.insertBefore(assignee, card.querySelector(".noema-comment-message"));
+    }
     const last = messages.at(-1);
     if (thread.status === "open" && thread.assignee && last?.author.kind === "person") {
       card.append(element("div", "noema-comment-waiting", `${thread.assignee.name} is replying…`));
     }
     if (isActive && thread.status === "open" && !host.readOnly()) {
-      card.append(composer("", "Reply", async (text) => {
-        await act(() => host.api.reply({ file: file()!, id: thread.id, text }));
+      card.append(composer("", "Reply", async (text, to) => {
+        await act(() => host.api.reply({ file: file()!, id: thread.id, text, ...(to ? { to } : {}) }));
       }, () => { active = null; render(); }, thread.assignee ? `Reply to ${thread.assignee.name}` : "Reply"));
     }
     card.addEventListener("mousedown", (event) => {
@@ -293,8 +472,8 @@ export function installComments(host: CommentsHost): CommentsController {
     const avatar = element("span", "noema-comment-avatar", "Y");
     avatar.style.background = authorColor("You");
     me.append(avatar, element("strong", "", "You"));
-    card.append(me, composer("", "Comment", (text) => submitDraft(text), () => { draft = null; render(); },
-      "Comment, or ask this note's collaborator"));
+    card.append(me, composer("", "Comment", (text, to) => submitDraft(text, to), () => { draft = null; render(); },
+      collaborators.length ? "Comment, or @mention a collaborator" : "Comment"));
     return card;
   }
 
@@ -305,6 +484,11 @@ export function installComments(host: CommentsHost): CommentsController {
     for (const thread of visible) {
       const card = cardFor(thread);
       cards.set(thread.id, card);
+      rail.append(card);
+    }
+    for (const block of suggestions) {
+      const card = suggestionCard(block);
+      cards.set(suggestionKey(block), card);
       rail.append(card);
     }
     if (draft) {
@@ -331,7 +515,9 @@ export function installComments(host: CommentsHost): CommentsController {
     const wanted: { id: string; top: number; height: number }[] = [];
     let detached = 0;
     for (const [id, card] of cards) {
-      const pos = id === "draft" ? draft?.from : anchors.get(id)?.textFrom;
+      const pos = id === "draft" ? draft?.from
+        : id.startsWith("s:") ? Number(id.slice(2))
+          : anchors.get(id)?.textFrom;
       const height = card.offsetHeight || 80;
       if (pos === undefined) {
         // A thread whose text is gone sits after the anchored ones.
@@ -380,13 +566,13 @@ export function installComments(host: CommentsHost): CommentsController {
     }
   }
 
-  async function submitDraft(text: string): Promise<void> {
+  async function submitDraft(text: string, to?: CollaboratorRef): Promise<void> {
     const current = draft;
     const path = file();
     if (!current || !path) return;
     const id = newCommentId();
     try {
-      await host.api.create({ file: path, id, quote: current.quote, text });
+      await host.api.create({ file: path, id, quote: current.quote, text, ...(to ? { to } : {}) });
     } catch (error) {
       host.setStatus(error instanceof Error ? error.message : String(error), true);
       return;
@@ -432,6 +618,10 @@ export function installComments(host: CommentsHost): CommentsController {
   }
 
   const onEditorClick = (event: MouseEvent) => {
+    // A suggestion read in place activates its card (C72).
+    const proposal = (event.target as HTMLElement | null)?.closest<HTMLElement>(".noema-ediff");
+    const from = Number(proposal?.dataset.cmSourceFrom);
+    if (proposal && suggestions.some((block) => block.from === from)) { activate(`s:${from}`); return; }
     const target = (event.target as HTMLElement | null)?.closest<HTMLElement>(".noema-comment-anchor");
     const id = target?.dataset.commentId;
     if (id && threads.some((thread) => thread.id === id && thread.status === "open")) activate(id);
@@ -441,6 +631,44 @@ export function installComments(host: CommentsHost): CommentsController {
   const resize = typeof ResizeObserver === "function" ? new ResizeObserver(() => schedule()) : null;
   resize?.observe(scroller);
   resize?.observe(view.contentDOM);
+
+  function renderBar(): void {
+    const path = file();
+    const api = host.api.collaborators;
+    bar.hidden = !path || !api || host.readOnly();
+    if (bar.hidden || !api || !path) return;
+    const chips = collaborators.map((who) => {
+      const name = collaboratorName(who);
+      const state = collaboratorState(who);
+      const chip = button("", `${name} — ${state}. Open the chat`, () => void api.show(who).catch(report), "noema-collab-chip");
+      chip.dataset.state = state;
+      chip.append(avatarFor(name, 22), element("span", "noema-collab-name", name), element("span", "noema-collab-dot"));
+      return chip;
+    });
+    const add = button("+", "Add a collaborator to this note", () => menu.hidden = !menu.hidden, "noema-collab-add");
+    const menu = element("div", "noema-collab-menu");
+    menu.hidden = true;
+    for (const [agent, label] of COLLABORATOR_AGENTS) {
+      menu.append(button(`New ${label} collaborator`, `Start ${label} on this note`, () => {
+        menu.hidden = true;
+        host.setStatus(`Starting ${label} on this note…`);
+        void api.create(agent, path).then(() => loadCollaborators()).catch(report);
+      }));
+    }
+    bar.replaceChildren(...chips, add, menu);
+  }
+
+  function report(error: unknown): void {
+    host.setStatus(error instanceof Error ? error.message : String(error), true);
+  }
+
+  async function loadCollaborators(): Promise<void> {
+    const path = file();
+    const api = host.api.collaborators;
+    if (!path || !api) { collaborators = []; renderBar(); return; }
+    try { collaborators = await api.list(path); } catch { collaborators = []; }
+    renderBar();
+  }
 
   async function refresh(): Promise<void> {
     const path = file();
@@ -453,7 +681,7 @@ export function installComments(host: CommentsHost): CommentsController {
         threads = [];
         host.setStatus(error instanceof Error ? error.message : String(error), true);
       }
-      if (active && !threads.some((thread) => thread.id === active && thread.status === "open")) active = null;
+      if (active && !active.startsWith("s:") && !threads.some((thread) => thread.id === active && thread.status === "open")) active = null;
       render();
     })();
     loading = run;
@@ -463,7 +691,12 @@ export function installComments(host: CommentsHost): CommentsController {
 
 
   const controller: CommentsController = {
-    refresh,
+    async refresh() {
+      await Promise.all([refresh(), loadCollaborators()]);
+    },
+    collaboratorsChanged(changedFile) {
+      if (changedFile && changedFile === file()) void loadCollaborators();
+    },
     startComment() {
       if (host.readOnly()) return;
       const candidate = selectionToComment();
@@ -479,9 +712,9 @@ export function installComments(host: CommentsHost): CommentsController {
       if (changedFile && changedFile === file()) void refresh();
     },
     documentChanged() {
-      const before = [...anchors.keys()].join(",");
+      const before = [...anchors.keys()].join(",") + "|" + suggestionSignature();
       scanAnchors();
-      if ([...anchors.keys()].join(",") !== before) render();
+      if ([...anchors.keys()].join(",") + "|" + suggestionSignature() !== before) render();
       else schedule();
     },
     selectionChanged() {
@@ -492,8 +725,9 @@ export function installComments(host: CommentsHost): CommentsController {
       resize?.disconnect();
       view.dom.removeEventListener("click", onEditorClick);
       rail.remove();
+      bar.remove();
       style.remove();
-      scroller.classList.remove("noema-comments-on");
+      scroller.classList.remove("noema-comments-on", "noema-review-rail");
     },
   };
   void RAIL_WIDTH;

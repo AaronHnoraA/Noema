@@ -7,6 +7,8 @@ import { markEmbeddedSurface } from "../../../embedded-surface.ts";
 import { dispatchConstructEdit } from "../constructs/index.ts";
 import { approvedEdiffMarkdown, ediffActionEdit, ediffSide, scanEdiffBlocks, EDIFF_FEEDBACK_EVENT, type EdiffAction, type EdiffBlock, type EdiffFeedbackDetail } from "../../../../ediff.ts";
 import { renderMarkdownHTML } from "../../../../render-html.ts";
+import { needsRenderedComparison, wordDiff } from "../../../../word-diff.ts";
+import { authorColor } from "../../../../author-color.ts";
 
 function button(label: string, title: string, action: () => void): HTMLButtonElement {
   const el = document.createElement("button");
@@ -150,6 +152,34 @@ export class EdiffWidget extends MeasuredWidget {
       view.focus();
     });
     actions.append(accept, reject, comment, edit);
+
+    // Google Docs-style suggestion (C72): the change shown in place, word by
+    // word, in its author's colour.  A page with a comment rail shows this and
+    // keeps the controls on the rail's card; elsewhere the full card remains.
+    const inline = document.createElement("div");
+    inline.className = "noema-ediff-inline";
+    if (block?.author) root.style.setProperty("--noema-ediff-author", authorColor(block.author.name));
+    if (block && !block.error) {
+      const before = ediffSide(block, "old").replace(/\n$/, "");
+      const after = ediffSide(block, "new").replace(/\n$/, "");
+      const changes = needsRenderedComparison(before + after) ? null : wordDiff(before, after);
+      if (changes) {
+        for (const change of changes) {
+          const node = document.createElement(change.kind === "del" ? "del" : change.kind === "ins" ? "ins" : "span");
+          node.textContent = change.text;
+          inline.append(node);
+        }
+      } else {
+        inline.classList.add("noema-ediff-inline-rendered");
+        for (const [side, markdown] of [["del", before], ["ins", after]] as const) {
+          if (!markdown.trim()) continue;
+          const node = document.createElement(side === "del" ? "del" : "ins");
+          node.innerHTML = renderMarkdownHTML(markdown);
+          inline.append(node);
+        }
+      }
+    }
+    root.append(inline);
 
     const preview = document.createElement("div");
     preview.className = "noema-ediff-preview";

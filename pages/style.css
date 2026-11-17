@@ -6166,3 +6166,57 @@ body[data-noema-format-painter] .cm-content {
   .noema-focused-editor.noema-comments-on .typora-web-wrap { padding-right: 0; }
   .noema-comment-rail { position: fixed; top: auto; bottom: 12px; right: 12px; }
 }
+
+/* Collaborators of the note (C71): Google Docs' avatars, top right. */
+.noema-collab-bar {
+  position: fixed; top: 34px; right: 18px; z-index: 30;
+  display: flex; align-items: center; gap: 6px;
+  font: 12px/1.3 var(--aaron-font-sans);
+}
+.noema-collab-bar[hidden] { display: none; }
+.noema-collab-chip {
+  display: flex; align-items: center; gap: 6px; padding: 3px 9px 3px 3px;
+  border: 1px solid color-mix(in srgb, var(--aaron-ink) 14%, transparent); border-radius: 16px;
+  background: color-mix(in srgb, var(--aaron-paper) 88%, var(--aaron-ink) 12%); color: var(--aaron-ink);
+  cursor: pointer; font: inherit;
+}
+.noema-collab-chip:hover { border-color: var(--aaron-accent); }
+.noema-collab-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.noema-collab-dot { width: 8px; height: 8px; border-radius: 50%; background: color-mix(in srgb, var(--aaron-ink) 35%, transparent); }
+.noema-collab-chip[data-state="working"] .noema-collab-dot { background: #5fd38d; animation: noema-collab-pulse 1.2s ease-in-out infinite; }
+.noema-collab-chip[data-state="needs you"] .noema-collab-dot { background: #f7a948; }
+.noema-collab-chip[data-state="disconnected"] { opacity: .55; }
+@keyframes noema-collab-pulse { 50% { opacity: .35; } }
+.noema-collab-add {
+  width: 28px; height: 28px; border-radius: 50%; border: 1px dashed color-mix(in srgb, var(--aaron-ink) 35%, transparent);
+  background: transparent; color: var(--aaron-accent); font-size: 16px; cursor: pointer;
+}
+.noema-collab-menu {
+  position: absolute; top: 34px; right: 0; display: flex; flex-direction: column; min-width: 190px; padding: 4px 0;
+  border-radius: 8px; background: var(--aaron-paper); box-shadow: 0 8px 24px rgb(0 0 0 / 40%);
+}
+.noema-collab-menu[hidden] { display: none; }
+.noema-collab-menu button { border: 0; background: none; color: var(--aaron-ink); text-align: left; padding: 7px 14px; font: inherit; cursor: pointer; }
+.noema-collab-menu button:hover { background: color-mix(in srgb, var(--aaron-ink) 8%, transparent); }
+.noema-comment-assignee {
+  display: inline-block; margin: 0 0 6px; padding: 1px 8px; border-radius: 10px; font-size: 11px;
+  background: color-mix(in srgb, var(--aaron-accent) 18%, transparent); color: var(--aaron-accent);
+}
+.noema-comment-mentions {
+  display: flex; flex-direction: column; margin-top: 4px; padding: 4px 0; border-radius: 8px;
+  background: var(--aaron-paper); box-shadow: 0 6px 18px rgb(0 0 0 / 35%);
+}
+.noema-comment-mentions[hidden] { display: none; }
+.noema-comment-mention {
+  display: flex; align-items: center; gap: 8px; border: 0; background: none; color: var(--aaron-ink);
+  padding: 5px 10px; font: inherit; text-align: left; cursor: pointer;
+}
+.noema-comment-mention-active, .noema-comment-mention:hover { background: color-mix(in srgb, var(--aaron-accent) 16%, transparent); }
+
+/* Suggestions on the rail (C72). */
+.noema-suggestion-card { border-left: 3px solid var(--noema-suggestion-author, var(--aaron-accent)); }
+.noema-suggestion-summary { margin: 8px 0 0 36px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.noema-suggestion-summary del { color: #e5534b; text-decoration: line-through; }
+.noema-suggestion-summary ins { color: var(--noema-suggestion-author, #5fd38d); text-decoration: underline; text-underline-offset: 3px; }
+.noema-suggestion-reject { color: #e5534b !important; }
+.noema-suggestion-comment { font-style: italic; }

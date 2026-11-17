@@ -295,7 +295,7 @@ describe("progressive live API", () => {
   test("discovers names without implementations, and describes one actual handler", async () => {
     const { router, call } = fixture();
     const result = await call("noema:api:agent:discover", [{ query: "agent document", limit: 1 }]);
-    expect(result.total).toBe(3);
+    expect(result.total).toBe(4); // read, propose, edit, comment (C71)
     expect(result.nextOffset).toBe(1);
     expect(JSON.stringify(result)).not.toContain("implementation");
     const detail = await call("noema:api:agent:describe", [{ channel: "noema:api:agent:document:propose" }]);

@@ -2955,6 +2955,7 @@ if (hostMode !== "server") apiRouter.register(createAgentApiHandlers({ router: a
 if (hostMode !== "server") apiRouter.register(createCommentApiHandlers({
   changed: (file) => broadcast("command", { command: "comments-changed", file: String(file) }),
   ask: (payload) => gatewayNotify("noema.event", { type: "comment-asked", payload }),
+  collaborators: (file) => broadcast("command", { command: "collaborators-changed", file: String(file) }),
 }), "Comments");
 
 async function handleEmacsCommand(body = {}) {

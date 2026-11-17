@@ -13,11 +13,14 @@ const fileOf = (body) => {
   return file;
 };
 
-export function createCommentApiHandlers({ changed = () => {}, ask = () => {} } = {}) {
+export function createCommentApiHandlers({ changed = () => {}, ask = () => {}, collaborators = () => {} } = {}) {
   const written = (file, thread) => { changed(file); return { ok: true, thread }; };
   // A person's comment goes to the note's collaborator unless they said not to.
   const asked = (file, thread, body, text) => {
-    if (body?.ask !== false && thread) ask({ file, id: thread.id, text, quote: thread.quote });
+    // An @-mention names who answers (C71); otherwise Emacs picks the note's collaborator.
+    if (body?.ask !== false && thread) ask({ file, id: thread.id, text, quote: thread.quote,
+      ...(body.to && typeof body.to === "object" ? { to: { buffer: String(body.to.buffer || ""),
+        nativeSessionId: String(body.to.nativeSessionId || "") } } : {}) });
   };
   return {
     "noema:api:comments:list": async (body) => ({ ok: true, threads: await listThreads(fileOf(body)) }),
@@ -38,6 +41,8 @@ export function createCommentApiHandlers({ changed = () => {}, ask = () => {} } 
     "noema:api:comments:edit": async (body) => written(fileOf(body), await editMessage({ ...body, file: fileOf(body) })),
     "noema:api:comments:delete": async (body) => written(fileOf(body), await deleteComment({ ...body, file: fileOf(body) })),
     "noema:api:comments:assign": async (body) => written(fileOf(body), await assignThread({ ...body, file: fileOf(body) })),
+    // A note's collaborators changed (Emacs): pages refresh their header.
+    "noema:api:comments:collaborators-changed": async (body) => { collaborators(fileOf(body)); return { ok: true }; },
     // Emacs appended to the journal itself: tell the pages.
     "noema:api:comments:changed": async (body) => { changed(fileOf(body)); return { ok: true }; },
   };

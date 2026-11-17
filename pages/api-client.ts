@@ -1,5 +1,13 @@
 import type {CaptureCatalog} from "./agenda-capture-view.ts";
 import type { CommentThread } from "../server/lib/note-comments.mjs";
+
+/** A collaborator as Emacs describes a pool session. */
+export interface Collaborator {
+  buffer: string; nativeSessionId: string | null; name: string | null; agent: string;
+  file?: string | null; busy?: boolean; background?: boolean;
+  turnState?: string; processState?: string; attention?: string | null;
+}
+export interface CollaboratorRef { buffer: string; nativeSessionId: string | null }
 import type { CursorPosition, GraphPayload, Inbound, SnippetSummary, UnusedAsset } from "./types.ts";
 import type { CoreConnectionStatus, CoreReconnectReason } from "./active-core-reconnect.ts";
 
@@ -1638,13 +1646,24 @@ export const api = {
       return ensureOk(await call(body) as { ok: boolean; jsFile: string; cssFile: string; js: string; css: string }, "Slides mirror failed");
     },
   },
+  /** A note's collaborators: pool sessions bound to it (C65, C71), through Emacs. */
+  collaborators: {
+    list: async (file: string): Promise<Collaborator[]> => {
+      const reply = await callHttpApi<{ sessions?: Collaborator[] }>("noema:api:emacs:agent", [{ action: "list", file }], "Loading collaborators failed");
+      return (reply.sessions ?? []).filter((session) => !session.background);
+    },
+    show: (who: Collaborator) =>
+      callHttpApi("noema:api:emacs:agent", [{ action: "show", buffer: who.buffer, nativeSessionId: who.nativeSessionId }], "Opening the chat failed"),
+    create: (agent: string, file: string) =>
+      callHttpApi("noema:api:emacs:agent", [{ action: "create", agent, file }], "Starting a collaborator failed"),
+  },
   /** Comment threads of a note (C70), kept beside it by the host. */
   comments: {
     list: (file: string) =>
       callHttpApi<{ ok: boolean; threads: CommentThread[] }>("noema:api:comments:list", [{ file }], "Loading comments failed"),
-    create: (body: { file: string; id: string; quote: string; text: string; ask?: boolean }) =>
+    create: (body: { file: string; id: string; quote: string; text: string; ask?: boolean; to?: CollaboratorRef }) =>
       callHttpApi<{ ok: boolean; thread: CommentThread }>("noema:api:comments:create", [body], "Comment failed"),
-    reply: (body: { file: string; id: string; text: string; ask?: boolean }) =>
+    reply: (body: { file: string; id: string; text: string; ask?: boolean; to?: CollaboratorRef }) =>
       callHttpApi<{ ok: boolean; thread: CommentThread }>("noema:api:comments:reply", [body], "Reply failed"),
     resolve: (body: { file: string; id: string; resolved: boolean }) =>
       callHttpApi<{ ok: boolean; thread: CommentThread }>("noema:api:comments:resolve", [body], "Resolve failed"),

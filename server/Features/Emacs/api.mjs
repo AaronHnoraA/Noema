@@ -59,7 +59,7 @@ export function createEmacsApiHandlers({
         buffer: "required for status/send/read/stop/show/bind: exact buffer name", nativeSessionId: "required for status/send/read/stop/show/bind: exact native ID",
         file: "bind/create/spawn: absolute primary document file (null in bind: project level); list: only that document's collaborators",
         requestId: "required for result: ID returned by spawn/send; no buffer needed. tasks recovers IDs by root/target, returning lifecycle metadata and original session identity, no prompts or replies. createdAt/finishedAt are Unix seconds. Receipts expire after Emacs exits or bounded eviction",
-        root: "optional absolute project fence; required for create/spawn", target: "optional target fence; explicit /fs: paths retain target",
+        root: "optional absolute project fence; required for create/spawn unless file is given (create then makes a collaborator of that document in its project)", target: "optional target fence; explicit /fs: paths retain target",
         agent: "required for create/spawn: registered ACP provider identifier, e.g. codex, claude-code, pi",
         name: "create/spawn: optional worker name", background: "create: true keeps the buffer out of ordinary chat tabs/recall; spawn always does",
         modelId: "spawn/background create: optional advertised ACP model ID, scoped to this task session; never changes ordinary defaults",

@@ -105,3 +105,56 @@ describe("C70 comment API", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+describe("C71 collaborators in comments", () => {
+  test("C71 a mention names who answers, and collaborator changes reach pages", async () => {
+    const { createCommentApiHandlers } = await import("../server/Features/Comments/api.mjs");
+    const dir = mkdtempSync(join(tmpdir(), "noema-comments-to-"));
+    try {
+      const file = join(dir, "SAI.md");
+      const asked: any[] = [], collaborators: string[] = [];
+      const api: any = createCommentApiHandlers({ ask: (p: any) => asked.push(p), collaborators: (f: string) => collaborators.push(f) });
+      const to = { buffer: "*Agent · claude·SAI*", nativeSessionId: "n1" };
+      await api["noema:api:comments:create"]({ file, id: "c-1234", quote: "q", text: "@claude·SAI why?", to });
+      expect(asked[0]).toMatchObject({ file, id: "c-1234", to });
+      await api["noema:api:comments:reply"]({ file, id: "c-1234", text: "and?", to });
+      expect(asked[1]).toMatchObject({ to });
+      await api["noema:api:comments:collaborators-changed"]({ file });
+      expect(collaborators).toEqual([file]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("C71 an agent leaves a comment on the text it names, and replies in a thread", async () => {
+    const { ApiRouter } = await import("../server/infrastructure/api-router.mjs");
+    const { createAgentApiHandlers } = await import("../server/Features/Agent/api.mjs");
+    const { createEmacsApiHandlers } = await import("../server/Features/Emacs/api.mjs");
+    const dir = mkdtempSync(join(tmpdir(), "noema-agent-comment-"));
+    try {
+      const file = join(dir, "SAI.md");
+      let source = "# T\n\nThe fixed field is F.\n";
+      const saved: any[] = [];
+      const router = new ApiRouter().register(createEmacsApiHandlers({
+        apiAgent: () => ({ ok: true, session: { name: "claude·SAI" } }),
+      } as any));
+      const call = async (channel: string, args: any[] = []): Promise<any> => {
+        if (channel === "noema:api:notes:open") return { ok: true, file: args[0], content: source, version: "v1" };
+        if (channel === "noema:api:notes:save") { saved.push(args[0]); source = args[0].content; return { ok: true }; }
+        return router.call(channel, args);
+      };
+      router.register(createAgentApiHandlers({ router, call }));
+      const from = source.indexOf("fixed field");
+      const reply = await call("noema:api:agent:document:comment", [{ file, authorSession: "tok",
+        from, to: from + "fixed field".length, oldText: "fixed field", text: "Is F finite?" }]);
+      expect(reply).toMatchObject({ ok: true });
+      expect(source).toBe(`# T\n\nThe {==fixed field==}{>>#${reply.thread.id}<<} is F.\n`);
+      expect(saved[0]).toMatchObject({ baseVersion: "v1" });
+      let [thread] = await listThreads(file);
+      expect(thread).toMatchObject({ quote: "fixed field", author: { name: "claude·SAI", kind: "agent", session: "tok" } });
+      await call("noema:api:agent:document:comment", [{ file, authorSession: "tok", id: thread.id, text: "Answered in §2." }]);
+      [thread] = await listThreads(file);
+      expect(thread.messages.at(-1)).toMatchObject({ text: "Answered in §2.", author: { kind: "agent" } });
+      await expect(call("noema:api:agent:document:comment", [{ file, from, to: from + 3, oldText: "zzz", text: "x" }]))
+        .rejects.toThrow("oldText");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

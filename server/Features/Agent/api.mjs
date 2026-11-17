@@ -10,6 +10,8 @@ import { callOneTool } from "../../lib/pi-model.mjs";
 import { join } from "node:path";
 import { fullChannel } from "../../lib/agent-api-client.mjs";
 import { proposeSuggestions } from "../../lib/collab-suggestions.mjs";
+import { commentAnchor, newCommentId } from "../../../shared/comment-anchors.mjs";
+import { createThread, replyThread } from "../../lib/note-comments.mjs";
 
 const bad = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
 const humanDecisions = new Set([
@@ -234,7 +236,30 @@ export function createAgentApiHandlers({ router, call }) {
     return call("noema:api:notes:save", [{ file: opened.file || file, content, baseVersion: opened.version,
       clientId: `${client}-${randomUUID()}`, seq: 1, mode: "source", refresh: "deferred" }]);
   };
+  // An agent's comment (C71): wrap the text it names in an anchor through the
+  // canonical save, so an open page follows, then open its thread; or reply.
+  const commentDocument = async ({ file, id, text, from, to, oldText, authorSession } = {}) => {
+    if (typeof file !== "string" || !/\.(md|markdown)$/i.test(file)) bad("A saved Markdown file is required");
+    if (typeof text !== "string" || !text.trim()) bad("A comment needs text");
+    const who = await authorOf(authorSession);
+    const author = { name: who?.name ?? "agent", kind: "agent", ...(who?.session ? { session: who.session } : {}) };
+    if (id) return { ok: true, thread: await replyThread({ file, id, text, author }) };
+    const opened = await call("noema:api:notes:open", [file]);
+    const start = position(opened.content, from), end = position(opened.content, to);
+    if (start === undefined || end === undefined || end <= start) bad("A comment needs an ordered from/to range");
+    if (typeof oldText !== "string" || opened.content.slice(start, end) !== oldText) bad("oldText differs from the saved source; read it again");
+    const threadId = newCommentId();
+    const anchored = opened.content.slice(0, start) + commentAnchor(oldText, threadId) + opened.content.slice(end);
+    const thread = await createThread({ file: opened.file || file, id: threadId, quote: oldText, text, author });
+    const saved = await call("noema:api:notes:save", [{ file: opened.file || file, content: anchored, baseVersion: opened.version,
+      clientId: `agent-comment-${randomUUID()}`, seq: 1, mode: "source", refresh: "deferred" }]);
+    return { ok: saved?.ok !== false, thread, ...(saved?.ok === false ? { save: saved } : {}) };
+  };
   return {
+    "noema:api:agent:document:comment": documented((body) => commentDocument(body), {
+      description: "Leave a comment on the text you name, as a collaborator does in Google Docs: the person sees it beside the text and answers in the thread. With id, reply in that thread instead. For a question or a note to the person, not for a change (that is document:propose).",
+      parameters: [{ file: "absolute Markdown path", from: "UTF-16 offset or {line,column}", to: "end, same form",
+        oldText: "the exact text from..to (one line)", text: "the comment", id: "optional thread id to reply in" }] }),
     "noema:api:agent:skill:list": documented((body) => listAgentSkills(body), {
       description: "Read the existing Skill/Packs manager's effective catalog. Packs marked agent_catalog there are the default; no Skill body is returned.",
       parameters: [{ root: "optional absolute project root", scope: "global or project", requestedSkills: "optional explicit ids", requestedPacks: "optional existing pack ids" }],

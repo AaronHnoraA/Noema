@@ -46,7 +46,8 @@ function transportError(error, origin) {
   return new Error(`API transport interrupted; outcome may be unknown. Read current state before retrying a mutation. ${error.message}`);
 }
 
-const AUTHORED = new Set(["noema:api:agent:document:propose", "noema:api:agent:document:edit"]);
+const AUTHORED = new Set(["noema:api:agent:document:propose", "noema:api:agent:document:edit",
+  "noema:api:agent:document:comment"]);
 
 /** Name the calling session on document writes (C66).  Emacs gives each Agent
  * process NOEMA_AGENT_SESSION; the model never has to pass it. */

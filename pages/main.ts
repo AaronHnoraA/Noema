@@ -2210,7 +2210,7 @@ if (!serverReaderMode) {
   comments = installComments({
     view: editor.view,
     scroller: host,
-    api: api.comments,
+    api: { ...api.comments, collaborators: api.collaborators },
     currentFile: () => currentFile,
     readOnly: () => currentReadOnly,
     setStatus: (message) => setStatus(message),
@@ -13566,6 +13566,9 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     case "comments-changed":
       comments?.changed(String(body.file || ""));
+      return true;
+    case "collaborators-changed":
+      comments?.collaboratorsChanged(String(body.file || ""));
       return true;
     case "notes-index-changed": {
       const version = typeof body.version === "number" ? body.version : 0;

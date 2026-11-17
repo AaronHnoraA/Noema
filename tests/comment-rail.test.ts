@@ -1,7 +1,7 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
 import type { EditorView } from "@codemirror/view";
 import { createEditor } from "../src/editor-api.ts";
-import { installComments, layoutCards, type CommentsApi } from "../pages/comments.ts";
+import { collaboratorState, installComments, layoutCards, mentionAt, type CommentsApi } from "../pages/comments.ts";
 import type { CommentThread } from "../server/lib/note-comments.mjs";
 
 const thread = (id: string, text: string, extra: Partial<CommentThread> = {}): CommentThread => ({
@@ -11,7 +11,7 @@ const thread = (id: string, text: string, extra: Partial<CommentThread> = {}): C
   ...extra,
 });
 
-function mount(content: string, threads: CommentThread[]) {
+function mount(content: string, threads: CommentThread[], collaborators: any[] = []) {
   const scroller = document.createElement("div");
   document.body.append(scroller);
   const editor = createEditor(scroller, { kernel: "cm6", initialContent: content });
@@ -25,6 +25,11 @@ function mount(content: string, threads: CommentThread[]) {
     resolve: async (body) => { calls.push(["resolve", body]); },
     edit: async (body) => { calls.push(["edit", body]); },
     remove: async (body) => { calls.push(["remove", body]); },
+    collaborators: {
+      list: async () => collaborators,
+      show: async (who) => { calls.push(["show", who.buffer]); },
+      create: async (agent, file) => { calls.push(["create-collaborator", agent, file]); },
+    },
   };
   const comments = installComments({
     view, scroller, api, currentFile: () => "/notes/SAI.md", readOnly: () => false,
@@ -121,6 +126,78 @@ describe("C70 comment rail", () => {
       await comments.refresh();
       expect(scroller.querySelector('.noema-comment-card[data-comment-id="c-1111"]')).toBeNull();
       expect(scroller.querySelector<HTMLElement>(".noema-comment-toggle")?.textContent).toBe("Resolved (1)");
+    } finally { done(); }
+  });
+
+  test("C71 the note's collaborators show at the top with their state; + starts one", async () => {
+    const claude = { buffer: "*Agent claude*", nativeSessionId: "n1", name: "claude·SAI", agent: "claude", busy: true };
+    const { comments, calls, done } = mount("Text.\n", [], [claude]);
+    try {
+      await comments.refresh();
+      const chip = document.querySelector<HTMLElement>(".noema-collab-chip")!;
+      expect(chip.textContent).toContain("claude·SAI");
+      expect(chip.dataset.state).toBe("working");
+      chip.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(calls).toContainEqual(["show", "*Agent claude*"]);
+      document.querySelector<HTMLButtonElement>(".noema-collab-add")!.click();
+      [...document.querySelectorAll<HTMLButtonElement>(".noema-collab-menu button")]
+        .find((item) => item.textContent === "New Codex collaborator")!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(calls).toContainEqual(["create-collaborator", "codex", "/notes/SAI.md"]);
+      expect(collaboratorState({ ...claude, busy: false, attention: "permission" } as any)).toBe("needs you");
+      expect(collaboratorState({ ...claude, busy: false, processState: "disconnected" } as any)).toBe("disconnected");
+    } finally { done(); }
+  });
+
+  test("C71 typing @ offers the collaborators and the chosen one answers", async () => {
+    expect(mentionAt("Why @cla", 8)).toEqual({ start: 4, query: "cla" });
+    expect(mentionAt("mail a@b", 8)).toBeNull();
+    const claude = { buffer: "*Agent claude*", nativeSessionId: "n1", name: "claude·SAI", agent: "claude" };
+    const content = "The fixed field here.\n";
+    const { view, scroller, comments, calls, done } = mount(content, [], [claude]);
+    try {
+      await comments.refresh();
+      const from = content.indexOf("fixed field");
+      view.dispatch({ selection: { anchor: from, head: from + "fixed field".length } });
+      comments.selectionChanged();
+      comments.startComment();
+      const input = scroller.querySelector<HTMLTextAreaElement>(".noema-comment-draft textarea")!;
+      expect(input.placeholder).toBe("Comment, or @mention a collaborator");
+      input.value = "Why? @cla";
+      input.setSelectionRange(9, 9);
+      input.dispatchEvent(new Event("input"));
+      const picker = scroller.querySelector<HTMLElement>(".noema-comment-mentions")!;
+      expect(picker.hidden).toBe(false);
+      expect(picker.textContent).toContain("claude·SAI");
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(input.value).toBe("Why? @claude·SAI ");
+      scroller.querySelector<HTMLFormElement>(".noema-comment-draft form")!.requestSubmit();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const [, body] = calls.find(([kind]) => kind === "create")!;
+      expect(body.to).toEqual({ buffer: "*Agent claude*", nativeSessionId: "n1" });
+    } finally { done(); }
+  });
+
+  test("C72 a proposal is a suggestion card: accept and reject act on the note", async () => {
+    const content = "Intro\n#+begin ediff Clarify\n@@ediff-author {\"name\":\"claude·SAI\"}\n-The field is fixed.\n+The field is finite and fixed.\n#+end ediff\nEnd\n";
+    const { view, scroller, comments, saved, done } = mount(content, []);
+    try {
+      await comments.refresh();
+      expect(scroller.classList.contains("noema-review-rail")).toBe(true);
+      const card = scroller.querySelector<HTMLElement>(".noema-suggestion-card")!;
+      expect(card.textContent).toContain("claude·SAI");
+      expect(card.textContent).toContain("Suggested: Clarify");
+      expect(card.querySelector("ins")?.textContent).toBe("finite and ");
+      card.querySelector<HTMLButtonElement>(".noema-comment-resolve")!.click();
+      expect(view.state.doc.toString()).toBe("Intro\nThe field is finite and fixed.\nEnd\n");
+      expect(saved()).toBe(1);
+      comments.documentChanged();
+      expect(scroller.querySelector(".noema-suggestion-card")).toBeNull();
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
+      comments.documentChanged();
+      scroller.querySelector<HTMLButtonElement>(".noema-suggestion-reject")!.click();
+      expect(view.state.doc.toString()).toContain("@@ediff-status rejected");
     } finally { done(); }
   });
 });
