@@ -461,14 +461,16 @@ the next open of the note (which would then show raw Markdown)."
       (cl-letf (((symbol-function '+agent-context--send)
                  (lambda (&rest arguments) (setq deliver (plist-get arguments :deliver)) nil))
                 ((symbol-function '+agent-collab-task-delivery)
-                 (lambda (file line anchor) (setq place (list file line anchor)) #'ignore)))
+                 (lambda (file line anchor begin end) (setq place (list file line anchor begin end)) #'ignore)))
         (pcase-let ((`(,buffer ,begin . ,end)
                      (noema-md-bridge-region file '(:line-start 2 :line-end 2))))
           (noema-md-bridge-run "agent" buffer begin end))
         (should (eq deliver #'ignore))
         (should (equal (file-truename (nth 0 place)) (file-truename file)))
         (should (equal (nth 1 place) 2))
-        (should (equal (nth 2 place) "two\n"))))))
+        (should (equal (nth 2 place) "two\n"))
+        ;; The place in 0-based characters, for the side comment.
+        (should (equal (list (nth 3 place) (nth 4 place)) '(4 8)))))))
 
 (ert-deftest noema-md-bridge-agent-choice-can-copy-to-clipboard ()
   "A Markdown pane's agent action can copy its line reference for vterm."

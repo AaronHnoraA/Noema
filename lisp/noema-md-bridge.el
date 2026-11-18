@@ -394,16 +394,19 @@ A short selection carries its text, which saves the Agent a read."
          (format "\nSelected text as saved (this is oldText; no need to open the reference):\n<selection>%s</selection>"
                  (buffer-substring-no-properties begin end)))))))
 
-(declare-function +agent-collab-task-delivery "tools/agent/collab" (file line anchor))
+(declare-function +agent-collab-task-delivery "tools/agent/collab" (file line anchor &optional begin end))
 (declare-function +agent-context--deliver "tools/agent/context"
                   (buffer blocks &optional instructions no-focus on-failure))
 
 (defun noema-md-bridge--thread-delivery (buffer begin end)
   "Return a delivery making the request a task on BEGIN..END of note BUFFER (C76)."
   (with-current-buffer buffer
-    (+agent-collab-task-delivery
-     (buffer-file-name buffer) (line-number-at-pos begin t)
-     (buffer-substring-no-properties begin (min end (+ begin 200))))))
+    (save-restriction
+      (widen)
+      (+agent-collab-task-delivery
+       (buffer-file-name buffer) (line-number-at-pos begin t)
+       (buffer-substring-no-properties begin (min end (+ begin 200)))
+       (1- begin) (1- end)))))
 
 (defun noema-md-bridge-run (action buffer begin end)
   "Run ACTION on BEGIN..END of note BUFFER."

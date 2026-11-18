@@ -1,5 +1,4 @@
 import MarkdownIt from "markdown-it";
-import { stripCommentAnchors } from "../shared/comment-anchors.mjs";
 import { full as emoji } from "markdown-it-emoji";
 import type Token from "markdown-it/lib/token.mjs";
 import type StateBlock from "markdown-it/lib/rules_block/state_block.mjs";
@@ -1741,7 +1740,7 @@ export function renderMarkdownHTML(
   options?: RenderMarkdownHTMLOptions,
   topLevelBlocks?: Array<{ from: number; to: number }>,
 ): string {
-  markdown = stripCommentAnchors(approvedEdiffMarkdown(markdown));
+  markdown = approvedEdiffMarkdown(markdown);
   const md = markdownItForRender(options);
   const root = document.createElement("div");
   const env = {};

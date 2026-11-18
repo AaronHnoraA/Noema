@@ -108,7 +108,6 @@ import {
   type ConstructSource,
 } from "./extensions/visual/constructs/index.ts";
 import { isStableWikiHref, scanWikiLinks } from "../../shared/wiki-link.mjs";
-import { scanCommentAnchors } from "../../shared/comment-anchors.mjs";
 import {
   isCoalescedVisualTyping,
   isCoalescedVisualTypingTransaction,
@@ -222,9 +221,7 @@ type LivePreviewToken =
   | { kind: "autolink"; from: number; to: number }
   | { kind: "static"; from: number; to: number; cls: string }
   | { kind: "html-inline"; from: number; to: number; source: string }
-  | { kind: "emoji"; from: number; to: number; emoji: string; name: string }
-  | { kind: "comment-text"; from: number; to: number; id: string }
-  | { kind: "comment-delimiter"; from: number; to: number };
+  | { kind: "emoji"; from: number; to: number; emoji: string; name: string };
 
 function mapLivePreviewTokens(tokens: readonly LivePreviewToken[], changes: ChangeSet): LivePreviewToken[] {
   return tokens.map((token) => {
@@ -306,42 +303,6 @@ function addHighlightTokens(
   }
 }
 
-/**
- * Comment anchors `{==text==}{>>#id<<}` (C70): the commented text is marked
- * with its thread id, which the page's comment rail answers; the markers stay
- * hidden like Google Docs shows none, and open only while the caret is inside
- * a marker itself, so editing the commented text never reveals them.
- */
-function addCommentTokens(
-  tokens: LivePreviewToken[],
-  doc: Text,
-  ranges: readonly { from: number; to: number }[],
-  excludedRanges: readonly { from: number; to: number }[],
-): { from: number; to: number }[] {
-  const found: { from: number; to: number }[] = [];
-  const visited = new Set<number>();
-  for (const { from: visibleFrom, to: visibleTo } of ranges) {
-    const firstLine = doc.lineAt(visibleFrom).number;
-    const lastLine = doc.lineAt(Math.min(toVisibleDocPos(doc, visibleTo))).number;
-    for (let lineNum = firstLine; lineNum <= lastLine; lineNum++) {
-      if (visited.has(lineNum)) continue;
-      visited.add(lineNum);
-      const line = doc.line(lineNum);
-      if (!line.text.includes("{==")) continue;
-      for (const anchor of scanCommentAnchors(line.text)) {
-        const from = line.from + anchor.from, to = line.from + anchor.to;
-        if (rangeOverlapsAny(from, to, excludedRanges)) continue;
-        found.push({ from, to });
-        tokens.push({ kind: "comment-delimiter", from, to: line.from + anchor.textFrom });
-        if (anchor.textFrom < anchor.textTo) {
-          tokens.push({ kind: "comment-text", from: line.from + anchor.textFrom, to: line.from + anchor.textTo, id: anchor.id });
-        }
-        tokens.push({ kind: "comment-delimiter", from: line.from + anchor.textTo, to });
-      }
-    }
-  }
-  return found;
-}
 
 /** `:name:` shortcodes outside code and math, rendered as the emoji. */
 function addEmojiTokens(
@@ -571,9 +532,7 @@ function collectLivePreviewTokens(
   addCjkTextTokens(tokens, doc, ranges, allExcluded, cjkLineCache);
   addWikiLinkTokens(tokens, doc, ranges, allExcluded);
   addJupyterLinkTokens(tokens, doc, ranges, allExcluded);
-  // Comment anchors (C70) come first: their `{==` / `==}` are not highlights.
-  const commentRanges = addCommentTokens(tokens, doc, ranges, allExcluded);
-  addHighlightTokens(tokens, doc, ranges, combineRanges(allExcluded, commentRanges), codeRanges);
+  addHighlightTokens(tokens, doc, ranges, allExcluded, codeRanges);
   addEmojiTokens(tokens, doc, ranges, allExcluded, codeRanges);
   addPairedHtmlTokens(tokens, doc);
 
@@ -715,16 +674,6 @@ function buildDecorations(view: EditorView, tokens = collectLivePreviewTokens(vi
           decos.push(Decoration.replace({ widget: new EmojiWidget(token.emoji, token.name) }).range(token.from, token.to));
         }
         break;
-      case "comment-text":
-        decos.push(Decoration.mark({
-          class: "noema-comment-anchor",
-          attributes: { "data-comment-id": token.id },
-        }).range(token.from, token.to));
-        break;
-      case "comment-delimiter":
-        pushMark(decos, token.from, token.to,
-          selectionIntersectsSpan(sel, token.from, token.to) ? "syntax-hint" : "syntax-hidden");
-        break;
     }
   }
 
@@ -748,7 +697,6 @@ function selectionAffectingTokenKey(state: EditorState, tokens: readonly LivePre
       case "autolink":
       case "html-inline":
       case "emoji":
-      case "comment-delimiter":
         if (selectionIntersectsSpan(sel, token.from, token.to)) {
           keys.push(`${token.kind}:${token.from}:${token.to}`);
         }
@@ -757,7 +705,6 @@ function selectionAffectingTokenKey(state: EditorState, tokens: readonly LivePre
         if (cursorLine === token.line) keys.push(`block-mark:${token.line}`);
         break;
       case "static":
-      case "comment-text":
         break;
     }
   }

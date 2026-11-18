@@ -116,7 +116,7 @@ import { createAgendaAttention } from "./server/lib/agenda-attention.mjs";
 import { createAgendaAttentionSources } from "./server/lib/agenda-attention-source.mjs";
 import { webAgendaProjection } from "./server/lib/agenda-projection.mjs";
 import { agendaMarkdownDocument, buildAgendaFromPlanning, extractPlanningItems, inspectAgendaDocument } from "./server/lib/runtime.mjs";
-import { commentAnchorLines, commentPatchAction, commentTodos } from "./server/lib/agenda-comments.mjs";
+import { commentPatchDone, commentStatusEdit, commentTodos } from "./server/lib/agenda-comments.mjs";
 import { createRendererBuildWatcher } from "./server/lib/renderer-build-watch.mjs";
 import {
   clientLifecycleReplay,
@@ -243,8 +243,6 @@ import { knowledgeSearchResponse } from "./server/lib/knowledge-search.mjs";
 import { virtualReferencesPayload } from "./server/lib/virtual-references.mjs";
 import { ApiRouter } from "./server/infrastructure/api-router.mjs";
 import { createAgentApiHandlers } from "./server/Features/Agent/api.mjs";
-import { createCommentApiHandlers } from "./server/Features/Comments/api.mjs";
-import { listThreads, moveThreads, setThreadStatus } from "./server/lib/note-comments.mjs";
 import { readJson, readText } from "./server/infrastructure/http-body.mjs";
 import { foreignPage } from "./server/infrastructure/local-boundary.mjs";
 import { createAssetsApiHandlers } from "./server/Features/Assets/api.mjs";
@@ -1148,9 +1146,6 @@ function withWikiMutationHooks(handlers, { full = [], only = null } = {}) {
               && (result?.type === "fs-moved" || result?.type === "fs-renamed")
               && /\.(?:md|markdown)$/i.test(String(result.oldFile || ""))) {
             broadcast("command", { command: "note-file-moved", oldFile: result.oldFile, file: result.file });
-            // Its comments follow the note (C70).
-            await moveThreads(String(result.oldFile), String(result.file)).catch((error) =>
-              console.warn("[comments] could not move threads:", error?.message || error));
             gatewayNotify("noema.event", {
               type: "note-moved",
               payload: { oldFile: result.oldFile, file: result.file },
@@ -1417,24 +1412,25 @@ const agendaIndex = createAgendaService({
       return workAgendaPlanning(notebook, document);
     }
     const planning = await agendaMarkdownDocument(document);
-    // Where the note's comments are anchored, for their Agenda items (C77).
-    planning.commentLines = commentAnchorLines(document.content);
-    planning.commentNote = { file: document.file, path: relative(document.root, document.file), key: document.file,
-      id: "", title: basename(document.file), project: "", tags: [] };
+    // Open side comments are tasks of the note (C77, C79).
+    planning.todos = [...(planning.todos || []), ...commentTodos(document.content, { extract: extractPlanningItems,
+      note: { file: document.file, path: relative(document.root, document.file), key: document.file,
+        id: "", title: basename(document.file), project: "", tags: [] } })];
     return planning;
   },
   evaluate: (planning, body, options) => buildAgendaFromPlanning(planning, body, options),
   ...agendaWriters,
-  // Open comment threads are Agenda tasks; done resolves, todo reopens (C77).
-  comments: async (file, planning) => planning.commentNote
-    ? commentTodos(file, await listThreads(file), { extract: extractPlanningItems, note: planning.commentNote, lines: planning.commentLines })
-    : [],
+  // Done writes @@scomment(done) into the note, todo takes it out (C77, C79),
+  // through the save an open page follows.
   async mutate(todo, patch) {
     if (todo.sourceKind !== "comment") return agendaWriters.mutate(todo, patch);
-    const action = commentPatchAction(patch);
-    await setThreadStatus({ file: todo.file, id: todo.commentId, resolved: action === "resolve" });
+    const done = commentPatchDone(patch);
+    const opened = await apiRouter.call("noema:api:notes:open", [todo.file]);
+    const saved = await apiRouter.call("noema:api:agent:document:edit", [{ file: todo.file,
+      edits: [commentStatusEdit(opened.content, todo, done)] }]);
+    if (saved?.ok === false) throw Object.assign(new Error(saved.message || "The comment could not be saved"), { statusCode: 409 });
     noteCommentsChanged(todo.file);
-    return { ok: true, changed: false, file: todo.file };
+    return { ok: true, changed: true, file: todo.file };
   },
   // Only knowledge-vault mutations invalidate its Wiki index. An ordinary
   // project (including one on this machine) owns a separate source scope.
@@ -2972,17 +2968,12 @@ if (hostMode !== "server") apiRouter.register(createAgentApiHandlers({ router: a
   // A change too large or too contested goes to the person (C74).
   onNeedsPerson: (payload) => gatewayNotify("noema.event", { type: "agent-needs-person", payload }),
   // An agent's comment is a comment like any other: pages and Emacs hear it.
-  onComment: (file) => apiRouter.call("noema:api:comments:changed", [{ file }])
-    .then(() => gatewayNotify("noema.event", { type: "comments-changed", payload: { file: String(file) } })),
+  onComment: (file) => noteCommentsChanged(file),
 }), "Agent");
-// Comments (C70): pages, Emacs's task panel (C75) and the Agenda (C77) hear
-// every change.
-function noteCommentsChanged(file, origin) {
-  broadcast("command", { command: "comments-changed", file: String(file) });
-  if (!origin?.fromEmacs) gatewayNotify("noema.event", { type: "comments-changed", payload: { file: String(file) } });
-  agendaIndex.invalidate([String(file)]);
+// A note's side comments changed (C79): Emacs's task panel (C75) hears it.
+function noteCommentsChanged(file) {
+  gatewayNotify("noema.event", { type: "comments-changed", payload: { file: String(file) } });
 }
-if (hostMode !== "server") apiRouter.register(createCommentApiHandlers({ changed: noteCommentsChanged }), "Comments");
 
 async function handleEmacsCommand(body = {}) {
   if (body.type === "command" || body.command) {

@@ -3,69 +3,59 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // @ts-ignore Node source module
-import { commentAnchorLines, commentPatchAction, commentTitle, commentTodos } from "../server/lib/agenda-comments.mjs";
+import { commentPatchDone, commentStatusEdit, commentTitle, commentTodos } from "../server/lib/agenda-comments.mjs";
 // @ts-ignore Node source module
 import { createAgendaIndex } from "../server/lib/agenda-index.mjs";
 // @ts-ignore Node source module
 import { agendaMarkdownDocument, buildAgendaFromPlanning, configure, extractPlanningItems } from "../server/lib/runtime.mjs";
-// @ts-ignore Node source module
-import { listThreads } from "../server/lib/note-comments.mjs";
 
 const note = { file: "/n/a.md", path: "a.md", key: "/n/a.md", id: "", title: "a.md", project: "", tags: [] };
-const thread = (id: string, text: string, extra: any = {}) => ({
-  id, note: "a.md", quote: "the bound", status: "open", createdAt: "2026-11-17T08:00:00.000Z",
-  messages: [{ mid: "m0", author: { name: "You", kind: "person" }, text, at: "2026-11-17T08:00:00.000Z" }], ...extra,
-});
+const source = "# A\n\nThe bound @@scomment [Prove [it] {ddl: 2026-11-20; prio: A}] {id: k3x9qa} holds.\n"
+  + "Done @@scomment(done) [old] {id: ab12cd}\nLegacy @@scomment [use clearer def]\n";
 
-describe("C77 comments are Agenda tasks", () => {
-  test("C77 an open thread is a todo with the DSL attributes it ends with", () => {
-    const [todo, ...rest] = commentTodos("/n/a.md", [
-      thread("c-aaaa1", "Prove [the] bound {ddl: 2026-11-20, prio: A}\nmore"),
-      thread("c-bbbb2", "done already", { status: "resolved" }),
-    ], { extract: extractPlanningItems, note, lines: { "c-aaaa1": 7 } });
-    expect(rest).toEqual([]);
-    expect(todo).toMatchObject({ id: "#c-aaaa1", commentId: "c-aaaa1", sourceKind: "comment", text: "Prove (the) bound",
-      status: "todo", line: 7, quote: "the bound" });
-    expect(todo.canon).toMatchObject({ ddl: "2026-11-20", prio: "A" });
-    expect(todo.inlineTags).toContain("comment");
-  });
-
-  test("C77 titles and anchor lines", () => {
-    expect(commentTitle("Fix it")).toEqual({ title: "Fix it", attrs: "" });
+describe("C77 side comments are Agenda tasks (C79)", () => {
+  test("C77 open side comments are todos with the DSL attributes they end with", () => {
+    const todos = commentTodos(source, { extract: extractPlanningItems, note });
+    expect(todos.map((todo: any) => todo.id)).toEqual(["#k3x9qa", "#@2"]);
+    expect(todos[0]).toMatchObject({ commentId: "k3x9qa", sourceKind: "comment", text: "Prove (it)", status: "todo",
+      line: 3, quote: "The bound" });
+    expect(todos[0].canon).toMatchObject({ ddl: "2026-11-20", prio: "A" });
+    expect(todos[0].inlineTags).toContain("comment");
     expect(commentTitle("Fix {prio: B}")).toEqual({ title: "Fix", attrs: "{prio: B}" });
-    expect(commentAnchorLines("a\nb {==x==}{>>#c-1234<<}\n\n{==y==}{>>#c-5678<<}")).toEqual({ "c-1234": 2, "c-5678": 4 });
   });
 
-  test("C77 done resolves, todo reopens, other patches are refused", () => {
-    expect(commentPatchAction({ status: "done" })).toBe("resolve");
-    expect(commentPatchAction({ op: "complete" })).toBe("resolve");
-    expect(commentPatchAction({ status: "todo" })).toBe("reopen");
-    expect(() => commentPatchAction({ ddl: "2026-11-20" })).toThrow(/comment/);
+  test("C77 done writes @@scomment(done); an id-less comment is given an id", () => {
+    const [named, legacy] = commentTodos(source, { extract: extractPlanningItems, note });
+    expect(commentStatusEdit(source, named, true)).toEqual({
+      oldText: "@@scomment [Prove [it] {ddl: 2026-11-20; prio: A}] {id: k3x9qa}",
+      newText: "@@scomment(done) [Prove [it] {ddl: 2026-11-20; prio: A}] {id: k3x9qa}" });
+    expect(commentStatusEdit(source, legacy, true).newText).toMatch(/^@@scomment\(done\) \[use clearer def\] \{id: [a-z0-9]{6}\}$/);
+    expect(() => commentStatusEdit("nothing", named, true)).toThrow(/changed/);
+    expect(commentPatchDone({ op: "complete" })).toBe(true);
+    expect(commentPatchDone({ status: "todo" })).toBe(false);
+    expect(() => commentPatchDone({ ddl: "2026-11-20" })).toThrow(/comment/);
   });
 
-  test("C77 the index lists a note's comments and forgets them once resolved", async () => {
+  test("C77 the index lists a note's open comments and follows its text", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-agenda-comments-"));
     configure({ root, workspaceRoot: root, stateRoot: join(root, ".state"), tmpRoot: join(root, ".tmp") });
-    const journal = join(root, ".noema-comments.jsonl");
-    const line = (event: any) => JSON.stringify({ v: 1, at: "2026-11-17T08:00:00.000Z", ...event }) + "\n";
-    await writeFile(join(root, "a.md"), "# A\n\nThe {==bound==}{>>#c-aaaa1<<} here.\n");
-    await writeFile(journal, line({ op: "thread", id: "c-aaaa1", note: "a.md", quote: "bound", author: { name: "You" }, text: "Prove it {prio: A}" }));
+    await writeFile(join(root, "a.md"), source);
     const service = createAgendaIndex({
       knowledgeRoot: root, watch: null, now: () => new Date(2026, 10, 18, 12).getTime(),
-      parseDocument: async (doc: any) => ({ ...(await agendaMarkdownDocument(doc)), commentLines: commentAnchorLines(doc.content), commentNote: { ...note, file: doc.file } }),
+      parseDocument: async (doc: any) => {
+        const planning = await agendaMarkdownDocument(doc);
+        planning.todos.push(...commentTodos(doc.content, { extract: extractPlanningItems, note: { ...note, file: doc.file } }));
+        return planning;
+      },
       evaluate: (planning: any, body: any, options: any) => buildAgendaFromPlanning(planning, body, { ...options, requireKernel: false }),
-      comments: async (file: string, planning: any) => commentTodos(file, await listThreads(file), { extract: extractPlanningItems, note: planning.commentNote, lines: planning.commentLines }),
     });
     try {
       const first = await service.query({ includePlanning: true });
-      const todo = first.todos.find((item: any) => item.sourceKind === "comment");
-      expect(todo).toMatchObject({ text: "Prove it", line: 3 });
-      expect(todo.sourceRef.revision).toBe(todo.sourceRevision);
-      await writeFile(journal, line({ op: "thread", id: "c-aaaa1", note: "a.md", quote: "bound", author: { name: "You" }, text: "Prove it {prio: A}" })
-        + line({ op: "resolve", id: "c-aaaa1", at: "2026-11-17T09:00:00.000Z" }));
+      expect(first.todos.filter((item: any) => item.sourceKind === "comment").map((item: any) => item.text)).toEqual(["Prove (it)", "use clearer def"]);
+      await writeFile(join(root, "a.md"), source.replace("@@scomment [Prove", "@@scomment(done) [Prove"));
       service.invalidate([join(root, "a.md")]);
       const second = await service.query({ includePlanning: true });
-      expect(second.todos.filter((item: any) => item.sourceKind === "comment")).toEqual([]);
+      expect(second.todos.filter((item: any) => item.sourceKind === "comment").map((item: any) => item.text)).toEqual(["use clearer def"]);
     } finally { service.close(); await rm(root, { recursive: true, force: true }); }
   });
 });

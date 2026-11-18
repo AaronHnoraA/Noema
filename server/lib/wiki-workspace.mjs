@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { stripCommentAnchors } from "../../shared/comment-anchors.mjs";
 import { createHash } from "node:crypto";
 import { constants as fsConstants, existsSync } from "node:fs";
 import {
@@ -726,7 +725,7 @@ async function noteForFile(file, repository, workspaceRoot, cache = null, infoVa
     } catch {}
   }
   const content = await readFile(file, "utf8");
-  const approvedContent = stripCommentAnchors(approvedEdiffMarkdown(content));
+  const approvedContent = approvedEdiffMarkdown(content);
   const meta = metadata(content);
   const title = titleFor(file, content, meta);
   const namespace = normalizeWikiNamespace(meta.namespace || repository.namespace || repository.name);

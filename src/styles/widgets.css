@@ -5780,14 +5780,6 @@ body.has-diagram-fullscreen {
   text-decoration: underline wavy color-mix(in srgb, #d14 60%, transparent);
 }
 
-/* Comment anchors (C70): Google Docs' pale highlight, darker for the active thread. */
-.cm-editor .noema-comment-anchor {
-  background: color-mix(in srgb, #f7c948 26%, transparent);
-  border-bottom: 2px solid color-mix(in srgb, #f7c948 70%, transparent);
-  border-radius: 2px;
-  cursor: pointer;
-}
-
 /* Google Docs-style suggestions (C72): with a comment rail the proposal reads
  * in place, the deleted words struck and the new ones underlined in the
  * author's colour; the controls live on the rail's card.  Details opens the
@@ -5817,3 +5809,30 @@ body.has-diagram-fullscreen {
 }
 .cm-editor .noema-ediff-inline-rendered del, .cm-editor .noema-ediff-inline-rendered ins { display: block; }
 .cm-editor .noema-ediff-inline-rendered del { opacity: .6; }
+
+/* The side comment input (C79): one box at the selection. */
+.noema-scomment-input {
+  position: fixed;
+  z-index: 60;
+  width: min(360px, calc(100vw - 16px));
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--noema-surface-raised, var(--aaron-bg-alt, #1f2430));
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+}
+.noema-scomment-input textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}
+
+/* A side comment whose task is done (C79): kept, faded, ticked. */
+.cm-editor .inline-side-comment-done .inline-side-comment-card { opacity: 0.5; }
+.cm-editor .inline-side-comment-done .inline-side-comment-card::before { content: "✓ "; }

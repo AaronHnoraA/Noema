@@ -913,6 +913,7 @@ class SideCommentWidget extends MeasuredWidget {
 
   eq(other: SideCommentWidget): boolean {
     return this.cmd.context === other.cmd.context
+      && this.cmd.switchValue === other.cmd.switchValue
       && this.cmd.fullFrom === other.cmd.fullFrom
       && this.cmd.fullTo === other.cmd.fullTo;
   }
@@ -925,6 +926,9 @@ class SideCommentWidget extends MeasuredWidget {
     wrap.dataset.cmOpenSource = "true";
     wrap.setAttribute("role", "note");
     wrap.setAttribute("aria-label", "Side comment");
+    // `@@scomment(done)`: a finished comment task (C79) stays, faded.
+    const done = String(this.cmd.switchValue || "").trim().toLowerCase() === "done";
+    wrap.classList.toggle("inline-side-comment-done", done);
 
     const anchor = document.createElement("span");
     anchor.className = "inline-side-comment-anchor";
@@ -952,6 +956,7 @@ class SideCommentWidget extends MeasuredWidget {
     if (!dom.classList.contains("inline-side-comment-widget")) return false;
     dom.dataset.cmSourceFrom = String(this.cmd.fullFrom);
     dom.dataset.cmSourceTo = String(this.cmd.fullTo);
+    if (previous.cmd.switchValue !== this.cmd.switchValue) return false;
     if (previous.cmd.context !== this.cmd.context) {
       const card = dom.querySelector<HTMLElement>(".inline-side-comment-card");
       if (!card) return false;
