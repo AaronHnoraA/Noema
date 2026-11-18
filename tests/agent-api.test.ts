@@ -218,28 +218,6 @@ describe("progressive live API", () => {
     expect(saved).toHaveLength(1);
   });
 
-  test("C79 an agent adds a comment after a passage and marks one done", async () => {
-    const saved: any[] = [];
-    let source = "The bound holds.\nOld @@comment [check] {id: ab12cd}\n";
-    const router = new ApiRouter();
-    const call = async (channel: string, args: any[] = []): Promise<any> => {
-      if (channel === "noema:api:notes:open") return { ok: true, file: args[0], content: source, version: "v1" };
-      if (channel === "noema:api:notes:save") { saved.push(args[0]); source = args[0].content; return { ok: true }; }
-      return router.call(channel, args);
-    };
-    const told: string[] = [];
-    router.register(createAgentApiHandlers({ router, call, onComment: (file: string) => told.push(file) }));
-    const made = await call("noema:api:agent:document:comment", [{ file: "/tmp/a.md", text: "Why 2?", after: "bound" }]);
-    expect(made.id).toMatch(/^[a-z0-9]{6}$/);
-    expect(source).toBe(`The bound @@comment [Why 2?] {id: ${made.id}} holds.\nOld @@comment [check] {id: ab12cd}\n`);
-    await call("noema:api:agent:document:comment", [{ file: "/tmp/a.md", id: "ab12cd" }]);
-    expect(source).toContain("Old @@comment(done) [check] {id: ab12cd}");
-    await call("noema:api:agent:document:comment", [{ file: "/tmp/a.md", id: "ab12cd", resolve: false }]);
-    expect(source).toContain("Old @@comment [check] {id: ab12cd}");
-    await expect(call("noema:api:agent:document:comment", [{ file: "/tmp/a.md", id: "zzzz99" }])).rejects.toThrow(/No comment/);
-    expect(told).toEqual(["/tmp/a.md", "/tmp/a.md", "/tmp/a.md"]);
-  });
-
   test("C25 a proposal keeps unchanged lines out: each changed run is its own card", () => {
     const source = Array.from({ length: 30 }, (_, i) => `line ${i}\n`).join("");
     const content = source.replace("line 2\n", "two\n").replace("line 20\n", "twenty\n");

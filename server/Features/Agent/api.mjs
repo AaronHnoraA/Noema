@@ -10,7 +10,8 @@ import { callOneTool } from "../../lib/pi-model.mjs";
 import { join } from "node:path";
 import { fullChannel } from "../../lib/agent-api-client.mjs";
 import { proposeSuggestions } from "../../lib/collab-suggestions.mjs";
-import { findComment, newCommentId, commentEdit, commentSource } from "../../../shared/comments.mjs";
+import { commentAnchor, newCommentId } from "../../../shared/comment-anchors.mjs";
+import { createThread, setThreadStatus } from "../../lib/note-comments.mjs";
 import { largeChange, resolveEdits } from "../../lib/edit-forms.mjs";
 
 const bad = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
@@ -274,33 +275,40 @@ export function createAgentApiHandlers({ router, call, onComment = () => {}, onN
     }
     return needsPerson(file, authorSession, "The file kept changing while this edit was applied.");
   };
-  // A comment of the note (C79): add one after the passage it is about,
-  // or mark one done (reopen with resolve:false).  One edit through the same
-  // save as document:edit, so an open page follows; there are no replies.
-  const commentDocument = async ({ file, id, text, after, resolve, authorSession } = {}) => {
+  // An agent's comment (C71): wrap the text it names in an anchor through the
+  // canonical save, so an open page follows, then open its thread; or reply.
+  // A comment of the person's (C80) is a task: an agent marks it done when the
+  // change is made, or opens a comment of its own on the text it names.  There
+  // are no replies: the work is the change to the file.
+  const commentDocument = async ({ file, id, text, from, to, oldText, resolve, authorSession } = {}) => {
     if (typeof file !== "string" || !/\.(md|markdown)$/i.test(file)) bad("A saved Markdown file is required");
-    const opened = await call("noema:api:notes:open", [file]);
-    let edit, made = null;
     if (id) {
-      const comment = findComment(opened.content, id);
-      if (!comment) bad(`No comment ${id} in this note`);
-      edit = commentEdit(comment, { done: resolve !== false });
-    } else {
-      if (typeof text !== "string" || !text.trim()) bad("A comment needs text");
-      if (typeof after !== "string" || !after.trim()) bad("Name the passage the comment follows with after");
-      made = newCommentId();
-      edit = { oldText: after, newText: `${after} ${commentSource({ text, id: made })}` };
+      if (typeof text === "string" && text.trim()) bad("Comments take no replies: make the change through document:edit, then mark the comment done");
+      const thread = await setThreadStatus({ file, id, resolved: resolve !== false });
+      onComment(file);
+      return { ok: true, thread };
     }
-    // The edit names its text, so it lands on the newest version.
-    const saved = await saveDocument({ file, authorSession, edits: [edit] }, editMarkdown, "agent-comment");
-    onComment(file);
-    return { ...saved, ...(made ? { id: made } : {}) };
+    if (typeof text !== "string" || !text.trim()) bad("A comment needs text");
+    const who = await authorOf(authorSession);
+    const author = { name: who?.name ?? "agent", kind: "agent", ...(who?.session ? { session: who.session } : {}) };
+    const opened = await call("noema:api:notes:open", [file]);
+    const start = position(opened.content, from), end = position(opened.content, to);
+    if (start === undefined || end === undefined || end <= start) bad("A comment needs an ordered from/to range");
+    if (typeof oldText !== "string" || opened.content.slice(start, end) !== oldText) bad("oldText differs from the saved source; read it again");
+    const threadId = newCommentId();
+    const anchored = opened.content.slice(0, start) + commentAnchor(oldText, threadId) + opened.content.slice(end);
+    const thread = await createThread({ file: opened.file || file, id: threadId, quote: oldText, text, author });
+    onComment(opened.file || file);
+    const saved = await call("noema:api:notes:save", [{ file: opened.file || file, content: anchored, baseVersion: opened.version,
+      clientId: `agent-comment-${randomUUID()}`, seq: 1, mode: "source", refresh: "deferred" }]);
+    return { ok: saved?.ok !== false, thread, ...(saved?.ok === false ? { save: saved } : {}) };
   };
   return {
     "noema:api:agent:document:comment": documented((body) => commentDocument(body), {
-      description: "Comments (@@comment) of a note. With id, mark that comment done when its task is finished (resolve:false reopens it). Without id, add a comment after the passage you name, for a question or a note to the person, not for a change (that is document:edit or propose).",
-      parameters: [{ file: "absolute Markdown path", id: "the comment's id, to mark it done",
-        resolve: "optional false: reopen instead", text: "a new comment", after: "the unique passage the new comment follows" }] }),
+      description: "Comments are tasks. With id, mark that comment done once its change is made (resolve:false reopens it); comments take no replies. Without id, comment on the text you name, for a question to the person, not for a change (that is document:edit or propose).",
+      parameters: [{ file: "absolute Markdown path", from: "UTF-16 offset or {line,column}", to: "end, same form",
+        oldText: "the exact text from..to (one line)", text: "a new comment", id: "the comment to mark done",
+        resolve: "optional false with id: reopen" }] }),
     "noema:api:agent:skill:list": documented((body) => listAgentSkills(body), {
       description: "Read the existing Skill/Packs manager's effective catalog. Packs marked agent_catalog there are the default; no Skill body is returned.",
       parameters: [{ root: "optional absolute project root", scope: "global or project", requestedSkills: "optional explicit ids", requestedPacks: "optional existing pack ids" }],

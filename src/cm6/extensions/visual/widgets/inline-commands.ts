@@ -598,10 +598,12 @@ function stopWidgetEventPropagation(event: Event): void {
 }
 
 /**
- * `@@comment [text]{args}` — a comment standing on its own (C79), drawn as a
- * small mark; `@@comment(done)` a finished one.  Its card pops up above the
- * text (`comment-popover.ts`).  `@@comment(true)` keeps the explicit display
- * variant: its body stays visible after a `COMMENT:` label.
+ * `@@comment [text]{args}` — a private annotation chip. Mirrors the org-env
+ * block comment's dimmed collapsible UI (`org-env-comment-*` classes) but as
+ * an inline replace widget instead of a block:true one. `@@comment(true)` is
+ * the explicit public/display variant: its body stays visible and is prefixed
+ * with a prominent `COMMENT:` label. Every other switch value, including an
+ * omitted switch, retains the private collapsed behavior.
  */
 class InlineCommentWidget extends MeasuredWidget {
   cmd: InlineCommand;
@@ -623,7 +625,7 @@ class InlineCommentWidget extends MeasuredWidget {
     );
   }
 
-  toDOM(_view: EditorView): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const { cmd } = this;
     const context = cmd.context.trim();
     const display = cmd.switchValue.trim().toLowerCase() === "true";
@@ -650,18 +652,39 @@ class InlineCommentWidget extends MeasuredWidget {
       return wrap;
     }
 
-    // A comment (C79) is a small mark in the text; its card pops up above
-    // the line on hover or while the caret is on it (`comment-popover.ts`).
-    const done = cmd.switchValue.trim().toLowerCase() === "done";
-    wrap.classList.add("inline-comment-mark");
-    wrap.classList.toggle("inline-comment-done", done);
-    wrap.setAttribute("role", "note");
-    wrap.setAttribute("aria-label", `${done ? "Done comment" : "Comment"}: ${context}`);
-    const icon = document.createElement("span");
-    icon.className = "inline-comment-icon";
-    icon.setAttribute("aria-hidden", "true");
-    icon.textContent = done ? "✓" : "";
-    wrap.append(icon);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "org-env-comment-button";
+    button.setAttribute("aria-expanded", "false");
+
+    const label = document.createElement("span");
+    label.className = "org-env-comment-label";
+    label.textContent = "comment";
+
+    const state = document.createElement("span");
+    state.className = "org-env-comment-state";
+    state.textContent = "show";
+    button.append(label, state);
+    button.addEventListener("mousedown", stopWidgetEventPropagation);
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const open = content.hidden === true;
+      content.hidden = !open;
+      wrap.classList.toggle("inline-comment-open", open);
+      wrap.dataset.commentOpen = open ? "true" : "false";
+      button.setAttribute("aria-expanded", open ? "true" : "false");
+      state.textContent = open ? "hide" : "show";
+      if (wrap.isConnected) view.requestMeasure();
+    });
+
+    const content = document.createElement("span");
+    content.className = "org-env-content";
+    content.hidden = true;
+    content.innerHTML = context ? renderInlineMarkdownHTML(context) : "";
+    content.addEventListener("mousedown", stopWidgetEventPropagation);
+
+    wrap.append(button, content);
     return wrap;
   }
 

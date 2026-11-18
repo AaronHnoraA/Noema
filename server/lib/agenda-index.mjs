@@ -50,7 +50,7 @@ export function createAgendaIndex({
   onMutation = () => {}, excludePatterns = [], captureTemplates = [], beforeClockIn = async () => {},
   list = listDocuments, read = readDocument, canonicalRoot = realpath,
   watch = startNoteWatcher, watchKnowledge = true, onChange = () => {},
-  now = Date.now,
+  now = Date.now, comments = null,
 } = {}) {
   if (!knowledgeRoot || !parseDocument || !evaluate) throw new Error("Agenda requires a knowledge root, parser and evaluator");
   if (!Array.isArray(excludePatterns) || excludePatterns.some((pattern) => typeof pattern !== "string")) {
@@ -252,6 +252,14 @@ export function createAgendaIndex({
             item.sourceKind = item.sourceKind || "markdown";
             item.sourceRef = { file, id: item.id, index: item.index, source: item.source, revision: doc.revision, ambiguous };
             planning[kind].push(item);
+          }
+          // Open comment threads of the note are tasks too (C77).
+          if (comments) for (const raw of await comments(file, doc.planning)) {
+            const item = structuredClone(raw);
+            item.uid = hash(`${file}\0${item.id}`);
+            item.scopeId = scope.id;
+            item.sourceRef = { file, id: item.id, index: 0, source: item.source, revision: item.sourceRevision, ambiguous: false };
+            planning.todos.push(item);
           }
           for (const raw of doc.planning.dag?.nodes || []) planning.dag.nodes.push({
             ...structuredClone(raw), scopeId: scope.id,

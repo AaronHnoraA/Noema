@@ -2153,7 +2153,7 @@ let slideDeck: SlideDeckController | null = null;
 let writingStatsController: WritingStatsController | null = null;
 let reconcileVimSelection: (() => void) | undefined;
 
-// Side comments (C79): ⌘⌥M adds one; installed once the editor exists.
+// Google Docs-style comments (C70); installed once the editor exists.
 let comments: CommentsController | null = null;
 
 const editor = createEditor(host, {
@@ -2180,6 +2180,7 @@ const editor = createEditor(host, {
       scheduleAutomaticProseCheck();
     }
     slideDeck?.refresh();
+    comments?.documentChanged();
   },
   onSelectionChange: () => {
     // Pointer motion can publish dozens of intermediate ranges. Vim adopts
@@ -2191,6 +2192,7 @@ const editor = createEditor(host, {
     selectionChangeHandlers.forEach((handler) => handler());
     scheduleWritingStats(writingStatsController?.isDocumentChanged() ?? true);
     scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true });
+    comments?.selectionChanged();
   },
   onBlur: () => {
     // Focus changes are not mode commands. Emacs buffer switches must preserve
@@ -2205,8 +2207,13 @@ const editor = createEditor(host, {
 if (!serverReaderMode) {
   comments = installComments({
     view: editor.view,
+    scroller: host,
+    api: api.comments,
+    currentFile: () => currentFile,
     readOnly: () => currentReadOnly,
     setStatus: (message) => setStatus(message),
+    save: () => { void save(); },
+    onDraft: () => closeSelectionTool(),
   });
 }
 // Shared → user → the note's `macros-from` files → its `#+begin macros`.
@@ -6639,6 +6646,7 @@ function applyOpenedNote(
     history: "reset",
     preserveView: options.preserveView === true,
   });
+  void comments?.refresh();
   syncFormatPainterUi();
   revision = 0;
   savedRevision = 0;
@@ -12942,7 +12950,8 @@ function updateSelectionTool(active = activeEditorSelection()): void {
     ? editorSelectionRect(revisionFormAnchor.from, revisionFormAnchor.to)
     : null;
   const rect = anchored || active?.rect || null;
-  if ((serverReaderMode && !serverReader.selectionToolbar) || !rect || !modal.hidden) {
+  // A comment being written sits where the toolbar would (C80).
+  if ((serverReaderMode && !serverReader.selectionToolbar) || !rect || !modal.hidden || comments?.drafting()) {
     closeSelectionTool();
     return;
   }
@@ -13551,6 +13560,9 @@ function runHostCommand(detail: unknown): boolean {
       return true;
     case "note-file-moved":
       void handleCurrentNoteMoved(String(body.oldFile || ""), String(body.file || ""));
+      return true;
+    case "comments-changed":
+      comments?.changed(String(body.file || ""));
       return true;
     case "notes-index-changed": {
       const version = typeof body.version === "number" ? body.version : 0;

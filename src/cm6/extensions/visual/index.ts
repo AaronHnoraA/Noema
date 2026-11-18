@@ -16,7 +16,6 @@ import { fencedCodeExtension } from "./widgets/fenced-code.ts";
 import { footnoteExtension } from "./widgets/footnotes.ts";
 import { imageExtension } from "./widgets/image.ts";
 import { inlineCommandsExtension, sideCommentLayoutExtension } from "./widgets/inline-commands.ts";
-import { commentPopoverExtension } from "./widgets/comment-popover.ts";
 import { leanExtension } from "./widgets/lean-block.ts";
 import {
   leanPlaceholderEditingExtension,
@@ -54,7 +53,6 @@ export function createVisualMarkdownExtensions(): Extension {
     leanPlaceholderPreviewExtension,
     noteCodePreviewExtension,
     inlineCommandsExtension,
-    commentPopoverExtension,
     sideCommentLayoutExtension,
     // Must run after inline widgets so its measurement phase sees final Visual
     // typography. Its direct StateField decorations may alter line structure.
