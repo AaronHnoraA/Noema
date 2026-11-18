@@ -10,7 +10,7 @@ import { callOneTool } from "../../lib/pi-model.mjs";
 import { join } from "node:path";
 import { fullChannel } from "../../lib/agent-api-client.mjs";
 import { proposeSuggestions } from "../../lib/collab-suggestions.mjs";
-import { findScomment, newScommentId, scommentEdit, scommentSource } from "../../../shared/scomment.mjs";
+import { findComment, newCommentId, commentEdit, commentSource } from "../../../shared/comments.mjs";
 import { largeChange, resolveEdits } from "../../lib/edit-forms.mjs";
 
 const bad = (message) => { throw Object.assign(new Error(message), { statusCode: 400 }); };
@@ -274,7 +274,7 @@ export function createAgentApiHandlers({ router, call, onComment = () => {}, onN
     }
     return needsPerson(file, authorSession, "The file kept changing while this edit was applied.");
   };
-  // A side comment of the note (C79): add one after the passage it is about,
+  // A comment of the note (C79): add one after the passage it is about,
   // or mark one done (reopen with resolve:false).  One edit through the same
   // save as document:edit, so an open page follows; there are no replies.
   const commentDocument = async ({ file, id, text, after, resolve, authorSession } = {}) => {
@@ -282,14 +282,14 @@ export function createAgentApiHandlers({ router, call, onComment = () => {}, onN
     const opened = await call("noema:api:notes:open", [file]);
     let edit, made = null;
     if (id) {
-      const comment = findScomment(opened.content, id);
-      if (!comment) bad(`No side comment ${id} in this note`);
-      edit = scommentEdit(comment, { done: resolve !== false });
+      const comment = findComment(opened.content, id);
+      if (!comment) bad(`No comment ${id} in this note`);
+      edit = commentEdit(comment, { done: resolve !== false });
     } else {
       if (typeof text !== "string" || !text.trim()) bad("A comment needs text");
       if (typeof after !== "string" || !after.trim()) bad("Name the passage the comment follows with after");
-      made = newScommentId();
-      edit = { oldText: after, newText: `${after} ${scommentSource({ text, id: made })}` };
+      made = newCommentId();
+      edit = { oldText: after, newText: `${after} ${commentSource({ text, id: made })}` };
     }
     // The edit names its text, so it lands on the newest version.
     const saved = await saveDocument({ file, authorSession, edits: [edit] }, editMarkdown, "agent-comment");
@@ -298,7 +298,7 @@ export function createAgentApiHandlers({ router, call, onComment = () => {}, onN
   };
   return {
     "noema:api:agent:document:comment": documented((body) => commentDocument(body), {
-      description: "Side comments (@@scomment) of a note. With id, mark that comment done when its task is finished (resolve:false reopens it). Without id, add a comment after the passage you name, for a question or a note to the person, not for a change (that is document:edit or propose).",
+      description: "Comments (@@comment) of a note. With id, mark that comment done when its task is finished (resolve:false reopens it). Without id, add a comment after the passage you name, for a question or a note to the person, not for a change (that is document:edit or propose).",
       parameters: [{ file: "absolute Markdown path", id: "the comment's id, to mark it done",
         resolve: "optional false: reopen instead", text: "a new comment", after: "the unique passage the new comment follows" }] }),
     "noema:api:agent:skill:list": documented((body) => listAgentSkills(body), {

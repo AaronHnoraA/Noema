@@ -1,15 +1,15 @@
-// Comments are side comments of the note (C79).
+// Comments of the note (C79).
 //
 // ⌘⌥M, or Comment on the selection toolbar, opens one small input at the
-// selection; Enter writes ` @@scomment [text] {id: …}` right after the
-// selected passage as one undoable edit, and the comment is drawn beside the
-// text like every side comment.  There is no rail, no thread and no reply:
-// a comment is a task, and tasks are handed to agents from Emacs's
-// collaboration panel (`H-t`).
+// selection; Enter writes ` @@comment [text] {id: …}` right after the
+// selected passage as one undoable edit.  The editor draws it as a small mark
+// whose comment pops up above the text (`comment-popover.ts`).  There is no
+// rail, no thread and no reply: a comment is a task, and tasks are handed to
+// agents from Emacs's collaboration panel (`H-t`).
 
 import type { EditorView } from "@codemirror/view";
 // @ts-ignore Node source module
-import { newScommentId, scommentSource } from "../shared/scomment.mjs";
+import { newCommentId, commentSource } from "../shared/comments.mjs";
 
 export type CommentsController = {
   startComment(): void;
@@ -25,7 +25,7 @@ type Options = {
 /** Return the text that inserts a comment with TEXT and ID after BEFORE, the
  * character that precedes the insertion point. */
 export function commentInsertion(text: string, id: string, before: string): string {
-  return `${before && !/\s$/.test(before) ? " " : ""}${scommentSource({ text, id })}`;
+  return `${before && !/\s$/.test(before) ? " " : ""}${commentSource({ text, id })}`;
 }
 
 export function installComments({ view, readOnly, setStatus }: Options): CommentsController {
@@ -43,7 +43,7 @@ export function installComments({ view, readOnly, setStatus }: Options): Comment
     const at = view.state.selection.main.to;
     const coords = view.coordsAtPos(at);
     box = document.createElement("div");
-    box.className = "noema-scomment-input";
+    box.className = "noema-comment-input";
     const input = document.createElement("textarea");
     input.rows = 2;
     input.placeholder = "Comment — Enter to add, Shift-Enter for a new line, Esc to cancel";
@@ -60,7 +60,7 @@ export function installComments({ view, readOnly, setStatus }: Options): Comment
         const text = input.value.trim();
         if (!text) { close(); return; }
         const position = Math.min(at, view.state.doc.length);
-        const insert = commentInsertion(text, newScommentId(), view.state.sliceDoc(Math.max(0, position - 1), position));
+        const insert = commentInsertion(text, newCommentId(), view.state.sliceDoc(Math.max(0, position - 1), position));
         view.dispatch({
           changes: { from: position, insert },
           selection: { anchor: position + insert.length },

@@ -10,8 +10,8 @@ import { createAgendaIndex } from "../server/lib/agenda-index.mjs";
 import { agendaMarkdownDocument, buildAgendaFromPlanning, configure, extractPlanningItems } from "../server/lib/runtime.mjs";
 
 const note = { file: "/n/a.md", path: "a.md", key: "/n/a.md", id: "", title: "a.md", project: "", tags: [] };
-const source = "# A\n\nThe bound @@scomment [Prove [it] {ddl: 2026-11-20; prio: A}] {id: k3x9qa} holds.\n"
-  + "Done @@scomment(done) [old] {id: ab12cd}\nLegacy @@scomment [use clearer def]\n";
+const source = "# A\n\nThe bound @@comment [Prove [it] {ddl: 2026-11-20; prio: A}] {id: k3x9qa} holds.\n"
+  + "Done @@comment(done) [old] {id: ab12cd}\nLegacy @@comment [use clearer def]\n";
 
 describe("C77 side comments are Agenda tasks (C79)", () => {
   test("C77 open side comments are todos with the DSL attributes they end with", () => {
@@ -24,12 +24,12 @@ describe("C77 side comments are Agenda tasks (C79)", () => {
     expect(commentTitle("Fix {prio: B}")).toEqual({ title: "Fix", attrs: "{prio: B}" });
   });
 
-  test("C77 done writes @@scomment(done); an id-less comment is given an id", () => {
+  test("C77 done writes @@comment(done); an id-less comment is given an id", () => {
     const [named, legacy] = commentTodos(source, { extract: extractPlanningItems, note });
     expect(commentStatusEdit(source, named, true)).toEqual({
-      oldText: "@@scomment [Prove [it] {ddl: 2026-11-20; prio: A}] {id: k3x9qa}",
-      newText: "@@scomment(done) [Prove [it] {ddl: 2026-11-20; prio: A}] {id: k3x9qa}" });
-    expect(commentStatusEdit(source, legacy, true).newText).toMatch(/^@@scomment\(done\) \[use clearer def\] \{id: [a-z0-9]{6}\}$/);
+      oldText: "@@comment [Prove [it] {ddl: 2026-11-20; prio: A}] {id: k3x9qa}",
+      newText: "@@comment(done) [Prove [it] {ddl: 2026-11-20; prio: A}] {id: k3x9qa}" });
+    expect(commentStatusEdit(source, legacy, true).newText).toMatch(/^@@comment\(done\) \[use clearer def\] \{id: [a-z0-9]{6}\}$/);
     expect(() => commentStatusEdit("nothing", named, true)).toThrow(/changed/);
     expect(commentPatchDone({ op: "complete" })).toBe(true);
     expect(commentPatchDone({ status: "todo" })).toBe(false);
@@ -52,7 +52,7 @@ describe("C77 side comments are Agenda tasks (C79)", () => {
     try {
       const first = await service.query({ includePlanning: true });
       expect(first.todos.filter((item: any) => item.sourceKind === "comment").map((item: any) => item.text)).toEqual(["Prove (it)", "use clearer def"]);
-      await writeFile(join(root, "a.md"), source.replace("@@scomment [Prove", "@@scomment(done) [Prove"));
+      await writeFile(join(root, "a.md"), source.replace("@@comment [Prove", "@@comment(done) [Prove"));
       service.invalidate([join(root, "a.md")]);
       const second = await service.query({ includePlanning: true });
       expect(second.todos.filter((item: any) => item.sourceKind === "comment").map((item: any) => item.text)).toEqual(["use clearer def"]);

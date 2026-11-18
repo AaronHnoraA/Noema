@@ -5780,22 +5780,8 @@ body.has-diagram-fullscreen {
   text-decoration: underline wavy color-mix(in srgb, #d14 60%, transparent);
 }
 
-/* Google Docs-style suggestions (C72): with a comment rail the proposal reads
- * in place, the deleted words struck and the new ones underlined in the
- * author's colour; the controls live on the rail's card.  Details opens the
- * full card again. */
+/* The inline rendering of a suggestion stays hidden: the card shows it. */
 .cm-editor .noema-ediff-inline { display: none; }
-.noema-review-rail .cm-editor .noema-ediff:not(.noema-ediff-expanded) {
-  padding: 2px 0 2px 10px;
-  border: 0;
-  border-left: 3px solid var(--noema-ediff-author, var(--aaron-accent, #7aa2f7));
-  border-radius: 0;
-  background: color-mix(in srgb, var(--noema-ediff-author, #7aa2f7) 7%, transparent);
-  box-shadow: none;
-}
-.noema-review-rail .cm-editor .noema-ediff:not(.noema-ediff-expanded) .noema-ediff-inline { display: block; white-space: pre-wrap; }
-.noema-review-rail .cm-editor .noema-ediff:not(.noema-ediff-expanded) :is(.noema-ediff-preview, .noema-ediff-diff, .noema-ediff-actions, .noema-ediff-modes, .noema-ediff-footer, .noema-ediff-comments) { display: none !important; }
-.noema-review-rail .cm-editor .noema-ediff:not(.noema-ediff-expanded) .noema-ediff-header { font-size: 11px; opacity: .8; }
 .cm-editor .noema-ediff-inline del {
   color: color-mix(in srgb, #e5534b 85%, var(--aaron-ink, #fff));
   text-decoration: line-through;
@@ -5810,29 +5796,100 @@ body.has-diagram-fullscreen {
 .cm-editor .noema-ediff-inline-rendered del, .cm-editor .noema-ediff-inline-rendered ins { display: block; }
 .cm-editor .noema-ediff-inline-rendered del { opacity: .6; }
 
-/* The side comment input (C79): one box at the selection. */
-.noema-scomment-input {
+/* The comment input (C79): one card at the selection, like the comment cards. */
+.noema-comment-input {
   position: fixed;
   z-index: 60;
-  width: min(360px, calc(100vw - 16px));
-  padding: 8px;
-  border-radius: 8px;
-  background: var(--noema-surface-raised, var(--aaron-bg-alt, #1f2430));
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
-}
-.noema-scomment-input textarea {
-  width: 100%;
+  width: min(340px, calc(100vw - 16px));
   box-sizing: border-box;
-  resize: vertical;
-  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
-  border-radius: 6px;
-  padding: 6px 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--aaron-paper, #1e2536) 90%, var(--aaron-ink, #e4ecff) 10%);
+  border: 1px solid color-mix(in srgb, var(--aaron-ink, #e4ecff) 12%, transparent);
+  box-shadow: 0 6px 22px rgb(0 0 0 / 34%), 0 0 0 1px color-mix(in srgb, #f7c948 45%, transparent);
+  color: var(--aaron-ink, #e4ecff);
+  font: 13px/1.45 var(--aaron-font-sans, system-ui, sans-serif);
+}
+.noema-comment-input textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  resize: none;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--aaron-accent, #7aa2f7);
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 13px;
+  outline: none;
 }
 
-/* A side comment whose task is done (C79): kept, faded, ticked. */
-.cm-editor .inline-side-comment-done .inline-side-comment-card { opacity: 0.5; }
-.cm-editor .inline-side-comment-done .inline-side-comment-card::before { content: "✓ "; }
+/* ── Comments (C79): a small mark in the text, a card above it ─────────── */
+.cm-editor .inline-comment-widget.inline-comment-mark {
+  display: inline-block;
+  margin: 0 0.12em;
+  vertical-align: 0.05em;
+  cursor: pointer;
+}
+.cm-editor .inline-comment-mark .inline-comment-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 1.05em;
+  height: 0.9em;
+  border-radius: 0.5em 0.5em 0.5em 0.12em;
+  background: #f7c948;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+  color: #3a2a00;
+  font: 700 0.62em/1 var(--aaron-font-sans, system-ui, sans-serif);
+  transition: transform .12s ease;
+}
+.cm-editor .inline-comment-mark:hover .inline-comment-icon { transform: scale(1.15); }
+.cm-editor .inline-comment-mark.inline-comment-done .inline-comment-icon {
+  background: color-mix(in srgb, #5fd38d 70%, var(--aaron-paper, #1e2536));
+  color: #0e1a12;
+  opacity: 0.7;
+}
+.noema-comment-card {
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(24rem, 80vw);
+  min-width: 12rem;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--aaron-paper, #1e2536) 90%, var(--aaron-ink, #e4ecff) 10%);
+  border: 1px solid color-mix(in srgb, var(--aaron-ink, #e4ecff) 12%, transparent);
+  box-shadow: 0 6px 22px rgb(0 0 0 / 34%), 0 0 0 1px color-mix(in srgb, #f7c948 30%, transparent);
+  color: var(--aaron-ink, #e4ecff);
+  font: 13px/1.45 var(--aaron-font-sans, system-ui, sans-serif);
+  white-space: normal;
+  text-align: left;
+}
+.noema-comment-card-head { display: flex; align-items: center; gap: 8px; }
+.noema-comment-card-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 16px;
+  border-radius: 9px 9px 9px 2px;
+  background: #f7c948;
+  color: #3a2a00;
+  font-size: 11px;
+  font-weight: 700;
+}
+.noema-comment-card-done .noema-comment-card-mark { background: #5fd38d; color: #0e1a12; }
+.noema-comment-card-head strong { font-weight: 600; }
+.noema-comment-card-head small {
+  margin-left: auto;
+  color: color-mix(in srgb, var(--aaron-ink, #e4ecff) 50%, transparent);
+  font: 11px/1 var(--aaron-font-mono, ui-monospace, monospace);
+  font-variant-ligatures: none;
+}
+.noema-comment-card-body { margin: 6px 0 0 26px; overflow-wrap: anywhere; }
+.noema-comment-card-body p { display: inline; margin: 0; }
+.noema-comment-card-done .noema-comment-card-body { opacity: .7; }
+.noema-comment-card-foot {
+  margin: 8px 0 0 26px;
+  color: color-mix(in srgb, var(--aaron-ink, #e4ecff) 50%, transparent);
+  font-size: 11px;
+}

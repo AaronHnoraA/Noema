@@ -598,12 +598,10 @@ function stopWidgetEventPropagation(event: Event): void {
 }
 
 /**
- * `@@comment [text]{args}` — a private annotation chip. Mirrors the org-env
- * block comment's dimmed collapsible UI (`org-env-comment-*` classes) but as
- * an inline replace widget instead of a block:true one. `@@comment(true)` is
- * the explicit public/display variant: its body stays visible and is prefixed
- * with a prominent `COMMENT:` label. Every other switch value, including an
- * omitted switch, retains the private collapsed behavior.
+ * `@@comment [text]{args}` — a comment standing on its own (C79), drawn as a
+ * small mark; `@@comment(done)` a finished one.  Its card pops up above the
+ * text (`comment-popover.ts`).  `@@comment(true)` keeps the explicit display
+ * variant: its body stays visible after a `COMMENT:` label.
  */
 class InlineCommentWidget extends MeasuredWidget {
   cmd: InlineCommand;
@@ -625,7 +623,7 @@ class InlineCommentWidget extends MeasuredWidget {
     );
   }
 
-  toDOM(view: EditorView): HTMLElement {
+  toDOM(_view: EditorView): HTMLElement {
     const { cmd } = this;
     const context = cmd.context.trim();
     const display = cmd.switchValue.trim().toLowerCase() === "true";
@@ -652,39 +650,18 @@ class InlineCommentWidget extends MeasuredWidget {
       return wrap;
     }
 
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "org-env-comment-button";
-    button.setAttribute("aria-expanded", "false");
-
-    const label = document.createElement("span");
-    label.className = "org-env-comment-label";
-    label.textContent = "comment";
-
-    const state = document.createElement("span");
-    state.className = "org-env-comment-state";
-    state.textContent = "show";
-    button.append(label, state);
-    button.addEventListener("mousedown", stopWidgetEventPropagation);
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const open = content.hidden === true;
-      content.hidden = !open;
-      wrap.classList.toggle("inline-comment-open", open);
-      wrap.dataset.commentOpen = open ? "true" : "false";
-      button.setAttribute("aria-expanded", open ? "true" : "false");
-      state.textContent = open ? "hide" : "show";
-      if (wrap.isConnected) view.requestMeasure();
-    });
-
-    const content = document.createElement("span");
-    content.className = "org-env-content";
-    content.hidden = true;
-    content.innerHTML = context ? renderInlineMarkdownHTML(context) : "";
-    content.addEventListener("mousedown", stopWidgetEventPropagation);
-
-    wrap.append(button, content);
+    // A comment (C79) is a small mark in the text; its card pops up above
+    // the line on hover or while the caret is on it (`comment-popover.ts`).
+    const done = cmd.switchValue.trim().toLowerCase() === "done";
+    wrap.classList.add("inline-comment-mark");
+    wrap.classList.toggle("inline-comment-done", done);
+    wrap.setAttribute("role", "note");
+    wrap.setAttribute("aria-label", `${done ? "Done comment" : "Comment"}: ${context}`);
+    const icon = document.createElement("span");
+    icon.className = "inline-comment-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = done ? "✓" : "";
+    wrap.append(icon);
     return wrap;
   }
 
@@ -913,7 +890,6 @@ class SideCommentWidget extends MeasuredWidget {
 
   eq(other: SideCommentWidget): boolean {
     return this.cmd.context === other.cmd.context
-      && this.cmd.switchValue === other.cmd.switchValue
       && this.cmd.fullFrom === other.cmd.fullFrom
       && this.cmd.fullTo === other.cmd.fullTo;
   }
@@ -926,9 +902,6 @@ class SideCommentWidget extends MeasuredWidget {
     wrap.dataset.cmOpenSource = "true";
     wrap.setAttribute("role", "note");
     wrap.setAttribute("aria-label", "Side comment");
-    // `@@scomment(done)`: a finished comment task (C79) stays, faded.
-    const done = String(this.cmd.switchValue || "").trim().toLowerCase() === "done";
-    wrap.classList.toggle("inline-side-comment-done", done);
 
     const anchor = document.createElement("span");
     anchor.className = "inline-side-comment-anchor";
@@ -956,7 +929,6 @@ class SideCommentWidget extends MeasuredWidget {
     if (!dom.classList.contains("inline-side-comment-widget")) return false;
     dom.dataset.cmSourceFrom = String(this.cmd.fullFrom);
     dom.dataset.cmSourceTo = String(this.cmd.fullTo);
-    if (previous.cmd.switchValue !== this.cmd.switchValue) return false;
     if (previous.cmd.context !== this.cmd.context) {
       const card = dom.querySelector<HTMLElement>(".inline-side-comment-card");
       if (!card) return false;

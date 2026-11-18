@@ -1,10 +1,12 @@
 /**
- * Inline `@@comment [text]` — private annotation chip mirroring the org-env
- * block comment's dimmed collapsible UI, as a non-block inline widget.
+ * Inline `@@comment [text]` (C79): a comment standing on its own, drawn as a
+ * small mark whose card pops up above the text.
  */
 
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
+import { showTooltip } from "@codemirror/view";
 import { createEditor } from "../src/editor-api.ts";
+import { commentAt, commentCard } from "../src/cm6/extensions/visual/widgets/comment-popover.ts";
 
 function mountCM6(initialContent = "") {
   const host = document.createElement("div");
@@ -13,111 +15,79 @@ function mountCM6(initialContent = "") {
   return { editor, cleanup: () => { editor.destroy(); host.remove(); } };
 }
 
-describe("inline @@comment widget", () => {
-  test("renders a collapsed chip with the source hidden", () => {
-    const md = "Public text @@comment [private note]\nplain";
+describe("inline @@comment (C79)", () => {
+  test("C79 a comment is a small mark; the source is hidden", () => {
+    const md = "Public text @@comment [private note] {id: ab12cd}\nplain";
     const { editor, cleanup } = mountCM6(md);
     try {
       editor.setMarkdownSelection(md.length);
-
-      const widget = document.querySelector<HTMLElement>(".inline-comment-widget");
+      const widget = document.querySelector<HTMLElement>(".inline-comment-widget.inline-comment-mark");
       expect(widget).toBeTruthy();
-      expect(widget!.dataset.commentOpen).toBe("false");
-
-      const label = widget!.querySelector<HTMLElement>(".org-env-comment-label");
-      expect(label?.textContent).toBe("comment");
-
-      const content = widget!.querySelector<HTMLElement>(".org-env-content");
-      expect(content?.hidden).toBe(true);
-      expect(content?.textContent).toBe("private note");
-
-      expect((editor.view as unknown as { contentDOM: HTMLElement }).contentDOM.textContent)
-        .not.toContain("@@comment");
-    } finally {
-      cleanup();
-    }
+      expect(widget!.getAttribute("aria-label")).toBe("Comment: private note");
+      expect(widget!.querySelector(".inline-comment-icon")).toBeTruthy();
+      expect((editor.view as unknown as { contentDOM: HTMLElement }).contentDOM.textContent).not.toContain("@@comment");
+    } finally { cleanup(); }
   });
 
-  test("keeps false collapsed but renders true as a prominent visible comment", () => {
-    const md = "@@comment(false) [private]\n@@comment(true) [check **this**]\nplain";
+  test("C79 a done comment is ticked", () => {
+    const md = "x @@comment(done) [finished] {id: ab12cd}\nplain";
     const { editor, cleanup } = mountCM6(md);
     try {
       editor.setMarkdownSelection(md.length);
-      const widgets = Array.from(document.querySelectorAll<HTMLElement>(".inline-comment-widget"));
-      const collapsed = widgets.find((widget) => !widget.classList.contains("inline-comment-display"))!;
-      const display = widgets.find((widget) => widget.classList.contains("inline-comment-display"))!;
+      const widget = document.querySelector<HTMLElement>(".inline-comment-mark")!;
+      expect(widget.classList.contains("inline-comment-done")).toBe(true);
+      expect(widget.querySelector(".inline-comment-icon")?.textContent).toBe("✓");
+    } finally { cleanup(); }
+  });
 
-      expect(collapsed.dataset.commentOpen).toBe("false");
-      expect(collapsed.querySelector<HTMLElement>(".org-env-content")?.hidden).toBe(true);
+  test("C79 with the caret on the comment its source opens and its card pops up above", () => {
+    const md = "Public text @@comment [check **this**] {id: ab12cd}\nplain";
+    const { editor, cleanup } = mountCM6(md);
+    const cards = () => (editor.view as any).state.facet(showTooltip).filter(Boolean)
+      .map((tooltip: any) => ({ above: tooltip.above, pos: tooltip.pos, dom: tooltip.create(editor.view).dom as HTMLElement }));
+    try {
+      editor.setMarkdownSelection(md.indexOf("@@comment") + 4);
+      expect(document.querySelector(".inline-comment-mark")).toBeNull();
+      expect((editor.view as unknown as { contentDOM: HTMLElement }).contentDOM.textContent).toContain("@@comment [check");
+      const [card] = cards();
+      expect(card).toMatchObject({ above: true, pos: md.indexOf("@@comment") });
+      expect(card.dom.querySelector(".noema-comment-card-body strong")?.textContent).toBe("this");
+      expect(card.dom.querySelector("small")?.textContent).toBe("ab12cd");
+      // Leaving the comment closes the card.
+      editor.setMarkdownSelection(md.length);
+      expect(cards()).toEqual([]);
+    } finally { cleanup(); }
+  });
+
+  test("C79 the card renders math and says when the task is done", () => {
+    const md = String.raw`a @@comment(done) [check \(\alpha\)] {id: ab12cd} b`;
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      const comment = commentAt(editor.view.state as any, md.indexOf("check"))!;
+      expect(comment).toMatchObject({ id: "ab12cd", done: true, from: 2 });
+      const card = commentCard(comment);
+      expect(card.classList.contains("noema-comment-card-done")).toBe(true);
+      expect(card.querySelector(".katex")).toBeTruthy();
+      expect(commentAt(editor.view.state as any, 0)).toBeNull();
+    } finally { cleanup(); }
+  });
+
+  test("C79 @@comment(true) still shows its body after COMMENT:", () => {
+    const md = "@@comment(true) [check **this**]\nplain";
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      editor.setMarkdownSelection(md.length);
+      const display = document.querySelector<HTMLElement>(".inline-comment-display")!;
       expect(display.dataset.commentOpen).toBe("true");
-      expect(display.getAttribute("role")).toBe("note");
       expect(display.querySelector(".inline-comment-display-label")?.textContent).toBe("COMMENT:");
       expect(display.querySelector(".inline-comment-display-content strong")?.textContent).toBe("this");
-      expect(display.querySelector(".org-env-comment-button")).toBeNull();
-    } finally {
-      cleanup();
-    }
+    } finally { cleanup(); }
   });
 
-  test("shows raw source when the cursor is inside the command", () => {
-    const md = "Public text @@comment [private note]\nplain";
-    const { editor, cleanup } = mountCM6(md);
-    try {
-      editor.setMarkdownSelection(md.indexOf("@@comment") + 2);
-      expect(document.querySelector(".inline-comment-widget")).toBeNull();
-      expect((editor.view as unknown as { contentDOM: HTMLElement }).contentDOM.textContent)
-        .toContain("@@comment [private note]");
-    } finally {
-      cleanup();
-    }
-  });
-
-  test("clicking the button toggles the content open and updates state text", () => {
-    const md = "Public text @@comment [private note]\nplain";
-    const { editor, cleanup } = mountCM6(md);
-    try {
-      editor.setMarkdownSelection(md.length);
-      const widget = document.querySelector<HTMLElement>(".inline-comment-widget")!;
-      const button = widget.querySelector<HTMLButtonElement>(".org-env-comment-button")!;
-      const state = widget.querySelector<HTMLElement>(".org-env-comment-state")!;
-      const content = widget.querySelector<HTMLElement>(".org-env-content")!;
-
-      expect(state.textContent).toBe("show");
-      button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-      expect(content.hidden).toBe(false);
-      expect(widget.dataset.commentOpen).toBe("true");
-      expect(state.textContent).toBe("hide");
-
-      button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-      expect(content.hidden).toBe(true);
-      expect(widget.dataset.commentOpen).toBe("false");
-      expect(state.textContent).toBe("show");
-    } finally {
-      cleanup();
-    }
-  });
-
-  test("renders inline math inside the revealed content", () => {
-    const md = String.raw`Public @@comment [check \(\alpha\)]` + "\nplain";
-    const { editor, cleanup } = mountCM6(md);
-    try {
-      editor.setMarkdownSelection(md.length);
-      const widget = document.querySelector<HTMLElement>(".inline-comment-widget")!;
-      const content = widget.querySelector<HTMLElement>(".org-env-content")!;
-      expect(content.querySelector(".katex")).toBeTruthy();
-    } finally {
-      cleanup();
-    }
-  });
-
-  test("multiple inline comments do not interfere with each other", () => {
+  test("C79 several comments on a line are separate marks", () => {
     const { cleanup } = mountCM6("a @@comment [one] b @@comment [two]\nplain");
     try {
-      const widgets = Array.from(document.querySelectorAll<HTMLElement>(".inline-comment-widget"));
-      expect(widgets.length).toBe(2);
-      expect(widgets.map((w) => w.querySelector(".org-env-content")?.textContent)).toEqual(["one", "two"]);
-    } finally {
-      cleanup();
-    }
+      expect(document.querySelectorAll(".inline-comment-mark").length).toBe(2);
+    } finally { cleanup(); }
   });
 });

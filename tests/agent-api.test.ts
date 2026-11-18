@@ -218,9 +218,9 @@ describe("progressive live API", () => {
     expect(saved).toHaveLength(1);
   });
 
-  test("C79 an agent adds a side comment after a passage and marks one done", async () => {
+  test("C79 an agent adds a comment after a passage and marks one done", async () => {
     const saved: any[] = [];
-    let source = "The bound holds.\nOld @@scomment [check] {id: ab12cd}\n";
+    let source = "The bound holds.\nOld @@comment [check] {id: ab12cd}\n";
     const router = new ApiRouter();
     const call = async (channel: string, args: any[] = []): Promise<any> => {
       if (channel === "noema:api:notes:open") return { ok: true, file: args[0], content: source, version: "v1" };
@@ -231,12 +231,12 @@ describe("progressive live API", () => {
     router.register(createAgentApiHandlers({ router, call, onComment: (file: string) => told.push(file) }));
     const made = await call("noema:api:agent:document:comment", [{ file: "/tmp/a.md", text: "Why 2?", after: "bound" }]);
     expect(made.id).toMatch(/^[a-z0-9]{6}$/);
-    expect(source).toBe(`The bound @@scomment [Why 2?] {id: ${made.id}} holds.\nOld @@scomment [check] {id: ab12cd}\n`);
+    expect(source).toBe(`The bound @@comment [Why 2?] {id: ${made.id}} holds.\nOld @@comment [check] {id: ab12cd}\n`);
     await call("noema:api:agent:document:comment", [{ file: "/tmp/a.md", id: "ab12cd" }]);
-    expect(source).toContain("Old @@scomment(done) [check] {id: ab12cd}");
+    expect(source).toContain("Old @@comment(done) [check] {id: ab12cd}");
     await call("noema:api:agent:document:comment", [{ file: "/tmp/a.md", id: "ab12cd", resolve: false }]);
-    expect(source).toContain("Old @@scomment [check] {id: ab12cd}");
-    await expect(call("noema:api:agent:document:comment", [{ file: "/tmp/a.md", id: "zzzz99" }])).rejects.toThrow(/No side comment/);
+    expect(source).toContain("Old @@comment [check] {id: ab12cd}");
+    await expect(call("noema:api:agent:document:comment", [{ file: "/tmp/a.md", id: "zzzz99" }])).rejects.toThrow(/No comment/);
     expect(told).toEqual(["/tmp/a.md", "/tmp/a.md", "/tmp/a.md"]);
   });
 

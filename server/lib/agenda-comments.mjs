@@ -1,13 +1,13 @@
-// Side comments as Agenda items (C77, C79).
+// Comments as Agenda items (C77, C79).
 //
-// An open `@@scomment` of a note is a task of that note's Agenda scope.  Its
+// An open `@@comment` of a note is a task of that note's Agenda scope.  Its
 // text may end in planning attributes written as in the DSL
 // (`Prove the bound {ddl: fri; prio: A}`), so a comment is found, filtered,
 // sorted and scheduled like any `@@todo`.  Marking it done writes
-// `@@scomment(done)` into the note; setting it back to todo removes it.
+// `@@comment(done)` into the note; setting it back to todo removes it.
 
 import { createHash } from "node:crypto";
-import { newScommentId, scanScomments, scommentEdit } from "../../shared/scomment.mjs";
+import { newCommentId, scanComments, commentEdit } from "../../shared/comments.mjs";
 
 const failure = (message, statusCode = 422) => Object.assign(new Error(message), { statusCode });
 const hash = (value) => createHash("sha256").update(value).digest("hex");
@@ -20,11 +20,11 @@ export function commentTitle(text) {
   return { title, attrs: match ? match[2] : "" };
 }
 
-/** Return the Agenda todos of the open side comments in a note's CONTENT.
+/** Return the Agenda todos of the open comments in a note's CONTENT.
  * EXTRACT is the Markdown planning parser and NOTE its note record. */
 export function commentTodos(content, { extract, note }) {
   const todos = [];
-  scanScomments(content).forEach((comment, index) => {
+  scanComments(content).forEach((comment, index) => {
     if (comment.done) return;
     const { title, attrs } = commentTitle(comment.text);
     const source = `@@todo(todo) [${title}]${attrs ? " " + attrs : ""}`;
@@ -57,8 +57,8 @@ export function commentPatchDone(patch = {}) {
 
 /** Return the edit setting TODO's comment to DONE in SOURCE, or throw when it moved. */
 export function commentStatusEdit(source, todo, done) {
-  const comment = scanScomments(source).find((item, index) =>
+  const comment = scanComments(source).find((item, index) =>
     todo.commentId ? item.id === todo.commentId : index === todo.commentIndex && item.source === todo.commentSource);
   if (!comment) throw failure("The comment changed; refresh Agenda", 409);
-  return scommentEdit(comment, { done, id: comment.id || newScommentId() });
+  return commentEdit(comment, { done, id: comment.id || newCommentId() });
 }
