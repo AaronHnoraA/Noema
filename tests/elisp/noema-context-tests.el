@@ -75,6 +75,11 @@
     ;; fallback when the MCP tool is missing.
     (should (string-match "node \\([^ `]+agent-api\\.mjs\\)" text))
     (should (file-exists-p (match-string 1 text)))
+    (should (string-match "`\\([^`]+\\) call CHANNEL -`" text))
+    (let* ((command (concat (match-string 1 text) " help"))
+           (process-environment (cons "PATH=/usr/bin:/bin" process-environment))
+           (reply (json-parse-string (shell-command-to-string command) :object-type 'alist)))
+      (should (member "call CHANNEL - < args.json" (append (alist-get 'usage reply) nil))))
     (should (<= (length text) 1600))))
 
 (ert-deftest noema-agent-text-c26-a-prompt-is-data-read-when-used ()

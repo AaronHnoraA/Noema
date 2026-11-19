@@ -362,7 +362,7 @@ Its key follows the text, so a changed guide reaches sessions that had the old o
   (require 'noema-agent-text)
   (let ((text (concat (noema-agent-text "tools") "\n"
                       (noema-agent-text
-                       "page-entry" :api
+                       "page-entry" :node (noema-agent-text-node-command) :api
                        ;; resources/agent/ -> the checkout's scripts/.
                        (shell-quote-argument
                         (expand-file-name "../../scripts/agent-api.mjs"

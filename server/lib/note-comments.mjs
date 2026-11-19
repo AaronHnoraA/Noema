@@ -89,7 +89,8 @@ export async function listThreads(file) {
 }
 
 export async function getThread(file, id) {
-  return (await folder(journalFor(file))).get(id) ?? null;
+  const thread = (await folder(journalFor(file))).get(id);
+  return thread?.note === basename(file) ? thread : null;
 }
 
 async function append(file, event) {
@@ -110,7 +111,7 @@ async function existing(file, id) {
 export async function createThread({ file, id, quote, text: body, author: who, assignee }) {
   if (typeof file !== "string" || !file.startsWith("/")) bad("An absolute note file is required");
   if (!COMMENT_ID_RE.test(String(id))) bad("Invalid comment id");
-  if (await getThread(file, id)) bad("That comment already exists");
+  if ((await folder(journalFor(file))).has(id)) bad("That comment already exists");
   await append(file, { op: "thread", id, note: basename(file), quote: String(quote ?? ""), author: author(who),
     text: text(body), ...(assignee ? { assignee } : {}) });
   return getThread(file, id);
@@ -157,6 +158,9 @@ export async function moveThreads(file, target) {
     return threads.length;
   }
   const ids = new Set(threads.map((thread) => thread.id));
+  const destination = await folder(journalFor(target));
+  if (threads.some((thread) => destination.has(thread.id)))
+    bad("The destination already has a comment with this id");
   const lines = (await readFile(journalFor(file), "utf8")).split("\n").filter((line) => {
     try { return ids.has(JSON.parse(line).id); } catch { return false; }
   }).map((line) => {

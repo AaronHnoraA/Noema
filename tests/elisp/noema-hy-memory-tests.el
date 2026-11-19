@@ -163,7 +163,10 @@ so its open page follows and the change is attributed (C66)."
           ;; The fake CLI echoes stdin: run exactly the entry's shell command.
           (with-temp-file (expand-file-name "scripts/agent-api.mjs" directory)
             (insert "process.stdin.pipe(process.stdout);\n"))
-          (let* ((json (shell-command-to-string (noema-agent-entry--command root)))
+          (let* ((command (noema-agent-entry--command root))
+                 ;; An Agent's non-login shell need not inherit Emacs's PATH.
+                 (process-environment (cons "PATH=/usr/bin:/bin" process-environment))
+                 (json (shell-command-to-string command))
                  (args (json-parse-string json :object-type 'alist)))
             (should (equal (alist-get 'root (aref args 0)) (directory-file-name root)))
             (should (equal (alist-get 'id (aref args 0)) "noema-project-maintenance"))))

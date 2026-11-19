@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commentAnchor, newCommentId, scanCommentAnchors, stripCommentAnchors } from "../shared/comment-anchors.mjs";
-import { COMMENTS_FILE, createThread, deleteComment, editMessage, foldJournal, listThreads, moveThreads,
+import { COMMENTS_FILE, assignThread, createThread, deleteComment, editMessage, foldJournal, getThread, listThreads, moveThreads,
   replyThread, setThreadStatus } from "../server/lib/note-comments.mjs";
 
 describe("C70 comment anchors", () => {
@@ -59,6 +59,35 @@ describe("C70 comment threads beside the note", () => {
     await expect(createThread({ file: a, id: "c-aaaa", quote: "q", text: "again" })).rejects.toThrow("already");
     await expect(replyThread({ file: a, id: "c-none", text: "x" })).rejects.toThrow("No such");
     await expect(createThread({ file: a, id: "bad", quote: "q", text: "x" })).rejects.toThrow("id");
+  }));
+
+  test("C70 a thread id cannot read or change another note in the same folder", () => withFolder(async (dir) => {
+    const a = join(dir, "a.md"), b = join(dir, "b.md");
+    await createThread({ file: a, id: "c-owned", quote: "q", text: "belongs to a" });
+    const before = readFileSync(join(dir, COMMENTS_FILE), "utf8");
+    expect(await getThread(b, "c-owned")).toBeNull();
+    for (const mutate of [
+      () => replyThread({ file: b, id: "c-owned", text: "wrong note" }),
+      () => setThreadStatus({ file: b, id: "c-owned", resolved: true }),
+      () => editMessage({ file: b, id: "c-owned", text: "wrong request" }),
+      () => deleteComment({ file: b, id: "c-owned" }),
+      () => assignThread({ file: b, id: "c-owned", assignee: { name: "other", session: "tok" } }),
+    ]) await expect(mutate()).rejects.toThrow("No such");
+    await expect(createThread({ file: b, id: "c-owned", quote: "q", text: "duplicate" })).rejects.toThrow("already");
+    expect(readFileSync(join(dir, COMMENTS_FILE), "utf8")).toBe(before);
+    expect(await getThread(a, "c-owned")).toMatchObject({ note: "a.md", status: "open" });
+  }));
+
+  test("C70 a move refuses destination id collisions before changing either journal", () => withFolder(async (dir) => {
+    const other = mkdtempSync(join(tmpdir(), "noema-comments-collision-"));
+    try {
+      const source = join(dir, "source.md"), target = join(other, "target.md");
+      await createThread({ file: source, id: "c-shared", quote: "q", text: "source task" });
+      await createThread({ file: join(other, "sibling.md"), id: "c-shared", quote: "q", text: "destination task" });
+      const before = [readFileSync(join(dir, COMMENTS_FILE), "utf8"), readFileSync(join(other, COMMENTS_FILE), "utf8")];
+      await expect(moveThreads(source, target)).rejects.toThrow("already");
+      expect([readFileSync(join(dir, COMMENTS_FILE), "utf8"), readFileSync(join(other, COMMENTS_FILE), "utf8")]).toEqual(before);
+    } finally { rmSync(other, { recursive: true, force: true }); }
   }));
 
   test("C70 a renamed note keeps its threads; another writer's lines are seen", () => withFolder(async (dir) => {

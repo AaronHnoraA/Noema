@@ -13,6 +13,19 @@
                     (file-name-directory (or load-file-name buffer-file-name)))
   "Where Agent-facing text lives.")
 
+(declare-function remote-client-executable-find "remote-core" (program))
+
+(defun noema-agent-text-node-command ()
+  "Return a shell-quoted client Node executable for Agent entry commands.
+Resolve it in Emacs before handing the command to a non-login shell."
+  (shell-quote-argument
+   (or (if (fboundp 'remote-client-executable-find)
+           (remote-client-executable-find "node")
+         (let ((default-directory temporary-file-directory)
+               (exec-path (default-value 'exec-path)))
+           (executable-find "node")))
+       "node")))
+
 (defun noema-agent-text (name &rest values)
   "Return the text resources/agent/NAME.md with VALUES filled in.
 VALUES is a plist of field names and strings: `:project' fills {project}."

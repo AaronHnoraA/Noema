@@ -31,8 +31,9 @@
         (args (json-serialize
                (vector `((id . "noema-project-maintenance")
                          (root . ,(directory-file-name root)))))))
-    (format "printf '%%s' %s | node %s call noema:api:agent:skill:read -"
+    (format "printf '%%s' %s | %s %s call noema:api:agent:skill:read -"
             (shell-quote-argument (decode-coding-string args 'utf-8))
+            (noema-agent-text-node-command)
             (shell-quote-argument api))))
 
 (defun noema-agent-entry--text (root buffer session)
@@ -40,6 +41,7 @@
   (noema-agent-text
    "project-entry"
    :project (directory-file-name root)
+   :node (noema-agent-text-node-command)
    :api (shell-quote-argument (expand-file-name "scripts/agent-api.mjs" noema-agent-entry--source))
    :command (noema-agent-entry--command root)
    :skill-file (expand-file-name "resources/skills/noema-project-maintenance/SKILL.md"
