@@ -116,6 +116,7 @@ import { createAgendaAttention } from "./server/lib/agenda-attention.mjs";
 import { createAgendaAttentionSources } from "./server/lib/agenda-attention-source.mjs";
 import { webAgendaProjection } from "./server/lib/agenda-projection.mjs";
 import { agendaMarkdownDocument, buildAgendaFromPlanning, extractPlanningItems, inspectAgendaDocument } from "./server/lib/runtime.mjs";
+import { createAgendaVisitHandler } from "./server/lib/agenda-navigation.mjs";
 import { commentAnchorLines, commentPatchAction, commentTodos } from "./server/lib/agenda-comments.mjs";
 import { createRendererBuildWatcher } from "./server/lib/renderer-build-watch.mjs";
 import {
@@ -2516,11 +2517,10 @@ const apiRouter = new ApiRouter().register({
         // project left active by other clients.
         scopes: Array.isArray(body?.scopes) && body.scopes.length ? body.scopes : ["knowledge"],
       })),
-  "noema:api:agenda:visit": async (body) => {
-    const todo = await agendaIndex.lookup(body || {}, false);
-    gatewayNotify("noema.event", { type: "agenda-visit", payload: todo });
-    return { ok: true };
-  },
+  "noema:api:agenda:visit": createAgendaVisitHandler({
+    lookup: (body) => agendaIndex.lookup(body, false),
+    notify: (event) => gatewayNotify("noema.event", event),
+  }),
   "noema:api:agenda:query": (body) => agendaIndex.query(body || {}),
   "noema:api:agenda:query-active": (body) => agendaIndex.queryActive(body || {}),
   "noema:api:agenda:document": (body) => inspectAgendaDocument(body || {}),
@@ -2757,7 +2757,7 @@ const apiRouter = new ApiRouter().register({
               payload: {
                 taskId: id, file, outputPath,
                 error: String(error?.message || error || "LaTeX export failed"),
-                backend: String(agent.agent || "codex"),
+                backend: String(agent.agent || "agy"),
               },
             });
           }
@@ -3433,7 +3433,11 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
         return call("noema:api:agenda:attention-" + operation, [body || {}]);
       },
       keepClockSource: function(body) { return call("noema:api:agenda:clock-keep-source", [body || {}]); },
-      visitAgenda: function(body) { return call("noema:api:agenda:visit", [body || {}]); },
+      visitAgenda: function(body) {
+        var client = new URL(window.location.href).searchParams.get("client") || "";
+        return call("noema:api:agenda:visit", [Object.assign({}, body || {}, client ? { originClient: client } : {})]);
+      },
+      agendaDocument: function(body) { return call("noema:api:agenda:document", [body || {}]); },
       batchTodos: function(body) { return call("noema:api:agenda:batch", [body || {}]); },
       linkTodos: function(body) { return call("noema:api:agenda:dependency", [body || {}]); },
       todoDepRef: function(body) { return call("noema:api:notes:todo-dep-ref", [body || {}]); }

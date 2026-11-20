@@ -4261,6 +4261,10 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   background: var(--aaron-paper-soft);
 }
 
+.noema-task-card [hidden] {
+  display: none;
+}
+
 .noema-task-card.is-running,
 .noema-task-card.is-queued {
   border-left-color: var(--aaron-accent);

@@ -153,6 +153,19 @@
       }
     },
     {
+      "name": "theorem-title-with-math-interval",
+      "markdown": "#+begin theorem Compactness on \\([0,1]\\)\nBody.\n#+end theorem",
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{theorem}[{{Compactness on \\([0,1]\\)}}]\n```\n\n\nBody.\n\n\n```{=latex}\n\\end{theorem}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "proof-title-word-boundary",
       "markdown": "#+begin proof proofread\nBoundary.\n#+end proof",
       "expected": {

@@ -2,10 +2,13 @@
 (require 'cl-lib)
 (require 'tools/agent/acp)
 
-(defun noema-agent-export-config (config model-id)
-  "Return a private export copy of CONFIG pinned to MODEL-ID.
+(defun noema-agent-export-config (config model-id &optional effort)
+  "Return a private export copy of CONFIG pinned to MODEL-ID and EFFORT.
 Interactive model preferences never override this export-only selection."
-  (let ((copy (+agent-acp-pinned-config config model-id "medium")))
+  (let ((copy (+agent-acp-pinned-config config model-id (or effort "medium"))))
+    (setf (alist-get :agent-task-options copy)
+          (list :model (and (stringp model-id) (not (string-empty-p model-id)) model-id)
+                :effort (and (stringp effort) (not (string-empty-p effort)) effort)))
     (when (eq (map-elt copy :identifier) 'claude-code)
       ;; Claude's SDK otherwise writes the private export prompt and note text
       ;; under ~/.claude/projects after the temporary workdir is removed.

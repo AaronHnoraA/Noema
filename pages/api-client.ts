@@ -362,7 +362,7 @@ export type TodoItem = Record<string, unknown> & AgendaLocator & {
   projectKey?: string;
   workNodeId?: string;
   cellIds?: string[];
-  sourceRef?: { id?: string; revision?: string };
+  sourceRef?: { id?: string; revision?: string; index?: number };
   file?: string;
   path?: string;
   note?: string;
@@ -661,6 +661,7 @@ type NativeApi = {
     attentionAction?: (operation: string, body: Record<string, unknown>) => Promise<unknown>;
     keepClockSource?: (body: Record<string, unknown>) => Promise<unknown>;
     visitAgenda?: (body: Record<string, unknown>) => Promise<unknown>;
+    agendaDocument?: (body: Record<string, unknown>) => Promise<unknown>;
     batchTodos?: (body: Record<string, unknown>) => Promise<unknown>;
     linkTodos?: (body: Record<string, unknown>) => Promise<unknown>;
     todoDepRef?: (body: Record<string, unknown>) => Promise<unknown>;
@@ -1393,6 +1394,9 @@ export const api = {
     async visitAgenda(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().notes?.visitAgenda, "Agenda source");
       return ensureOk(await call(body) as Record<string, unknown>, "Agenda source visit failed");
+    },
+    async agendaDocument(body: { file: string; content: string }): Promise<import("./agenda-navigation.ts").AgendaDocument> {
+      return await requireMethod(nativeApi().notes?.agendaDocument, "Live Agenda document")(body) as import("./agenda-navigation.ts").AgendaDocument;
     },
     async batchTodos(body: Record<string, unknown>): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().notes?.batchTodos, "Agenda batch");

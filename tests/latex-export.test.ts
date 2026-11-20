@@ -464,6 +464,24 @@ describe("LaTeX export", () => {
     expect(latex).not.toContain("\\textbackslash");
   });
 
+  test("compiles interval notation in theorem and proof titles", async () => {
+    const { notes } = await setupRoot();
+    const file = join(notes, "interval.md");
+    const outputPath = join(notes, "interval.tex");
+    await writeFile(file, String.raw`#+begin theorem On \([0,1]\)
+A continuous function attains its maximum.
+#+end theorem
+
+#+begin proof For \(x\in[0,1]\)
+Proof text.
+#+end proof`);
+    await exportLatex({ file, outputPath });
+    const tex = await readFile(outputPath, "utf8");
+    expect(tex).toContain(String.raw`On \([0,1]\)`);
+    expect(tex).toContain(String.raw`For \(x\in[0,1]\)`);
+    expect((await readFile(join(notes, "interval.pdf"))).subarray(0, 4).toString()).toBe("%PDF");
+  });
+
   test("keeps the Proof label visible when a proof has a direction or title", () => {
     const result = noemaMarkdownToLatex([
       "#+begin proof <=",
@@ -989,7 +1007,7 @@ describe("LaTeX export", () => {
       workspaceRoot: root,
       latexTemplatesRoot: join(root, "templates"),
       latexExportEngine: "codex",
-      latexCodexBin: "/nonexistent/codex-binary",
+      latexAgyBin: "/nonexistent/agy-binary",
     });
     const note = join(notes, "c.md");
     await writeFile(note, "# C\n\nBody.\n", "utf8");
@@ -1078,27 +1096,31 @@ describe("LaTeX export", () => {
     expect(await readFile(out, "utf8")).toContain("Verified body.");
   });
 
-  test("passes everyday export models to the injected ACP runner", async () => {
+  test("uses agy with the Emacs profile by default and honors explicit export backends", async () => {
     const { root, notes } = await setupRoot();
     const note = join(notes, "models.md");
     await writeFile(note, "Verified body.\n", "utf8");
-    for (const [backend, expected] of [["codex", "gpt-5.6-terra"], ["claude", "sonnet"]]) {
+    for (const [backend, expectedModel] of [
+      [undefined, ""],
+      ["codex", "gpt-5.6-terra"],
+      ["claude", "sonnet"],
+    ]) {
       configure({
         root: notes, workspaceRoot: root,
         latexTemplatesRoot: join(root, "templates"),
         latexExportEngine: "codex", latexExportAgent: backend,
       });
-      let receivedModel = "";
+      let received: unknown;
       await exportLatex({
         file: note,
         outputPath: join(notes, `models-${backend}.tex`),
         polish: true,
-        agentRunner: async ({ model }: { model: string }) => {
-          receivedModel = model;
+        agentRunner: async (options: { backend: string; model: string }) => {
+          received = options;
           return { ok: false, message: "test runner stopped after recording model" };
         },
       });
-      expect(receivedModel).toBe(expected);
+      expect(received).toMatchObject({ backend: backend ?? "agy", model: expectedModel });
     }
   });
 

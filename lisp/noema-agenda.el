@@ -33,12 +33,22 @@ and projects. This is data, never evaluated Lisp."
 (defvar noema-agenda--project-root nil)
 (defvar noema-agenda--project-lease nil)
 (defvar noema-agenda--project-request 0)
+(defvar noema-agenda--visit-request 0
+  "Generation of the latest native source navigation request.")
+(defvar noema-agenda--waiting-visit nil)
+(defvar noema-agenda-navigation-cancel-functions nil
+  "Functions clearing host navigation intents after cancellation.")
 (defvar noema-agenda--project-callbacks nil)
 (defvar noema-agenda--reconnect nil)
 (defvar noema-agenda-project-root-function #'identity
   "Host adapter mapping a project identity to a supported source root.
 The Emacs host supplies Remote placement here; unsupported placement signals
 an error before any host request or project scan.")
+(defvar noema-agenda-visit-function nil
+  "Optional rendered-document visitor called with (RECORD REQUEST).
+Return non-nil to handle the visit. REQUEST is the current navigation generation;
+delayed visitors must verify it and the originating window before moving focus.")
+(defvar +programmatic-file-visit)
 (defvar-local noema-agenda--snapshot nil)
 (defvar-local noema-agenda--from nil)
 (defvar-local noema-agenda--days 7)
@@ -53,6 +63,30 @@ an error before any host request or project scan.")
 (defvar-local noema-agenda--marks nil)
 (defvar-local noema-agenda--preferred-uid nil)
 (defvar-local noema-agenda--categories nil)
+
+(defun noema-agenda--finish-visit (request)
+  "Stop watching commands once REQUEST no longer needs an async result."
+  (when (eql request noema-agenda--waiting-visit)
+    (setq noema-agenda--waiting-visit nil)
+    (remove-hook 'pre-command-hook #'noema-agenda--cancel-visit)))
+
+(defun noema-agenda--cancel-visit ()
+  "Invalidate pending navigation before the user's next Emacs command."
+  (cl-incf noema-agenda--visit-request)
+  (noema-agenda--finish-visit noema-agenda--waiting-visit)
+  (run-hooks 'noema-agenda-navigation-cancel-functions))
+
+(defun noema-agenda--watch-visit (request)
+  "Watch only while REQUEST waits for the host or its document page."
+  (when (= request noema-agenda--visit-request)
+    (setq noema-agenda--waiting-visit request)
+    (add-hook 'pre-command-hook #'noema-agenda--cancel-visit)))
+
+(defun noema-agenda--begin-visit ()
+  "Begin one cancellable navigation, superseding earlier requests."
+  (noema-agenda--cancel-visit)
+  (noema-agenda--watch-visit noema-agenda--visit-request)
+  noema-agenda--visit-request)
 
 (defun noema-agenda--get (object key &optional default)
   "Read KEY from a gateway OBJECT or test alist."
@@ -151,6 +185,7 @@ an error before any host request or project scan.")
     (add-text-properties
      0 (length entry)
      (list 'noema-agenda-item todo 'noema-agenda-occurrence occurrence
+           'mouse-face 'highlight 'help-echo "Click or RET to open this task in its note"
            'day day 'type (noema-agenda--get occurrence 'kind "todo")
            'todo-state state 'priority (- 1000 (string-to-char priority))
            'org-todo-regexp (regexp-opt '("TODO" "DOING" "BLOCKED" "WAITING" "DONE" "CANCELLED") t)) entry)
@@ -314,6 +349,7 @@ projects."
 (defun noema-agenda-host-stopped ()
   "Forget leases and pending calls when the host exits, without restarting it."
   (cl-incf noema-agenda--project-request)
+  (noema-agenda--cancel-visit)
   (setq noema-agenda--project-scope nil noema-agenda--project-lease nil
         noema-agenda--reconnect t)
   (noema-agenda--finish-project-requests nil '((message . "Noema host stopped")))
@@ -741,9 +777,6 @@ With a prefix argument, choose a target file; otherwise use the scope inbox.md."
           (when (noema-agenda--matches todo block) (push (noema-agenda--entry todo nil nil) entries))))
       (when entries (insert (org-agenda-finalize-entries entries 'agenda) "\n")))))
 
-(defvar noema-agenda--visit-request 0
-  "Generation of the latest native source navigation request.")
-
 (defun noema-agenda--snapshot-task (snapshot record)
   "Resolve RECORD among live tasks in editor SNAPSHOT, never raw code text."
   (let* ((ref (noema-agenda--get record 'sourceRef))
@@ -782,29 +815,49 @@ With a prefix argument, choose a target file; otherwise use the scope inbox.md."
       (user-error "Task position does not match the editor; refresh Agenda"))
     (recenter)))
 
+(defun noema-agenda--visit-source-record (record request)
+  "Visit RECORD in a text buffer when no rendered-document adapter handles it."
+  (let ((+programmatic-file-visit t))
+    (pop-to-buffer (find-file-noselect (noema-agenda--get record 'file))))
+  (if (equal (noema-agenda--get record 'sourceKind) "work-node")
+      (progn (noema-agenda--finish-visit request)
+             (message "Opened the legacy work document as source"))
+    (let ((buffer (current-buffer)) (window (selected-window))
+          (file buffer-file-name) (tick (buffer-chars-modified-tick))
+          (content (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max)))))
+      (noema-agenda--call
+       "document" `((file . ,file) (content . ,content))
+       (lambda (snapshot error-object)
+         (noema-agenda--finish-visit request)
+         (when (and (= request noema-agenda--visit-request) (buffer-live-p buffer))
+           (with-current-buffer buffer
+             (cond
+              (error-object (noema-agenda--error error-object))
+              ((or (/= tick (buffer-chars-modified-tick)) (not (equal file buffer-file-name)))
+               (message "Task source changed during navigation; retry from Agenda"))
+              ((not (and (window-live-p window) (eq window (selected-window))
+                         (eq buffer (window-buffer window))))
+               (message "Task navigation finished after switching buffers; retry from Agenda"))
+              (t (noema-agenda--goto-snapshot-task (noema-agenda--snapshot-task snapshot record)))))))))))
+
 (defun noema-agenda-visit-record (record)
   "Visit a resolved native RECORD using live document or WorkNode identity."
   (unless record (user-error "Task moved or disappeared; refresh Agenda"))
-  (let ((request (cl-incf noema-agenda--visit-request)))
-    (pop-to-buffer (find-file-noselect (noema-agenda--get record 'file)))
-    (if (equal (noema-agenda--get record 'sourceKind) "work-node")
-        (message "Opened the legacy work document as source")
-      (let ((buffer (current-buffer)) (window (selected-window))
-            (file buffer-file-name) (tick (buffer-chars-modified-tick))
-            (content (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max)))))
-        (noema-agenda--call
-         "document" `((file . ,file) (content . ,content))
-         (lambda (snapshot error-object)
-           (when (and (= request noema-agenda--visit-request) (buffer-live-p buffer))
-             (with-current-buffer buffer
-               (cond
-                (error-object (noema-agenda--error error-object))
-                ((or (/= tick (buffer-chars-modified-tick)) (not (equal file buffer-file-name)))
-                 (message "Task source changed during navigation; retry from Agenda"))
-                ((not (and (window-live-p window) (eq window (selected-window))
-                           (eq buffer (window-buffer window))))
-                 (message "Task navigation finished after switching buffers; retry from Agenda"))
-                (t (noema-agenda--goto-snapshot-task (noema-agenda--snapshot-task snapshot record))))))))))))
+  (unless (and (stringp (noema-agenda--get record 'file))
+               (file-name-absolute-p (noema-agenda--get record 'file)))
+    (user-error "Task has no absolute source file; refresh Agenda"))
+  (let ((request (noema-agenda--begin-visit)))
+    (unless (and (not (equal (noema-agenda--get record 'sourceKind) "work-node"))
+                 noema-agenda-visit-function
+                 (funcall noema-agenda-visit-function record request))
+      (noema-agenda--visit-source-record record request))))
+
+(defun noema-agenda-mouse-visit (event)
+  "Visit the task clicked by EVENT, using the same guarded path as RET."
+  (interactive "e")
+  (mouse-set-point event)
+  (when (get-text-property (line-beginning-position) 'noema-agenda-item)
+    (noema-agenda-visit)))
 
 (defun noema-agenda-visit ()
   "Resolve the current native record and visit its original source."
@@ -812,10 +865,11 @@ With a prefix argument, choose a target file; otherwise use the scope inbox.md."
   (let* ((todo (noema-agenda-item-at-point))
          (uid (noema-agenda--get todo 'uid))
          (buffer (current-buffer)) (window (selected-window))
-         (request (cl-incf noema-agenda--visit-request)))
+         (request (noema-agenda--begin-visit)))
     (noema-agenda--call
      "query" `((scopes . ,(vector (noema-agenda--get todo 'scopeId))))
      (lambda (snapshot error-object)
+       (noema-agenda--finish-visit request)
        (when (and (= request noema-agenda--visit-request)
                   (buffer-live-p buffer) (window-live-p window)
                   (eq window (selected-window)) (eq buffer (window-buffer window)))
@@ -864,7 +918,9 @@ With a prefix argument, choose a target file; otherwise use the scope inbox.md."
                       ("B" . noema-agenda-bulk) ("c" . noema-agenda-capture-menu) ("D" . noema-agenda-dependency)
                       ("I" . noema-agenda-clock-in) ("O" . noema-agenda-clock-out) ("v R" . noema-agenda-clock-retry)
                       ("K" . noema-agenda-clock-keep-source)
-                      ("RET" . noema-agenda-visit) ("?" . noema-agenda-help) ("q" . quit-window)))
+                      ("RET" . noema-agenda-visit)
+                      ("<mouse-1>" . noema-agenda-mouse-visit) ("<mouse-2>" . noema-agenda-mouse-visit)
+                      ("?" . noema-agenda-help) ("q" . quit-window)))
       (define-key map (kbd (car binding)) (cdr binding))) map))
 
 (define-derived-mode noema-agenda-mode org-agenda-mode "Noema Agenda"

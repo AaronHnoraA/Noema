@@ -482,6 +482,33 @@
             (should (= 1 (length visited)))))
       (kill-buffer buffer))))
 
+(ert-deftest noema-agenda-navigation-delegates-markdown-before-visiting-source ()
+  (let ((noema-agenda-visit-function
+         (lambda (record request)
+           (should (equal (alist-get 'file record) "/tmp/task.md"))
+           (should (= request noema-agenda--visit-request))
+           t)))
+    (cl-letf (((symbol-function 'find-file-noselect)
+               (lambda (&rest _) (ert-fail "Rendered Markdown must not visit raw source"))))
+      (noema-agenda-visit-record '((file . "/tmp/task.md") (id . "#task"))))))
+
+(ert-deftest noema-agenda-navigation-mouse-uses-the-clicked-task ()
+  (save-window-excursion
+    (noema-agenda-test--with-buffer
+     (switch-to-buffer (current-buffer))
+     (goto-char (point-min)) (search-forward "Native task")
+     (let* ((position (point))
+            (event (list 'mouse-1 (list (selected-window) position '(0 . 0) 0)))
+            visited)
+       (goto-char (point-min))
+       (cl-letf (((symbol-function 'noema-agenda--call)
+                  (lambda (_op _body callback) (funcall callback (noema-agenda-test--snapshot) nil)))
+                 ((symbol-function 'noema-agenda-visit-record) (lambda (record) (setq visited record))))
+         (let ((command (key-binding [mouse-1])))
+           (should (commandp command))
+           (funcall command event)))
+       (should (equal (alist-get 'uid visited) "one"))))))
+
 
 (ert-deftest noema-agenda-navigation-resolves-live-task-not-identical-code-text ()
   (let* ((source "@@todo [Same]{id: task}")

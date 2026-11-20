@@ -100,7 +100,8 @@ let katexMacrosRoot = resolve(process.env.NOEMA_KATEX_MACROS_DIR || join(workspa
 // server/lib/latex-export-codex.mjs and ../../docs/noema/design/latex-export-style.md.
 let latexAgentDir = resolve(process.env.NOEMA_LATEX_AGENT_DIR || join(appDir, "agents", "latex-export"));
 let latexExportEngine = String(process.env.NOEMA_LATEX_EXPORT_ENGINE || "codex").trim().toLowerCase();
-let latexExportAgent = String(process.env.NOEMA_LATEX_EXPORT_AGENT || "codex").trim().toLowerCase();
+let latexExportAgent = String(process.env.NOEMA_LATEX_EXPORT_AGENT || "agy").trim().toLowerCase();
+let latexAgyBin = String(process.env.NOEMA_AGY_BIN || "agy").trim();
 let latexCodexBin = String(process.env.NOEMA_CODEX_BIN || "codex").trim();
 let latexClaudeBin = String(process.env.NOEMA_CLAUDE_BIN || "claude").trim();
 let latexOpencodeBin = String(process.env.NOEMA_OPENCODE_BIN || "opencode").trim();
@@ -109,7 +110,7 @@ let latexExportModel = String(process.env.NOEMA_LATEX_EXPORT_MODEL || "").trim()
 let latexExportMaxAttempts = Math.max(1, Number(process.env.NOEMA_LATEX_EXPORT_MAX_ATTEMPTS) || 3);
 let latexExportAgentIdleTimeoutMs = Math.max(10_000, Number(process.env.NOEMA_LATEX_EXPORT_AGENT_IDLE_TIMEOUT_MS) || 180_000);
 let latexExportAgentHardTimeoutMs = Math.max(latexExportAgentIdleTimeoutMs, Number(process.env.NOEMA_LATEX_EXPORT_AGENT_HARD_TIMEOUT_MS) || 900_000);
-const LATEX_EXPORT_AGENTS = ["codex", "claude", "opencode"];
+const LATEX_EXPORT_AGENTS = ["agy", "codex", "claude", "opencode"];
 const LATEX_EXPORT_ENGINES = ["codex", "mechanical"];
 const execFileAsync = promisify(execFile);
 
@@ -6191,7 +6192,8 @@ function normalizeLatexExportEngine(value) {
 }
 
 function latexExportAgentBin(agent) {
-  switch (normalizeLatexExportAgent(agent) || "codex") {
+  switch (normalizeLatexExportAgent(agent) || "agy") {
+    case "agy": return latexAgyBin;
     case "claude": return latexClaudeBin;
     case "opencode": return latexOpencodeBin;
     case "codex":
@@ -6210,7 +6212,7 @@ async function applyLatexExportSettingsFromState(existingState = null) {
 }
 
 function latexExportAgentStatusPayload() {
-  const agent = normalizeLatexExportAgent(latexExportAgent) || "codex";
+  const agent = normalizeLatexExportAgent(latexExportAgent) || "agy";
   const engine = normalizeLatexExportEngine(latexExportEngine) || "codex";
   return {
     type: "latex-export-agent",
@@ -6221,7 +6223,7 @@ function latexExportAgentStatusPayload() {
       const bin = executablePath(latexExportAgentBin(id));
       return {
         id,
-        label: id === "codex" ? "Codex" : id === "claude" ? "Claude" : "OpenCode",
+        label: { agy: "Antigravity", codex: "Codex", claude: "Claude", opencode: "OpenCode" }[id],
         current: id === agent,
         available: agentAvailable(bin),
       };
@@ -6893,8 +6895,8 @@ export async function exportLatex(body = {}) {
   // above with a 422, so none of them can reach the warning list from here.
   const warnings = Array.isArray(converted.warnings) ? [...converted.warnings] : [];
   warnings.push(...diagramWarnings, ...(summary?.warnings || []));
-  const backend = ["codex", "claude", "opencode"].includes(latexExportAgent) ? latexExportAgent : "codex";
-  const agentBin = executablePath(backend === "claude" ? latexClaudeBin : backend === "opencode" ? latexOpencodeBin : latexCodexBin);
+  const backend = normalizeLatexExportAgent(latexExportAgent) || "agy";
+  const agentBin = executablePath(latexExportAgentBin(backend));
   const agentRunner = typeof body.agentRunner === "function" ? body.agentRunner : null;
   const wantAgent = latexExportEngine !== "mechanical" && String(body.engine || "").toLowerCase() !== "mechanical";
   // The polish pass runs by default and can be turned off per export. It is no
@@ -6923,9 +6925,7 @@ export async function exportLatex(body = {}) {
       backend,
       agentBin,
       agentRunner,
-      // Export polishing uses an everyday model even when the interactive
-      // agent is configured for a slower, high-effort model. Explicit export
-      // settings still take precedence for every backend.
+      // The Emacs ACP bridge applies its current Antigravity export profile.
       model: latexExportModel || (backend === "codex" ? latexCodexModel || "gpt-5.6-terra"
         : backend === "claude" ? "sonnet" : ""),
       needsTitle: false,
@@ -9198,7 +9198,8 @@ export function configure(options = {}) {
   katexMacrosRoot = resolve(String(options.katexMacrosRoot || process.env.NOEMA_KATEX_MACROS_DIR || join(workspaceRoot, "etc", "katex-macros")));
   latexAgentDir = resolve(String(options.latexAgentDir || process.env.NOEMA_LATEX_AGENT_DIR || join(appDir, "agents", "latex-export")));
   latexExportEngine = String(options.latexExportEngine || process.env.NOEMA_LATEX_EXPORT_ENGINE || "codex").trim().toLowerCase();
-  latexExportAgent = String(options.latexExportAgent || process.env.NOEMA_LATEX_EXPORT_AGENT || "codex").trim().toLowerCase();
+  latexExportAgent = String(options.latexExportAgent || process.env.NOEMA_LATEX_EXPORT_AGENT || "agy").trim().toLowerCase();
+  latexAgyBin = String(options.latexAgyBin || process.env.NOEMA_AGY_BIN || "agy").trim();
   latexCodexBin = String(options.latexCodexBin || process.env.NOEMA_CODEX_BIN || "codex").trim();
   latexClaudeBin = String(options.latexClaudeBin || process.env.NOEMA_CLAUDE_BIN || "claude").trim();
   latexOpencodeBin = String(options.latexOpencodeBin || process.env.NOEMA_OPENCODE_BIN || "opencode").trim();

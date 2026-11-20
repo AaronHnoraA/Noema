@@ -12,7 +12,7 @@ export const LANGUAGETOOL_SETTINGS_LIMITS = Object.freeze({
 
 const HARD_DEFAULTS = Object.freeze({
   automaticEnabled: true,
-  serverUrl: "http://10.243.90.222:8765",
+  serverUrl: "http://100.64.0.2:8765",
   language: "en-US",
   level: "picky",
   performanceProfile: "balanced",

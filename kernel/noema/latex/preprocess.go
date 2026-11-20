@@ -1204,6 +1204,10 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 		}
 		label = "Proof (" + direction + ")"
 	}
+	if strings.Contains(label, "]") {
+		// amsthm forwards proof titles to an optional item label, consuming one group.
+		label = "{{" + label + "}}"
+	}
 	opened := "\\begin{" + env + "}"
 	if label != "" {
 		opened += "[" + label + "]"

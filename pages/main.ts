@@ -216,6 +216,7 @@ import {
   type BibliographyWatchRange,
 } from "./bibliography-state.ts";
 import type { CursorPosition, NoteSummary, ReadingNeighbor, SnippetSummary } from "./types.ts";
+import { createAgendaNavigator } from "./agenda-navigation.ts";
 import { createVimLite, type VimLiteKey, type VimLiteMode } from "./vim-lite.ts";
 import { ceilCommandGeneratedId, ceilLanguageForKernel } from "../src/cm6/extensions/visual/widgets/ceil-shared.ts";
 import {
@@ -704,6 +705,117 @@ function visibleTaskSnapshot(): CoreTask[] {
     : ["queued", "running", "canceling"].includes(task.status));
 }
 
+function updateTaskLines(list: HTMLElement, lines: string[]): void {
+  lines.forEach((text, index) => {
+    const item = list.children[index] ?? list.appendChild(document.createElement("li"));
+    if (item.textContent !== text) item.textContent = text;
+  });
+  while (list.children.length > lines.length) list.lastElementChild!.remove();
+}
+
+function createTaskCard(id: string) {
+  const card = document.createElement("article");
+  card.innerHTML = `
+    <div class="noema-task-card-head"><div><strong></strong><span></span></div><span class="noema-task-status-badge"></span></div>
+    <p></p><div class="noema-task-phase"></div><div class="noema-task-meta"></div>
+    <div class="noema-task-result"></div><div data-task-notice></div>
+    <details><summary></summary><ol></ol></details>
+    <details class="noema-task-agent-audit"><summary></summary><p></p><ul></ul></details>
+    <div class="noema-task-actions"></div>`;
+  const [progress, audit] = card.querySelectorAll("details");
+  const actions = card.querySelector<HTMLElement>(".noema-task-actions")!;
+
+  function button(label: string, run: () => Promise<void>, refresh = true) {
+    const control = document.createElement("button");
+    control.type = "button";
+    control.textContent = label;
+    control.addEventListener("click", async () => {
+      control.disabled = true;
+      try {
+        await run();
+        if (refresh) await refreshTaskManager();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await refreshTaskManager(true);
+        taskManagerStatus.textContent = message;
+      } finally {
+        control.disabled = false;
+      }
+    });
+    actions.appendChild(control);
+    return control;
+  }
+  const openAgent = button("Open agent session", async () => {
+    await api.latex.openAgent(id);
+    closeTaskManager();
+  }, false);
+  const cancel = button("Cancel", async () => { await api.tasks.cancel(id); });
+  const retry = button("Rerun", async () => {
+    await api.tasks.retry(id);
+    taskManagerStatus.textContent = "LaTeX export queued again with the same inputs.";
+  });
+  const intervene = button("Intervene in Emacs", async () => {
+    await api.latex.intervene(id);
+    taskManagerStatus.textContent = "Opened a separate Emacs agent session for this export.";
+    closeTaskManager();
+  }, false);
+  const close = button("Close task", async () => { await api.tasks.close(id); });
+
+  const setText = (selector: string, text: string) => {
+    const element = card.querySelector<HTMLElement>(selector)!;
+    if (element.textContent !== text) element.textContent = text;
+    return element;
+  };
+  function update(task: CoreTask): void {
+    card.className = `noema-task-card is-${task.status}`;
+    setText("strong", task.title || task.kind);
+    setText(".noema-task-card-head div span", task.kind);
+    setText(".noema-task-status-badge", task.status);
+    setText(":scope > p", task.description || "Core task");
+    setText(".noema-task-phase", `${task.phase || task.status}${task.message && task.message !== task.phase ? ` — ${task.message}` : ""}`);
+    setText(".noema-task-meta", [
+      taskMetadataLine(task),
+      task.startedAt ? `Started ${taskTime(task.startedAt)}` : `Created ${taskTime(task.createdAt)}`,
+      task.finishedAt ? `Finished ${taskTime(task.finishedAt)}` : "",
+    ].filter(Boolean).join(" · "));
+    const resultText = taskResultLine(task);
+    setText(".noema-task-result", resultText).hidden = !resultText;
+    const warning = task.error || visibleTaskWarnings(task).join("; ");
+    const notice = setText("[data-task-notice]", warning);
+    notice.className = task.error ? "noema-task-error" : "noema-task-warning";
+    notice.hidden = !warning;
+
+    const entries = task.progress ?? [];
+    progress.hidden = !entries.length;
+    setText("details summary", `Progress (${entries.length})`);
+    updateTaskLines(progress.querySelector("ol")!, entries.map(entry => `${taskTime(entry.at)}  ${entry.text || ""}`.trim()));
+    const agent = task.result?.agent as Record<string, unknown> | undefined;
+    const decisions: Record<string, unknown>[] = Array.isArray(agent?.decisions) ? agent.decisions : [];
+    const report = String(agent?.summary || "").trim();
+    audit.hidden = !report && !decisions.length;
+    setText(".noema-task-agent-audit summary", `Agent audit (${decisions.length} decisions)`);
+    setText(".noema-task-agent-audit p", report).hidden = !report;
+    const list = audit.querySelector("ul")!;
+    list.hidden = !decisions.length;
+    updateTaskLines(list, decisions.map(decision =>
+      `${decision.id || decision.kind || "review"}: ${decision.action || "reviewed"} — ${decision.reason || "No reason returned"}`));
+
+    const isExport = task.kind === "latex-export";
+    openAgent.hidden = !isExport || !task.agentSessionAvailable;
+    cancel.hidden = !task.cancellable;
+    retry.hidden = !task.retryable;
+    retry.textContent = task.status === "completed" ? "Run again" : "Rerun";
+    intervene.hidden = !isExport || task.status !== "failed";
+    close.hidden = !task.closeable;
+    actions.hidden = !actions.querySelector("button:not([hidden])");
+  }
+  return { card, update };
+}
+
+const taskCards = new Map<string, ReturnType<typeof createTaskCard>>();
+const emptyTaskList = document.createElement("div");
+emptyTaskList.className = "noema-task-empty";
+
 function renderTaskManager(): void {
   for (const tab of taskManagerTabs) {
     const selected = tab.dataset.taskTab === taskManagerTab;
@@ -713,181 +825,28 @@ function renderTaskManager(): void {
   const tasks = visibleTaskSnapshot();
   const active = taskManagerSnapshot.filter((task) => ["queued", "running", "canceling"].includes(task.status)).length;
   taskManagerSummary.textContent = `${active} active · ${taskManagerSnapshot.length} retained`;
-  taskManagerList.replaceChildren();
-  if (tasks.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "noema-task-empty";
-    empty.textContent = taskManagerTab === "active" ? "No active tasks." : "No LaTeX export tasks in the current Core session.";
-    taskManagerList.appendChild(empty);
+  const retained = new Set(taskManagerSnapshot.map(task => task.id));
+  const visible = new Set(tasks.map(task => task.id));
+  for (const [id, view] of taskCards) {
+    if (!visible.has(id)) view.card.remove();
+    if (!retained.has(id)) taskCards.delete(id);
+  }
+  if (!tasks.length) {
+    emptyTaskList.textContent = taskManagerTab === "active" ? "No active tasks." : "No LaTeX export tasks in the current Core session.";
+    taskManagerList.appendChild(emptyTaskList);
     return;
   }
-  for (const task of tasks) {
-    const card = document.createElement("article");
-    card.className = `noema-task-card is-${task.status}`;
-    const head = document.createElement("div");
-    head.className = "noema-task-card-head";
-    const identity = document.createElement("div");
-    const title = document.createElement("strong");
-    title.textContent = task.title || task.kind;
-    const kind = document.createElement("span");
-    kind.textContent = task.kind;
-    identity.append(title, kind);
-    const badge = document.createElement("span");
-    badge.className = "noema-task-status-badge";
-    badge.textContent = task.status;
-    head.append(identity, badge);
-
-    const description = document.createElement("p");
-    description.textContent = task.description || "Core task";
-    const phase = document.createElement("div");
-    phase.className = "noema-task-phase";
-    phase.textContent = `${task.phase || task.status}${task.message && task.message !== task.phase ? ` — ${task.message}` : ""}`;
-    const meta = document.createElement("div");
-    meta.className = "noema-task-meta";
-    meta.textContent = [
-      taskMetadataLine(task),
-      task.startedAt ? `Started ${taskTime(task.startedAt)}` : `Created ${taskTime(task.createdAt)}`,
-      task.finishedAt ? `Finished ${taskTime(task.finishedAt)}` : "",
-    ].filter(Boolean).join(" · ");
-    card.append(head, description, phase, meta);
-
-    const resultText = taskResultLine(task);
-    if (resultText) {
-      const result = document.createElement("div");
-      result.className = "noema-task-result";
-      result.textContent = resultText;
-      card.appendChild(result);
+  emptyTaskList.remove();
+  tasks.forEach((task, index) => {
+    let view = taskCards.get(task.id);
+    if (!view) {
+      view = createTaskCard(task.id);
+      taskCards.set(task.id, view);
     }
-    const warnings = visibleTaskWarnings(task);
-    if (warnings.length > 0 || task.error) {
-      const notice = document.createElement("div");
-      notice.className = task.error ? "noema-task-error" : "noema-task-warning";
-      notice.textContent = task.error || warnings.map(String).join("; ");
-      card.appendChild(notice);
-    }
-    if (task.progress?.length) {
-      const details = document.createElement("details");
-      const summary = document.createElement("summary");
-      summary.textContent = `Progress (${task.progress.length})`;
-      const log = document.createElement("ol");
-      for (const entry of task.progress) {
-        const item = document.createElement("li");
-        item.textContent = `${taskTime(entry.at)}  ${String(entry.text || "")}`.trim();
-        log.appendChild(item);
-      }
-      details.append(summary, log);
-      card.appendChild(details);
-    }
-    const agent = task.result?.agent && typeof task.result.agent === "object"
-      ? task.result.agent as Record<string, unknown>
-      : null;
-    const decisions = agent && Array.isArray(agent.decisions)
-      ? agent.decisions as Array<Record<string, unknown>>
-      : [];
-    const agentSummary = String(agent?.summary || "").trim();
-    if (agentSummary || decisions.length > 0) {
-      const details = document.createElement("details");
-      details.className = "noema-task-agent-audit";
-      const summary = document.createElement("summary");
-      summary.textContent = `Agent audit (${decisions.length} decisions)`;
-      details.appendChild(summary);
-      if (agentSummary) {
-        const report = document.createElement("p");
-        report.textContent = agentSummary;
-        details.appendChild(report);
-      }
-      if (decisions.length > 0) {
-        const list = document.createElement("ul");
-        for (const decision of decisions) {
-          const item = document.createElement("li");
-          const id = String(decision.id || decision.kind || "review");
-          const action = String(decision.action || "reviewed");
-          const reason = String(decision.reason || "No reason returned");
-          item.textContent = `${id}: ${action} — ${reason}`;
-          list.appendChild(item);
-        }
-        details.appendChild(list);
-      }
-      card.appendChild(details);
-    }
-    const actions = document.createElement("div");
-    actions.className = "noema-task-actions";
-    if (task.kind === "latex-export" && task.agentSessionAvailable) {
-      const openAgent = document.createElement("button");
-      openAgent.type = "button";
-      openAgent.textContent = "Open agent session";
-      openAgent.addEventListener("click", async () => {
-        openAgent.disabled = true;
-        try {
-          await api.latex.openAgent(task.id);
-          closeTaskManager();
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          openAgent.disabled = false;
-          await refreshTaskManager(true);
-          taskManagerStatus.textContent = message;
-        }
-      });
-      actions.appendChild(openAgent);
-    }
-    if (task.cancellable) {
-      const cancel = document.createElement("button");
-      cancel.type = "button";
-      cancel.textContent = "Cancel";
-      cancel.addEventListener("click", async () => {
-        cancel.disabled = true;
-        try { await api.tasks.cancel(task.id); } catch (error) { taskManagerStatus.textContent = error instanceof Error ? error.message : String(error); }
-        await refreshTaskManager();
-      });
-      actions.appendChild(cancel);
-    }
-    if (task.retryable) {
-      const retry = document.createElement("button");
-      retry.type = "button";
-      retry.textContent = task.status === "completed" ? "Run again" : "Rerun";
-      retry.addEventListener("click", async () => {
-        retry.disabled = true;
-        try {
-          await api.tasks.retry(task.id);
-          taskManagerStatus.textContent = "LaTeX export queued again with the same inputs.";
-        } catch (error) {
-          taskManagerStatus.textContent = error instanceof Error ? error.message : String(error);
-        }
-        await refreshTaskManager();
-      });
-      actions.appendChild(retry);
-    }
-    if (task.kind === "latex-export" && task.status === "failed") {
-      const intervene = document.createElement("button");
-      intervene.type = "button";
-      intervene.textContent = "Intervene in Emacs";
-      intervene.addEventListener("click", async () => {
-        intervene.disabled = true;
-        try {
-          await api.latex.intervene(task.id);
-          taskManagerStatus.textContent = "Opened a separate Emacs agent session for this export.";
-          closeTaskManager();
-        } catch (error) {
-          taskManagerStatus.textContent = error instanceof Error ? error.message : String(error);
-          intervene.disabled = false;
-        }
-      });
-      actions.appendChild(intervene);
-    }
-    if (task.closeable) {
-      const close = document.createElement("button");
-      close.type = "button";
-      close.textContent = "Close task";
-      close.addEventListener("click", async () => {
-        close.disabled = true;
-        try { await api.tasks.close(task.id); } catch (error) { taskManagerStatus.textContent = error instanceof Error ? error.message : String(error); }
-        await refreshTaskManager();
-      });
-      actions.appendChild(close);
-    }
-    if (actions.childElementCount > 0) card.appendChild(actions);
-    taskManagerList.appendChild(card);
-  }
+    view.update(task);
+    const atIndex = taskManagerList.children.item(index);
+    if (view.card !== atIndex) taskManagerList.insertBefore(view.card, atIndex);
+  });
 }
 
 async function refreshTaskManager(silent = false): Promise<void> {
@@ -1567,7 +1526,7 @@ let saveIdleHandle = 0;
 let proseAutoSuspendedUntil = 0;
 let languageToolSettings: LanguageToolSettings = {
   automaticEnabled: true,
-  serverUrl: "http://10.243.90.222:8765",
+  serverUrl: "http://100.64.0.2:8765",
   language: "en-US",
   level: "picky",
   performanceProfile: "balanced",
@@ -6610,6 +6569,7 @@ function applyOpenedNote(
   options: ApplyOpenedNoteOptions = {},
 ): void {
   const previousFile = currentFile;
+  navigateAgendaTask.cancel();
   const revealCursor = options.revealCursor !== false && !passiveServerReader;
   const focusEditor = options.focusEditor !== false && !passiveServerReader;
   const updateStatus = options.updateStatus !== false;
@@ -7975,6 +7935,21 @@ function openLocationFromHost(options: { file?: string; hash?: string; dom?: str
   pendingOpenDomTarget = domTarget;
   void openFile(file);
 }
+
+const navigateAgendaTask = createAgendaNavigator({
+  file: () => currentFile || "",
+  content: () => editor.getMarkdown(),
+  selection: () => editor.view.state.selection,
+  active: () => !paused,
+  inspect: (body) => api.notes.agendaDocument(body),
+  reveal: ({ from, to }) => {
+    pushNavigationBackLocation();
+    editor.setMarkdownSelection(from, to);
+    revealCursorAfterLayout();
+    editor.focus();
+    noteCursorPositionEvent();
+  },
+});
 
 function cleanHref(href: string): string {
   return String(href || "").trim();
@@ -9875,6 +9850,7 @@ async function exportLatexTool(): Promise<void> {
 
 function latexExportAgentLabel(id: string): string {
   switch (id) {
+    case "agy": return "Antigravity";
     case "claude": return "Claude";
     case "opencode": return "OpenCode";
     case "codex":
@@ -9885,7 +9861,7 @@ function latexExportAgentLabel(id: string): string {
 function latexExportAgentOptions(status: LatexExportAgentStatus): { value: string; label: string }[] {
   const agents = status.agents?.length
     ? status.agents
-    : ["codex", "claude", "opencode"].map((id) => ({ id, label: latexExportAgentLabel(id), current: id === status.agent }));
+    : ["agy", "codex", "claude", "opencode"].map((id) => ({ id, label: latexExportAgentLabel(id), current: id === status.agent }));
   return agents.map((agent) => {
     const id = String(agent.id || "").trim();
     const suffix = [
@@ -9903,7 +9879,7 @@ async function switchLatexExportAgentTool(): Promise<void> {
   setStatus("Loading LaTeX export agents...");
   try {
     const status = await api.latex.agentStatus();
-    const current = String(status.agent || "codex");
+    const current = String(status.agent || "agy");
     const picked = await openFormModal("LaTeX export agent", [{
       id: "agent",
       label: "Agent backend",
@@ -13246,6 +13222,7 @@ function applyPaused(next: boolean): void {
   rendererActivity.setPaused(next);
   document.documentElement.classList.toggle("noema-paused", next);
   if (next) {
+    navigateAgendaTask.cancel();
     cancelAssistWork();
   } else {
     if (pendingNotesRefresh) {
@@ -13750,6 +13727,9 @@ function runHostCommand(detail: unknown): boolean {
       editor.focus();
       return true;
     }
+    case "agenda-visit":
+      void navigateAgendaTask(body as TodoItem).catch((error) => setStatus(String(error instanceof Error ? error.message : error)));
+      return true;
     case "select-all":
       editor.focus();
       editor.view.dispatch({ selection: { anchor: 0, head: editor.view.state.doc.length } });

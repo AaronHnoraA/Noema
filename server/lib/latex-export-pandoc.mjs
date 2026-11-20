@@ -8,7 +8,7 @@ import {
   readLayoutTrailingAttrs,
 } from "../../shared/layout-attrs.mjs";
 import { tikzPictureSource } from "../../shared/tikz-source.mjs";
-import { citeLatex, convertInline, escapeLatexTitle, isDisplayCommentCommand, revisionLatex } from "./latex-export.mjs";
+import { citeLatex, convertInline, escapeLatexTitle, isDisplayCommentCommand, latexEnvironmentTitle, revisionLatex } from "./latex-export.mjs";
 import { revisionKind } from "../../shared/revision-kinds.mjs";
 
 const ENV_MAP = new Map([
@@ -140,7 +140,7 @@ function environmentOpen(kind, title, options) {
     const direction = heading === "=>" ? "\\(\\Rightarrow\\)" : heading === "<=" ? "\\(\\Leftarrow\\)" : label;
     label = `Proof (${direction})`;
   }
-  return { latex: `\\begin{${env}}${label ? `[${label}]` : ""}`, env };
+  return { latex: `\\begin{${env}}${latexEnvironmentTitle(label)}`, env };
 }
 
 function validateLatexMark(command, lineText, context = {}) {

@@ -516,6 +516,9 @@ function buildPrompt({ contextItems = [], retryLog, needsTitle = true, sourceTit
 // disabled and read/write files within the working directory.
 function agentArgs(backend, { workdir, model, prompt }) {
   switch (backend) {
+    case "agy":
+      return ["--sandbox", "--mode", "accept-edits", "--disable-slash-commands",
+        ...(model ? ["--model", model] : []), "--print", prompt];
     case "claude":
       return [
         "-p", prompt,

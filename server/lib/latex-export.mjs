@@ -143,6 +143,12 @@ function citationSuffixJoin(citation, suffix) {
   return `${citation}${gap}${escapeLatexText(suffix)}`;
 }
 
+export function latexEnvironmentTitle(latex) {
+  if (!latex) return "";
+  // amsthm forwards proof titles to an optional item label, consuming one group.
+  return latex.includes("]") ? `[{{${latex}}}]` : `[${latex}]`;
+}
+
 export function citeLatex(command, options = {}) {
   const map = options.citationKeyMap || {};
   const namespace = String(command.switchValue || "").trim();
@@ -317,12 +323,11 @@ function beginEnv(kind, title, envMap = ENV_MAP, commentBlocks = COMMENT_BLOCKS)
           : label;
       label = `Proof (${direction})`;
     }
-    label = label ? `[${label}]` : "";
-    return `\\begin{${env}}${label}`;
+    return `\\begin{${env}}${latexEnvironmentTitle(label)}`;
   }
   if (commentBlocks.has(kind)) {
     const heading = title || kind;
-    return `\\begin{remark}[${escapeLatexTitle(heading)}]`;
+    return `\\begin{remark}${latexEnvironmentTitle(escapeLatexTitle(heading))}`;
   }
   return `\\paragraph{${escapeLatexTitle(kind)}}${title ? ` ${convertInline(title)}` : ""}`;
 }
