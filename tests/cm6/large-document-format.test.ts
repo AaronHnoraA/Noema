@@ -2,9 +2,16 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "@voidzero-dev/vite-plus-test";
 import { createEditorCM6 } from "../../src/cm6/editor-cm6.ts";
-import { activeInlineFormats, inlineFormatsAvailable } from "../../src/cm6/inline-format.ts";
+import { activeInlineFormats, inlineFormatsAvailable, selectionToolbarFormats } from "../../src/cm6/inline-format.ts";
+import { EditorSelection, EditorState } from "@codemirror/state";
 
 describe("inline commands beyond the syntax parser's initial viewport", () => {
+  it("leaves format inspection until a command is chosen for a large mixed selection", () => {
+    const text = "段落 **bold** and \\(x\\).\n\n$$\ny=x^2\n$$\n\n```mermaid\ngraph LR\nA --> B\n```\n\n".repeat(5000);
+    const state = EditorState.create({ doc: text, selection: EditorSelection.single(text.length, 0) });
+    expect(selectionToolbarFormats(state)).toBeNull();
+  });
+
   it("recognizes a code block and a formatted link near the end of a 5 MB note", () => {
     const fixture = readFileSync(join(process.cwd(), "tests/synthetic_qc_note_5mb.md"), "utf8");
     const tail = "\n```js\n**literal**\n```\n\n**tail** and see [docs](old)"

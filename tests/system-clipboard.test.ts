@@ -98,6 +98,23 @@ describe("writeSystemClipboard", () => {
 
     expect(await writeSystemClipboard("copied")).toBe(false);
   });
+
+  test("copies a large note through the host without waiting for WebKit clipboard permission", async () => {
+    let releaseBrowser!: () => void;
+    const writeText = vi.fn(() => new Promise<void>((resolve) => { releaseBrowser = resolve; }));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const text = "公式 \\(x\\)\n```mermaid\ngraph TD\nA-->B\n```\n".repeat(120_000);
+    const host = vi.fn(async () => true);
+    setSystemClipboardWriter(host);
+    const copy = writeSystemClipboard(text);
+    try {
+      expect(writeText).not.toHaveBeenCalled();
+      expect(await copy).toBe(true);
+      expect(host).toHaveBeenCalledExactlyOnceWith(text);
+    } finally {
+      releaseBrowser?.();
+    }
+  });
 });
 
 describe("installHostClipboard", () => {

@@ -256,7 +256,7 @@ import {
 } from "./xwidget-key-guard.ts";
 import { focusQuiescenceEnabled, serverMode, sourceEditorName } from "./host-mode.ts";
 import { installHostClipboard } from "./host-clipboard.ts";
-import { unionSelectionRect } from "./selection-geometry.ts";
+import { BLANK_SELECTION_PROBE_LIMIT, nativeSelectionRect, unionSelectionRect } from "./selection-geometry.ts";
 import { writeSystemClipboard } from "../src/system-clipboard.ts";
 import { copiedText } from "../src/cm6/copied-text.ts";
 import { createZoomController } from "./features/zoom/controller.ts";
@@ -268,7 +268,7 @@ import { installActiveCoreReconnect } from "./active-core-reconnect.ts";
 import { noteAutoSaveEnabled } from "./save-policy.ts";
 import { defaultSaveRetryDelayMs, SaveDrain } from "./save-drain.ts";
 import { diskVersionChangedAfterSave } from "./external-save.ts";
-import { activeInlineFormats, INLINE_FORMAT_KINDS, inlineFormatAvailable, inlineFormatsAvailable, type InlineFormatKind } from "../src/cm6/inline-format.ts";
+import { INLINE_FORMAT_KINDS, selectionToolbarFormats, type InlineFormatKind } from "../src/cm6/inline-format.ts";
 import {
   EditorSaveChangeTracker,
   sourceLineEnding,
@@ -8785,7 +8785,8 @@ function readOnlyOutputSelectionText(): string {
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return "";
   const anchor = selection.anchorNode;
   const element = anchor instanceof Element ? anchor : anchor?.parentElement;
-  if (!element?.closest(CEIL_READONLY_TEXT_SELECTOR)) return "";
+  const output = element?.closest(CEIL_READONLY_TEXT_SELECTOR);
+  if (!output || !output.contains(selection.focusNode)) return "";
   return selection.toString();
 }
 
@@ -12872,9 +12873,6 @@ function updateMathPreview(
 
 type ActiveEditorSelection = { rect: DOMRect };
 
-/** Whitespace-only selections offer no command; the read is bounded on purpose. */
-const BLANK_SELECTION_PROBE_LIMIT = 4096;
-
 function selectionLooksBlank(read: () => string, length: number): boolean {
   // Checking needs the text, so only check while the selection is small enough
   // for the read to be free; nobody selects four thousand blank characters.
@@ -12930,11 +12928,9 @@ function activeEditorSelection(): ActiveEditorSelection | null {
   const anchor = selection.anchorNode;
   const focus = selection.focusNode;
   if (!anchor || !focus || !host.contains(anchor) || !host.contains(focus)) return null;
-  const read = (): string => selection.toString();
-  if (selectionLooksBlank(read, BLANK_SELECTION_PROBE_LIMIT)) return null;
-  const rect = selection.getRangeAt(0).getBoundingClientRect();
-  if (rect.width === 0 && rect.height === 0) return null;
-  return { rect };
+  const range = selection.getRangeAt(0);
+  const rect = nativeSelectionRect(range, focus === range.startContainer && selection.focusOffset === range.startOffset);
+  return rect ? { rect } : null;
 }
 
 function selectionTouchesEditor(): boolean {
@@ -12971,17 +12967,14 @@ function updateSelectionTool(active = activeEditorSelection()): void {
 
 /** Show which inline formats the selection already has, as Marker's bubble menu does. */
 function markActiveSelectionFormats(): void {
-  const state = editor.view.state;
-  const available = inlineFormatsAvailable(state);
-  const active = available ? activeInlineFormats(state) : new Set<InlineFormatKind>();
+  const formats = selectionToolbarFormats(editor.view.state);
   for (const button of selectionTool.querySelectorAll<HTMLButtonElement>("[data-selection-command]")) {
     const command = button.dataset.selectionCommand ?? "";
     const format = INLINE_FORMAT_KINDS.includes(command as InlineFormatKind);
     if (!format && command !== "clear-format" && command !== "link") continue;
-    button.disabled = format
-      ? !inlineFormatAvailable(state, command as InlineFormatKind)
-      : !available;
-    if (format) button.setAttribute("aria-pressed", String(active.has(command as InlineFormatKind)));
+    button.disabled = formats !== null && (!formats.available || (format && formats.codeOnly && command !== "code"));
+    if (format && formats) button.setAttribute("aria-pressed", String(formats.active.has(command as InlineFormatKind)));
+    else button.removeAttribute("aria-pressed");
   }
 }
 
@@ -14296,7 +14289,6 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (runClipboardShortcut(event)) {
-    scheduleAssistUpdate({ snippets: true, mathPreview: true, cursor: true, selectionTool: true });
     event.stopPropagation();
     return;
   }

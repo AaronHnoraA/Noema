@@ -5,6 +5,21 @@ export type RectLike = {
   bottom: number;
 };
 
+export const BLANK_SELECTION_PROBE_LIMIT = 4096;
+
+/** Inside rendered output WebKit owns the selection. For a range across DOM
+ * nodes, position the toolbar at the moving end without laying out every box. */
+export function nativeSelectionRect(range: Range, focusAtStart: boolean): DOMRect | null {
+  const shortText = range.startContainer === range.endContainer
+    && range.startContainer.nodeType === Node.TEXT_NODE
+    && range.endOffset - range.startOffset <= BLANK_SELECTION_PROBE_LIMIT;
+  if (shortText && !range.toString().trim()) return null;
+  const anchor = shortText ? range : range.cloneRange();
+  if (!shortText) anchor.collapse(focusAtStart);
+  const rect = anchor.getBoundingClientRect();
+  return rect.width || rect.height ? rect : null;
+}
+
 /**
  * The smallest box containing every non-empty rect, or null when there is none.
  *

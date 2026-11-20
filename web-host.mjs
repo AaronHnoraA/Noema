@@ -10,7 +10,7 @@
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, statSync, watch } from "node:fs";
 import { readFile, rm, stat } from "node:fs/promises";
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2924,11 +2924,14 @@ async function katexMacrosPayload() {
   };
 }
 
+// Match the note API's body budget in both directions, including UTF-8 text.
+const clipboardMaxBytes = 64 * 1024 * 1024;
+
 async function readSystemClipboard(body) {
   // Text first: a spreadsheet or a Finder copy also carries a picture, and
   // only a real image has no text beside it.
   try {
-    const { stdout } = await execFileAsync("pbpaste");
+    const { stdout } = await execFileAsync("pbpaste", { maxBuffer: clipboardMaxBytes });
     if (stdout) return { kind: "text", text: stdout };
   } catch (_) {}
 
@@ -4005,16 +4008,12 @@ const server = createServer(async (req, res) => {
           sendText(res, 403, "Not a local client");
           return;
         }
-        try {
-          const text = await readText(req);
-          await new Promise((resolve) => {
-            const proc = spawn("pbcopy");
-            proc.stdin.write(text, "utf8");
-            proc.stdin.end();
-            proc.on("close", resolve);
-            proc.on("error", resolve);
-          });
-        } catch (_) {}
+        const text = await readText(req, clipboardMaxBytes);
+        await new Promise((resolve, reject) => {
+          const proc = execFile("pbcopy", (error) => error ? reject(error) : resolve());
+          proc.stdin.on("error", reject);
+          proc.stdin.end(text, "utf8");
+        });
         res.writeHead(204);
         res.end();
         return;

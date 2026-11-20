@@ -60,22 +60,15 @@ async function writeViaBrowser(text: string): Promise<boolean> {
   }
 }
 
-/**
- * Copy TEXT to the machine clipboard, resolving to whether it landed.
- *
- * With a host writer installed both paths run: the host writer owns the machine
- * pasteboard, and the browser write is still attempted so an in-page paste that
- * reads `navigator.clipboard` sees the same text without a host round trip.
- * The result reports the host writer, because that is the one the user can
- * observe from another application.
- */
+/** The host and browser target the same pasteboard. Use its installed writer
+ * once, so a pending WebKit permission prompt cannot hold up a completed copy. */
 export async function writeSystemClipboard(text: string): Promise<boolean> {
   if (typeof text !== "string") return false;
   const writer = hostWriter;
   if (!writer) return writeViaBrowser(text);
-  const [host] = await Promise.all([
-    writer(text).catch(() => false),
-    writeViaBrowser(text).catch(() => false),
-  ]);
-  return host;
+  try {
+    return await writer(text);
+  } catch {
+    return false;
+  }
 }

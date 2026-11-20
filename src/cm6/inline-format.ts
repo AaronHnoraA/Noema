@@ -671,6 +671,23 @@ export function inlineFormatAvailable(
   return kind === "code" || !range.empty || !insideInlineCode(state, range.from);
 }
 
+/** Opening the toolbar is part of selecting and copying. Leave an uninspected
+ * large range to the format command, which validates the full range on use. */
+export function selectionToolbarFormats(state: EditorState): {
+  available: boolean;
+  active: Set<InlineFormatKind>;
+  codeOnly: boolean;
+} | null {
+  const range = state.selection.main;
+  if (range.to - range.from > 4096) return null;
+  const available = inlineFormatsAvailable(state);
+  return {
+    available,
+    active: available ? activeInlineFormats(state) : new Set(),
+    codeOnly: available && range.empty && insideInlineCode(state, range.from),
+  };
+}
+
 /**
  * Where Tab leaves an inline span when the caret sits at the end of its
  * content: past `**`, `` ` ``, `==`, `\)`, or a link's `](url)`. MarkText's

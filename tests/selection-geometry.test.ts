@@ -1,9 +1,31 @@
-import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
+import { describe, expect, test, vi } from "@voidzero-dev/vite-plus-test";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
-import { unionSelectionRect } from "../pages/selection-geometry.ts";
+import { nativeSelectionRect, unionSelectionRect } from "../pages/selection-geometry.ts";
 import { selectionColumnClip } from "../src/cm6/selection-column-clip.ts";
+
+test("positions the output toolbar without reading or measuring a whole native selection", () => {
+  const root = document.createElement("div");
+  root.innerHTML = "<span>start</span><span>end</span>";
+  document.body.append(root);
+  const range = document.createRange();
+  range.selectNodeContents(root);
+  const bounds = vi.spyOn(Range.prototype, "getBoundingClientRect").mockImplementation(function (this: Range) {
+    expect(this.collapsed).toBe(true);
+    return new DOMRect(4, 5, 0, 18);
+  });
+  const stringify = vi.spyOn(Range.prototype, "toString");
+  try {
+    expect(nativeSelectionRect(range, false)?.height).toBe(18);
+    expect(bounds).toHaveBeenCalledTimes(1);
+    expect(stringify).not.toHaveBeenCalled();
+  } finally {
+    stringify.mockRestore();
+    bounds.mockRestore();
+    root.remove();
+  }
+});
 
 function rect(left: number, top: number, right: number, bottom: number) {
   return { left, top, right, bottom };
