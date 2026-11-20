@@ -139,8 +139,8 @@
 \fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\footnotesize\thepage}\renewcommand{\headrulewidth}{0pt}}
 
 \newcommand{\NoemaTheoremHead}[3]{%
-  \thmname{#1}\thmnumber{ #2}\thmnote{ {\normalfont\normalsize(#3)}}}
-\newcommand{\NoemaTheoremFont}{\normalfont\fontsize{11.5}{14}\selectfont\bfseries}
+  \thmname{#1}\thmnumber{~#2}\thmnote{\enspace{\normalfont\normalsize(#3)}}}
+\newcommand{\NoemaTheoremFont}{\normalfont\fontsize{12.25}{15}\bfseries\selectfont}
 \newtheoremstyle{noema-statement}{.8em}{.8em}{\itshape}{}%
   {\NoemaTheoremFont}{.}{\newline}{\NoemaTheoremHead{#1}{#2}{#3}}
 \newtheoremstyle{noema-definition}{.8em}{.8em}{}{}%
