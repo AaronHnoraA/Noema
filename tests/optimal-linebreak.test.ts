@@ -6,6 +6,7 @@ import {
   resetOptimalLinebreakAudit,
 } from "../src/cm6/extensions/visual/optimal-linebreak.ts";
 import { refreshViewportDecorationsNow } from "../src/cm6/viewport-refresh.ts";
+import { setConstructsPinned } from "../src/cm6/extensions/visual/constructs/index.ts";
 
 function rect(width: number, height = 24): DOMRect {
   return {
@@ -47,6 +48,82 @@ afterEach(() => {
 });
 
 describe("optimal Visual-mode line breaking", () => {
+  test("keeps the writing line on native wrapping across spaces and idle layout passes", async () => {
+    installLayoutMocks();
+    const prose = "普通笔记正文的换行和字距应该稳定。English words mixed with 中文。".repeat(3);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { initialContent: prose + "\n\n" + prose });
+    const lines = () => [...host.querySelectorAll(".cm-line")];
+    const planned = () => lines().map((line) => line.classList.contains("cm-kp-paragraph"));
+    try {
+      await settleLayout();
+      expect(planned()).toEqual([true, false, true]);
+      editor.view.focus();
+      editor.setMarkdownSelection(prose.length);
+      await settleLayout();
+      expect(planned()).toEqual([false, false, true]);
+      let at = prose.length;
+      for (const insert of [" ", "a", " ", "文", " "]) {
+        editor.view.dispatch({
+          changes: { from: at, insert },
+          selection: { anchor: at + insert.length },
+          userEvent: "input.type",
+        });
+        at += insert.length;
+        expect(planned()).toEqual([false, false, true]);
+        refreshViewportDecorationsNow(editor.view);
+        await settleLayout();
+        expect(lines()[0]!.querySelector("[class*='cm-kp-']")).toBeNull();
+        expect(planned()).toEqual([false, false, true]);
+      }
+      expect(editor.getMarkdown()).toBe(prose + " a 文 \n\n" + prose);
+      expect(editor.getSelection()).toEqual({ from: at, to: at });
+      editor.setMarkdownSelection(at + 2);
+      expect(planned()).toEqual([true, false, false]);
+      editor.view.dispatch({ effects: setConstructsPinned.of(true) });
+      expect(planned()).toEqual([true, false, true]);
+      editor.view.dispatch({ effects: setConstructsPinned.of(false) });
+      expect(planned()).toEqual([true, false, false]);
+      editor.view.contentDOM.blur();
+      await settleLayout();
+      expect(planned()).toEqual([true, false, true]);
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  test("leaving a freshly edited line never reveals obsolete breaks over consecutive spaces", async () => {
+    installLayoutMocks();
+    const prose = "普通笔记正文的换行和字距应该稳定。English words mixed with 中文。".repeat(3);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { initialContent: prose + "\n\n" + prose });
+    try {
+      await settleLayout();
+      editor.view.focus();
+      editor.setMarkdownSelection(prose.indexOf(" "));
+      await settleLayout();
+      const at = editor.getSelection().from;
+      editor.view.dispatch({
+        changes: { from: at, insert: " " },
+        selection: { anchor: at + 1 },
+        userEvent: "input.type",
+      });
+      const second = editor.view.state.doc.line(3).from;
+      editor.setMarkdownSelection(second);
+      const first = () => host.querySelector(".cm-line")!;
+      expect(first().classList.contains("cm-kp-paragraph")).toBe(false);
+      editor.view.dispatch({ changes: { from: second, insert: "新" }, userEvent: "input.type" });
+      refreshViewportDecorationsNow(editor.view);
+      await settleLayout();
+      expect(first().classList.contains("cm-kp-paragraph")).toBe(false);
+      expect(first().textContent).toContain("English  words");
+    } finally {
+      editor.destroy();
+    }
+  });
+
   test("leaves paragraphs beside a wrapped figure to the browser's actual float width", async () => {
     installLayoutMocks();
     const source = "![diagram](missing.png){align:left; wrap:on}\n\n"

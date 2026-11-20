@@ -1,8 +1,9 @@
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import {
+  EditorState,
+  Facet,
   StateEffect,
   StateField,
-  type EditorState,
   type Extension,
   type Range,
   type Text,
@@ -28,7 +29,12 @@ import { mixedCjkItems } from "../../../linebreak/mixed-cjk.ts";
 import { waitForParser } from "../parser-watcher.ts";
 import { hasViewportDecorationRefresh } from "../../viewport-refresh.ts";
 import { isCoalescedVisualTyping } from "./typing-burst.ts";
-import { constructSources, drawnConstructSource } from "./constructs/index.ts";
+import {
+  constructsPinnedField,
+  constructSources,
+  drawnConstructSource,
+  replaceDecorations,
+} from "./constructs/index.ts";
 
 type AppliedLayout = {
   doc: Text;
@@ -37,10 +43,32 @@ type AppliedLayout = {
 
 const applyOptimalLayout = StateEffect.define<AppliedLayout>();
 
-const optimalLinebreakDecorations = StateField.define<DecorationSet>({
+const setWritingFocus = StateEffect.define<boolean>();
+const writingFocus = StateField.define<boolean>({
+  create: () => false,
+  update(focused, tr) {
+    for (const effect of tr.effects) if (effect.is(setWritingFocus)) focused = effect.value;
+    return focused;
+  },
+  provide: () => EditorView.focusChangeEffect.of((_state, focused) => setWritingFocus.of(focused)),
+});
+
+// Focus is tracked in source mode too, for a focused editor switching to Visual.
+export const optimalLinebreakEditingExtension: Extension = writingFocus;
+
+const measuredLinebreaks = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(value, transaction) {
-    if (transaction.docChanged) value = value.map(transaction.changes);
+    if (transaction.docChanged && value.size) {
+      value = value.map(transaction.changes);
+      // A caret can leave before the idle pass. Only unchanged source lines
+      // still have a valid plan to reveal in that interval.
+      const touched: Array<{ from: number; to: number }> = [];
+      transaction.changes.iterChangedRanges((_fromA, _toA, from, to) => {
+        touched.push({ from: transaction.newDoc.lineAt(from).from, to: transaction.newDoc.lineAt(to).to });
+      });
+      value = replaceDecorations(value, touched, []);
+    }
     for (const effect of transaction.effects) {
       if (effect.is(applyOptimalLayout) && effect.value.doc === transaction.state.doc) {
         value = effect.value.decorations;
@@ -48,7 +76,11 @@ const optimalLinebreakDecorations = StateField.define<DecorationSet>({
     }
     return value;
   },
-  provide: (field) => EditorView.decorations.from(field),
+});
+
+const writingLineStarts = Facet.define<number>();
+const visibleLinebreaks = Facet.define<DecorationSet, DecorationSet>({
+  combine: ([layout]) => layout ?? Decoration.none,
 });
 
 class OptimalBreakWidget extends WidgetType {
@@ -405,7 +437,7 @@ class OptimalLinebreakPlugin {
       const decorations = overlaps || delta === 0
         ? entry.decorations
         : entry.decorations.map((range) => range.value.range(range.from + delta, range.to + delta));
-      const next = { ...entry, from, to, decorations, dirty: overlaps };
+      const next = { ...entry, from, to, decorations, dirty: entry.dirty || overlaps };
       mapped.set(`${from}:${to}`, next);
       this.cacheBytes += next.bytes;
     }
@@ -655,10 +687,24 @@ class OptimalLinebreakPlugin {
 const optimalLinebreakPlugin = ViewPlugin.fromClass(OptimalLinebreakPlugin);
 
 export const optimalLinebreakExtension: Extension = [
-  optimalLinebreakDecorations,
+  measuredLinebreaks,
+  writingLineStarts.computeN(
+    ["selection", "doc", writingFocus, constructsPinnedField, EditorState.readOnly, EditorView.editable],
+    (state) => {
+      if (!state.field(writingFocus) || state.field(constructsPinnedField)
+          || state.readOnly || !state.facet(EditorView.editable)) return [];
+      return state.selection.ranges.map((range) => state.doc.lineAt(range.head).from);
+    },
+  ),
+  // Keep the measured plan ready for leaving the line. While writing, paint
+  // the native wrap even when an idle measure chooses different breaks.
+  visibleLinebreaks.compute([measuredLinebreaks, writingLineStarts, "doc"], (state) =>
+    replaceDecorations(state.field(measuredLinebreaks),
+      state.facet(writingLineStarts).map((from) => state.doc.lineAt(from)), [])),
+  EditorView.decorations.compute([visibleLinebreaks], (state) => state.facet(visibleLinebreaks)),
   // Line breaks and spacing laid over whitespace: structure, so Vim and the
   // caret move through the text they stand for.
   constructSources.of(drawnConstructSource(
-    "layout-spacing", "structure", (state) => state.field(optimalLinebreakDecorations, false))),
+    "layout-spacing", "structure", (state) => state.facet(visibleLinebreaks))),
   optimalLinebreakPlugin,
 ];
