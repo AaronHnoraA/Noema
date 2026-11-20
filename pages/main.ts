@@ -9535,9 +9535,10 @@ async function openAgendaEditPop(target: PlanningEditTarget): Promise<void> {
   setStatus("Agenda updated");
 }
 
-type LatexScopeChoice = { scopes: LatexExportScope[]; keepTex: boolean };
+type LatexExportOptions = { keepTex: boolean; includeAbstract: boolean; includeToc: boolean };
+type LatexScopeChoice = { scopes: LatexExportScope[]; options: LatexExportOptions };
 
-function openLatexScopeModal(scopes: readonly LatexExportScope[], keepTexInitially = true): Promise<LatexScopeChoice | null> {
+function openLatexScopeModal(scopes: readonly LatexExportScope[], initial: LatexExportOptions): Promise<LatexScopeChoice | null> {
   return new Promise((resolve) => {
     modal.innerHTML = "";
     const panel = document.createElement("form");
@@ -9676,7 +9677,10 @@ function openLatexScopeModal(scopes: readonly LatexExportScope[], keepTexInitial
     panel.addEventListener("submit", (event) => {
       event.preventDefault();
       const selected = selectedScopes();
-      if (selected.length > 0) close({ scopes: selected, keepTex: keepTex.checked });
+      if (selected.length > 0) close({
+        scopes: selected,
+        options: { keepTex: keepTex.checked, includeAbstract: includeAbstract.checked, includeToc: includeToc.checked },
+      });
     });
 
     const selectionSummary = document.createElement("div");
@@ -9685,15 +9689,24 @@ function openLatexScopeModal(scopes: readonly LatexExportScope[], keepTexInitial
     panel.appendChild(selectionSummary);
     const actions = document.createElement("div");
     actions.className = "noema-modal-actions";
-    // The PDF is always written; this decides whether its .tex (and the
-    // support files it needs) is kept beside it.  The server remembers it.
-    const keepTexLabel = document.createElement("label");
-    keepTexLabel.className = "noema-latex-export-keep-tex";
-    keepTexLabel.title = "Keep the .tex source and its support files beside the PDF";
-    const keepTex = document.createElement("input");
-    keepTex.type = "checkbox";
-    keepTex.checked = keepTexInitially;
-    keepTexLabel.append(keepTex, document.createTextNode("Keep .tex"));
+    const options = document.createElement("div");
+    options.className = "noema-latex-export-options";
+    options.setAttribute("role", "group");
+    options.setAttribute("aria-label", "Export options");
+    function checkbox(key: keyof LatexExportOptions, caption: string, hint: string): HTMLInputElement {
+      const label = document.createElement("label");
+      label.title = hint;
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.name = key;
+      input.checked = initial[key];
+      label.append(input, document.createTextNode(caption));
+      options.appendChild(label);
+      return input;
+    }
+    const keepTex = checkbox("keepTex", "Keep .tex", "Keep the source and its support files beside the PDF");
+    const includeAbstract = checkbox("includeAbstract", "Include abstract", "Use the summary from the note when available");
+    const includeToc = checkbox("includeToc", "Table of contents", "List the sections included in this export");
     const cancel = document.createElement("button");
     cancel.type = "button";
     cancel.textContent = "Cancel";
@@ -9701,7 +9714,7 @@ function openLatexScopeModal(scopes: readonly LatexExportScope[], keepTexInitial
     const submit = document.createElement("button");
     submit.type = "submit";
     submit.textContent = "Choose Path";
-    actions.append(keepTexLabel, cancel, submit);
+    actions.append(options, cancel, submit);
     panel.appendChild(actions);
 
     const onBackdrop = (event: MouseEvent): void => {
@@ -9741,7 +9754,11 @@ async function exportLatexTool(): Promise<void> {
     setStatus(`LaTeX export failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
-  const choice = await openLatexScopeModal(scopes, defaultInfo.keepTex !== false);
+  const choice = await openLatexScopeModal(scopes, {
+    keepTex: defaultInfo.keepTex !== false,
+    includeAbstract: defaultInfo.includeAbstract !== false,
+    includeToc: defaultInfo.includeToc === true,
+  });
   if (!choice) {
     setStatus("LaTeX export canceled");
     return;
@@ -9848,7 +9865,7 @@ async function exportLatexTool(): Promise<void> {
       ...(chosenTemplate ? { templatePath: chosenTemplate.file, engine: chosenTemplate.engine } : {}),
       ...(Object.keys(vars).length > 0 ? { vars } : {}),
       polish,
-      keepTex: choice.keepTex,
+      ...choice.options,
     });
     setStatus("LaTeX export added to tasks");
   } catch (err) {

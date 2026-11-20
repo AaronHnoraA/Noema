@@ -790,6 +790,7 @@ const LATEX_TEXT_SYMBOL_FALLBACKS = [
   ["∧", "\\wedge"], ["∨", "\\vee"], ["⊕", "\\oplus"], ["⊗", "\\otimes"], ["∘", "\\circ"],
   ["⋅", "\\cdot"], ["√", "\\surd"], ["∑", "\\sum"], ["∏", "\\prod"], ["∂", "\\partial"], ["∇", "\\nabla"],
   ["⟨", "\\langle"], ["⟩", "\\rangle"], ["≪", "\\ll"], ["≫", "\\gg"], ["⊥", "\\perp"], ["∥", "\\parallel"],
+  ...Array.from("₀₁₂₃₄₅₆₇₈₉", (char, digit) => [char, "{}_{" + digit + "}"]),
 ];
 
 export function latexTextSymbolFallbacks() {
@@ -800,8 +801,12 @@ export function latexTextSymbolFallbacks() {
     // characters here can recurse through its own symbol commands.
     "\\makeatletter",
     "\\@ifpackageloaded{unicode-math}{}{%",
-    "\\RequirePackage{newunicodechar}",
-    "\\newcommand{\\NoemaTextSymbol}[2]{\\ifmmode#2\\else\\iffontchar\\font\"#1\\relax\\char\"#1\\relax\\else\\ensuremath{#2}\\fi\\fi}",
+    "\\RequirePackage{iftex,newunicodechar}",
+    "\\ifPDFTeX",
+    "\\newcommand{\\NoemaTextSymbol}[2]{\\ensuremath{#2}}%",
+    "\\else",
+    "\\newcommand{\\NoemaTextSymbol}[2]{\\ifmmode#2\\else\\iffontchar\\font\"#1\\relax\\char\"#1\\relax\\else\\ensuremath{#2}\\fi\\fi}%",
+    "\\fi",
     ...LATEX_TEXT_SYMBOL_FALLBACKS.map(([char, math]) =>
       `\\newunicodechar{${char}}{\\NoemaTextSymbol{${hex(char)}}{${math}}}`),
     "}",
@@ -822,7 +827,6 @@ export function latexMacrosPackage(macros, features = {}) {
   \adjustbox{max width=\dimexpr\linewidth-\parindent\relax,max totalheight=\textheight}{%
     \NoemaOriginalIncludeGraphics[#1]{#2}}}`,
     "\\RequirePackage{booktabs,longtable,array,calc,etoolbox}",
-    "\\RequirePackage{footnote}",
     "\\RequirePackage{needspace}",
     "\\RequirePackage[normalem]{ulem}",
     "\\RequirePackage{xcolor}",
@@ -834,7 +838,8 @@ export function latexMacrosPackage(macros, features = {}) {
 \@ifundefined{c@none}{\newcounter{none}}{}
 \patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
 \makeatother
-\makesavenoteenv{longtable}
+% Beamer owns overlay-aware footnotes; the footnote package cannot patch them.
+\IfClassLoadedF{beamer}{\RequirePackage{footnote}\makesavenoteenv{longtable}}
 \providecommand{\tightlist}{%
   \setlength{\itemsep}{0.2em}\setlength{\parskip}{0pt}}
 \providecommand{\st}[1]{\sout{#1}}

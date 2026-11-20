@@ -30,7 +30,13 @@
 \usepackage{noema-macros}
 
 \begin{document}
+\ifnum {{includeToc}}=0\relax\assignmentcontentsfalse\fi
 \maketitle
+\ifnum {{hasSummary}}=1\relax
+  \begin{abstract}
+  {{summary}}
+  \end{abstract}
+\fi
 \newpage
 
 {{body}}

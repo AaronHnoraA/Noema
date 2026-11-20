@@ -45,8 +45,15 @@
 \begin{document}
 \maketitle
 \thispagestyle{empty}
-\tableofcontents
-\newpage
+\ifnum {{hasSummary}}=1\relax
+  \begin{abstract}
+  {{summary}}
+  \end{abstract}
+\fi
+\ifnum {{includeToc}}=1\relax
+  \tableofcontents
+  \newpage
+\fi
 
 {{body}}
 

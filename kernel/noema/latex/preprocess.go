@@ -384,7 +384,7 @@ func parseYAMLFrontMatter(lines []string) (map[string]string, int) {
 			continue
 		}
 		key := strings.ToLower(match[1])
-		if key != "title" && key != "date" {
+		if key != "title" && key != "date" && key != "author" && key != "summary" {
 			continue
 		}
 		if match[2] == ">" || match[2] == "|" {

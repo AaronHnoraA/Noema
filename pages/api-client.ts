@@ -1160,6 +1160,9 @@ export type LatexExportRequest = Record<string, unknown> & {
   vars?: Record<string, string>;
   /** Run the optional agent polish pass over a draft that already compiles. */
   polish?: boolean;
+  keepTex?: boolean;
+  includeAbstract?: boolean;
+  includeToc?: boolean;
 };
 export type LatexExportAgentStatus = {
   type?: string;

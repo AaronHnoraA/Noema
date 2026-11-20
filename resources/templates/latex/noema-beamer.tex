@@ -30,6 +30,17 @@
   \titlepage
 \end{frame}
 
+\ifnum {{hasSummary}}=1\relax
+\begin{frame}[allowframebreaks]{\abstractname}
+{{summary}}
+\end{frame}
+\fi
+\ifnum {{includeToc}}=1\relax
+\begin{frame}[allowframebreaks]{\contentsname}
+\tableofcontents
+\end{frame}
+\fi
+
 {{body}}
 
 \end{document}

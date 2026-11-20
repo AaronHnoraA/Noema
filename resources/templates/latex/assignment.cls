@@ -270,6 +270,8 @@
     \setlength{\abovedisplayshortskip}{5pt plus 2pt}
     \setlength{\belowdisplayshortskip}{5pt plus 2pt minus 2pt}
 }
+\newif\ifassignmentcontents
+\assignmentcontentstrue
 \renewcommand{\maketitle}
 {
     \ProjectInfos
@@ -282,9 +284,11 @@
         [\@assignmentauthorurl]
         {\@assignmentstudentid}
         {\@assignmentaffiliation}
-    \vspace*{.35\baselineskip}
-    {\small\tableofcontents}
-    \vspace*{.7\baselineskip}
+    \ifassignmentcontents
+        \vspace*{.35\baselineskip}
+        {\small\tableofcontents}
+        \vspace*{.7\baselineskip}
+    \fi
     \hrule
     \vspace*{.8\baselineskip}
 }

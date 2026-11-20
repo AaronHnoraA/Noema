@@ -286,6 +286,33 @@ describe("LaTeX export", () => {
     expect(result.body).not.toContain("Exact title.");
   });
 
+  test("prints the article byline and whole-note abstract once above a selected body", async () => {
+    const { root, notes } = await setupRoot();
+    const templatePath = join(root, "templates", "latex", "noema-article.tex");
+    await writeFile(templatePath, await readFile(join(process.cwd(), "resources/templates/latex/noema-article.tex")));
+    const note = join(notes, "article.md");
+    await writeFile(note, [
+      "#+begin meta", "title: d-SetSAI", "author: Ada & Lee", "date: 2026-10-25",
+      "#+begin summary", "Title: a **short** study of \\(d\\).", "#+end summary",
+      "#+end meta", "", "Unselected paragraph.",
+    ].join("\n"));
+    const out = join(notes, "selected.tex");
+    await exportLatex({ file: note, content: "Selected paragraph. The identifier `A₀` occurs for \\(d=2\\).", outputPath: out });
+    const tex = await readFile(out, "utf8");
+    expect(tex).toContain("\\title{ d-SetSAI }");
+    expect(tex).toContain("\\author{ Ada \\& Lee }");
+    expect(tex).toContain("\\date{ 2026-10-25 }");
+    expect(tex.match(/Title: a \\textbf\{short\} study of \\\(d\\\)\./g)).toHaveLength(1);
+    expect(tex).toContain("\\NoemaOpeningInitial{S}{elected} paragraph.");
+    expect(tex).not.toContain("Unselected paragraph.");
+    // Overleaf can compile the identical exported files with pdfLaTeX.
+    const pdftex = spawnSync("pdflatex", ["-halt-on-error", "-interaction=batchmode", "selected.tex"], {
+      cwd: notes, encoding: "utf8",
+    });
+    expect(pdftex.status, pdftex.stdout || pdftex.error?.message).toBe(0);
+    expect(await readFile(join(notes, "selected.log"), "utf8")).not.toMatch(/Missing character:|Undefined control sequence/);
+  });
+
   test("validates typed LaTeX marks instead of silently swallowing mistakes", () => {
     expect(() => preprocessNoemaForPandoc("Text @@latexmk(typo) here."))
       .toThrow(/Unknown @@latexmk mark/);
@@ -718,6 +745,34 @@ describe("LaTeX export", () => {
     await exportLatex({ file: note, outputPath: out });
     expect(existsSync(out)).toBe(true);
     expect((await latexExportDefaults({ file: note }) as { keepTex?: boolean }).keepTex).toBe(false);
+  });
+
+  test("applies abstract and contents choices to a selection and recalls them across notes", async () => {
+    const { root, notes } = await setupRoot();
+    const article = "noema-article.tex";
+    await writeFile(join(root, "templates", "latex", article),
+      await readFile(join(process.cwd(), "resources/templates/latex", article)));
+    const file = join(notes, "first.md");
+    const other = join(notes, "second.md");
+    const outputPath = join(notes, "selected.tex");
+    await writeFile(file, "#+begin meta\nsummary: Abstract marker.\n#+end meta\n\n# Excluded section\n");
+    await writeFile(other, "Another note.");
+    const request = { file, outputPath, content: "# Selected section\n\nSelected body.", keepTex: false };
+    expect(await latexExportDefaults({ file })).toMatchObject({ includeAbstract: true, includeToc: false });
+    for (const [includeAbstract, includeToc] of [[false, true], [true, false]]) {
+      const result = await exportLatex({ ...request, includeAbstract, includeToc });
+      const pdf = spawnSync("pdftotext", ["-layout", result.pdfFile, "-"], { encoding: "utf8" });
+      expect(pdf.status).toBe(0);
+      // Small capitals are extracted differently by the two TeX engines.
+      const text = pdf.stdout.toLowerCase();
+      expect(text.includes("abstract marker.")).toBe(includeAbstract);
+      expect(text.includes("contents")).toBe(includeToc);
+      expect(text.match(/selected section/g)).toHaveLength(includeToc ? 2 : 1);
+      expect(text).not.toContain("excluded section");
+      expect(await latexExportDefaults({ file: other })).toMatchObject({ includeAbstract, includeToc, keepTex: false });
+    }
+    await expect(exportLatex({ ...request, includeAbstract: false, includeToc: true, content: "" })).rejects.toThrow();
+    expect(await latexExportDefaults({ file: other })).toMatchObject({ includeAbstract: true, includeToc: false });
   });
 
   test("keeps long side notes, footnotes, and revision notes in the compiled PDF", async () => {

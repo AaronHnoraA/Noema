@@ -73,7 +73,7 @@ function parseYamlFrontMatter(lines) {
     const match = lines[index].match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
     if (!match) continue;
     const key = match[1].toLowerCase();
-    if (key !== "title" && key !== "date") continue;
+    if (!["title", "date", "author", "summary"].includes(key)) continue;
     if (match[2] === ">" || match[2] === "|") {
       const parts = [];
       while (index + 1 < end && /^(?:\s+|$)/.test(lines[index + 1])) parts.push(lines[++index].trim());

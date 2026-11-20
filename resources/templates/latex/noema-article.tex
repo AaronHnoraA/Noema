@@ -1,31 +1,43 @@
-% !TEX program = xelatex
 % noema-template: {"name":"Article","engine":"xelatex","documentRole":"article","vars":[]}
 % noema-opening-initial: latin
-% A white academic page with restrained printer's ornaments.
+% A single text column for mathematical articles.
 \documentclass[11pt]{article}
 \usepackage[a4paper,top=28mm,bottom=29mm,left=29mm,right=29mm,headheight=22pt]{geometry}
 \usepackage{amsmath,amssymb,amsthm,mathtools}
-\usepackage{fontspec}
-\IfFontExistsTF{LibertinusSerif-Regular.otf}
-  {\setmainfont{LibertinusSerif-Regular.otf}[
-    BoldFont=LibertinusSerif-Bold.otf,
-    ItalicFont=LibertinusSerif-Italic.otf,
-    BoldItalicFont=LibertinusSerif-BoldItalic.otf,
-    Ligatures=TeX]}
-  {\setmainfont{Latin Modern Roman}}
-\usepackage{xeCJK}
-\IfFileExists{/Users/hc/Library/Fonts/方正柳公权楷书 简繁.TTF}
-  {\setCJKmainfont[Path=/Users/hc/Library/Fonts/,AutoFakeBold=2]{方正柳公权楷书 简繁.TTF}}
-  {\setCJKmainfont[BoldFont=FandolSong-Bold.otf]{FandolSong-Regular.otf}}
-\setCJKsansfont[BoldFont=FandolHei-Bold.otf]{FandolHei-Regular.otf}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \IfFileExists{libertinus-type1.sty}{\usepackage[lining]{libertinus-type1}}{\usepackage{lmodern}}
+\else
+  \usepackage{fontspec}
+  \IfFontExistsTF{LibertinusSerif-Regular.otf}
+    {\setmainfont{LibertinusSerif-Regular.otf}[
+      BoldFont=LibertinusSerif-Bold.otf,ItalicFont=LibertinusSerif-Italic.otf,
+      BoldItalicFont=LibertinusSerif-BoldItalic.otf,Ligatures=TeX,
+      FontFace={sb}{n}{LibertinusSerif-Semibold.otf},
+      FontFace={sb}{it}{LibertinusSerif-SemiboldItalic.otf}]}
+    {\setmainfont{Latin Modern Roman}}
+  \IfFontExistsTF{LibertinusMono-Regular.otf}
+    {\setmonofont{LibertinusMono-Regular.otf}}{}
+  \ifXeTeX
+    \usepackage{xeCJK}
+    \IfFileExists{/Users/hc/Library/Fonts/方正柳公权楷书 简繁.TTF}
+      {\setCJKmainfont[Path=/Users/hc/Library/Fonts/,AutoFakeBold=2]{方正柳公权楷书 简繁.TTF}}
+      {\setCJKmainfont[BoldFont=FandolSong-Bold.otf]{FandolSong-Regular.otf}}
+    \setCJKsansfont[BoldFont=FandolHei-Bold.otf]{FandolHei-Regular.otf}
+  \fi
+\fi
 \usepackage{graphicx}
 \usepackage{microtype}
+\IfFileExists{ragged2e.sty}{\usepackage{ragged2e}}{\let\RaggedRight\raggedright}
 \usepackage{enumitem}
 \usepackage[dvipsnames]{xcolor}
 \usepackage{titlesec}
+\usepackage{titletoc}
 \usepackage{fancyhdr}
-\IfFileExists{truncate.sty}{\usepackage{truncate}}{\newcommand{\truncate}[2]{##2}}
 \IfFileExists{lettrine.sty}{\usepackage{lettrine}}{}
+\IfFileExists{truncate.sty}{\usepackage{truncate}}{\newcommand{\truncate}[2]{##2}}
 \IfFileExists{fvextra.sty}{\usepackage{fvextra}}{}
 \IfFileExists{xurl.sty}{\usepackage{xurl}}{}
 \IfFileExists{caption.sty}{%
@@ -42,7 +54,6 @@
 \setlength{\parindent}{1.45em}
 \setlength{\parskip}{0.15em}
 \linespread{1.12}
-\setlength{\emergencystretch}{3em}
 \setlist{topsep=.45em,itemsep=.18em,parsep=0pt,leftmargin=2em}
 \ifcsname fvset\endcsname
   \fvset{breaklines=true,breakanywhere=true,fontsize=\small}
@@ -51,41 +62,72 @@
 \setlength{\tabcolsep}{5pt}
 \renewcommand{\arraystretch}{1.12}
 
-\newcommand{\NoemaPrinterOrnament}{%
-  \begingroup\color{NoemaRule}%
-  \makebox[\linewidth][c]{%
-    \rule{.16\linewidth}{.35pt}\hspace{.6em}%
-    \raisebox{-.05ex}{\(\circ\mkern-7mu\circ\)}%
-    \hspace{.6em}\rule{.16\linewidth}{.35pt}}%
-  \endgroup}
+% Keep secondary headings and definition fields one weight below theorem heads.
+\newcommand{\NoemaSemibold}{%
+  \ifcsname\encodingdefault/\rmdefault/sb/n\endcsname
+    \fontseries{sb}\selectfont
+  \else\bfseries\fi}
+\DeclareTextFontCommand{\NoemaDefinitionStrong}{\NoemaSemibold}
 \newcommand{\NoemaOpeningInitial}[2]{%
   \ifcsname lettrine\endcsname
     \lettrine[lines=2,findent=.12em,nindent=0em]{#1}{#2}%
   \else #1#2\fi}
-
-\titleformat{\section}[display]
-  {\normalfont\centering\color{NoemaInk}}
-  {\small\scshape\thesection}{.3em}
-  {\large\scshape\mdseries}
-  [\vspace{.45ex}{\color{NoemaRule}\rule{.16\textwidth}{.35pt}}]
-\titleformat{\subsection}{\normalfont\large\bfseries\color{NoemaInk}}{\thesubsection}{0.6em}{}
-\titleformat{\subsubsection}{\normalfont\normalsize\itshape\color{NoemaInk}}{\thesubsubsection}{0.6em}{}
-\titlespacing*{\section}{0pt}{2.7ex plus .7ex minus .2ex}{1.5ex}
+% A link placed in the number box travels with the heading across a page break.
+\newcommand{\NoemaHeadingNumber}[1]{%
+  \MakeLinkTarget*{#1.\csname theH#1\endcsname.heading}%
+  \csname the#1\endcsname}
+\titleformat{\section}
+  {\normalfont\Large\scshape\centering\color{NoemaInk}}
+  {\NoemaHeadingNumber{section}.}{.55em}{}
+\titleformat{\subsection}{\normalfont\large\NoemaSemibold\color{NoemaInk}}{\NoemaHeadingNumber{subsection}}{0.6em}{}
+\titleformat{\subsubsection}{\normalfont\normalsize\itshape\color{NoemaInk}}{\NoemaHeadingNumber{subsubsection}}{0.6em}{}
+\titlespacing*{\section}{0pt}{3ex plus .5ex minus .2ex}{1.1ex}
 \titlespacing*{\subsection}{0pt}{1.8ex plus .4ex minus .2ex}{.7ex}
 \titlespacing*{\subsubsection}{0pt}{1.4ex plus .3ex minus .2ex}{.5ex}
 
+% Hang wrapped titles below their own text. Folios share one right edge.
+\titlecontents{section}[1.9em]
+  {\addvspace{.36\baselineskip}\normalsize\NoemaSemibold}
+  {\contentslabel{1.9em}}{}{\hfill\normalfont\contentspage}
+\newcommand{\NoemaContentsLeader}{%
+  \enspace\titlerule*[.72em]{\textcolor{NoemaRule}{.}}\normalfont\contentspage}
+\titlecontents{subsection}[4.4em]{\small}
+  {\contentslabel{2.5em}}{}{\NoemaContentsLeader}
+\titlecontents{subsubsection}[7.6em]{\small}
+  {\contentslabel{3.2em}}{}{\NoemaContentsLeader}
+\newcommand{\NoemaArticleContents}{%
+  \begin{list}{}{%
+    \setlength{\leftmargin}{.055\linewidth}\setlength{\rightmargin}{\leftmargin}%
+    \setlength{\topsep}{.55\baselineskip}\setlength{\partopsep}{0pt}%
+    \setlength{\parsep}{0pt}}%
+    \item[]\hypersetup{linkcolor=NoemaInk}\tableofcontents
+  \end{list}%
+  \addvspace{.8\baselineskip}}
+
 \makeatletter
 \renewcommand{\maketitle}{%
-  \begin{center}
-    \vspace*{.2em}
-    {\fontsize{19}{24}\selectfont\scshape\mdseries\@title\par}
-    \vspace{.6em}
-    {\small\itshape\color{NoemaAccent}\@date\par}
-    \vspace{.95em}
-    \NoemaPrinterOrnament\par
-  \end{center}
-  \vspace{1.45em}\thispagestyle{plain}}
+  \begingroup
+    \centering\setlength{\parskip}{0pt}%
+    {\fontsize{22}{27}\selectfont\mdseries\@title\par}
+    \vspace{.5em}
+    {\normalsize\scshape\@author\enspace
+      {\normalfont\small\color{NoemaRule}\textperiodcentered}\enspace
+      {\normalfont\small\color{NoemaAccent}\@date}\par}
+  \endgroup
+  \addvspace{.8\baselineskip}\thispagestyle{plain}}
 \makeatother
+\newcommand{\NoemaArticleSummary}[1]{%
+  \IfBlankF{#1}{%
+    \begin{list}{}{%
+      \setlength{\leftmargin}{.075\linewidth}%
+      \setlength{\rightmargin}{\leftmargin}%
+      \setlength{\topsep}{.7em}%
+      \setlength{\partopsep}{0pt}%
+      \setlength{\parsep}{.2em}}%
+      \item[]\small{\centering\NoemaSemibold\abstractname\par}%
+      \nobreak\vspace{.2em}%
+      \RaggedRight\noindent\ignorespaces#1\par
+    \end{list}}}
 \pagestyle{fancy}
 \fancyhf{}
 \makeatletter
@@ -96,10 +138,13 @@
 \renewcommand{\headrule}{\hbox to\headwidth{\color{NoemaRule}\leaders\hrule height \headrulewidth\hfill}}
 \fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\footnotesize\thepage}\renewcommand{\headrulewidth}{0pt}}
 
+\newcommand{\NoemaTheoremHead}[3]{%
+  \thmname{#1}\thmnumber{ #2}\thmnote{ {\normalfont\normalsize(#3)}}}
+\newcommand{\NoemaTheoremFont}{\normalfont\fontsize{11.5}{14}\selectfont\bfseries}
 \newtheoremstyle{noema-statement}{.8em}{.8em}{\itshape}{}%
-  {\scshape\mdseries}{.}{.55em}{}
+  {\NoemaTheoremFont}{.}{\newline}{\NoemaTheoremHead{#1}{#2}{#3}}
 \newtheoremstyle{noema-definition}{.8em}{.8em}{}{}%
-  {\scshape\mdseries}{.}{.55em}{}
+  {\NoemaTheoremFont}{.}{\newline}{\NoemaTheoremHead{#1}{#2}{#3}}
 \theoremstyle{noema-statement}
 \newtheorem{theorem}{Theorem}
 \newtheorem{lemma}{Lemma}
@@ -107,15 +152,31 @@
 \newtheorem{corollary}{Corollary}
 \theoremstyle{noema-definition}
 \newtheorem{definition}{Definition}
+\AddToHook{env/definition/begin}{%
+  \let\textbf\NoemaDefinitionStrong
+  \setlength{\parindent}{0pt}%
+  \setlength{\parskip}{.3\baselineskip}}
 \newtheorem{remark}{Remark}
 \newtheorem{example}{Example}
 
 \usepackage{noema-macros}
+\setlength{\emergencystretch}{5em}
+% Let code identifiers wrap at an existing underscore without adding a hyphen.
+\newcommand{\NoemaCodeUnderscore}{\textunderscore\allowbreak}
+\AddToHook{cmd/ttfamily/after}{\let\_\NoemaCodeUnderscore}
+\AddToHook{cmd/section/before}{\par\Needspace{4\baselineskip}}
 \title{ {{title}} }
+\author{Aaron He}
+\IfBlankF{ {{author}} }{\author{ {{author}} }}
 \date{ {{date}} }
 
 \begin{document}
 \maketitle
+\NoemaArticleSummary{ {{summary}} }
+{\centering\color{NoemaRule}\rule[.5ex]{.13\linewidth}{.35pt}\par}
+\ifnum {{includeToc}}=1\relax
+  \NoemaArticleContents
+\fi
 
 {{body}}
 

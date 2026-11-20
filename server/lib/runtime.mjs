@@ -19,7 +19,7 @@ import { noteMacroSpec, parseNoteLocalMacros } from "../../shared/note-macros.mj
 import { durationFromEnv } from "./jupyter-cell.mjs";
 import { moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
 import { scanPlanningDocument, planningSourceIsLive } from "../../shared/planning-document.mjs";
-import { maskMetaSummaryContent } from "../../shared/meta-summary.mjs";
+import { maskMetaSummaryContent, orgMetaSummaryRange } from "../../shared/meta-summary.mjs";
 import { BLOCK_ID_SOURCE, isBlockReferenceId, parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
 import { blockPropertyItemsForDocument, patchBlockPropertySource } from "../../shared/block-properties.mjs";
 import { evaluateAttributeView } from "../../shared/attribute-view.mjs";
@@ -6523,7 +6523,8 @@ function parseLatexTemplateHeader(text, templateFile = "") {
     }
     const placeholders = [...String(text || "").matchAll(/\{\{\s*([A-Za-z][\w-]*)\s*\}\}/g)].map((token) => token[1]);
     if (placeholders.filter((key) => key === "body").length !== 1) throw new Error("template must contain {{body}} exactly once");
-    const builtins = new Set(["title", "date", "source", "body"]);
+    // Templates may already declare their own author or summary form field.
+    const builtins = new Set(["title", "date", "author", "summary", "hasSummary", "includeToc", "source", "body"]);
     for (const key of new Set(placeholders)) {
       if (!builtins.has(key) && !ids.has(key)) throw new Error(`placeholder {{${key}}} has no declared variable`);
     }
@@ -6644,8 +6645,9 @@ export async function latexExportDefaults(body = {}) {
     templateRoot: latexTemplatesRoot,
     template: rememberedLatexTemplate(remembered?.templatePath),
     vars: remembered?.vars && typeof remembered.vars === "object" ? remembered.vars : {},
-    // Whether the last export kept its .tex beside the PDF; a global choice.
     keepTex: state.settings?.keepTex !== false,
+    includeAbstract: state.settings?.includeAbstract !== false,
+    includeToc: state.settings?.includeToc === true,
   };
 }
 
@@ -6766,10 +6768,12 @@ export async function exportLatex(body = {}) {
   // Metadata is resolved from the whole note, not the exported scope: a heading
   // or selection export rarely contains the `#+begin meta` block that carries
   // the title, date, and `annotations` switch.
+  const summaryRange = orgMetaSummaryRange(documentContent);
+  const metadataSource = summaryRange ? maskMetaSummaryContent(documentContent) : documentContent;
   const documentMeta = typeof latexProvider?.metadata === "function"
-    ? await latexProvider.metadata(documentContent)
-    : extractNoemaMetadata(documentContent);
-  const converted = await noemaMarkdownToLatexPandoc(exportContent, {
+    ? await latexProvider.metadata(metadataSource)
+    : extractNoemaMetadata(metadataSource);
+  const conversionOptions = {
     sourceFile,
     sourceDir: sourceFile ? dirname(sourceFile) : "",
     pandocBin: executablePath("pandoc"),
@@ -6778,7 +6782,8 @@ export async function exportLatex(body = {}) {
     disableAnnotations: String(documentMeta.annotations || "").trim().toLowerCase() === "none",
     transformProvider: latexProvider,
     signal,
-  });
+  };
+  const converted = await noemaMarkdownToLatexPandoc(maskMetaSummaryContent(exportContent), conversionOptions);
   throwIfAborted(signal);
   const metaTitle = String(documentMeta.title || converted.meta.title || "").trim();
   const title = latexExportTitle(sourceFile, body.title || "", metaTitle);
@@ -6796,6 +6801,13 @@ export async function exportLatex(body = {}) {
     throw new Error(`Selected LaTeX template could not be read: ${resolve(requestedTemplate)}`);
   }
   const header = parseLatexTemplateHeader(template.text, template.file);
+  const summaryMarkdown = (summaryRange
+    ? documentContent.slice(summaryRange.bodyFrom, summaryRange.bodyTo)
+    : String(documentMeta.summary || "")).trim();
+  const useNoteSummary = /\{\{\s*summary\s*\}\}/.test(template.text) && !header.vars.some(v => v.id === "summary");
+  const summary = body.includeAbstract !== false && useNoteSummary && summaryMarkdown
+    ? await noemaMarkdownToLatexPandoc(summaryMarkdown, conversionOptions)
+    : null;
   // `engine: "mechanical"` names the conversion (no agent polish, below), not a
   // TeX engine; the template's engine then compiles.
   const requestedEngine = String(body.engine || "").toLowerCase();
@@ -6807,8 +6819,9 @@ export async function exportLatex(body = {}) {
   // widening the stable Go/Node feature contract for one standard LaTeX
   // package; this also remains correct after an optional polish pass.
   const macroFeatures = {
-    ...converted.features,
-    usesWrapfig: /\\begin\{wrapfigure\}/.test(converted.body),
+    usesSideComment: converted.features.usesSideComment || summary?.features.usesSideComment,
+    usesTikz: converted.features.usesTikz || summary?.features.usesTikz,
+    usesWrapfig: /\\begin\{wrapfigure\}/.test(converted.body) || /\\begin\{wrapfigure\}/.test(summary?.body || ""),
   };
   const hasNoemaMacros = /\\(?:usepackage|RequirePackage)(?:\[[^\]]*\])?\{noema-macros\}/.test(template.text);
   const marginTemplate = macroFeatures.usesSideComment
@@ -6847,13 +6860,20 @@ export async function exportLatex(body = {}) {
     rawTemplateVars[v.id] = raw;
     extraVars[v.id] = escapeLatexTemplateVariable(raw, v);
   }
-  const templateKeys = [...Object.keys(extraVars), "title", "date", "source", "body"];
+  const summaryText = body.includeAbstract === false ? "" : (extraVars.summary ?? summary?.body.trim() ?? "");
+  // Older callers let Report and Assignment print their cover contents.
+  const includeToc = body.includeToc ?? ["report", "assignment"].includes(header.documentRole);
+  const templateKeys = [...Object.keys(extraVars), "title", "date", "author", "summary", "hasSummary", "includeToc", "source", "body"];
   const templatePlan = typeof latexProvider?.planTemplate === "function"
     ? await latexProvider.planTemplate(templateText, templateKeys)
     : null;
   const assemble = (bodyLatex, titleOverride = "") => {
     const vars = {
+      author: escapeLatexTitle(documentMeta.author || ""),
+      includeToc: includeToc ? "1" : "0",
+      hasSummary: summaryText.trim() ? "1" : "0",
       ...extraVars,
+      summary: summaryText,
       title: escapeLatexTitle(String(titleOverride || docTitle)),
       date: escapeLatexTitle(documentMeta.date || converted.meta.date || todayDateValue()),
       source: escapeLatexTitle(sourceFile ? displayPathForFile(sourceFile) : ""),
@@ -6872,7 +6892,7 @@ export async function exportLatex(body = {}) {
   // Every bibliography and citation diagnostic already failed the preflight
   // above with a 422, so none of them can reach the warning list from here.
   const warnings = Array.isArray(converted.warnings) ? [...converted.warnings] : [];
-  warnings.push(...diagramWarnings);
+  warnings.push(...diagramWarnings, ...(summary?.warnings || []));
   const backend = ["codex", "claude", "opencode"].includes(latexExportAgent) ? latexExportAgent : "codex";
   const agentBin = executablePath(backend === "claude" ? latexClaudeBin : backend === "opencode" ? latexOpencodeBin : latexCodexBin);
   const agentRunner = typeof body.agentRunner === "function" ? body.agentRunner : null;
@@ -6982,10 +7002,11 @@ export async function exportLatex(body = {}) {
     if (sourceFile) paths[sourceFile] = verified.texFile;
     const templates = { ...(state.templates && typeof state.templates === "object" ? state.templates : {}) };
     if (sourceFile) templates[sourceFile] = { templatePath: template.file, vars: rawTemplateVars };
-    const settings = typeof body.keepTex === "boolean"
-      ? { ...(state.settings && typeof state.settings === "object" ? state.settings : {}), keepTex: body.keepTex }
-      : state.settings;
-    return { ...state, schemaVersion: 1, paths, templates, ...(settings ? { settings } : {}), updatedAt: new Date().toISOString() };
+    const settings = { ...state.settings };
+    for (const key of ["keepTex", "includeAbstract", "includeToc"]) {
+      if (typeof body[key] === "boolean") settings[key] = body[key];
+    }
+    return { ...state, schemaVersion: 1, paths, templates, settings, updatedAt: new Date().toISOString() };
   });
 
   emit("Done");
