@@ -20,6 +20,12 @@ describe("Server configuration and read-only policy", () => {
       npmBin: "/usr/bin/npm",
     });
     expect(config.retainReleases).toBe(3);
+    // The kernel is compiled on the server with this Go.
+    expect(config.goBin).toBe("/usr/local/go/bin/go");
+    expect(normalizeServerDeployConfig({
+      schemaVersion: 1, sshTarget: "server", remoteRoot: "/srv/noema",
+      nodeBin: "/usr/bin/node", npmBin: "/usr/bin/npm", goBin: "/opt/go/bin/go",
+    }).goBin).toBe("/opt/go/bin/go");
   });
 
   test("normalizes explicit public/private repositories and runtime paths", () => {

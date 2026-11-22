@@ -36,6 +36,7 @@ export type ServerDeployConfig = Readonly<{
   serviceName: string;
   nodeBin: string;
   npmBin: string;
+  goBin: string;
   retainReleases: number;
 }>;
 

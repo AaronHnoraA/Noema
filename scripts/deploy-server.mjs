@@ -99,6 +99,16 @@ try {
   await run("rsync", ["-az", runtimeFile, `${deploy.sshTarget}:${remoteRuntime}`]);
   await run("rsync", ["-az", unitFile, `${deploy.sshTarget}:${remoteUnit}`]);
   await ssh(deploy, `${remoteCommand("cd", [releaseDir])} && ${remoteCommand(deploy.npmBin, ["ci", "--omit=dev"])}`);
+  // The Server reader runs the same Go kernel as the editor; it is compiled
+  // on the server (cgo for SQLite), never cross-compiled on the Mac, into the
+  // path the kernel supervisor looks in (build/kernel/<os>-<arch>/).
+  const goBin = shellQuote(deploy.goBin);
+  await ssh(deploy, [
+    remoteCommand("cd", [join(releaseDir, "kernel")]),
+    `out="../build/kernel/$(${goBin} env GOOS)-$(${goBin} env GOARCH)/noema-kernel"`,
+    `mkdir -p "$(dirname "$out")"`,
+    `CGO_ENABLED=1 ${goBin} build -tags fts5 -ldflags '-s -w' -o "$out" .`,
+  ].join(" && "), { timeout: 15 * 60_000 });
   await ssh(deploy, [
     remoteCommand("ln", ["-sfn", releaseDir, currentDir]),
     remoteCommand("systemctl", ["--user", "link", remoteUnit]),

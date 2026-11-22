@@ -541,6 +541,10 @@ const researchCaptures = createResearchCaptureService({
 
 function applyKernelState(next) {
   noemaKernel = next;
+  // The Server reader runs the kernel for the Wiki index only (it is read
+  // through noemaKernel by the index builder). Its search and catalogue keep
+  // the publishing boundary as before; no editing provider is installed.
+  if (hostMode === "server") return;
   const ready = next?.state === "listening" && next.box;
   kernelResearchProvider = next?.state === "listening" && next.baseUrl
     ? createKernelResearchProvider({ baseUrl: next.baseUrl })
@@ -585,7 +589,7 @@ function applyKernelState(next) {
 }
 
 kernelSupervisor = createKernelSupervisor({
-  enabled: hostMode !== "server",
+  enabled: true,
   env: process.env,
   runtimeRoot,
   stateRoot,
@@ -594,18 +598,16 @@ kernelSupervisor = createKernelSupervisor({
   onState: applyKernelState,
 });
 applyKernelState(kernelSupervisor.status());
-// The kernel lives and dies with this host, and owns the Wiki index: every
-// refresh goes to it, and fails while it is restarting rather than being done
-// here. The Server reader runs no kernel and keeps the host's builder.
-if (hostMode !== "server") {
-  configureWikiIndexBuilder(createKernelWikiIndexBuilder({
-    kernel: () => ({
-      ready: noemaKernel?.state === "listening" && Boolean(noemaKernel?.box),
-      baseUrl: noemaKernel?.baseUrl,
-      box: noemaKernel?.box,
-    }),
-  }));
-}
+// The kernel lives and dies with this host, Server reader included, and owns
+// the Wiki index: every refresh goes to it, and fails while it is restarting
+// rather than being done here.
+configureWikiIndexBuilder(createKernelWikiIndexBuilder({
+  kernel: () => ({
+    ready: noemaKernel?.state === "listening" && Boolean(noemaKernel?.box),
+    baseUrl: noemaKernel?.baseUrl,
+    box: noemaKernel?.box,
+  }),
+}));
 void kernelSupervisor.start().catch((error) => {
   process.stderr.write(`[noema-web] kernel supervisor failed: ${error?.stack || error}\n`);
 });
@@ -646,11 +648,25 @@ async function knowledgeVirtualReferencesPayload(body = {}) {
   return virtualReferencesPayload(index, body);
 }
 
+// The host does not start without its kernel; the Server reader's catalogue
+// is built by it, so it waits here rather than at listen time.
+let initialKernelReady = null;
+async function requireKernelAtStartup() {
+  initialKernelReady ??= kernelSupervisor.ready().then(async (initialKernel) => {
+    if (initialKernel.state !== "listening") {
+      await kernelSupervisor.close();
+      throw new Error(`Go kernel core failed before host startup: ${initialKernel.reason || initialKernel.state}`);
+    }
+    return initialKernel;
+  });
+  return await initialKernelReady;
+}
+
 let serverRepositoryState = serverConfig
   ? await syncServerRepositories(serverConfig)
   : null;
 let serverPublicCatalog = serverConfig
-  ? await buildServerPublicCatalog(await wikiIndexPayload({ force: true }), serverConfig)
+  ? await requireKernelAtStartup().then(async () => buildServerPublicCatalog(await wikiIndexPayload({ force: true }), serverConfig))
   : null;
 
 async function rebuildServerPublicCatalog({ sync = false } = {}) {
@@ -4265,13 +4281,7 @@ server.on("error", (err) => {
   process.stderr.write(`[noema-web] Failed to start server: ${err.message}\n`);
   process.exit(1);
 });
-if (hostMode !== "server") {
-  const initialKernel = await kernelSupervisor.ready();
-  if (initialKernel.state !== "listening") {
-    await kernelSupervisor.close();
-    throw new Error(`Go kernel core failed before host startup: ${initialKernel.reason || initialKernel.state}`);
-  }
-}
+await requireKernelAtStartup();
 if (marginNoteBridge) {
   try { marginNoteListener = await startMarginNoteListener({ bridge: marginNoteBridge, token: marginNoteToken }); }
   catch (error) { process.stderr.write(`[noema-web] MarginNote rendezvous unavailable: ${error.message}\n`); }

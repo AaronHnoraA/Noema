@@ -149,6 +149,9 @@ export function normalizeServerDeployConfig(raw) {
     serviceName: serviceName.endsWith(".service") ? serviceName : `${serviceName}.service`,
     nodeBin: safeAbsolutePath(raw.nodeBin, "nodeBin"),
     npmBin: safeAbsolutePath(raw.npmBin, "npmBin"),
+    // The Go toolchain that builds the kernel on the server (cgo needs a C
+    // compiler there too).
+    goBin: safeAbsolutePath(raw.goBin || "/usr/local/go/bin/go", "goBin"),
     retainReleases,
   });
 }

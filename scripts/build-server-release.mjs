@@ -17,6 +17,10 @@ const entries = [
   "js",
   "dist/pages",
   "src/styles/themes",
+  // The Go kernel is built on the server (scripts/deploy-server.mjs): its
+  // source and the resources it runs from travel with the release.
+  "kernel",
+  "kernel-resources",
 ];
 
 await rm(outputRoot, { recursive: true, force: true });
@@ -27,7 +31,11 @@ for (const entry of entries) {
   await cp(join(projectRoot, entry), destination, {
     recursive: true,
     force: true,
-    filter: (source) => basename(source) !== ".DS_Store",
+    // Test binaries and fixtures stay home; a kernel built for this Mac never
+    // ships.
+    filter: (source) => basename(source) !== ".DS_Store"
+      && !source.endsWith(".test")
+      && basename(source) !== "testdata",
   });
 }
 process.stdout.write(`Server release staged at ${outputRoot}\n`);
