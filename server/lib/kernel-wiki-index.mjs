@@ -24,6 +24,9 @@ export function createKernelWikiIndexBuilder({ kernel, fetchImpl = globalThis.fe
       body: JSON.stringify({ notebook: state.box.id, full: Boolean(full), includeIndex: true }),
       signal: AbortSignal.timeout(timeoutMs),
     });
+    if (response.status === 404) {
+      throw new Error("This Noema kernel predates the Wiki index refresh; run `make kernel-build` in site-lisp/noema and restart Noema");
+    }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || Number(payload?.code) !== 0 || !payload?.data) {
       throw new Error(String(payload?.msg || `kernel Wiki refresh failed with HTTP ${response.status}`));

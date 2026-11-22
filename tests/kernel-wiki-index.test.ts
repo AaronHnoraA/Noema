@@ -27,6 +27,12 @@ describe("the kernel owns the Wiki index", () => {
     await expect(build("/elsewhere")).rejects.toThrow(/indexes \/v/);
   });
 
+  test("an older kernel without the endpoint says how to update it", async () => {
+    const fetchImpl = (async () => new Response("not found", { status: 404 })) as unknown as typeof fetch;
+    const build = createKernelWikiIndexBuilder({ kernel: () => ({ ready: true, baseUrl: "http://k", box: { id: "b", root: "/v" } }), fetchImpl });
+    await expect(build("/v")).rejects.toThrow(/make kernel-build/);
+  });
+
   test("buildWikiIndex takes the kernel's index and adds the relationships", async () => {
     const root = mkdtempSync(join(tmpdir(), "kernel-index-"));
     try {
