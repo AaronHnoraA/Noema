@@ -99,6 +99,8 @@ func ApplyIndex(db *sql.DB, idx Index, now string) (changed int, err error) {
 	}
 	defer tx.Rollback()
 	for _, table := range desiredTables(idx, now) {
+		// The scan watermark moves on every refresh; it is not a change.
+		counts := table.name != "repository_index_state"
 		// page_bigrams has no rowid; its rows are deleted by value.
 		byValue := table.name == "page_bigrams"
 		selectCols := strings.Join(table.columns, ", ")
@@ -150,7 +152,9 @@ func ApplyIndex(db *sql.DB, idx Index, now string) (changed int, err error) {
 			if err != nil {
 				return 0, err
 			}
-			changed++
+			if counts {
+				changed++
+			}
 		}
 		placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(table.columns)), ", ")
 		for key, values := range table.rows {
@@ -158,7 +162,9 @@ func ApplyIndex(db *sql.DB, idx Index, now string) (changed int, err error) {
 				if _, err := tx.Exec("INSERT INTO "+table.name+" ("+strings.Join(table.columns, ", ")+") VALUES ("+placeholders+")", values...); err != nil {
 					return 0, fmt.Errorf("%s: %w", table.name, err)
 				}
-				changed++
+				if counts {
+					changed++
+				}
 			}
 		}
 	}
