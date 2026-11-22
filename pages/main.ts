@@ -6132,6 +6132,11 @@ function restoreEditorSaveChanges(snapshot: EditorSaveSnapshot): void {
   if (!editorSaveChanges.restore(snapshot.changeToken)) forceFullEditorSave = true;
 }
 
+/** A save the host rejected because its change set does not fit the file. */
+function isChangeSetMismatch(message: string): boolean {
+  return /change-set (?:source length mismatch|new length mismatch|range is invalid)/i.test(message);
+}
+
 const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof api.notes.save>>>({
   capture() {
     if (currentReadOnly || !currentFile || revision === savedRevision) return null;
@@ -6188,6 +6193,17 @@ const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof ap
   fail(error, snapshot, retryInMs) {
     restoreEditorSaveChanges(snapshot);
     const message = error instanceof Error ? error.message : "Save failed";
+    // The host refused the change set because it does not start from the text
+    // on disk. Sending it again can never succeed and kept the person's edits
+    // unsaved; save the whole note instead, still guarded by its version, so
+    // an edit made elsewhere is a conflict rather than overwritten.
+    if (snapshot.changeToken && isChangeSetMismatch(message)) {
+      forceFullEditorSave = true;
+      lastSaveProblem = null;
+      setStatus("Saving the whole note…");
+      window.setTimeout(() => void saveDrain.request(), 0);
+      return;
+    }
     lastSaveProblem = { kind: "error", message };
     setStatus(retryInMs === null ? message : `${message} — retrying in ${Math.round(retryInMs / 1000)}s`);
   },
@@ -7044,8 +7060,19 @@ async function mergeExternalSaveUnderTyping(file: string): Promise<boolean> {
   } finally {
     applyingContent = false;
   }
+  const remoteDoc = Text.of(remoteText.split("\n"));
+  // The unsaved changes must lead from the text on disk to the text on
+  // screen; if anything else changed the document in the same step, save the
+  // whole note rather than a change set that would not fit.
+  let fits = false;
+  try {
+    fits = merged.local.apply(remoteDoc).eq(editor.view.state.doc);
+  } catch {
+    fits = false;
+  }
   editorSaveChanges.replace(merged.local);
-  savedBaseDoc = merged.remote.empty ? base : Text.of(remoteText.split("\n"));
+  if (!fits) forceFullEditorSave = true;
+  savedBaseDoc = remoteDoc;
   currentVersion = String(opened.version || currentVersion);
   currentMtimeMs = Number(opened.mtimeMs) || currentMtimeMs;
   if (pendingExternalSave?.file === file) pendingExternalSave = null;
