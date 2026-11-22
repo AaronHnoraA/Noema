@@ -190,6 +190,206 @@
       }
     },
     {
+      "name": "front matter wins over a meta block",
+      "file": "front.md",
+      "content": "---\ntitle: 'Quoted Title'\ntags: [a, \"b c\"]\n---\n\n#+begin meta\ntitle: Not used\n#+end meta\n",
+      "expected": {
+        "title": "Quoted Title",
+        "persistedId": "",
+        "identityStatus": "provisional",
+        "pageNamespaceAliases": [],
+        "aliases": [],
+        "tags": [
+          "a",
+          "b c"
+        ],
+        "blocks": [],
+        "duplicateBlockIds": [],
+        "wikiLinks": []
+      }
+    },
+    {
+      "name": "a meta block past the preamble is prose",
+      "file": "late.md",
+      "content": "# Late\n\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n#+begin meta\nid: 019fb6e9-5a90-779a-9784-63e211090ac7\n#+end meta\n",
+      "expected": {
+        "title": "Late",
+        "persistedId": "",
+        "identityStatus": "provisional",
+        "pageNamespaceAliases": [],
+        "aliases": [],
+        "tags": [],
+        "blocks": [],
+        "duplicateBlockIds": [],
+        "wikiLinks": []
+      }
+    },
+    {
+      "name": "setext title",
+      "file": "setext.md",
+      "content": "Intro\n=== Big Title\n",
+      "expected": {
+        "title": "Big Title",
+        "persistedId": "",
+        "identityStatus": "provisional",
+        "pageNamespaceAliases": [],
+        "aliases": [],
+        "tags": [],
+        "blocks": [],
+        "duplicateBlockIds": [],
+        "wikiLinks": []
+      }
+    },
+    {
+      "name": "escaped wiki link is literal",
+      "file": "escaped.md",
+      "content": "# E\n\n\\[[Literal]] and [[Real|  spaced label  ]] and [[ |empty]]\n",
+      "expected": {
+        "title": "E",
+        "persistedId": "",
+        "identityStatus": "provisional",
+        "pageNamespaceAliases": [],
+        "aliases": [],
+        "tags": [],
+        "blocks": [],
+        "duplicateBlockIds": [],
+        "wikiLinks": [
+          {
+            "target": "Real",
+            "label": "spaced label"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CJK and astral text before anchors count UTF-16 units",
+      "file": "cjk.md",
+      "content": "# 标题\n\n中文段落😀 {#cjk-para}\n\n#+begin lemma 引理 {#lem-cjk}\nx\n#+end lemma\n",
+      "expected": {
+        "title": "标题",
+        "persistedId": "",
+        "identityStatus": "provisional",
+        "pageNamespaceAliases": [],
+        "aliases": [],
+        "tags": [],
+        "blocks": [
+          {
+            "id": "lem-cjk",
+            "kind": "org-env",
+            "envKind": "lemma",
+            "label": "lemma · 引理",
+            "offset": 45
+          },
+          {
+            "id": "cjk-para",
+            "kind": "anchor",
+            "envKind": "",
+            "label": "cjk-para",
+            "offset": 13
+          }
+        ],
+        "duplicateBlockIds": [],
+        "wikiLinks": []
+      }
+    },
+    {
+      "name": "planning ids",
+      "file": "plan.md",
+      "content": "# P\n\n@@todo [Write the proof] {id: task-proof, ddl: 2026-12-01}\n- [ ] item {id=item-two}\n",
+      "expected": {
+        "title": "P",
+        "persistedId": "",
+        "identityStatus": "provisional",
+        "pageNamespaceAliases": [],
+        "aliases": [],
+        "tags": [],
+        "blocks": [
+          {
+            "id": "task-proof",
+            "kind": "planning",
+            "envKind": "",
+            "label": "@@todo [Write the proof]",
+            "offset": 30
+          },
+          {
+            "id": "item-two",
+            "kind": "planning",
+            "envKind": "",
+            "label": "- [ ] item",
+            "offset": 75
+          }
+        ],
+        "duplicateBlockIds": [],
+        "wikiLinks": []
+      }
+    },
+    {
+      "name": "ediff: a valid proposal indexes its old side",
+      "file": "ediff.md",
+      "content": "# D\n\n#+begin ediff Fix\n@@ediff-author {\"name\":\"agent\"}\n-Old [[Before]]\n+New [[After]]\n#+end ediff\n\nTail.\n",
+      "expected": {
+        "title": "D",
+        "persistedId": "",
+        "identityStatus": "provisional",
+        "pageNamespaceAliases": [],
+        "aliases": [],
+        "tags": [],
+        "blocks": [],
+        "duplicateBlockIds": [],
+        "wikiLinks": [
+          {
+            "target": "Before",
+            "label": "Before"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ediff: an invalid block stays as source",
+      "file": "ediff-bad.md",
+      "content": "# D\n\n#+begin ediff\nnot a diff line [[Kept]]\n#+end ediff\n",
+      "expected": {
+        "title": "D",
+        "persistedId": "",
+        "identityStatus": "provisional",
+        "pageNamespaceAliases": [],
+        "aliases": [],
+        "tags": [],
+        "blocks": [],
+        "duplicateBlockIds": [],
+        "wikiLinks": [
+          {
+            "target": "Kept",
+            "label": "Kept"
+          }
+        ]
+      }
+    },
+    {
+      "name": "a {#id} on a non-semantic environment (tikz) is still a plain anchor",
+      "file": "nonsem.md",
+      "content": "# N\n\n#+begin tikz {#not-an-id}\n\\draw;\n#+end tikz\n",
+      "expected": {
+        "title": "N",
+        "persistedId": "",
+        "identityStatus": "provisional",
+        "pageNamespaceAliases": [],
+        "aliases": [],
+        "tags": [],
+        "blocks": [
+          {
+            "id": "not-an-id",
+            "kind": "anchor",
+            "envKind": "",
+            "label": "not-an-id",
+            "offset": 18
+          }
+        ],
+        "duplicateBlockIds": [],
+        "wikiLinks": []
+      }
+    },
+    {
       "name": "namespace aliases",
       "file": "ns.md",
       "content": "#+begin meta\nnamespace: math\nnamespace_aliases: maths, mathematics\n#+end meta\n\n# N\n",
