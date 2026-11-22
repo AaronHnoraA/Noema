@@ -26,6 +26,23 @@ describe("C70 comment threads beside the note", () => {
     try { await body(dir); } finally { rmSync(dir, { recursive: true, force: true }); }
   };
 
+  test("C81 clearing a failed attempt preserves the annotation and reopening restores it", () => {
+    const entries: Array<Record<string, string | { session: string }>> = [
+      { op: "thread", id: "c-1111", note: "a.md", text: "Fix this", quote: "x" },
+      { op: "assign", id: "c-1111", attempt: "try-2", assignee: { session: "tok" } },
+      { op: "reopen", id: "c-1111" },
+      { op: "fail", id: "c-1111", attempt: "try-1", reason: "stale failure" },
+    ];
+    const fold = () => foldJournal(entries.map((event) => JSON.stringify(event)).join("\n")).get("c-1111");
+    expect(fold()?.failure).toBeUndefined();
+    entries.push({ op: "fail", id: "c-1111", attempt: "try-2", reason: "refusal" });
+    entries.push({ op: "archive", id: "c-1111", attempt: "try-2", state: "failed" });
+    expect(fold()).toMatchObject({ archived: true, failure: "refusal", quote: "x" });
+    entries.push({ op: "reopen", id: "c-1111" });
+    expect(fold()?.archived).toBeUndefined();
+    expect(fold()?.failure).toBeUndefined();
+  });
+
   test("C70 a thread is kept in the folder's hidden journal and folded on read", () => withFolder(async (dir) => {
     const file = join(dir, "SAI.md");
     writeFileSync(file, "x\n");

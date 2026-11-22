@@ -39,7 +39,7 @@ export function commentTitle(text) {
 export function commentTodos(file, threads, { extract, note, lines = {} }) {
   const todos = [];
   for (const thread of threads) {
-    if (thread.status === "resolved") continue;
+    if (thread.status === "resolved" || thread.archived || thread.author?.kind === "agent") continue;
     const { title, attrs } = commentTitle(thread.messages?.[0]?.text);
     const source = `@@todo(todo) [${title}]${attrs ? " " + attrs : ""}`;
     const [todo] = extract(`${source}\n`, note, 0).todos || [];

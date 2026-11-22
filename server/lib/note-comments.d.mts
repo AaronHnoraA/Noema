@@ -4,6 +4,7 @@ export interface CommentThread {
   id: string; note: string; quote: string; status: "open" | "resolved"; author: CommentAuthor;
   createdAt: string; assignee: { name: string; session?: string } | null; messages: CommentMessage[];
   resolvedAt?: string; resolvedBy?: CommentAuthor;
+  archived?: boolean; failure?: string; attempt?: string;
 }
 export const COMMENTS_FILE: string;
 export function journalFor(file: string): string;

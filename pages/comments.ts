@@ -5,8 +5,8 @@
 // highlighted, and the comment itself lives beside the note in the folder's
 // journal (server/lib/note-comments.mjs).  There is no rail: the comment's card
 // pops up above its text while the caret is in the highlight or the pointer
-// rests on it.  A comment is a task; Emacs's collaboration panel (`H-t`) hands
-// it to an agent, which changes the file through the API and marks it done.
+// rests on it.  The person's selection comment enters the collaboration panel
+// (`H-t`), where it can be handed to an agent.
 
 import { EditorView } from "@codemirror/view";
 import { commentAnchor, newCommentId, scanCommentAnchors, type CommentAnchor } from "../shared/comment-anchors.mjs";
@@ -52,6 +52,10 @@ export interface CommentsController {
 }
 
 interface Draft { from: number; to: number; quote: string }
+
+function closed(thread: CommentThread): boolean {
+  return thread.archived === true || thread.status === "resolved";
+}
 
 function initials(name: string): string {
   return (name.match(/[\p{L}\p{N}]/u)?.[0] ?? "?").toUpperCase();
@@ -122,7 +126,7 @@ export function installComments(host: CommentsHost): CommentsController {
   function paintStyle(): void {
     const rules: string[] = [];
     for (const thread of threads) {
-      if (thread.status === "resolved") {
+      if (closed(thread)) {
         rules.push(`.noema-comment-anchor[data-comment-id="${thread.id}"]{background:none;border-bottom:1px dashed color-mix(in srgb,#f7c948 45%,transparent)}`);
       }
     }
@@ -185,7 +189,7 @@ export function installComments(host: CommentsHost): CommentsController {
     head.append(avatar, who);
     if (first && !host.readOnly()) {
       const tools = element("div", "noema-comment-tools");
-      tools.append(thread.status === "open"
+      tools.append(!closed(thread)
         ? button("✓", "Done", () => void act(() => host.api.resolve({ file: file()!, id: thread.id, resolved: true })), "noema-comment-resolve")
         : button("↺", "Reopen", () => void act(() => host.api.resolve({ file: file()!, id: thread.id, resolved: false }))));
       const menu = element("div", "noema-comment-menu");
@@ -225,11 +229,13 @@ export function installComments(host: CommentsHost): CommentsController {
     } else {
       const thread = threads.find((item) => item.id === shown);
       if (!thread) { card.hidden = true; paintStyle(); return; }
-      card.classList.toggle("noema-comment-pop-done", thread.status === "resolved");
+      card.classList.toggle("noema-comment-pop-done", closed(thread));
       thread.messages.forEach((message, index) => card.append(messageNode(thread, message, index === 0)));
-      const state = thread.status === "resolved" ? "Done"
-        : thread.assignee?.name ? `→ ${thread.assignee.name}` : "A task: hand it to an agent from H-t";
-      card.append(element("div", "noema-comment-state", state));
+      const state = thread.archived ? "Cleared" : thread.status === "resolved" ? "Done"
+        : thread.author?.kind === "agent" ? ""
+          : thread.failure ? "Task failed"
+            : thread.assignee?.name ? `→ ${thread.assignee.name}` : "A task: hand it to an agent from H-t";
+      if (state) card.append(element("div", "noema-comment-state", state));
       card.hidden = false;
     }
     paintStyle();

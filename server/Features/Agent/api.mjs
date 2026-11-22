@@ -305,7 +305,7 @@ export function createAgentApiHandlers({ router, call, onComment = () => {}, onN
   };
   return {
     "noema:api:agent:document:comment": documented((body) => commentDocument(body), {
-      description: "Comments are tasks. With id, mark that comment done once its change is made (resolve:false reopens it); comments take no replies. Without id, comment on the text you name, for a question to the person, not for a change (that is document:edit or propose).",
+      description: "With id, mark a comment task done once its change is made (resolve:false reopens it); comments take no replies. Without id, leave a question for the person on the text you name. Use document:edit or propose to change the text.",
       parameters: [{ file: "absolute Markdown path", from: "UTF-16 offset or {line,column}", to: "end, same form",
         oldText: "the exact text from..to (one line)", text: "a new comment", id: "the comment to mark done",
         resolve: "optional false with id: reopen" }] }),

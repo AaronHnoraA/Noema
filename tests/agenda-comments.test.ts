@@ -36,6 +36,15 @@ describe("C77 comments are Agenda tasks", () => {
     expect(commentAnchorLines("a\nb {==x==}{>>#c-1234<<}\n\n{==y==}{>>#c-5678<<}")).toEqual({ "c-1234": 2, "c-5678": 4 });
   });
 
+  test("C81 an archived task and an agent's question stay out of the agenda", () => {
+    const todos = commentTodos("/n/a.md", [
+      thread("c-aaaa1", "A task"),
+      thread("c-bbbb2", "Archived", { archived: true }),
+      thread("c-cccc3", "A question for the author", { author: { name: "Agent", kind: "agent" } }),
+    ], { extract: extractPlanningItems, note });
+    expect(todos.map((item: any) => item.commentId)).toEqual(["c-aaaa1"]);
+  });
+
   test("C77 done resolves, todo reopens, other patches are refused", () => {
     expect(commentPatchAction({ status: "done" })).toBe("resolve");
     expect(commentPatchAction({ op: "complete" })).toBe("resolve");

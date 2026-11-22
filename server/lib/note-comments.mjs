@@ -12,7 +12,9 @@
 //   {"v":1,"op":"resolve"|"reopen","id","author","at"}
 //   {"v":1,"op":"edit","id","mid"?,"text","at"}      mid absent: the first message
 //   {"v":1,"op":"delete","id","mid"?,"at"}            mid absent: the whole thread
-//   {"v":1,"op":"assign","id","assignee","at"}
+//   {"v":1,"op":"assign","id","assignee","attempt"?,"at"}
+//   {"v":1,"op":"fail","id","attempt","reason","at"}
+//   {"v":1,"op":"archive","id","state","attempt"?,"at"}
 //   {"v":1,"op":"move","id","note","at"}              the note was renamed
 
 import { appendFile, readFile, stat } from "node:fs/promises";
@@ -45,6 +47,7 @@ export function foldJournal(text) {
         if (!thread) threads.set(event.id, {
           id: event.id, note: event.note, quote: event.quote ?? "", status: "open",
           author: author(event.author), createdAt: event.at, assignee: event.assignee ?? null,
+          ...(event.attempt ? { attempt: event.attempt } : {}),
           messages: [{ mid: "m0", author: author(event.author), text: event.text ?? "", at: event.at }],
         });
         break;
@@ -52,7 +55,30 @@ export function foldJournal(text) {
         if (thread) thread.messages.push({ mid: event.mid, author: author(event.author), text: event.text ?? "", at: event.at });
         break;
       case "resolve": if (thread) Object.assign(thread, { status: "resolved", resolvedAt: event.at, resolvedBy: author(event.author) }); break;
-      case "reopen": if (thread) thread.status = "open"; break;
+      case "reopen":
+        if (thread) {
+          if (thread.archived || thread.status === "resolved") {
+            if (thread.archived) thread.assignee = null;
+            delete thread.archived;
+            delete thread.failure;
+            delete thread.attempt;
+          }
+          thread.status = "open";
+        }
+        break;
+      case "fail":
+        if (thread?.status === "open" && !thread.archived &&
+            typeof event.reason === "string" && typeof event.attempt === "string" &&
+            event.attempt === thread.attempt)
+          thread.failure = event.reason;
+        break;
+      case "archive":
+        if (thread && !thread.archived && thread.author.kind !== "agent" &&
+            event.attempt === thread.attempt &&
+            (event.state === "resolved" && thread.status === "resolved" ||
+             event.state === "failed" && thread.status === "open" && thread.failure))
+          thread.archived = true;
+        break;
       case "edit": {
         const message = thread?.messages.find((m) => m.mid === (event.mid ?? "m0"));
         if (message) Object.assign(message, { text: event.text ?? "", edited: event.at });
@@ -63,7 +89,14 @@ export function foldJournal(text) {
         if (!event.mid || event.mid === "m0") threads.delete(event.id);
         else thread.messages = thread.messages.filter((m) => m.mid !== event.mid);
         break;
-      case "assign": if (thread) thread.assignee = event.assignee ?? null; break;
+      case "assign":
+        if (thread) {
+          thread.assignee = event.assignee ?? null;
+          if (event.attempt) thread.attempt = event.attempt;
+          else delete thread.attempt;
+          delete thread.failure;
+        }
+        break;
       case "move": if (thread && typeof event.note === "string") thread.note = event.note; break;
     }
   }
