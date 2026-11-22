@@ -724,6 +724,35 @@ function openWikiNoteCache(rootValue) {
   }
 }
 
+/**
+ * Everything the Wiki index derives from one note's text alone: no file
+ * system, repository or other notes. It is the contract a second indexer
+ * (the Go kernel, docs/noema/design/wiki-workspace.md "Index ownership")
+ * must reproduce, pinned by shared/wiki-note-parse-fixtures.json.
+ */
+export function parseWikiNoteContent(content, file = "note.md") {
+  const text = String(content ?? "");
+  const approvedContent = stripCommentAnchors(approvedEdiffMarkdown(text));
+  const meta = metadata(text);
+  const persistedId = String(meta.id || "").trim();
+  const parsedBlocks = blockIds(approvedContent);
+  return {
+    approvedContent,
+    meta,
+    title: titleFor(file, text, meta),
+    persistedId,
+    identityStatus: persistedId
+      ? (/^\d{14}-/.test(persistedId) || !/^[0-9a-f-]{36}$/i.test(persistedId) ? "legacy" : "managed")
+      : "provisional",
+    pageNamespaceAliases: parseList(meta.namespace_aliases).map(normalizeWikiNamespace).filter(Boolean),
+    aliases: parseList(meta.aliases),
+    tags: parseList(meta.tags),
+    blocks: parsedBlocks.blocks,
+    duplicateBlockIds: parsedBlocks.duplicateIds,
+    wikiLinks: wikiLinks(approvedContent),
+  };
+}
+
 async function noteForFile(file, repository, workspaceRoot, cache = null, infoValue = null) {
   const info = infoValue || await stat(file);
   const workspacePath = relative(workspaceRoot, file).split(sep).join("/");
@@ -753,16 +782,13 @@ async function noteForFile(file, repository, workspaceRoot, cache = null, infoVa
     } catch {}
   }
   const content = await readFile(file, "utf8");
-  const approvedContent = stripCommentAnchors(approvedEdiffMarkdown(content));
-  const meta = metadata(content);
-  const title = titleFor(file, content, meta);
+  const parsed = parseWikiNoteContent(content, file);
+  const { approvedContent, meta, title, pageNamespaceAliases, persistedId } = parsed;
   const namespace = normalizeWikiNamespace(meta.namespace || repository.namespace || repository.name);
   const qualifiedNamespace = `${repository.partition}/${namespace}`;
-  const pageNamespaceAliases = parseList(meta.namespace_aliases).map(normalizeWikiNamespace).filter(Boolean);
-  const persistedId = String(meta.id || "").trim();
   const id = persistedId || provisionalKey(repository.uid || repository.id, repositoryPath);
-  const parsedBlocks = blockIds(approvedContent);
-  const blocks = parsedBlocks.blocks;
+  const blocks = parsed.blocks;
+  const parsedBlocks = { duplicateIds: parsed.duplicateBlockIds };
   const dependencies = dependencyRefs(approvedContent, file, repository);
   return {
     key: id,
@@ -785,9 +811,9 @@ async function noteForFile(file, repository, workspaceRoot, cache = null, infoVa
     ].map(normalizeWikiNamespace).filter(Boolean))],
     kind: String(meta.kind || "page"),
     redirectTo: String(meta.redirect_to || meta.redirect || ""),
-    identityStatus: persistedId ? (/^\d{14}-/.test(persistedId) || !/^[0-9a-f-]{36}$/i.test(persistedId) ? "legacy" : "managed") : "provisional",
-    aliases: parseList(meta.aliases),
-    tags: parseList(meta.tags),
+    identityStatus: parsed.identityStatus,
+    aliases: parsed.aliases,
+    tags: parsed.tags,
     private: repository.partition === "private" || String(meta.private).toLowerCase() === "true",
     file,
     path: workspacePath,
@@ -803,7 +829,7 @@ async function noteForFile(file, repository, workspaceRoot, cache = null, infoVa
     blocks,
     duplicateBlockIds: parsedBlocks.duplicateIds,
     dependencies,
-    wikiLinks: wikiLinks(approvedContent),
+    wikiLinks: parsed.wikiLinks,
     searchText: approvedContent,
     refs: [],
     backlinks: [],
