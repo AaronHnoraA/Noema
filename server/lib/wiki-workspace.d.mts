@@ -20,6 +20,7 @@ export type WikiDiagnostic = {
   path?: string;
   partition?: WikiPartition;
   name?: string;
+  files?: string[];
 };
 export type WikiNote = {
   matchedTerms?: string[];
@@ -134,6 +135,7 @@ export type WikiGitProvider = {
   }>;
 };
 
+export function duplicatePageIdDiagnostics(duplicates?: Array<{ id: string; candidates?: Array<{ file?: string }> }>): WikiDiagnostic[];
 export function configureWikiGitProvider(provider?: WikiGitProvider | null): void;
 
 export function expandNoemaPath(value?: string, fallback?: string): string;

@@ -18,6 +18,7 @@ import {
   listTrashedWikiPages,
   restoreTrashedWikiPage,
   discoverWikiRepositories,
+  duplicatePageIdDiagnostics,
   exportWiki,
   initWikiRepository,
   mergeWikiPages,
@@ -1249,6 +1250,21 @@ describe("Wiki workspace", () => {
     }
   });
 
+  test("a web link to a Markdown file is not a wiki reference", async () => {
+    const root = await tempRoot();
+    await initWikiRepository(root, "private", "math");
+    const target = await createWikiPage(root, "wiki", { title: "Guide", repositoryId: "private/math", filename: "guide.md" });
+    const reader = await createWikiPage(root, "wiki", { title: "Reader", repositoryId: "private/math", filename: "reader.md" });
+    await writeFile(reader.file, `${await readFile(reader.file, "utf8")}`
+      + "[up](https://example.org/docs/README.md#install) [mail](mailto:a@b.c) [local](./guide.md#top)\n");
+    const index = await buildWikiIndex(root, { layout: "wiki" });
+    const page = index.notes.find((note) => note.id === reader.id)!;
+    expect(page.unresolvedLinks.filter((link) => /^https?:|^mailto:/.test(link))).toEqual([]);
+    expect(page.wikiLinks.map((link) => link.target)).not.toContain("https://example.org/docs/README.md#install");
+    expect(page.wikiLinks.map((link) => link.target)).toContain("./guide.md#top");
+    expect(target.id).toBeTruthy();
+  });
+
   test("links a title that contains a colon unless a namespace answers first", async () => {
     const root = await tempRoot();
     await initWikiRepository(root, "private", "math");
@@ -1357,5 +1373,28 @@ describe("Wiki workspace", () => {
     await expect(cloneWikiRepository(root, { partition: "private", name: "evil", remote: "https://user:secret@example.test/x.git" }))
       .rejects.toThrow(/embedded credentials/);
     expect(existsSync(join(root, "private", "evil"))).toBe(false);
+  });
+});
+
+describe("duplicate page ids", () => {
+  test("one diagnostic per id names every file that carries it", () => {
+    const pair = (first: string, second: string) => ({
+      id: "019f-dup",
+      candidates: [{ file: first }, { file: second }],
+    });
+    const diagnostics = duplicatePageIdDiagnostics([
+      pair("/v/QMM.md", "/v/assets/QMM/candidate.md"),
+      pair("/v/QMM.md", "/v/assets/QMM/merge-preview.md"),
+      { id: "019f-other", candidates: [{ file: "/v/a.md" }, { file: "/v/b.md" }] },
+    ]);
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics[0]).toMatchObject({
+      code: "duplicate-page-id",
+      severity: "error",
+      path: "/v/QMM.md",
+      files: ["/v/QMM.md", "/v/assets/QMM/candidate.md", "/v/assets/QMM/merge-preview.md"],
+    });
+    expect(diagnostics[0]!.message).toContain("3 files");
+    expect(diagnostics[0]!.message).toContain("/v/assets/QMM/merge-preview.md");
   });
 });

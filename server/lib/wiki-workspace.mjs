@@ -366,7 +366,10 @@ function wikiLinks(content) {
   for (const match of scanWikiLinks(source)) links.push({ target: match.target, label: match.label });
   for (const match of source.matchAll(/\[[^\]\n]*\]\(((?:[^()\n]|\([^()\n]*\))+)\)/g)) {
     const target = String(match[1] || "").trim();
-    if (/^(?:roam:\/\/|#|\.\/?#)/i.test(target) || /\.(?:md|markdown)#/i.test(target)) {
+    // A URL with any scheme but roam:// points outside the wiki: an
+    // `https://…/README.md#x` link is not a page reference that can be missing.
+    const external = /^[a-z][a-z0-9+.-]*:/i.test(target) && !/^roam:\/\//i.test(target);
+    if (!external && (/^(?:roam:\/\/|#|\.\/?#)/i.test(target) || /\.(?:md|markdown)#/i.test(target))) {
       links.push({ target, label: "" });
     }
   }
@@ -553,6 +556,30 @@ function resolvedWikiTarget(lookup, targetValue, source = null) {
     else if (isUuidV7(fragment)) status = "missing-fragment";
   }
   return { candidates, fragment, targetBlockId, status };
+}
+
+/**
+ * One diagnostic per duplicated id, naming every file that carries it.  The
+ * relationship pass reports each later file against the first, so six copies
+ * would otherwise be five identical messages with no path to act on.
+ */
+export function duplicatePageIdDiagnostics(duplicates = []) {
+  const byId = new Map();
+  for (const duplicate of duplicates) {
+    const files = byId.get(duplicate.id) ?? new Set();
+    for (const candidate of duplicate.candidates ?? []) if (candidate?.file) files.add(candidate.file);
+    byId.set(duplicate.id, files);
+  }
+  return [...byId.entries()].map(([id, files]) => {
+    const list = [...files];
+    return {
+      code: "duplicate-page-id",
+      severity: "error",
+      message: `Page id ${id} is present in ${list.length} files: ${list.join(", ")}`,
+      path: list[0] ?? "",
+      files: list,
+    };
+  });
 }
 
 export function resolveWikiRelationships(notes) {
@@ -894,13 +921,7 @@ export async function buildWikiIndex(rootValue, options = {}) {
   const inventories = indexedRepositories.flatMap((item) => item.inventory);
   const related = resolveWikiRelationships(noteGroups.flat());
   discovered.diagnostics.push(...blockRelationshipDiagnostics(noteGroups.flat(), related.reports));
-  for (const duplicate of related.reports.duplicateIds) {
-    discovered.diagnostics.push({
-      code: "duplicate-page-id",
-      severity: "error",
-      message: `Page id ${duplicate.id} is present in multiple files`,
-    });
-  }
+  discovered.diagnostics.push(...duplicatePageIdDiagnostics(related.reports.duplicateIds));
   const index = {
     type: "wiki-index",
     ...discovered,
