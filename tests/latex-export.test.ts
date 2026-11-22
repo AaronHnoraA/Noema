@@ -50,7 +50,9 @@ async function setupRoot() {
   return { root, notes };
 }
 
-describe("LaTeX export", () => {
+// Many cases run real pdflatex/latexmk compiles; under the full parallel
+// suite they need more than the 5 s default.
+describe("LaTeX export", { timeout: 60_000 }, () => {
   test("adds one opening initial only to an opening Latin paragraph", () => {
     const body = "\\section{Introduction}\\label{intro}\n\nWe study graphs.\n\nAnother paragraph.\n";
     expect(latexOpeningDropCap(body)).toBe("\\section{Introduction}\\label{intro}\n\n\\NoemaOpeningInitial{W}{e} study graphs.\n\nAnother paragraph.\n");
@@ -791,8 +793,7 @@ Proof text.
     }
     await expect(exportLatex({ ...request, includeAbstract: false, includeToc: true, content: "" })).rejects.toThrow();
     expect(await latexExportDefaults({ file: other })).toMatchObject({ includeAbstract: true, includeToc: false });
-  // Four real PDF compiles: under the full parallel suite they exceed 5 s.
-  }, 60_000);
+  });
 
   test("keeps long side notes, footnotes, and revision notes in the compiled PDF", async () => {
     const { notes } = await setupRoot();
@@ -1303,7 +1304,7 @@ Proof text.
   });
 });
 
-describe("LaTeX export regressions", () => {
+describe("LaTeX export regressions", { timeout: 60_000 }, () => {
   test("keeps every link on a line whose label carries a private command", () => {
     const result = preprocessNoemaForPandoc(
       "See [a @@todo one](http://x.com) and [b](http://y.com) end.",
