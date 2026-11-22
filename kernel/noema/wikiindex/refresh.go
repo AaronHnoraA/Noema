@@ -16,14 +16,17 @@ func DatabaseFile(root string) string {
 
 // RefreshResult says what a refresh did.
 type RefreshResult struct {
-	Mode       string `json:"mode"`
-	Reason     string `json:"reason"`
-	Changed    int    `json:"changed"`
-	Pages      int    `json:"pages"`
-	Files      int    `json:"files"`
-	Generation string `json:"generation"`
-	ElapsedMs  int64  `json:"elapsedMs"`
-	Index      *Index `json:"index,omitempty"`
+	Mode    string `json:"mode"`
+	Reason  string `json:"reason"`
+	Changed int    `json:"changed"`
+	// Inserted counts the rows each table gained: a page whose row changed
+	// counts once in "pages".
+	Inserted   map[string]int `json:"inserted"`
+	Pages      int            `json:"pages"`
+	Files      int            `json:"files"`
+	Generation string         `json:"generation"`
+	ElapsedMs  int64          `json:"elapsedMs"`
+	Index      *Index         `json:"index,omitempty"`
 }
 
 var refreshMu sync.Mutex
@@ -84,7 +87,7 @@ func Refresh(root string, full bool) (RefreshResult, error) {
 		state, known := written[file]
 		if size, mtime, ok := fileStamp(file); known && ok && size == state.size && mtime.Equal(state.mtime) {
 			var tables []*tableRows
-			changed, tables, err = applyKnown(db, state.tables, idx, now)
+			changed, result.Inserted, tables, err = applyKnown(db, state.tables, idx, now)
 			if err != nil {
 				delete(written, file)
 				return result, err
@@ -92,7 +95,7 @@ func Refresh(root string, full bool) (RefreshResult, error) {
 			db.Close()
 			remember(file, tables)
 		} else {
-			changed, err = ApplyIndex(db, idx, now)
+			changed, result.Inserted, err = applyIndexCounting(db, idx, now)
 			if err != nil {
 				delete(written, file)
 				return result, err
@@ -124,6 +127,7 @@ func Refresh(root string, full bool) (RefreshResult, error) {
 			return result, err
 		}
 		remember(file, desiredTables(idx, now))
+		result.Inserted = map[string]int{"pages": len(idx.Notes), "files": len(idx.Files)}
 		result.Mode, result.Reason = "full", reason
 	}
 	result.ElapsedMs = time.Since(started).Milliseconds()

@@ -425,7 +425,7 @@ describe("Wiki workspace", () => {
     expect(searchWikiDatabase(root, { query: "RareSearchNeedle" })).toMatchObject({ total: 1 });
   });
 
-  test("falls back to an atomic full rebuild when the HEAD watermark is rewritten", async () => {
+  test("an index stays right when a repository's history is rewritten", async () => {
     const root = await tempRoot();
     const repository = await gitRepository(root, "private", "research");
     await execFileAsync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
@@ -439,9 +439,12 @@ describe("Wiki workspace", () => {
     await execFileAsync("git", ["-C", repository, "add", "."]);
     await execFileAsync("git", ["-C", repository, "commit", "--amend", "--no-edit"]);
 
+    // The kernel rescans the files on every refresh, so it needs no HEAD
+    // watermark to notice an amended commit; the index must simply be right.
     const rebuilt = await buildWikiIndex(root, { layout: "wiki", mode: "auto" });
-    expect(rebuilt.maintenance).toMatchObject({ mode: "full", reason: "head-watermark-unreachable" });
+    expect(rebuilt.maintenance?.builder).toBe("kernel");
     expect(searchWikiDatabase(root, { query: "Rewritten" })).toMatchObject({ total: 1 });
+    expect(searchWikiDatabase(root, { query: "Before" })).toMatchObject({ total: 0 });
   });
 
   test("uses Git commits as page history and restores an old version into the working tree", async () => {

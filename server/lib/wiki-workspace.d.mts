@@ -103,7 +103,11 @@ export type WikiIndexMaintenance = {
   mode: "incremental" | "full";
   reason: string;
   changedFiles: string[];
-  changes: { repositories: number; files: number; pages: number; relationships: number; removed: number };
+  /** The legacy layout's host builder counts these; the kernel counts rows, pages and files. */
+  changes: { rows?: number; repositories?: number; files: number; pages: number; relationships?: number; removed?: number };
+  /** "kernel" for the Wiki layout. */
+  builder?: "kernel";
+  elapsedMs?: number;
 };
 
 export type WikiGitProvider = {

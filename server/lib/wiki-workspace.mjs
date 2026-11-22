@@ -919,7 +919,16 @@ async function kernelBuiltWikiIndex(root, options = {}) {
     generation: index.generation || "",
     maintenance: {
       ok: true, dbFile: wikiDatabaseFile(root), mode: built.mode, reason: built.reason,
-      changes: { rows: Number(built.changed) || 0 }, changedFiles: [], builder: "kernel", elapsedMs: built.elapsedMs,
+      changes: {
+        rows: Number(built.changed) || 0,
+        pages: Number(built.inserted?.pages) || 0,
+        files: Number(built.inserted?.files) || 0,
+      },
+      // What the caller said had changed; the kernel rescans everything and
+      // needs no hint, but the caller's record of a refresh keeps it.
+      changedFiles: [...new Set((options.changedFiles || []).map((file) => resolve(file)))],
+      builder: "kernel",
+      elapsedMs: built.elapsedMs,
     },
   };
 }
@@ -965,39 +974,11 @@ export async function buildWikiIndex(rootValue, options = {}) {
     index.maintenance = await persistWikiIndex(index, options);
     return index;
   }
-  if (wikiIndexBuilder) return await kernelBuiltWikiIndex(root, options);
-  const discovered = await discoverWikiRepositories(root);
-  await Promise.all(discovered.repositories.map(async (repository) => {
-    repository.headSha = await repositoryHeadSha(repository);
-  }));
-  const cache = openWikiNoteCache(root);
-  let indexedRepositories;
-  try {
-    indexedRepositories = await Promise.all(discovered.repositories.map(async (repository) => {
-      const inventory = await repositoryFileInventory(repository);
-      const notes = await Promise.all(inventory
-        .filter((item) => item.kind === "note")
-        .map((item) => noteForFile(item.file, repository, root, cache, item)));
-      return { inventory, notes };
-    }));
-  } finally {
-    cache?.db.close();
+  // The Wiki layout's index is the kernel's; there is no second builder here.
+  if (!wikiIndexBuilder) {
+    throw new Error("The Wiki index is built by the Noema kernel, and no kernel is configured");
   }
-  const noteGroups = indexedRepositories.map((item) => item.notes);
-  const inventories = indexedRepositories.flatMap((item) => item.inventory);
-  const related = resolveWikiRelationships(noteGroups.flat());
-  discovered.diagnostics.push(...blockRelationshipDiagnostics(noteGroups.flat(), related.reports));
-  discovered.diagnostics.push(...duplicatePageIdDiagnostics(related.reports.duplicateIds));
-  const index = {
-    type: "wiki-index",
-    ...discovered,
-    files: inventories,
-    directories: directoryInventory(inventories),
-    ...related,
-  };
-  index.generation = wikiIndexGeneration(index);
-  index.maintenance = await persistWikiIndex(index, options);
-  return index;
+  return await kernelBuiltWikiIndex(root, options);
 }
 
 function directoryInventory(files) {

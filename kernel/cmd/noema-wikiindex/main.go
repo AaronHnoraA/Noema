@@ -2,6 +2,7 @@
 //
 //	noema-wikiindex -index index.json -out new.db
 //	noema-wikiindex -scan VAULT -out new.db
+//	noema-wikiindex -refresh VAULT [-full]   (prints the refresh result and index as JSON)
 //
 // It never writes into an existing database (wikiindex.WriteDatabase refuses),
 // so it is safe to run beside the real index while the kernel's builder is
@@ -24,8 +25,22 @@ import (
 func main() {
 	indexFile := flag.String("index", "", "index JSON as Node's buildWikiIndex returns it, with searchText")
 	scanRoot := flag.String("scan", "", "vault root to scan and parse instead of reading -index")
+	refreshRoot := flag.String("refresh", "", "vault root whose .noema/wiki.db to refresh in place, printing the result as JSON")
+	full := flag.Bool("full", false, "with -refresh, build in full")
 	out := flag.String("out", "", "database file to create; must not exist")
 	flag.Parse()
+	if *refreshRoot != "" {
+		result, err := wikiindex.Refresh(*refreshRoot, *full)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if (*indexFile == "") == (*scanRoot == "") || *out == "" {
 		fmt.Fprintln(os.Stderr, "usage: noema-wikiindex (-index index.json | -scan VAULT) -out new.db")
 		os.Exit(2)

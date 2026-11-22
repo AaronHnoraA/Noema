@@ -96,16 +96,24 @@ func desiredTables(idx Index, now string) []*tableRows {
 // apply_test.go holds. A database of another schema is refused; the caller
 // builds it in full instead.
 func ApplyIndex(db *sql.DB, idx Index, now string) (changed int, err error) {
+	changed, _, err = applyIndexCounting(db, idx, now)
+	return changed, err
+}
+
+// applyIndexCounting is ApplyIndex that also says how many rows each table
+// gained (a changed row is one removal and one insertion).
+func applyIndexCounting(db *sql.DB, idx Index, now string) (changed int, inserted map[string]int, err error) {
+	inserted = map[string]int{}
 	var version int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if version != SchemaVersion {
-		return 0, errors.New("wikiindex: schema differs; build in full")
+		return 0, nil, errors.New("wikiindex: schema differs; build in full")
 	}
 	tx, err := db.Begin()
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer tx.Rollback()
 	for _, table := range desiredTables(idx, now) {
@@ -119,7 +127,7 @@ func ApplyIndex(db *sql.DB, idx Index, now string) (changed int, err error) {
 		}
 		rows, err := tx.Query("SELECT " + selectCols + " FROM " + table.name)
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		present := map[string]int{}
 		type staleRow struct {
@@ -139,7 +147,7 @@ func ApplyIndex(db *sql.DB, idx Index, now string) (changed int, err error) {
 			}
 			if err := rows.Scan(pointers...); err != nil {
 				rows.Close()
-				return 0, err
+				return 0, nil, err
 			}
 			key := rowKey(values[offset:])
 			if present[key] < table.counts[key] {
@@ -160,7 +168,7 @@ func ApplyIndex(db *sql.DB, idx Index, now string) (changed int, err error) {
 				_, err = tx.Exec("DELETE FROM "+table.name+" WHERE rowid=?", row.rowid)
 			}
 			if err != nil {
-				return 0, err
+				return 0, nil, err
 			}
 			if counts {
 				changed++
@@ -170,27 +178,29 @@ func ApplyIndex(db *sql.DB, idx Index, now string) (changed int, err error) {
 		for key, values := range table.rows {
 			for missing := table.counts[key] - present[key]; missing > 0; missing-- {
 				if _, err := tx.Exec("INSERT INTO "+table.name+" ("+strings.Join(table.columns, ", ")+") VALUES ("+placeholders+")", values...); err != nil {
-					return 0, fmt.Errorf("%s: %w", table.name, err)
+					return 0, nil, fmt.Errorf("%s: %w", table.name, err)
 				}
 				if counts {
 					changed++
 				}
+				inserted[table.name]++
 			}
 		}
 	}
 	for _, meta := range [][2]string{{"generation", idx.Generation}, {"updated_at", now}, {"last_mode", "incremental"},
 		{"last_reason", "kernel"}, {"last_error", ""}, {"last_incremental_at", now}} {
 		if _, err := tx.Exec("INSERT OR REPLACE INTO wiki_meta VALUES (?, ?)", meta[0], meta[1]); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 	}
-	return changed, tx.Commit()
+	return changed, inserted, tx.Commit()
 }
 
 // applyKnown brings a database whose rows are exactly PREVIOUS (the tables
 // this process last wrote to it) to IDX, writing only the difference and
 // reading nothing back.
-func applyKnown(db *sql.DB, previous []*tableRows, idx Index, now string) (int, []*tableRows, error) {
+func applyKnown(db *sql.DB, previous []*tableRows, idx Index, now string) (int, map[string]int, []*tableRows, error) {
+	inserted := map[string]int{}
 	next := desiredTables(idx, now)
 	before := map[string]*tableRows{}
 	for _, table := range previous {
@@ -198,14 +208,14 @@ func applyKnown(db *sql.DB, previous []*tableRows, idx Index, now string) (int, 
 	}
 	tx, err := db.Begin()
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	defer tx.Rollback()
 	changed := 0
 	for _, table := range next {
 		old := before[table.name]
 		if old == nil {
-			return 0, nil, errors.New("wikiindex: remembered tables are incomplete")
+			return 0, nil, nil, errors.New("wikiindex: remembered tables are incomplete")
 		}
 		counts := table.name != "repository_index_state"
 		where := make([]string, len(table.columns))
@@ -219,7 +229,7 @@ func applyKnown(db *sql.DB, previous []*tableRows, idx Index, now string) (int, 
 		for key, values := range old.rows {
 			for extra := old.counts[key] - table.counts[key]; extra > 0; extra-- {
 				if _, err := tx.Exec(remove, values...); err != nil {
-					return 0, nil, fmt.Errorf("%s: %w", table.name, err)
+					return 0, nil, nil, fmt.Errorf("%s: %w", table.name, err)
 				}
 				if counts {
 					changed++
@@ -231,19 +241,20 @@ func applyKnown(db *sql.DB, previous []*tableRows, idx Index, now string) (int, 
 		for key, values := range table.rows {
 			for missing := table.counts[key] - old.counts[key]; missing > 0; missing-- {
 				if _, err := tx.Exec(insert, values...); err != nil {
-					return 0, nil, fmt.Errorf("%s: %w", table.name, err)
+					return 0, nil, nil, fmt.Errorf("%s: %w", table.name, err)
 				}
 				if counts {
 					changed++
 				}
+				inserted[table.name]++
 			}
 		}
 	}
 	for _, meta := range [][2]string{{"generation", idx.Generation}, {"updated_at", now}, {"last_mode", "incremental"},
 		{"last_reason", "kernel"}, {"last_error", ""}, {"last_incremental_at", now}} {
 		if _, err := tx.Exec("INSERT OR REPLACE INTO wiki_meta VALUES (?, ?)", meta[0], meta[1]); err != nil {
-			return 0, nil, err
+			return 0, nil, nil, err
 		}
 	}
-	return changed, next, tx.Commit()
+	return changed, inserted, next, tx.Commit()
 }
