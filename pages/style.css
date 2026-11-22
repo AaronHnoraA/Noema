@@ -303,9 +303,34 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
   .cm-table-drag-handle,
   .cm-image-toolbar,
   .cm-image-resize-handle,
-  .cm-ceil-output-toolbar
+  .cm-ceil-output-toolbar,
+  .cm-code-fold-button
 ) {
   display: none !important;
+}
+
+/* Rendered blocks open their source on click in the editor, so they show a
+   pointer there. The reader opens nothing, so a pointer would promise a click
+   that does nothing; only real controls (links, citations, copy, expand) keep
+   one. */
+body[data-host-mode="server"][data-server-reader-editing-aids="false"] .cm-content :is(
+  .cm-front-matter-block,
+  .cm-math-inline,
+  .cm-math-block,
+  .cm-mermaid-block,
+  .cm-image-widget
+),
+body[data-host-mode="server"][data-server-reader-editing-aids="false"] .cm-content :is(
+  .cm-front-matter-block,
+  .cm-math-inline,
+  .cm-math-block,
+  .cm-mermaid-block,
+  .cm-image-widget
+) * {
+  cursor: default;
+}
+body[data-host-mode="server"][data-server-reader-editing-aids="false"] .cm-content :is(button, a, .inline-cite-widget, .cm-link-text) {
+  cursor: pointer;
 }
 
 .noema-status-pill {
