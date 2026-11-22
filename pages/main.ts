@@ -51,7 +51,9 @@ import { INLINE_MATH_RE } from "../src/inline-math.ts";
 import { scanInlineCommands } from "../src/command-syntax.ts";
 import { decodeRevisionAttribute, decodeRevisionContext } from "../src/authoring-syntax.ts";
 import { DEFAULT_REVISION_KIND, revisionKindIdOf, revisionKinds } from "../src/revision-kinds.ts";
-import { formatMathRenderError, renderMathHTML } from "../src/math-render.ts";
+import { clearMathRenderCache, formatMathRenderError, renderMathHTML } from "../src/math-render.ts";
+import { clearCodeHighlightCache } from "../src/code-highlight.ts";
+import { clearTikzWidgetResults } from "../src/cm6/extensions/visual/widgets/block-extras.ts";
 import { mathPreviewFitScale } from "./math-preview-fit.ts";
 import { liveTexMatrixTemplate, liveTexPaletteBeforeInputKey, liveTexPaletteCategories, liveTexPaletteMatches, liveTexPaletteSourceTemplate, rebaseLiveTexPaletteRange, searchLiveTexPalette, type LiveTexPaletteItem } from "./live-tex-palette.ts";
 import { managedFormulaStyle, wrapManagedFormulaStyle, type ManagedFormulaStyle } from "./formula-style.ts";
@@ -6942,13 +6944,33 @@ async function reviewSaveConflict(): Promise<void> {
 
 let refreshInFlight = false;
 
+/**
+ * The explicit Refresh (page button, Portal header, palette): reload the note
+ * from disk and recompute everything drawn from it — formulas, diagrams,
+ * TikZ (failed renders included), code highlighting, KaTeX macros, the note
+ * index, link and tag completion, and snippets. Automatic reloads after a
+ * save stay light and keep these caches.
+ */
 async function refreshCurrentFile(): Promise<void> {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
     lastSaveProblem = null;
+    clearMathRenderCache();
+    clearCodeHighlightCache();
+    clearTikzWidgetResults();
+    clearCompletionCache();
+    wikiIndexPromise = null;
+    // The diagram module is lazy; loading it here costs nothing Mermaid-sized.
+    await import("../src/diagram-render.ts").then((module) => module.clearDiagramRenderCache()).catch(() => {});
+    await noteMacros.loadGlobal().catch(() => {});
     const refreshed = await reloadCurrentFilePreservingCursor({ preserveView: true });
     if (!refreshed && lastSaveProblem?.kind === "conflict") await reviewSaveConflict();
+    // A reload that finds the same text replaces nothing; redraw every widget
+    // so the cleared caches are actually recomputed.
+    if (refreshed) editor.rerenderPreview();
+    void reloadNotes(true);
+    void reloadSnippets(true);
   } finally {
     refreshInFlight = false;
   }

@@ -1098,6 +1098,16 @@ function tikzResultCacheKey(file: string, id: string, source: string): string {
   return `${file}\n${id}\n${source}`;
 }
 
+/**
+ * Forget every settled TikZ answer, failures included, so the next draw asks
+ * again. The last picture of each block stays as the dimmed placeholder, and
+ * successful SVGs come back from the renderer's own cache.
+ */
+export function clearTikzWidgetResults(): void {
+  tikzAssetResults.clear();
+  tikzDirtyBlocks.clear();
+}
+
 /** Already-settled answer for this exact body, when there is one. */
 function tikzAssetResult(file: string, id: string, source: string): TikzAssetResult | undefined {
   return tikzAssetResults.get(tikzResultCacheKey(file, id, source));
