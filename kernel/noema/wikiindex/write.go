@@ -41,6 +41,7 @@ type IndexRepository struct {
 
 type IndexFile struct {
 	RepositoryID   string  `json:"repositoryId"`
+	RepositoryUID  string  `json:"repositoryUid"`
 	RepositoryPath string  `json:"repositoryPath"`
 	File           string  `json:"file"`
 	Kind           string  `json:"kind"`
@@ -71,6 +72,8 @@ type IndexNote struct {
 	CreatedMs       float64      `json:"createdMs"`
 	Dependencies    []Dependency `json:"dependencies"`
 	SearchText      string       `json:"searchText"`
+
+	duplicateBlockIDs []string
 }
 
 type Diagnostic struct {

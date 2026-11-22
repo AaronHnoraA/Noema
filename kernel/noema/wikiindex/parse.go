@@ -84,6 +84,13 @@ var nonSemanticOrgEnvs = map[string]bool{
 
 // Parse derives the index fields of the note CONTENT read from FILE.
 func Parse(content, file string) Note {
+	note, _, _ := parseNote(content, file)
+	return note
+}
+
+// parseNote is Parse plus the approved text (what search indexes) and the
+// metadata fields the scanner needs.
+func parseNote(content, file string) (Note, string, map[string]string) {
 	approved := commentAnchorRE.ReplaceAllString(approvedEdiffMarkdown(content), "$1")
 	meta := metadata(content)
 	persisted := strings.TrimSpace(meta["id"])
@@ -111,7 +118,7 @@ func Parse(content, file string) Note {
 		Blocks:               blocks,
 		DuplicateBlockIDs:    duplicates,
 		WikiLinks:            wikiLinks(approved),
-	}
+	}, approved, meta
 }
 
 // NormalizeNamespace matches shared/wiki-link.mjs normalizeWikiNamespace.
