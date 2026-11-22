@@ -136,6 +136,7 @@ export type WikiGitProvider = {
 };
 
 export function duplicatePageIdDiagnostics(duplicates?: Array<{ id: string; candidates?: Array<{ file?: string }> }>): WikiDiagnostic[];
+export function configureWikiIndexBuilder(builder?: ((root: string, options: { full: boolean }) => Promise<{ index: unknown; mode: string; reason: string; changed: number; elapsedMs: number }>) | null): void;
 export function configureWikiGitProvider(provider?: WikiGitProvider | null): void;
 
 export function expandNoemaPath(value?: string, fallback?: string): string;

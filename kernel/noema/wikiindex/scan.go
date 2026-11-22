@@ -110,7 +110,7 @@ func discover(root string) ([]IndexRepository, []Diagnostic) {
 				IdentityStatus: status, Name: entry.Name(), Namespace: namespace,
 				QualifiedNamespace: partition + "/" + namespace,
 				NamespaceAliases:   uniqueNamespaces(append([]string{entry.Name()}, aliases...)...),
-				Partition:          partition, Path: path})
+				Partition:          partition, Path: path, Public: partition == "public"})
 		}
 	}
 	return repositories, diagnostics
@@ -256,6 +256,12 @@ func Scan(root string) (Index, error) {
 	}
 	repositories, diagnostics := discover(root)
 	idx := Index{Repositories: repositories, Files: []IndexFile{}, Notes: []IndexNote{}}
+	for index := range repositories {
+		if out, err := exec.Command("git", "-C", repositories[index].Path, "rev-parse", "HEAD").Output(); err == nil {
+			repositories[index].HeadSHA = strings.TrimSpace(string(out))
+		}
+	}
+	idx.Repositories = repositories
 	for _, repo := range repositories {
 		statuses := gitStatuses(repo.Path)
 		for _, file := range walkFiles(repo.Path) {
@@ -274,7 +280,8 @@ func Scan(root string) (Index, error) {
 			if status == "" {
 				status = "clean"
 			}
-			entry := IndexFile{RepositoryID: repo.ID, RepositoryUID: repo.UID, RepositoryPath: rel, File: file,
+			entry := IndexFile{RepositoryID: repo.ID, RepositoryUID: repo.UID, Partition: repo.Partition,
+				Path: repo.ID + "/" + rel, Name: filepath.Base(file), RepositoryPath: rel, File: file,
 				Kind: kind, Ext: strings.TrimPrefix(ext, "."), Size: float64(info.Size()), MtimeMs: mtimeMs(info), GitStatus: status}
 			idx.Files = append(idx.Files, entry)
 			if kind != "note" {
@@ -293,7 +300,7 @@ func Scan(root string) (Index, error) {
 	}
 	relations := Resolve(pages)
 	for _, note := range idx.Notes {
-		for _, id := range note.duplicateBlockIDs {
+		for _, id := range note.DuplicateBlockIDs {
 			path := note.Path
 			if path == "" {
 				path = note.File
@@ -378,7 +385,9 @@ func scanNote(root string, repo IndexRepository, file IndexFile, content string)
 		Path:    workspacePath, RepositoryUID: firstNonEmpty(repo.UID, repo.ID),
 		MtimeMs: file.MtimeMs, CreatedMs: createdTime(meta["date"]),
 		Dependencies: dependencyRefs(approved, file.File, repo), SearchText: approved,
-		duplicateBlockIDs: parsed.DuplicateBlockIDs,
+		DuplicateBlockIDs: parsed.DuplicateBlockIDs,
+		Link:              workspacePath,
+		Size:              file.Size,
 	}
 	return note
 }

@@ -99,6 +99,7 @@ import {
   kernelLexicalSearchEligible,
 } from "./server/lib/kernel-knowledge-search.mjs";
 import { createKernelRelationshipOverlay } from "./server/lib/kernel-relationships.mjs";
+import { createKernelWikiIndexBuilder } from "./server/lib/kernel-wiki-index.mjs";
 import { createKernelSupervisor } from "./server/lib/kernel-supervisor.mjs";
 import { writeHostDescriptor } from "./server/lib/host-descriptor.mjs";
 import { createMarginNoteBridge, ensureMarginNoteToken } from "./server/Features/MarginNote/bridge.mjs";
@@ -220,6 +221,7 @@ import {
   wikiRepositoryStatus,
   restoreWikiPageVersion,
   configureWikiGitProvider,
+  configureWikiIndexBuilder,
 } from "./server/lib/wiki-workspace.mjs";
 import {
   abortWikiConflict,
@@ -592,6 +594,18 @@ kernelSupervisor = createKernelSupervisor({
   onState: applyKernelState,
 });
 applyKernelState(kernelSupervisor.status());
+// The kernel lives and dies with this host, and owns the Wiki index: every
+// refresh goes to it, and fails while it is restarting rather than being done
+// here. The Server reader runs no kernel and keeps the host's builder.
+if (hostMode !== "server") {
+  configureWikiIndexBuilder(createKernelWikiIndexBuilder({
+    kernel: () => ({
+      ready: noemaKernel?.state === "listening" && Boolean(noemaKernel?.box),
+      baseUrl: noemaKernel?.baseUrl,
+      box: noemaKernel?.box,
+    }),
+  }));
+}
 void kernelSupervisor.start().catch((error) => {
   process.stderr.write(`[noema-web] kernel supervisor failed: ${error?.stack || error}\n`);
 });

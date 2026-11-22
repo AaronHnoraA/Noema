@@ -885,6 +885,45 @@ async function repositoryHeadSha(repository) {
   }
 }
 
+// The Go kernel owns the Wiki index (docs/noema/design/wiki-workspace.md
+// "Index ownership"). A host whose kernel runs installs its refresh here;
+// the index is then scanned, parsed and written by the kernel, and the host
+// only adds the relationships it keeps in memory. A kernel failure is an
+// error, never a silent rebuild here: the kernel lives and dies with the host.
+let wikiIndexBuilder = null;
+
+export function configureWikiIndexBuilder(builder = null) {
+  wikiIndexBuilder = typeof builder === "function" ? builder : null;
+}
+
+async function kernelBuiltWikiIndex(root, options = {}) {
+  const full = options.mode === "full" || options.force === true;
+  const built = await wikiIndexBuilder(root, { full });
+  const index = built?.index;
+  if (!index || !Array.isArray(index.notes)) throw new Error("The kernel returned no Wiki index");
+  const notes = index.notes.map((note) => {
+    const { searchText: _searchText, ...rest } = note;
+    return { ...rest, refs: [], backlinks: [], unresolvedLinks: [] };
+  });
+  const related = resolveWikiRelationships(notes);
+  const files = index.files || [];
+  return {
+    type: "wiki-index",
+    root,
+    layout: "wiki",
+    repositories: index.repositories || [],
+    diagnostics: index.diagnostics || [],
+    files,
+    directories: directoryInventory(files),
+    ...related,
+    generation: index.generation || "",
+    maintenance: {
+      ok: true, dbFile: wikiDatabaseFile(root), mode: built.mode, reason: built.reason,
+      changes: { rows: Number(built.changed) || 0 }, changedFiles: [], builder: "kernel", elapsedMs: built.elapsedMs,
+    },
+  };
+}
+
 export async function buildWikiIndex(rootValue, options = {}) {
   const root = expandNoemaPath(rootValue);
   const layout = wikiLayout(options.layout);
@@ -926,6 +965,7 @@ export async function buildWikiIndex(rootValue, options = {}) {
     index.maintenance = await persistWikiIndex(index, options);
     return index;
   }
+  if (wikiIndexBuilder) return await kernelBuiltWikiIndex(root, options);
   const discovered = await discoverWikiRepositories(root);
   await Promise.all(discovered.repositories.map(async (repository) => {
     repository.headSha = await repositoryHeadSha(repository);

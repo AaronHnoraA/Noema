@@ -48,7 +48,7 @@ describe("Wiki database contract", () => {
     try {
       const text = readFileSync(resolve(process.cwd(), "shared/wiki-db-fixtures.json"), "utf8").split("$ROOT").join(root);
       const fixture = JSON.parse(text) as { index: Record<string, unknown>; tables: Record<string, unknown> };
-      await persistWikiIndex({ ...fixture.index, root }, { mode: "full" });
+      await persistWikiIndex({ ...fixture.index, root } as never, { mode: "full" });
       const db = new DatabaseSync(wikiDatabaseFile(root), { readOnly: true });
       try {
         const rows = (query: string) => (db.prepare(query).all() as Array<Record<string, unknown>>)

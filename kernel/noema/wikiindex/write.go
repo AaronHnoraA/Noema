@@ -36,12 +36,16 @@ type IndexRepository struct {
 	NamespaceAliases   []string `json:"namespaceAliases"`
 	Partition          string   `json:"partition"`
 	Path               string   `json:"path"`
+	Public             bool     `json:"public"`
 	HeadSHA            string   `json:"headSha"`
 }
 
 type IndexFile struct {
 	RepositoryID   string  `json:"repositoryId"`
 	RepositoryUID  string  `json:"repositoryUid"`
+	Partition      string  `json:"partition"`
+	Path           string  `json:"path"`
+	Name           string  `json:"name"`
 	RepositoryPath string  `json:"repositoryPath"`
 	File           string  `json:"file"`
 	Kind           string  `json:"kind"`
@@ -72,8 +76,10 @@ type IndexNote struct {
 	CreatedMs       float64      `json:"createdMs"`
 	Dependencies    []Dependency `json:"dependencies"`
 	SearchText      string       `json:"searchText"`
-
-	duplicateBlockIDs []string
+	Link            string       `json:"link"`
+	Size            float64      `json:"size"`
+	// DuplicateBlockIDs are block ids written more than once in the page.
+	DuplicateBlockIDs []string `json:"duplicateBlockIds"`
 }
 
 type Diagnostic struct {
