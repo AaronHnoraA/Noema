@@ -8,12 +8,27 @@ const TO_FULL: Record<string, string> = { ",": "，", ".": "。", "!": "！", "?
 const TO_HALF = Object.fromEntries(Object.entries(TO_FULL).map(([half, full]) => [full, half]));
 const PROTECTED = /^(?:FencedCode|CodeBlock|InlineCode|InlineMath|BlockMath|Link|Image|Autolink|URL|Table|HTMLBlock|HTMLTag)$/u;
 
+const FULL_WIDTH_PUNCTUATION = /[，。！？；：、）」』》〉】〕…—]/u;
+
+function insideProtected(view: EditorView, at: number): boolean {
+  for (let node: import("@lezer/common").SyntaxNode | null = syntaxTree(view.state).resolveInner(at, -1); node; node = node.parent) {
+    if (PROTECTED.test(node.name)) return true;
+  }
+  return false;
+}
+
 /** A constant-size edit at a CJK boundary. Lezer is consulted only after the
  * two neighboring characters establish that a transform is possible. */
 export function cjkTyping(): Extension {
   return EditorView.inputHandler.of((view, from, to, insert) => {
     if (view.state.readOnly || view.composing || view.compositionStarted ||
         from !== to || insert.length !== 1 || view.state.selection.ranges.length !== 1) return false;
+    // A full-width mark carries its own space: a space typed right after it
+    // in prose is swallowed (CJK typesetting never puts one there).
+    if (insert === " " && from > 0 && FULL_WIDTH_PUNCTUATION.test(view.state.doc.sliceString(from - 1, from))
+        && syntaxTreeAvailable(view.state, from) && !insideProtected(view, from)) {
+      return true;
+    }
     if (!LATIN_OR_DIGIT.test(insert) && !HAN.test(insert) && !TO_FULL[insert] && !TO_HALF[insert]) return false;
     const doc = view.state.doc;
     const left = from > 0 ? doc.sliceString(from - 1, from) : "";
@@ -34,9 +49,7 @@ export function cjkTyping(): Extension {
       }
     }
     if (text === insert || !syntaxTreeAvailable(view.state, from)) return false;
-    for (let node: import("@lezer/common").SyntaxNode | null = syntaxTree(view.state).resolveInner(from, -1); node; node = node.parent) {
-      if (PROTECTED.test(node.name)) return false;
-    }
+    if (insideProtected(view, from)) return false;
     view.dispatch({
       changes: { from, to, insert: text },
       selection: { anchor: from + cursor },
