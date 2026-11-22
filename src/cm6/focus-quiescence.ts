@@ -7,7 +7,7 @@ import { EMBEDDED_SURFACE_SELECTOR } from "./embedded-surface.ts";
  * Keeping this contract at the CM6 boundary means host shells never need to
  * know how the editor is rendered or how its state is preserved.
  */
-export type FocusQuiescenceEditor = Pick<EditorView, "contentDOM">;
+export type FocusQuiescenceEditor = Pick<EditorView, "contentDOM"> & Partial<Pick<EditorView, "focus">>;
 
 /**
  * Keyboard names that represent browser/system controls rather than editor
@@ -300,7 +300,13 @@ export function createFocusQuiescenceController(
   const wakeNow = (): void => {
     if (!canUseEditorSurface()) return;
     parked = false;
-    contentDOM.focus({ preventScroll: true });
+    // view.focus() writes the DOM selection in the same step; a bare
+    // contentDOM.focus() leaves it for CodeMirror's focus handler 10 ms later.
+    // An input method key that wakes the editor starts composing at once, so
+    // in that gap it composed wherever WebKit put the caret (often the start
+    // of the line), not at the cursor.
+    if (view.focus) view.focus();
+    else contentDOM.focus({ preventScroll: true });
   };
 
   // Kept as a compatibility hook for the shared activity participant. Normal

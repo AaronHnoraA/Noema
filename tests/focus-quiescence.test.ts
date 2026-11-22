@@ -381,3 +381,18 @@ describe("shared focus quiescence controller", () => {
     }
   });
 });
+
+describe("waking a parked editor", () => {
+  test("focuses through the view so the DOM caret is written in the same step", () => {
+    const harness = createHarness();
+    const viewFocus = vi.fn(() => focus(harness.contentDOM));
+    (harness.view as { focus?: () => void }).focus = viewFocus;
+    focus(harness.contentDOM);
+    harness.controller.park();
+    expect(document.activeElement).not.toBe(harness.contentDOM);
+    // An input method key arrives while parked.
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Process", keyCode: 229, bubbles: true, cancelable: true }));
+    expect(viewFocus).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(harness.contentDOM);
+  });
+});
