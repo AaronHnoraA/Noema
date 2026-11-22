@@ -15,6 +15,10 @@ const SERVER_READ_CHANNELS = new Set([
   "noema:api:config:note-katex-macros",
   "noema:api:config:app",
   "noema:api:jupyter-cell:read-script-cell",
+  // Citations resolve against .bib files inside the note root
+  // (server/lib/bibliography.mjs refuses a source outside it). Without this a
+  // published page showed every citation as [?].
+  "noema:api:bibliography:document",
 ]);
 
 const SERVER_COMPATIBILITY_CHANNELS = new Map([

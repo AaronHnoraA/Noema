@@ -85,6 +85,9 @@ describe("Server configuration and read-only policy", () => {
     expect(serverApiChannelAllowed("noema:api:wiki:search")).toBe(true);
     expect(serverApiChannelAllowed("noema:api:knowledge:search")).toBe(true);
     expect(serverApiChannelAllowed("noema:api:jupyter-cell:read-script-cell")).toBe(true);
+    // A published page resolves its citations; completion is an editing aid.
+    expect(serverApiChannelAllowed("noema:api:bibliography:document")).toBe(true);
+    expect(serverApiChannelAllowed("noema:api:completions:bibliography")).toBe(false);
     expect(serverApiChannelAllowed("noema:api:jupyter-cell:execute-script-cell")).toBe(false);
     expect(serverApiCompatibilityResult("noema:api:session:save-position"))
       .toEqual({ ok: true, stored: false });
