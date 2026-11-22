@@ -720,7 +720,7 @@ Proof text.
   });
 
   test.each(["xelatex", "lualatex"])("keeps side-comment colour inside each margin box (%s)", async (engine) => {
-    if ([engine, "mutool"].some((command) => spawnSync(command, ["-v"]).error?.code === "ENOENT")) return;
+    if ([engine, "mutool"].some((command) => (spawnSync(command, ["-v"]).error as NodeJS.ErrnoException | undefined)?.code === "ENOENT")) return;
     const { notes } = await setupRoot();
     await writeFile(join(notes, "noema-macros.sty"), latexMacrosPackage({}));
     const longNote = "A note with enough words to extend across several pages. ".repeat(35);
