@@ -791,7 +791,8 @@ Proof text.
     }
     await expect(exportLatex({ ...request, includeAbstract: false, includeToc: true, content: "" })).rejects.toThrow();
     expect(await latexExportDefaults({ file: other })).toMatchObject({ includeAbstract: true, includeToc: false });
-  });
+  // Four real PDF compiles: under the full parallel suite they exceed 5 s.
+  }, 60_000);
 
   test("keeps long side notes, footnotes, and revision notes in the compiled PDF", async () => {
     const { notes } = await setupRoot();
