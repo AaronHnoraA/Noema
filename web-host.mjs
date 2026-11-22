@@ -264,6 +264,7 @@ import { createResearchRuntimeService } from "./server/lib/research-runtime.mjs"
 import { pumpResearchRunStream } from "./server/lib/research-run-stream.mjs";
 import { createResearchCaptureService } from "./server/lib/research-capture.mjs";
 import { captureRequestAuthorized, ensureCaptureToken } from "./server/lib/capture-token.mjs";
+import { createInputSourceSwitcher } from "./server/lib/input-source.mjs";
 import {
   createResearchNotebookWatchReconciler,
   researchNotebookWatchDirectory,
@@ -299,6 +300,7 @@ import * as zmq from "zeromq";
 const execFileAsync = promisify(execFile);
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
+const inputSourceSwitcher = createInputSourceSwitcher({ helper: join(scriptDir, "build", "apple", "noema-input-source") });
 const requestedHostMode = String(process.env.NOEMA_HOST_MODE || "emacs").trim().toLowerCase();
 const hostMode = requestedHostMode === "server" ? "server" : "emacs";
 const serverConfig = hostMode === "server"
@@ -1790,6 +1792,7 @@ if (Number.isInteger(ownerPid) && ownerPid > 1) {
   }, 5000).unref();
 }
 process.on("exit", () => kernelSupervisor?.forceCloseSync());
+process.on("exit", () => inputSourceSwitcher.close());
 
 const MIME = {
   ".css": "text/css; charset=utf-8",
@@ -2527,6 +2530,10 @@ const apiRouter = new ApiRouter().register({
   },
   "noema:api:completions:bibliography": async (body) => {
     return await bibliographyCompletions(body || {});
+  },
+  "noema:api:input-source:mode": async (body) => {
+    if (hostMode === "server") return { ok: true, available: false };
+    return inputSourceSwitcher.set(String(body?.mode || ""));
   },
   "noema:api:bibliography:document": async (body) => {
     return await bibliographyForDocument(body || {});

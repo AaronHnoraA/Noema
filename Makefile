@@ -65,7 +65,7 @@ memory-test:
 	node --check server/lib/hy-memory-bridge.mjs
 	emacs -Q --batch -L lisp -L tests/elisp -l tests/elisp/noema-hy-memory-tests.el -f ert-run-tests-batch-and-exit
 
-build: check-env check-go prune-legacy-garbage build-web kernel-build
+build: check-env check-go prune-legacy-garbage build-web kernel-build input-source-build
 
 # Optional macOS integration helper, not a second product shell. It requests
 # access only when the user invokes authorization through Noema.
@@ -79,6 +79,17 @@ build/apple/noema-agenda-eventkit: apple/AgendaEventKit.swift apple/Info.plist
 	  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker apple/Info.plist \
 	  apple/AgendaEventKit.swift -o "$@"
 	codesign --force --sign - --identifier org.noema.agenda.eventkit "$@"
+
+# Keeps the keyboard Latin outside Vim Insert (docs/noema/guide/vim.md). Built
+# by `make build` on macOS; elsewhere the host simply has no helper.
+input-source-build:
+	@if [ "$$(uname -s)" = Darwin ]; then $(MAKE) build/apple/noema-input-source; fi
+
+build/apple/noema-input-source: apple/InputSource.swift
+	mkdir -p build/apple
+	xcrun swiftc -swift-version 5 -O -target "$$(uname -m)-apple-macosx14.0" \
+	  -framework Carbon apple/InputSource.swift -o "$@"
+	"$@" --self-test
 
 agenda-apple-test: check-env agenda-apple-build
 	build/apple/noema-agenda-eventkit --self-test

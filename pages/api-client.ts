@@ -1849,6 +1849,12 @@ export const api = {
       return ensureOk(await call(body) as BibliographyCompletionResult, "Bibliography completion failed");
     },
   },
+  inputSource: {
+    /** Tell the host which Vim state has the keyboard ("normal" keeps it Latin). */
+    async mode(mode: "normal" | "insert"): Promise<unknown> {
+      return await callHttpApi("noema:api:input-source:mode", [{ mode }], "Input source switch failed");
+    },
+  },
   bibliography: {
     async document(body: { file?: string; content?: string } = {}): Promise<BibliographyDocument> {
       const call = window.noemaApi?.bibliography?.document;

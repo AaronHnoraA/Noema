@@ -2091,7 +2091,20 @@ function renderModeToggleLabel(mode: VimLiteMode): void {
   }
 }
 
+// Outside Insert the keyboard is kept Latin, so Esc, hjkl, V and g work with
+// a Chinese input method on (docs/noema/guide/vim.md, "Input methods"). Only
+// the transition is sent; the host helper does nothing without macOS.
+let inputSourceSent: "normal" | "insert" | "" = "";
+function syncInputSource(mode: VimLiteMode | null): void {
+  if (serverReaderMode) return;
+  const wanted = mode && mode !== "insert" && editor.view.hasFocus && document.hasFocus() ? "normal" : "insert";
+  if (wanted === inputSourceSent || (wanted === "insert" && !inputSourceSent)) return;
+  inputSourceSent = wanted;
+  void api.inputSource.mode(wanted).catch(() => {});
+}
+
 function updateModeLabel(mode: VimLiteMode): void {
+  syncInputSource(mode);
   renderModeToggleLabel(mode);
   modeLabel.dataset.mode = mode;
   root.dataset.vimMode = mode;
@@ -3716,6 +3729,11 @@ const vim = createVimLite(editor, host, {
     return editor.runCommand("unfold-all-headings");
   },
 });
+// Entering the editor in Normal makes the keyboard Latin; leaving it (to Emacs,
+// a page input or another application) gives the person's input method back.
+editor.view.contentDOM.addEventListener("focus", () => syncInputSource(vim.mode()));
+editor.view.contentDOM.addEventListener("blur", () => syncInputSource(null));
+window.addEventListener("blur", () => syncInputSource(null));
 const focusQuiescence = createFocusQuiescenceController({
   // The controller is shared by all renderer hosts. Only the Emacs xwidget
   // adapter opts in so a genuinely hidden buffer can park native focus and
