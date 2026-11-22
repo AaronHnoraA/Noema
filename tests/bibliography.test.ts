@@ -127,6 +127,20 @@ describe("bibliography", () => {
     });
   });
 
+  test("a root-relative note path resolves under the library, as the Server reader sends it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "noema-bib-relative-"));
+    const noteDir = join(root, "public", "demo");
+    await mkdir(noteDir, { recursive: true });
+    await writeFile(join(noteDir, "refs.bib"), "@article{shor1995, author = {Shor, Peter}, title = {Scheme}, year = {1995}}\n", "utf8");
+    const content = "---\nbib: ./refs.bib\n---\n\nShor @@cite(refs) [shor1995].\n";
+    await writeFile(join(noteDir, "QEC.md"), content, "utf8");
+    configureBibliography({ root });
+    const result = await bibliographyForDocument({ file: "public/demo/QEC.md", content });
+    expect(result.diagnostics).toEqual([]);
+    expect(result.citations?.[0]?.diagnostics).toEqual([]);
+    expect(result.references).toHaveLength(1);
+  });
+
   test("adds declared bibliography paths to the default note-local directory", async () => {
     const root = await mkdtemp(join(tmpdir(), "noema-bib-additive-"));
     roots.push(root);

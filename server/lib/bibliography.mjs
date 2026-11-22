@@ -170,7 +170,10 @@ async function effectiveMeta(file, content, seen = new Set(), allowedRoot = root
 }
 
 async function visibleBibFiles(file, content, metadataContent = content, requestedRoot = "", libraryRoot = rootDir) {
-  const noteFile = canonicalPath(file || join(libraryRoot, "scratch.md"));
+  // A relative note path names a note under the library (the Server reader
+  // and the Wiki API address notes root-relative); it never means the host
+  // process's working directory.
+  const noteFile = canonicalPath(file ? resolve(libraryRoot, file) : join(libraryRoot, "scratch.md"));
   // Noema explicitly supports opening a standalone Markdown file outside
   // the library. Its local `bib: ./...` declarations must work too, while
   // remaining confined to that note's directory unless the trusted caller

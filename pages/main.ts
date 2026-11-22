@@ -6144,12 +6144,15 @@ const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof ap
     updateTitle();
     setStatus("Saving...");
     const changeToken = editorSaveChanges.capture();
+    // The change set must start from the text this pane last loaded or
+    // saved; one that does not would only be rejected by the host.
+    const fitsBase = !changeToken || !savedBaseDoc || changeToken.changeSet.length === savedBaseDoc.length;
     return {
       file: currentFile,
       revision,
       doc: editor.view.state.doc,
       changeToken,
-      body: saveBody(changeToken),
+      body: saveBody(changeToken, !fitsBase),
     };
   },
   write(snapshot) {
@@ -6799,7 +6802,11 @@ async function reloadCurrentFilePreservingCursor(options: {
   }
   if (!options.silent) setStatus("Refreshing...");
   try {
-    const opened = await api.notes.open(file);
+    // A refresh driven by a file event (ifClean) may land inside another
+    // writer's truncate-then-write; only an explicit refresh may load an
+    // empty file over a non-empty note.
+    const opened = options.ifClean ? await openExternalSettled(file) : await api.notes.open(file);
+    if (!opened) return false;
     if (options.expectedDiskContent !== undefined
         && String(opened.content ?? "") !== options.expectedDiskContent) {
       setStatus("The file changed again while you reviewed it. Compare the new version before replacing your draft.");
@@ -7031,6 +7038,32 @@ async function refreshPendingExternalSaveOnFocus(): Promise<void> {
   }
 }
 
+/** Rereads before a file event's empty read may count as the file's content. */
+const EXTERNAL_EMPTY_REREADS = [60, 150, 400, 1000];
+
+/**
+ * The note as another writer left it. Many writers (editors, agents' file
+ * tools) truncate a file and then write it, so a file event can be read while
+ * it is momentarily empty. Loading that read blanked the page, and the next
+ * save then failed against the real file (change-set mismatch) or was refused
+ * as an empty overwrite. An empty read over a non-empty note is reread; if
+ * the file stays empty, it is not loaded automatically (null) and the person
+ * is told, so Refresh can still load it on purpose.
+ */
+async function openExternalSettled(file: string): Promise<Awaited<ReturnType<typeof api.notes.open>> | null> {
+  let opened = await api.notes.open(file);
+  if (editor.view.state.doc.length === 0) return opened;
+  for (const delay of EXTERNAL_EMPTY_REREADS) {
+    if (String(opened.content ?? "").trim() !== "") return opened;
+    await new Promise((resolve) => window.setTimeout(resolve, delay));
+    if (currentFile !== file) return null;
+    opened = await api.notes.open(file);
+  }
+  if (String(opened.content ?? "").trim() !== "") return opened;
+  setStatus("The file on disk is empty; your note is kept. Refresh to load the empty file.");
+  return null;
+}
+
 /**
  * Another writer saved this note while the person has unsaved typing. Rebase
  * that save over the typing and apply it in place, so the person keeps
@@ -7041,7 +7074,8 @@ async function mergeExternalSaveUnderTyping(file: string): Promise<boolean> {
   if (currentReadOnly || currentRemote || !currentLineEnding.patchable) return false;
   await saveDrain.whenIdle();
   if (currentFile !== file) return false;
-  const opened = await api.notes.open(file);
+  const opened = await openExternalSettled(file);
+  if (!opened) return false;
   await saveDrain.whenIdle();
   // Everything from here is synchronous: no save or keystroke can interleave.
   const base = savedBaseDoc;
