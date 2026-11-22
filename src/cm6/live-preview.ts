@@ -2696,7 +2696,10 @@ function buildLineDecoRanges(
           decos.push(lineClassDecoration(node.name === "FencedCode" ? "cm-md-code-first cm-md-code-header" : "cm-md-code-first").range(first.from));
         }
         if (last.number >= firstLine && last.number <= lastWindowLine) {
-          decos.push(lineClassDecoration("cm-md-code-last").range(last.from));
+          // A closing fence carries no content; it is drawn as the card's
+          // thin bottom edge instead of a blank full-height line.
+          const closing = node.name === "FencedCode" && last.number > first.number && /^\s*(?:`{3,}|~{3,})\s*$/.test(last.text);
+          decos.push(lineClassDecoration(closing ? "cm-md-code-last cm-md-code-close" : "cm-md-code-last").range(last.from));
         }
         return false;
       }

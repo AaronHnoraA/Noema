@@ -3041,7 +3041,14 @@ async function refreshBibliography(force = false): Promise<void> {
     const currentContent = editor.getMarkdown();
     const currentState = bibliographyResolutionState(currentContent);
     const currentKey = `${currentFile}\n${currentState.key}`;
-    if (requestSeq !== bibliographyRequestSeq || key !== currentKey) return;
+    if (requestSeq !== bibliographyRequestSeq) return;
+    // The note changed while this request was out (an open applies its text
+    // in more than one step). Ask again for the current text; dropping the
+    // answer without a retry left citations on "Resolving" for good.
+    if (key !== currentKey) {
+      scheduleBibliographyRefresh(true);
+      return;
+    }
     alignBibliographyCitationRanges(nextModel, state.commands, currentState.commands);
     bibliographyModel = nextModel;
     bibliographyModelKey = key;
@@ -3057,7 +3064,10 @@ async function refreshBibliography(force = false): Promise<void> {
     const currentContent = editor.getMarkdown();
     const currentState = bibliographyResolutionState(currentContent);
     const currentKey = `${currentFile}\n${currentState.key}`;
-    if (key !== currentKey) return;
+    if (key !== currentKey) {
+      scheduleBibliographyRefresh(true);
+      return;
+    }
     bibliographyModel = { ok: false, entries: [], references: [], citations: [], namespaces: [], message: error instanceof Error ? error.message : "Bibliography failed" };
     // Cache failures by resolution input as well. Unrelated typing must not
     // hammer a failing bibliography endpoint; a citation/meta edit, explicit
@@ -7211,7 +7221,8 @@ function runCopilotAction(action: string): void {
   copilotActionHandlers.forEach((handler) => handler(action));
 }
 
-setupCopilot({
+// The Server reader has no completion service (the host refuses the channel).
+if (!serverReaderMode) setupCopilot({
   editor,
   host,
   currentFile: () => currentFile,
@@ -11053,6 +11064,8 @@ function applyLanguageToolConfiguration(settings: LanguageToolSettings, settings
 }
 
 async function loadLanguageToolConfiguration(): Promise<void> {
+  // Prose checking is an authoring aid; the Server reader never asks for it.
+  if (serverReaderMode) return;
   const sequence = ++languageToolLoadSequence;
   try {
     const result = await api.proseCheck.settings();

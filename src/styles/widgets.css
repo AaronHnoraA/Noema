@@ -176,6 +176,10 @@
   border-bottom-left-radius: 7px;
   border-bottom-right-radius: 7px;
 }
+.cm-editor .cm-md-code-block.cm-md-code-close {
+  font-size: 0.55em;
+  line-height: 1.15;
+}
 .cm-editor .cm-md-table {
   font-family: var(--aaron-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   font-size: 0.9em;
