@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -178,8 +181,8 @@ func inside(root, target string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
-func dependencyRefs(content, noteFile string, repository IndexRepository) []Dependency {
-	refs := []Dependency{}
+func dependencyCandidates(content, noteFile string, repository IndexRepository) []depCandidate {
+	out := []depCandidate{}
 	add := func(raw, kind string) {
 		value := strings.TrimSpace(raw)
 		value = strings.TrimPrefix(strings.TrimPrefix(value, `"`), "<")
@@ -193,21 +196,34 @@ func dependencyRefs(content, noteFile string, repository IndexRepository) []Depe
 		}
 		file := filepath.Clean(filepath.Join(filepath.Dir(noteFile), target))
 		if !inside(repository.Path, file) {
-			refs = append(refs, Dependency{Kind: kind, Raw: value, Status: "outside-repository", Path: ""})
+			out = append(out, depCandidate{kind: kind, raw: value, outside: true})
 			return
 		}
-		status := "missing"
-		if _, err := os.Stat(file); err == nil {
-			status = "resolved"
-		}
 		rel, _ := filepath.Rel(repository.Path, file)
-		refs = append(refs, Dependency{Kind: kind, Raw: value, Status: status, Path: filepath.ToSlash(rel)})
+		out = append(out, depCandidate{kind: kind, raw: value, file: file, rel: filepath.ToSlash(rel)})
 	}
 	for _, m := range dependencyLinkRE.FindAllStringSubmatch(content, -1) {
 		add(m[1], "asset")
 	}
 	for _, m := range includeRE.FindAllStringSubmatch(content, -1) {
 		add(m[1], "include")
+	}
+	return out
+}
+
+// dependencyRefs are a page's dependencies with their files' current status.
+func dependencyRefs(candidates []depCandidate, exists func(string) bool) []Dependency {
+	refs := []Dependency{}
+	for _, c := range candidates {
+		if c.outside {
+			refs = append(refs, Dependency{Kind: c.kind, Raw: c.raw, Status: "outside-repository", Path: ""})
+			continue
+		}
+		status := "missing"
+		if exists(c.file) {
+			status = "resolved"
+		}
+		refs = append(refs, Dependency{Kind: c.kind, Raw: c.raw, Status: status, Path: c.rel})
 	}
 	return refs
 }
@@ -250,48 +266,111 @@ func generation(idx Index) string {
 
 // Scan builds the full index of the vault at ROOT from its files.
 func Scan(root string) (Index, error) {
+	scanMu.Lock()
+	defer scanMu.Unlock()
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return Index{}, err
 	}
 	repositories, diagnostics := discover(root)
 	idx := Index{Repositories: repositories, Files: []IndexFile{}, Notes: []IndexNote{}}
+	// Git is asked about every repository at once: two processes each.
+	statusesByRepo := make([]map[string]string, len(repositories))
+	var wait sync.WaitGroup
 	for index := range repositories {
-		if out, err := exec.Command("git", "-C", repositories[index].Path, "rev-parse", "HEAD").Output(); err == nil {
-			repositories[index].HeadSHA = strings.TrimSpace(string(out))
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			if out, err := exec.Command("git", "-C", repositories[index].Path, "rev-parse", "HEAD").Output(); err == nil {
+				repositories[index].HeadSHA = strings.TrimSpace(string(out))
+			}
+			statusesByRepo[index] = gitStatuses(repositories[index].Path)
+		}(index)
+	}
+	wait.Wait()
+	idx.Repositories = repositories
+	// Every file of every repository, then their metadata in parallel: one
+	// stat each, as many at once as the machine runs well.
+	type found struct {
+		repo     int
+		file     string
+		info     os.FileInfo
+		statuses map[string]string
+	}
+	files := []found{}
+	for repoIndex, repo := range repositories {
+		for _, file := range walkFiles(repo.Path) {
+			files = append(files, found{repo: repoIndex, file: file, statuses: statusesByRepo[repoIndex]})
 		}
 	}
-	idx.Repositories = repositories
-	for _, repo := range repositories {
-		statuses := gitStatuses(repo.Path)
-		for _, file := range walkFiles(repo.Path) {
-			info, err := os.Stat(file)
-			if err != nil {
-				continue
+	parallel(len(files), func(index int) {
+		if info, err := os.Stat(files[index].file); err == nil {
+			files[index].info = info
+		}
+	})
+	seen := map[string]bool{}
+	type pendingNote struct {
+		repo  IndexRepository
+		entry IndexFile
+	}
+	notes := []pendingNote{}
+	depFiles := map[string]bool{}
+	for _, item := range files {
+		if item.info == nil {
+			continue
+		}
+		repo := repositories[item.repo]
+		rel, _ := filepath.Rel(repo.Path, item.file)
+		rel = filepath.ToSlash(rel)
+		ext := strings.ToLower(jsExtname(item.file))
+		kind := "file"
+		if noteExtensions[ext] {
+			kind = "note"
+		}
+		status := item.statuses[rel]
+		if status == "" {
+			status = "clean"
+		}
+		entry := IndexFile{RepositoryID: repo.ID, RepositoryUID: repo.UID, Partition: repo.Partition,
+			Path: repo.ID + "/" + rel, Name: filepath.Base(item.file), RepositoryPath: rel, File: item.file,
+			Kind: kind, Ext: strings.TrimPrefix(ext, "."), Size: float64(item.info.Size()), MtimeMs: mtimeMs(item.info), GitStatus: status}
+		idx.Files = append(idx.Files, entry)
+		if kind != "note" {
+			continue
+		}
+		if cached, ok := cachedParse(entry, repo); ok {
+			seen[item.file] = true
+			notes = append(notes, pendingNote{repo: repo, entry: entry})
+			for _, dep := range cached.deps {
+				if !dep.outside {
+					depFiles[dep.file] = true
+				}
 			}
-			rel, _ := filepath.Rel(repo.Path, file)
-			rel = filepath.ToSlash(rel)
-			ext := strings.ToLower(jsExtname(file))
-			kind := "file"
-			if noteExtensions[ext] {
-				kind = "note"
-			}
-			status := statuses[rel]
-			if status == "" {
-				status = "clean"
-			}
-			entry := IndexFile{RepositoryID: repo.ID, RepositoryUID: repo.UID, Partition: repo.Partition,
-				Path: repo.ID + "/" + rel, Name: filepath.Base(file), RepositoryPath: rel, File: file,
-				Kind: kind, Ext: strings.TrimPrefix(ext, "."), Size: float64(info.Size()), MtimeMs: mtimeMs(info), GitStatus: status}
-			idx.Files = append(idx.Files, entry)
-			if kind != "note" {
-				continue
-			}
-			content, err := os.ReadFile(file)
-			if err != nil {
-				continue
-			}
-			idx.Notes = append(idx.Notes, scanNote(root, repo, entry, string(content)))
+		}
+	}
+	// Whether each dependency exists, asked once per file and in parallel.
+	depList := make([]string, 0, len(depFiles))
+	for file := range depFiles {
+		depList = append(depList, file)
+	}
+	present := make([]bool, len(depList))
+	parallel(len(depList), func(index int) {
+		_, err := os.Stat(depList[index])
+		present[index] = err == nil
+	})
+	existing := make(map[string]bool, len(depList))
+	for index, file := range depList {
+		existing[file] = present[index]
+	}
+	exists := func(file string) bool { return existing[file] }
+	for _, pending := range notes {
+		if note, ok := scanNote(root, pending.repo, pending.entry, exists); ok {
+			idx.Notes = append(idx.Notes, note)
+		}
+	}
+	for file := range parseCache {
+		if !seen[file] {
+			delete(parseCache, file)
 		}
 	}
 	pages := make([]Page, len(idx.Notes))
@@ -348,8 +427,50 @@ func duplicatePageIDDiagnostics(duplicates []DuplicateID) []Diagnostic {
 	return out
 }
 
-func scanNote(root string, repo IndexRepository, file IndexFile, content string) IndexNote {
-	parsed, approved, meta := parseNote(content, file.File)
+// parsedFile is what a file's text alone gives, kept while the file's size
+// and modification time stay the same (Node's note_cache plays this role).
+type parsedFile struct {
+	size, mtime float64
+	note        Note
+	approved    string
+	meta        map[string]string
+	deps        []depCandidate
+	depsRepo    string
+}
+
+// depCandidate is a dependency as the text names it; whether its file exists
+// is asked on every scan.
+type depCandidate struct {
+	kind, raw, file, rel string
+	outside              bool
+}
+
+var (
+	parseCache = map[string]parsedFile{}
+	scanMu     sync.Mutex
+)
+
+func cachedParse(file IndexFile, repo IndexRepository) (parsedFile, bool) {
+	if hit, ok := parseCache[file.File]; ok && hit.size == file.Size && hit.mtime == file.MtimeMs && hit.depsRepo == repo.Path {
+		return hit, true
+	}
+	content, err := os.ReadFile(file.File)
+	if err != nil {
+		return parsedFile{}, false
+	}
+	note, approved, meta := parseNote(string(content), file.File)
+	entry := parsedFile{size: file.Size, mtime: file.MtimeMs, note: note, approved: approved, meta: meta,
+		deps: dependencyCandidates(approved, file.File, repo), depsRepo: repo.Path}
+	parseCache[file.File] = entry
+	return entry, true
+}
+
+func scanNote(root string, repo IndexRepository, file IndexFile, exists func(string) bool) (IndexNote, bool) {
+	cached, ok := cachedParse(file, repo)
+	if !ok {
+		return IndexNote{}, false
+	}
+	parsed, approved, meta := cached.note, cached.approved, cached.meta
 	namespace := NormalizeNamespace(firstNonEmpty(meta["namespace"], repo.Namespace, repo.Name))
 	qualifiedNS := repo.Partition + "/" + namespace
 	id := parsed.PersistedID
@@ -384,12 +505,12 @@ func scanNote(root string, repo IndexRepository, file IndexFile, content string)
 		Private: repo.Partition == "private" || strings.ToLower(meta["private"]) == "true",
 		Path:    workspacePath, RepositoryUID: firstNonEmpty(repo.UID, repo.ID),
 		MtimeMs: file.MtimeMs, CreatedMs: createdTime(meta["date"]),
-		Dependencies: dependencyRefs(approved, file.File, repo), SearchText: approved,
+		Dependencies: dependencyRefs(cached.deps, exists), SearchText: approved,
 		DuplicateBlockIDs: parsed.DuplicateBlockIDs,
 		Link:              workspacePath,
 		Size:              file.Size,
 	}
-	return note
+	return note, true
 }
 
 func firstNonEmpty(values ...string) string {
@@ -410,4 +531,31 @@ func jsExtname(file string) string {
 		return ""
 	}
 	return base[dot:]
+}
+
+// parallel runs WORK for 0..n-1 on a few goroutines.
+func parallel(n int, work func(int)) {
+	workers := runtime.NumCPU()
+	if workers > 16 {
+		workers = 16
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	var next int64 = -1
+	var wait sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for {
+				index := int(atomic.AddInt64(&next, 1))
+				if index >= n {
+					return
+				}
+				work(index)
+			}
+		}()
+	}
+	wait.Wait()
 }

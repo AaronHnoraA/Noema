@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -16,32 +17,41 @@ type tableRows struct {
 }
 
 func rowKey(values []any) string {
-	parts := make([]string, len(values))
+	var key strings.Builder
 	for index, value := range values {
+		if index > 0 {
+			key.WriteByte(0x1f)
+		}
 		switch v := value.(type) {
 		case nil:
-			parts[index] = "\x00nil"
+			key.WriteString("\x00nil")
 		case sql.NullString:
 			if v.Valid {
-				parts[index] = "s:" + v.String
+				key.WriteString("s:")
+				key.WriteString(v.String)
 			} else {
-				parts[index] = "\x00nil"
+				key.WriteString("\x00nil")
 			}
 		case []byte:
-			parts[index] = "s:" + string(v)
+			key.WriteString("s:")
+			key.Write(v)
 		case string:
-			parts[index] = "s:" + v
+			key.WriteString("s:")
+			key.WriteString(v)
 		case int:
-			parts[index] = fmt.Sprintf("n:%v", float64(v))
+			key.WriteString("n:")
+			key.WriteString(strconv.FormatFloat(float64(v), 'g', -1, 64))
 		case int64:
-			parts[index] = fmt.Sprintf("n:%v", float64(v))
+			key.WriteString("n:")
+			key.WriteString(strconv.FormatFloat(float64(v), 'g', -1, 64))
 		case float64:
-			parts[index] = fmt.Sprintf("n:%v", v)
+			key.WriteString("n:")
+			key.WriteString(strconv.FormatFloat(v, 'g', -1, 64))
 		default:
-			parts[index] = fmt.Sprintf("?:%v", v)
+			key.WriteString(fmt.Sprintf("?:%v", v))
 		}
 	}
-	return strings.Join(parts, "\x1f")
+	return key.String()
 }
 
 // desiredTables is what a full build of IDX writes, table by table.
@@ -175,4 +185,65 @@ func ApplyIndex(db *sql.DB, idx Index, now string) (changed int, err error) {
 		}
 	}
 	return changed, tx.Commit()
+}
+
+// applyKnown brings a database whose rows are exactly PREVIOUS (the tables
+// this process last wrote to it) to IDX, writing only the difference and
+// reading nothing back.
+func applyKnown(db *sql.DB, previous []*tableRows, idx Index, now string) (int, []*tableRows, error) {
+	next := desiredTables(idx, now)
+	before := map[string]*tableRows{}
+	for _, table := range previous {
+		before[table.name] = table
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, nil, err
+	}
+	defer tx.Rollback()
+	changed := 0
+	for _, table := range next {
+		old := before[table.name]
+		if old == nil {
+			return 0, nil, errors.New("wikiindex: remembered tables are incomplete")
+		}
+		counts := table.name != "repository_index_state"
+		where := make([]string, len(table.columns))
+		for index, column := range table.columns {
+			where[index] = column + " IS ?"
+		}
+		remove := "DELETE FROM " + table.name + " WHERE rowid = (SELECT rowid FROM " + table.name + " WHERE " + strings.Join(where, " AND ") + " LIMIT 1)"
+		if table.name == "page_bigrams" {
+			remove = "DELETE FROM page_bigrams WHERE bigram=? AND page_key=?"
+		}
+		for key, values := range old.rows {
+			for extra := old.counts[key] - table.counts[key]; extra > 0; extra-- {
+				if _, err := tx.Exec(remove, values...); err != nil {
+					return 0, nil, fmt.Errorf("%s: %w", table.name, err)
+				}
+				if counts {
+					changed++
+				}
+			}
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(table.columns)), ", ")
+		insert := "INSERT INTO " + table.name + " (" + strings.Join(table.columns, ", ") + ") VALUES (" + placeholders + ")"
+		for key, values := range table.rows {
+			for missing := table.counts[key] - old.counts[key]; missing > 0; missing-- {
+				if _, err := tx.Exec(insert, values...); err != nil {
+					return 0, nil, fmt.Errorf("%s: %w", table.name, err)
+				}
+				if counts {
+					changed++
+				}
+			}
+		}
+	}
+	for _, meta := range [][2]string{{"generation", idx.Generation}, {"updated_at", now}, {"last_mode", "incremental"},
+		{"last_reason", "kernel"}, {"last_error", ""}, {"last_incremental_at", now}} {
+		if _, err := tx.Exec("INSERT OR REPLACE INTO wiki_meta VALUES (?, ?)", meta[0], meta[1]); err != nil {
+			return 0, nil, err
+		}
+	}
+	return changed, next, tx.Commit()
 }

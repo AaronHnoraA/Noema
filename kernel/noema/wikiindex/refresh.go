@@ -28,6 +28,33 @@ type RefreshResult struct {
 
 var refreshMu sync.Mutex
 
+// written remembers, per database file, the rows this process last wrote and
+// the file's size and time right after, so the next refresh writes only the
+// difference. Anything else touching the file voids it.
+type writtenState struct {
+	size   int64
+	mtime  time.Time
+	tables []*tableRows
+}
+
+var written = map[string]writtenState{}
+
+func fileStamp(file string) (int64, time.Time, bool) {
+	info, err := os.Stat(file)
+	if err != nil {
+		return 0, time.Time{}, false
+	}
+	return info.Size(), info.ModTime(), true
+}
+
+func remember(file string, tables []*tableRows) {
+	if size, mtime, ok := fileStamp(file); ok {
+		written[file] = writtenState{size: size, mtime: mtime, tables: tables}
+	} else {
+		delete(written, file)
+	}
+}
+
 // Refresh rebuilds the vault's wiki.db from its files: in place, row by row,
 // when the database has this schema, otherwise in full into a temporary file
 // renamed over it, so a reader never sees a half-built index. Refreshes are
@@ -53,9 +80,25 @@ func Refresh(root string, full bool) (RefreshResult, error) {
 			return result, err
 		}
 		defer db.Close()
-		changed, err := ApplyIndex(db, idx, now)
-		if err != nil {
-			return result, err
+		changed := 0
+		state, known := written[file]
+		if size, mtime, ok := fileStamp(file); known && ok && size == state.size && mtime.Equal(state.mtime) {
+			var tables []*tableRows
+			changed, tables, err = applyKnown(db, state.tables, idx, now)
+			if err != nil {
+				delete(written, file)
+				return result, err
+			}
+			db.Close()
+			remember(file, tables)
+		} else {
+			changed, err = ApplyIndex(db, idx, now)
+			if err != nil {
+				delete(written, file)
+				return result, err
+			}
+			db.Close()
+			remember(file, desiredTables(idx, now))
 		}
 		result.Mode, result.Reason, result.Changed = "incremental", "changes", changed
 	} else {
@@ -80,6 +123,7 @@ func Refresh(root string, full bool) (RefreshResult, error) {
 		if err := os.Rename(temporary, file); err != nil {
 			return result, err
 		}
+		remember(file, desiredTables(idx, now))
 		result.Mode, result.Reason = "full", reason
 	}
 	result.ElapsedMs = time.Since(started).Milliseconds()

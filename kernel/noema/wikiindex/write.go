@@ -8,6 +8,7 @@ import (
 
 	"regexp"
 	"strings"
+	"sync"
 
 	"golang.org/x/text/unicode/norm"
 )
@@ -342,11 +343,33 @@ func emit(idx Index, now string, put func(table string, values ...any)) {
 		pathText := note.RepositoryID + "/" + note.RepositoryPath
 		put("pages_fts", key, note.Title, aliasText, tagText, pathText, note.SearchText)
 		put("pages_fts_trigram", key, note.Title, aliasText, tagText, pathText, note.SearchText)
-		for _, pair := range cjkPairs(note.Title, aliasText, tagText, note.SearchText) {
+		for _, pair := range memoCJKPairs(note.Title, aliasText, tagText, note.SearchText) {
 			put("page_bigrams", pair, key)
 		}
 	}
 	for _, diagnostic := range idx.Diagnostics {
 		put("diagnostics", diagnostic.Code, diagnostic.Severity, diagnostic.Message, diagnostic.Path)
 	}
+}
+
+// pairMemo keeps each page's CJK pairs while its searchable text is the same;
+// recomputing them over every page made each refresh pay for the whole vault.
+var (
+	pairMemo   = map[string][]string{}
+	pairMemoMu sync.Mutex
+)
+
+func memoCJKPairs(title, aliases, tags, body string) []string {
+	key := title + "\x00" + aliases + "\x00" + tags + "\x00" + body
+	pairMemoMu.Lock()
+	defer pairMemoMu.Unlock()
+	if pairs, ok := pairMemo[key]; ok {
+		return pairs
+	}
+	if len(pairMemo) > 20000 {
+		pairMemo = map[string][]string{}
+	}
+	pairs := cjkPairs(title, aliases, tags, body)
+	pairMemo[key] = pairs
+	return pairs
 }
