@@ -62,7 +62,7 @@ import {
 import { adaptPasteText, pasteTransactionSpec } from "./paste-context.ts";
 import { joinTypingEvent, lastEditKindField } from "./history-grouping.ts";
 import { selectionColumnClip } from "./selection-column-clip.ts";
-import { isPointerSelecting, updateHasPointerSelectionEffect } from "./extensions/visual/selection.ts";
+import { isPointerSelecting, passiveReaderFacet, updateHasPointerSelectionEffect } from "./extensions/visual/selection.ts";
 import { exitFencedCode } from "./code-block-input.ts";
 import { renderMarkdownHTML } from "../render-html.ts";
 import {
@@ -1341,6 +1341,7 @@ function buildExtensions(
     ...(standalone ? [
       EditorState.readOnly.of(!!options.readOnly),
       EditorView.editable.of(!options.readOnly),
+      passiveReaderFacet.of(!!options.passiveReader),
     ] : []),
     EditorView.clickAddsSelectionRange.of((event) => event.altKey || event.metaKey || event.ctrlKey),
     ...(standalone ? [

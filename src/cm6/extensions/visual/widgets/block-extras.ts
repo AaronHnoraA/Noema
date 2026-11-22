@@ -3432,7 +3432,13 @@ class TikzWidget extends MeasuredWidget {
     setSourceRange(figure, this.from, this.to);
     figure.dataset.cmOpenSource = "true";
 
-    const meta = completeTikzTitle(this.title);
+    const titled = completeTikzTitle(this.title);
+    // A read-only page (the published reader, a read-only pane) cannot write
+    // the id into the source, and waiting for it left "Preparing TikZ…" for
+    // good. Render under an id derived from the body instead.
+    const meta = titled.changed && view.state.readOnly
+      ? { ...titled, id: `ro-${shortHash(this.body)}`, changed: false }
+      : titled;
     applyImageLayout(figure, meta.layout);
     const resizeHandle = view.state.readOnly ? null : figureResizeHandle(view, figure, "tikz");
     const heightHandle = view.state.readOnly ? null : figureHeightHandle(view, figure, "tikz");

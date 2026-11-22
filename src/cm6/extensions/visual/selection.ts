@@ -7,6 +7,7 @@
 
 import {
   EditorSelection,
+  Facet,
   StateEffect,
   StateField,
   type EditorState,
@@ -254,8 +255,31 @@ export function getMousedownSelection(state: EditorState): EditorSelection | und
   return state.field(mousedownSelectionField, false);
 }
 
+/**
+ * A passive reader (the published website) never shows authoring source:
+ * clicking a heading must not bring back its `##`. The visual layer then sees
+ * a caret parked at the end of the document, on the final line a note ends
+ * with, whatever the reader clicks or selects. Native selection and copy use
+ * the real selection and are unaffected.
+ */
+export const passiveReaderFacet = Facet.define<boolean, boolean>({
+  combine: (values) => values.some(Boolean),
+});
+
+const parkedSelections = new WeakMap<object, EditorSelection>();
+
+function parkedSelection(state: EditorState): EditorSelection {
+  let parked = parkedSelections.get(state.doc);
+  if (!parked) {
+    parked = EditorSelection.single(state.doc.length);
+    parkedSelections.set(state.doc, parked);
+  }
+  return parked;
+}
+
 /** The selection preview widgets should see until the pointer gesture settles. */
 export function visualSelection(state: EditorState): EditorSelection {
+  if (state.facet(passiveReaderFacet)) return parkedSelection(state);
   return isPointerSelecting(state) ? getMousedownSelection(state) ?? state.selection : state.selection;
 }
 

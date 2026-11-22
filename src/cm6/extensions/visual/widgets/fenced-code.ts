@@ -99,6 +99,13 @@ class LangBadgeWidget extends MeasuredWidget {
   }
 
   private wireLangEditor(span: HTMLElement, view: EditorView): void {
+    if (view.state.readOnly) {
+      // A reader sees the language; nothing in a read-only page opens an editor.
+      span.classList.remove("cm-code-lang-editor");
+      span.removeAttribute("title");
+      span.removeAttribute("tabindex");
+      return;
+    }
     const edit = (): void => {
       if (span.querySelector("input")) return;
       const input = document.createElement("input");
