@@ -606,6 +606,7 @@ export function setupCopilot(context: Context): () => void {
   document.head.appendChild(style);
 
   let timer = 0;
+  let composing = false;
   let jumpTimer = 0;
   let seq = 0;
   let accepting = false;
@@ -890,6 +891,9 @@ export function setupCopilot(context: Context): () => void {
   }
 
   function eligibleShell(): boolean {
+    // Input-method text is not typed yet: a suggestion beside it would show
+    // the next line's words after the caret, as if that line had been pulled up.
+    if (composing) return false;
     if (context.isActive && !context.isActive()) return false;
     if (context.vimMode() !== "insert") return false;
     if (!editorHasFocus()) return false;
@@ -965,6 +969,11 @@ export function setupCopilot(context: Context): () => void {
 
   function handleDocumentChange(): void {
     if (accepting) return;
+    if (composing) {
+      window.clearTimeout(timer);
+      clearCompletion();
+      return;
+    }
     const followed = consumeTypedPrefix();
     if (followed) {
       lastScheduleKey = scheduleStateKey();
@@ -1499,6 +1508,18 @@ export function setupCopilot(context: Context): () => void {
   }));
   cleanups.push(context.onChange(handleDocumentChange));
   cleanups.push(context.onDocumentEvent("beforeinput", consumeJumpBeforeInput, { capture: true }));
+  cleanups.push(context.onDocumentEvent("compositionstart", (event) => {
+    if (!(event.target instanceof Node) || !context.host.contains(event.target)) return;
+    composing = true;
+    window.clearTimeout(timer);
+    clearCompletion();
+  }, { capture: true }));
+  cleanups.push(context.onDocumentEvent("compositionend", () => {
+    if (!composing) return;
+    composing = false;
+    lastScheduleKey = "";
+    scheduleIfChanged();
+  }, { capture: true }));
   context.host.addEventListener("noema:copilot-host-key", handleHostKeyEvent);
   cleanups.push(() => context.host.removeEventListener("noema:copilot-host-key", handleHostKeyEvent));
   if (context.onSelectionChange) cleanups.push(context.onSelectionChange(handleEditorStateChange));

@@ -2020,3 +2020,26 @@ describe("copilot plugin insertion", () => {
   });
 
 });
+
+describe("copilot beside an input method", () => {
+  test("shows no suggestion while a composition is open, and may again after it", async () => {
+    const harness = await visibleHarness({ idleDelayMs: 0 });
+    try {
+      harness.target.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
+      // The suggestion beside input-method text would show the next line's
+      // words after the caret, as if that line had been pulled up.
+      expect(harness.ghost()?.hidden).toBe(true);
+      harness.type("sa");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(harness.ghost()?.hidden).toBe(true);
+      const requestsWhileComposing = harness.requests.filter((request) => request.action === "inline").length;
+      await harness.trigger();
+      expect(harness.requests.filter((request) => request.action === "inline").length).toBe(requestsWhileComposing);
+      harness.target.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "萨" }));
+      await harness.trigger();
+      expect(harness.ghost()?.hidden).toBe(false);
+    } finally {
+      harness.dispose();
+    }
+  });
+});
