@@ -1,0 +1,936 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "titles, aliases, refs and backlinks",
+      "pages": [
+        {
+          "id": "a",
+          "identityStatus": "managed",
+          "title": "Group",
+          "aliases": [
+            "Groups"
+          ],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Group",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "group.md",
+          "partition": "private",
+          "file": "/v/private/math/group.md",
+          "blocks": [],
+          "wikiLinks": [
+            {
+              "target": "Ring",
+              "label": "Ring"
+            },
+            {
+              "target": "Groups",
+              "label": "Groups"
+            }
+          ]
+        },
+        {
+          "id": "b",
+          "identityStatus": "managed",
+          "title": "Ring",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Ring",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "ring.md",
+          "partition": "private",
+          "file": "/v/private/math/ring.md",
+          "blocks": [],
+          "wikiLinks": [
+            {
+              "target": "Group",
+              "label": "Group"
+            },
+            {
+              "target": "[[x]]",
+              "label": "[[x]]"
+            },
+            {
+              "target": "Field",
+              "label": "Field"
+            }
+          ]
+        },
+        {
+          "id": "c",
+          "identityStatus": "managed",
+          "title": "Reader",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Reader",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "reader.md",
+          "partition": "private",
+          "file": "/v/private/math/reader.md",
+          "blocks": [],
+          "wikiLinks": [
+            {
+              "target": "groups",
+              "label": "groups"
+            },
+            {
+              "target": "Group",
+              "label": "Group"
+            },
+            {
+              "target": "Nowhere",
+              "label": "Nowhere"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "pages": [
+          {
+            "refs": [
+              "b"
+            ],
+            "backlinks": [
+              "b",
+              "c"
+            ],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [
+              "a"
+            ],
+            "backlinks": [
+              "a"
+            ],
+            "unresolvedLinks": [
+              "[[x]]",
+              "Field"
+            ]
+          },
+          {
+            "refs": [
+              "a"
+            ],
+            "backlinks": [],
+            "unresolvedLinks": [
+              "Nowhere"
+            ]
+          }
+        ],
+        "reports": {
+          "wanted": [
+            {
+              "title": "[[x]]",
+              "namespace": "math",
+              "qualifiedTitle": "math:[[x]]",
+              "references": [
+                {
+                  "sourceId": "b",
+                  "sourceTitle": "Ring",
+                  "sourceFile": "/v/private/math/ring.md"
+                }
+              ]
+            },
+            {
+              "title": "Field",
+              "namespace": "math",
+              "qualifiedTitle": "math:Field",
+              "references": [
+                {
+                  "sourceId": "b",
+                  "sourceTitle": "Ring",
+                  "sourceFile": "/v/private/math/ring.md"
+                }
+              ]
+            },
+            {
+              "title": "Nowhere",
+              "namespace": "math",
+              "qualifiedTitle": "math:Nowhere",
+              "references": [
+                {
+                  "sourceId": "c",
+                  "sourceTitle": "Reader",
+                  "sourceFile": "/v/private/math/reader.md"
+                }
+              ]
+            }
+          ],
+          "ambiguous": [],
+          "duplicates": [],
+          "duplicateIds": [],
+          "missingFragments": []
+        }
+      }
+    },
+    {
+      "name": "namespaces, colons in titles and wanted pages",
+      "pages": [
+        {
+          "id": "a",
+          "identityStatus": "managed",
+          "title": "Chapter 1: Scope",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Chapter 1: Scope",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "ch.md",
+          "partition": "private",
+          "file": "/v/private/math/ch.md",
+          "blocks": [],
+          "wikiLinks": []
+        },
+        {
+          "id": "b",
+          "identityStatus": "managed",
+          "title": "Scope",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "notes",
+          "qualifiedNamespace": "private/notes",
+          "namespaceAliases": [
+            "notes",
+            "private/notes",
+            "private/notes"
+          ],
+          "fullTitle": "private/notes:Scope",
+          "repository": "notes",
+          "repositoryId": "private/notes",
+          "repositoryPath": "scope.md",
+          "partition": "private",
+          "file": "/v/private/notes/scope.md",
+          "blocks": [],
+          "wikiLinks": []
+        },
+        {
+          "id": "c",
+          "identityStatus": "managed",
+          "title": "Reader",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Reader",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "r.md",
+          "partition": "private",
+          "file": "/v/private/math/r.md",
+          "blocks": [],
+          "wikiLinks": [
+            {
+              "target": "Chapter 1: Scope",
+              "label": "Chapter 1: Scope"
+            },
+            {
+              "target": "notes:Scope",
+              "label": "notes:Scope"
+            },
+            {
+              "target": "Nowhere: Else",
+              "label": "Nowhere: Else"
+            },
+            {
+              "target": "Research:New Page",
+              "label": "Research:New Page"
+            },
+            {
+              "target": "定理：存在性",
+              "label": "定理：存在性"
+            },
+            {
+              "target": "beta",
+              "label": "beta"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "pages": [
+          {
+            "refs": [],
+            "backlinks": [
+              "c"
+            ],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [],
+            "backlinks": [
+              "c"
+            ],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [
+              "a",
+              "b"
+            ],
+            "backlinks": [],
+            "unresolvedLinks": [
+              "Nowhere: Else",
+              "Research:New Page",
+              "定理：存在性",
+              "beta"
+            ]
+          }
+        ],
+        "reports": {
+          "wanted": [
+            {
+              "title": "beta",
+              "namespace": "math",
+              "qualifiedTitle": "math:beta",
+              "references": [
+                {
+                  "sourceId": "c",
+                  "sourceTitle": "Reader",
+                  "sourceFile": "/v/private/math/r.md"
+                }
+              ]
+            },
+            {
+              "title": "New Page",
+              "namespace": "Research",
+              "qualifiedTitle": "Research:New Page",
+              "references": [
+                {
+                  "sourceId": "c",
+                  "sourceTitle": "Reader",
+                  "sourceFile": "/v/private/math/r.md"
+                }
+              ]
+            },
+            {
+              "title": "Nowhere: Else",
+              "namespace": "math",
+              "qualifiedTitle": "math:Nowhere: Else",
+              "references": [
+                {
+                  "sourceId": "c",
+                  "sourceTitle": "Reader",
+                  "sourceFile": "/v/private/math/r.md"
+                }
+              ]
+            },
+            {
+              "title": "定理：存在性",
+              "namespace": "math",
+              "qualifiedTitle": "math:定理:存在性",
+              "references": [
+                {
+                  "sourceId": "c",
+                  "sourceTitle": "Reader",
+                  "sourceFile": "/v/private/math/r.md"
+                }
+              ]
+            }
+          ],
+          "ambiguous": [],
+          "duplicates": [],
+          "duplicateIds": [],
+          "missingFragments": []
+        }
+      }
+    },
+    {
+      "name": "ambiguity, local preference and duplicate titles",
+      "pages": [
+        {
+          "id": "a",
+          "identityStatus": "managed",
+          "title": "Tensor",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Tensor",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "t.md",
+          "partition": "private",
+          "file": "/v/private/math/t.md",
+          "blocks": [],
+          "wikiLinks": []
+        },
+        {
+          "id": "b",
+          "identityStatus": "managed",
+          "title": "Tensor",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "notes",
+          "qualifiedNamespace": "private/notes",
+          "namespaceAliases": [
+            "notes",
+            "private/notes",
+            "private/notes"
+          ],
+          "fullTitle": "private/notes:Tensor",
+          "repository": "notes",
+          "repositoryId": "private/notes",
+          "repositoryPath": "t.md",
+          "partition": "private",
+          "file": "/v/private/notes/t.md",
+          "blocks": [],
+          "wikiLinks": []
+        },
+        {
+          "id": "c",
+          "identityStatus": "managed",
+          "title": "Tensor",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "physics",
+          "qualifiedNamespace": "private/physics",
+          "namespaceAliases": [
+            "physics",
+            "private/physics",
+            "private/physics"
+          ],
+          "fullTitle": "private/physics:Tensor",
+          "repository": "physics",
+          "repositoryId": "private/physics",
+          "repositoryPath": "t.md",
+          "partition": "private",
+          "file": "/v/private/physics/t.md",
+          "blocks": [],
+          "wikiLinks": []
+        },
+        {
+          "id": "d",
+          "identityStatus": "managed",
+          "title": "Reader",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "other",
+          "qualifiedNamespace": "private/other",
+          "namespaceAliases": [
+            "other",
+            "private/other",
+            "private/other"
+          ],
+          "fullTitle": "private/other:Reader",
+          "repository": "other",
+          "repositoryId": "private/other",
+          "repositoryPath": "r.md",
+          "partition": "private",
+          "file": "/v/private/other/r.md",
+          "blocks": [],
+          "wikiLinks": [
+            {
+              "target": "Tensor",
+              "label": "Tensor"
+            }
+          ]
+        },
+        {
+          "id": "e",
+          "identityStatus": "managed",
+          "title": "Local",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Local",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "l.md",
+          "partition": "private",
+          "file": "/v/private/math/l.md",
+          "blocks": [],
+          "wikiLinks": [
+            {
+              "target": "Tensor",
+              "label": "Tensor"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "pages": [
+          {
+            "refs": [],
+            "backlinks": [
+              "e"
+            ],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [],
+            "backlinks": [],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [],
+            "backlinks": [],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [],
+            "backlinks": [],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [
+              "a"
+            ],
+            "backlinks": [],
+            "unresolvedLinks": []
+          }
+        ],
+        "reports": {
+          "wanted": [],
+          "ambiguous": [
+            {
+              "sourceId": "d",
+              "sourceTitle": "Reader",
+              "target": "Tensor",
+              "candidates": [
+                {
+                  "id": "a",
+                  "title": "Tensor",
+                  "file": "/v/private/math/t.md",
+                  "location": "private/math:Tensor · t.md"
+                },
+                {
+                  "id": "b",
+                  "title": "Tensor",
+                  "file": "/v/private/notes/t.md",
+                  "location": "private/notes:Tensor · t.md"
+                },
+                {
+                  "id": "c",
+                  "title": "Tensor",
+                  "file": "/v/private/physics/t.md",
+                  "location": "private/physics:Tensor · t.md"
+                }
+              ]
+            }
+          ],
+          "duplicates": [],
+          "duplicateIds": [],
+          "missingFragments": []
+        }
+      }
+    },
+    {
+      "name": "stable ids, redirects, fragments and file links",
+      "pages": [
+        {
+          "id": "019fb6e9-5a90-779a-9784-63e211090ac7",
+          "identityStatus": "managed",
+          "title": "Target",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Target",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "dir/target.md",
+          "partition": "private",
+          "file": "/v/private/math/dir/target.md",
+          "blocks": [
+            {
+              "id": "thm-1",
+              "kind": "anchor",
+              "envKind": "",
+              "label": "thm-1",
+              "offset": 0
+            }
+          ],
+          "wikiLinks": []
+        },
+        {
+          "id": "old-id",
+          "identityStatus": "managed",
+          "title": "Old",
+          "aliases": [],
+          "kind": "redirect",
+          "redirectTo": "roam://019fb6e9-5a90-779a-9784-63e211090ac7",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Old",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "old.md",
+          "partition": "private",
+          "file": "/v/private/math/old.md",
+          "blocks": [],
+          "wikiLinks": []
+        },
+        {
+          "id": "c",
+          "identityStatus": "managed",
+          "title": "Reader",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Reader",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "dir/reader.md",
+          "partition": "private",
+          "file": "/v/private/math/dir/reader.md",
+          "blocks": [],
+          "wikiLinks": [
+            {
+              "target": "roam://019fb6e9-5a90-779a-9784-63e211090ac7",
+              "label": "roam://019fb6e9-5a90-779a-9784-63e211090ac7"
+            },
+            {
+              "target": "roam://old-id",
+              "label": "roam://old-id"
+            },
+            {
+              "target": "Target#thm-1",
+              "label": "Target#thm-1"
+            },
+            {
+              "target": "Target#019fb7a8-12ff-752d-ad5a-958fc37f4a1f",
+              "label": "Target#019fb7a8-12ff-752d-ad5a-958fc37f4a1f"
+            },
+            {
+              "target": "Target#plain-missing",
+              "label": "Target#plain-missing"
+            },
+            {
+              "target": "./target.md#x",
+              "label": "./target.md#x"
+            },
+            {
+              "target": "#local",
+              "label": "#local"
+            },
+            {
+              "target": "Old",
+              "label": "Old"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "pages": [
+          {
+            "refs": [],
+            "backlinks": [
+              "c"
+            ],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [],
+            "backlinks": [],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [
+              "019fb6e9-5a90-779a-9784-63e211090ac7"
+            ],
+            "backlinks": [],
+            "unresolvedLinks": [
+              "Target#019fb7a8-12ff-752d-ad5a-958fc37f4a1f",
+              "Old"
+            ]
+          }
+        ],
+        "reports": {
+          "wanted": [
+            {
+              "title": "Old",
+              "namespace": "math",
+              "qualifiedTitle": "math:Old",
+              "references": [
+                {
+                  "sourceId": "c",
+                  "sourceTitle": "Reader",
+                  "sourceFile": "/v/private/math/dir/reader.md"
+                }
+              ]
+            }
+          ],
+          "ambiguous": [],
+          "duplicates": [],
+          "duplicateIds": [],
+          "missingFragments": [
+            {
+              "sourceId": "c",
+              "sourceFile": "/v/private/math/dir/reader.md",
+              "target": "Target#019fb7a8-12ff-752d-ad5a-958fc37f4a1f",
+              "fragment": "019fb7a8-12ff-752d-ad5a-958fc37f4a1f"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "duplicate ids; provisional ids are not compared",
+      "pages": [
+        {
+          "id": "dup",
+          "identityStatus": "managed",
+          "title": "One",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:One",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "one.md",
+          "partition": "private",
+          "file": "/v/private/math/one.md",
+          "blocks": [],
+          "wikiLinks": []
+        },
+        {
+          "id": "dup",
+          "identityStatus": "managed",
+          "title": "Two",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Two",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "assets/two.md",
+          "partition": "private",
+          "file": "/v/private/math/assets/two.md",
+          "blocks": [],
+          "wikiLinks": []
+        },
+        {
+          "id": "dup",
+          "identityStatus": "managed",
+          "title": "Three",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Three",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "assets/three.md",
+          "partition": "private",
+          "file": "/v/private/math/assets/three.md",
+          "blocks": [],
+          "wikiLinks": []
+        },
+        {
+          "id": "p:1",
+          "identityStatus": "provisional",
+          "title": "Four",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Four",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "four.md",
+          "partition": "private",
+          "file": "/v/private/math/four.md",
+          "blocks": [],
+          "wikiLinks": []
+        },
+        {
+          "id": "p:1",
+          "identityStatus": "provisional",
+          "title": "Five",
+          "aliases": [],
+          "kind": "page",
+          "redirectTo": "",
+          "namespace": "math",
+          "qualifiedNamespace": "private/math",
+          "namespaceAliases": [
+            "math",
+            "private/math",
+            "private/math"
+          ],
+          "fullTitle": "private/math:Five",
+          "repository": "math",
+          "repositoryId": "private/math",
+          "repositoryPath": "five.md",
+          "partition": "private",
+          "file": "/v/private/math/five.md",
+          "blocks": [],
+          "wikiLinks": []
+        }
+      ],
+      "expected": {
+        "pages": [
+          {
+            "refs": [],
+            "backlinks": [],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [],
+            "backlinks": [],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [],
+            "backlinks": [],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [],
+            "backlinks": [],
+            "unresolvedLinks": []
+          },
+          {
+            "refs": [],
+            "backlinks": [],
+            "unresolvedLinks": []
+          }
+        ],
+        "reports": {
+          "wanted": [],
+          "ambiguous": [],
+          "duplicates": [],
+          "duplicateIds": [
+            {
+              "id": "dup",
+              "candidates": [
+                {
+                  "id": "dup",
+                  "title": "One",
+                  "file": "/v/private/math/one.md",
+                  "location": "private/math:One · one.md"
+                },
+                {
+                  "id": "dup",
+                  "title": "Two",
+                  "file": "/v/private/math/assets/two.md",
+                  "location": "private/math:Two · assets/two.md"
+                }
+              ]
+            },
+            {
+              "id": "dup",
+              "candidates": [
+                {
+                  "id": "dup",
+                  "title": "One",
+                  "file": "/v/private/math/one.md",
+                  "location": "private/math:One · one.md"
+                },
+                {
+                  "id": "dup",
+                  "title": "Three",
+                  "file": "/v/private/math/assets/three.md",
+                  "location": "private/math:Three · assets/three.md"
+                }
+              ]
+            }
+          ],
+          "missingFragments": []
+        }
+      }
+    }
+  ]
+}
