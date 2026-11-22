@@ -946,7 +946,8 @@ export async function defaultResearchHistorySources(projectRoot, { userHome = ho
     // agent-shell writes transcripts under the directory its agent runs in.
     ...(workspace && resolve(workspace) !== resolve(projectRoot)
       ? [{ kind: "agent-shell", path: join(workspace, ".agent-shell", "transcripts") }] : []),
-    { kind: "magent", path: join(userHome, ".config", "emacs", "var", "noema-interaction", "magent", "sessions") },
+    // Where Emacs writes them: `magent-session-directory` default, lisp/tools/agent/config.el.
+    { kind: "magent", path: join(userHome, ".config", "emacs", "var", "noema", "magent", "sessions") },
     { kind: "codex", path: join(String(env.CODEX_HOME || join(userHome, ".codex")), "sessions") },
     { kind: "claude", path: join(userHome, ".claude", "projects") },
   ];

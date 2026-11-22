@@ -13,7 +13,7 @@ Noema-specific integration remains intentionally bounded:
 1. `lisp/noema-compose.el` exposes the mature gptel UI directly.
 2. `lisp/noema-agent-acp.el` is the sole research/runtime boundary to
    agent-shell and acp.el.
-3. `lisp/noema-interaction-magent*.el` retains the audited queue/CLI fallback
+3. `lisp/tools/agent/interaction-magent*.el` (Emacs config) retains the audited queue/CLI fallback
    integration from the prototype under Noema naming.
 4. Upstream source retains original feature names, licenses, docs and tests.
 5. Noema owns Project/WorkNode/Run/Artifact semantics; upstream buffers and

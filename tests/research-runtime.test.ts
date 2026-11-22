@@ -1306,10 +1306,10 @@ describe("research runtime service", () => {
     const userHome = join(root, "home");
     await mkdir(join(root, ".agent-shell", "transcripts"), { recursive: true });
     await mkdir(join(userHome, ".codex", "sessions"), { recursive: true });
-    await mkdir(join(userHome, ".config", "emacs", "var", "noema-interaction", "magent", "sessions"), { recursive: true });
+    await mkdir(join(userHome, ".config", "emacs", "var", "noema", "magent", "sessions"), { recursive: true });
     expect(await defaultResearchHistorySources(root, { userHome, env: {} })).toEqual([
       { kind: "agent-shell", path: join(root, ".agent-shell", "transcripts"), projectRoot: root },
-      { kind: "magent", path: join(userHome, ".config", "emacs", "var", "noema-interaction", "magent", "sessions"), projectRoot: root },
+      { kind: "magent", path: join(userHome, ".config", "emacs", "var", "noema", "magent", "sessions"), projectRoot: root },
       { kind: "codex", path: join(userHome, ".codex", "sessions"), projectRoot: root },
     ]);
     expect(await findResearchProjectRoot(join(root, "nested"))).toBe(root);

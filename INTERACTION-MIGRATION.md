@@ -17,7 +17,9 @@ site-lisp/noema/
 ```
 
 The useful legacy profile, prompt, context-reference, CLI fallback, result and
-session behavior now uses the `noema-interaction-*` namespace. Editable
+session behavior now lives in the Emacs configuration as
+`lisp/tools/agent/interaction*.el` with the `+agent-interaction-*` namespace
+(agent infrastructure belongs to Emacs, AGENT.md). Editable
 profiles and templates live under `etc/noema/`; runtime files live under
 `var/noema/`.
 
