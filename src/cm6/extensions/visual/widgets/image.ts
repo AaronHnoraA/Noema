@@ -312,15 +312,24 @@ class ImageWidget extends MeasuredWidget {
       const target = figureLayoutTarget(view, wrap);
       if (target) applyFigureLayout(view, target, next);
     };
-    const toolbar = buildImageToolbar(this.layout, applyLayout, () => {
-      if (!joinNextImage(view, Number(wrap.dataset.cmSourceFrom))) arrangeWithNextFigure(view, wrap);
-    }, this.joinable ? "Place with next image" : "Place with next figure");
-    if (!this.inRow && !view.state.readOnly) toolbar.append(figureMoveGrip(view, wrap));
     const embed = htmlEmbeds.get(wrap);
-    if (embed) toolbar.append(imageToolSeparator(), imageToolButton("⤢", "Full screen (Esc exits)", false, () => embed.toggleFullscreen(true)));
-    wrap.append(toolbar);
+    if (!view.state.readOnly) {
+      const toolbar = buildImageToolbar(this.layout, applyLayout, () => {
+        if (!joinNextImage(view, Number(wrap.dataset.cmSourceFrom))) arrangeWithNextFigure(view, wrap);
+      }, this.joinable ? "Place with next image" : "Place with next figure");
+      if (!this.inRow) toolbar.append(figureMoveGrip(view, wrap));
+      if (embed) toolbar.append(imageToolSeparator(), imageToolButton("⤢", "Full screen (Esc exits)", false, () => embed.toggleFullscreen(true)));
+      wrap.append(toolbar);
+    } else if (embed) {
+      // A reader keeps the one control that is not an edit: full screen.
+      const toolbar = document.createElement("div");
+      toolbar.className = "cm-image-toolbar";
+      toolbar.append(imageToolButton("⤢", "Full screen (Esc exits)", false, () => embed.toggleFullscreen(true)));
+      wrap.append(toolbar);
+    }
     syncImageRow(wrap, view, this.from, this.layout, resizableImage);
-    if (resizableImage) {
+    // Layout controls write the source; a read-only page has none of them.
+    if (resizableImage && !view.state.readOnly) {
       wrap.append(buildImageResizeHandle(wrap, resizableImage, this.layout, applyLayout, view));
     }
     if (!this.inRow && !view.state.readOnly) wrap.append(figureHeightHandle(view, wrap, "image"));

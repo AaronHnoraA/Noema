@@ -59,3 +59,19 @@ test("a read-only page renders a TikZ block that has no id yet", async () => {
     setTikzRendererForTests(null);
   }
 });
+
+test("a read-only page shows a reader's controls only", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const editor = createEditor(host, {
+    initialContent: "# T\n\n![img](a.png)\n\n```python\nprint(1)\n```\n\nFootnote[^1].\n\n[^1]: note\n",
+    readOnly: true,
+    passiveReader: true,
+  });
+  opened.push({ editor, host });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // Layout tools and resize handles write the source; a reader has none.
+  expect(host.querySelector(".cm-image-tool-button, .cm-image-resize-handle, .cm-figure-height-handle, .cm-code-lang-input")).toBeNull();
+  const labels = [...host.querySelectorAll("button")].map((button) => button.getAttribute("aria-label") || button.textContent);
+  expect(labels).toEqual(["Copy code", "Fold", "Jump to footnote 1", "Back to footnote reference 1"]);
+});
