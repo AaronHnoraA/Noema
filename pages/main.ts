@@ -131,7 +131,7 @@ import { normalizeDateValue, todayDateValue } from "../src/planning-values.ts";
 import { NOEMA_AUTHORING_SNIPPETS } from "../src/authoring-syntax.ts";
 import { patchPlanningNodeRaw } from "../shared/planning-dsl.mjs";
 import { scanPlanningDocument, planningSourceIsLive } from "../shared/planning-document.mjs";
-import { latexMarkNames, latexMarkSnippetDefinitions } from "../shared/latex-marks.mjs";
+import { latexMarkChoiceNames, latexMarkSnippetDefinitions } from "../shared/latex-marks.mjs";
 import {
   buildLatexExportScopes,
   latexExportScopesContent,
@@ -1783,7 +1783,7 @@ const BUILTIN_SNIPPETS: SnippetSummary[] = [{
   mode: "markdown-mode",
   group: "Noema builtin",
   kind: "",
-  body: `@@latexmk(\${1|${latexMarkNames().join(",")}|})$0`,
+  body: `@@latexmk(\${1|${latexMarkChoiceNames().join(",")}|})$0`,
   source: BUILTIN_SNIPPET_SOURCE,
 }, ...NOEMA_AUTHORING_SNIPPETS.map((snippet) => ({
   ...snippet,

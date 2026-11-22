@@ -753,6 +753,9 @@ export function latexAnnotationPreamble() {
     "\\providecommand{\\aarontodoinline}[1]{%",
     "  \\textcolor{AaronTodo}{\\textbf{TODO:}\\nobreakspace #1}%",
     "}",
+    // `@@latexmk(prompt) [..]` reaches the draft as an instruction for the
+    // typesetting Agent. It typesets nothing, even if the host never strips it.
+    "\\providecommand{\\noemaprompt}[1]{}",
     "\\providecommand{\\sidecommentinline}[1]{%",
     "  \\textcolor{AaronSideCommentBackground}{\\textbf{NOTE:}\\nobreakspace #1}%",
     "}",

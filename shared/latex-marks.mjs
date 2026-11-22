@@ -18,6 +18,23 @@ export function latexMarkNames() {
   return Object.keys(LATEX_MARKS);
 }
 
+/**
+ * `@@latexmk(prompt) [instruction]`: an instruction to the typesetting Agent
+ * for the markup at this spot ("set this table landscape", "keep these two
+ * figures on one page"). It is not a LaTeX command: the Pandoc pass leaves
+ * `\noemaprompt{instruction}` in the draft, which expands to nothing, and the
+ * polish Agent carries it out and removes it.
+ */
+export const LATEX_PROMPT_MARK = "prompt";
+
+/** Names offered after `@@latexmk(`: the marks, then the Agent instruction. */
+export function latexMarkChoiceNames() {
+  return [...Object.keys(LATEX_MARKS), LATEX_PROMPT_MARK];
+}
+
 export function latexMarkSnippetDefinitions() {
-  return Object.entries(LATEX_MARKS).map(([key, spec]) => ({ key, name: `LaTeX mark: ${spec.label}`, body: `@@latexmk(${key})$0` }));
+  return [
+    ...Object.entries(LATEX_MARKS).map(([key, spec]) => ({ key, name: `LaTeX mark: ${spec.label}`, body: `@@latexmk(${key})$0` })),
+    { key: LATEX_PROMPT_MARK, name: "LaTeX mark: instruction for the typesetting Agent", body: "@@latexmk(prompt) [${1:instruction}]$0" },
+  ];
 }

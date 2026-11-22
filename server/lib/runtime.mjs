@@ -11,7 +11,7 @@ import { buildWikiIndex, wikiIndexStatus } from "./wiki-workspace.mjs";
 import { configureTmpRoot, noemaTmpRoot, runtimeMkdtemp, runtimeTmpFile } from "./tmp.mjs";
 import { prepareLatexDiagrams } from "./latex-export-diagrams.mjs";
 import { applyLatexTemplate, bibliographyReferencesToLatex, defaultLatexOutputPath, escapeLatexText, escapeLatexTitle, escapeLatexUrl, latexLogDiagnostics, latexMacrosPackage, latexNeedsAnotherPass, latexOpeningDropCap, readLatexTemplate, writeLatexExport } from "./latex-export.mjs";
-import { noemaMarkdownToLatexPandoc, extractNoemaMetadata } from "./latex-export-pandoc.mjs";
+import { noemaMarkdownToLatexPandoc, extractNoemaMetadata, stripLatexPromptMarkers } from "./latex-export-pandoc.mjs";
 import { agentAvailable, loadAgentRules, normalizeAgentTitle, polishBodyWithAgent } from "./latex-export-codex.mjs";
 import { loadKatexMacros } from "./katex-macros.mjs";
 import { loadMacroSourceFiles, loadUserKatexMacros, MACRO_SOURCE_BYTES_LIMIT, readLocalMacroSource } from "./user-katex-macros.mjs";
@@ -6974,7 +6974,13 @@ export async function exportLatex(body = {}) {
 
   emit("Verifying final PDF…");
   throwIfAborted(signal);
-  const latex = assemble(bodyLatex);
+  // @@latexmk(prompt) instructions were for the Agent; none reaches the file.
+  // One still in the body was not carried out (no Agent, or it was skipped).
+  const unhandledPrompts = (String(bodyLatex).match(/\\noemaprompt\{/g) || []).length;
+  if (unhandledPrompts > 0) {
+    warnings.push(`${unhandledPrompts} @@latexmk(prompt) instruction${unhandledPrompts === 1 ? " was" : "s were"} not carried out by an Agent and ${unhandledPrompts === 1 ? "was" : "were"} left out of the LaTeX`);
+  }
+  const latex = assemble(stripLatexPromptMarkers(bodyLatex));
   const verified = await compileLatexExportPdf({
     latex,
     outputPath,

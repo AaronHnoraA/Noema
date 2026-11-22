@@ -3936,6 +3936,25 @@ body.has-diagram-fullscreen {
   font-size: 1.12em;
 }
 
+/* `@@latexmk(prompt) [..]`: an instruction for the typesetting Agent, set as
+ * a quiet margin-note chip so it reads as an aside, not as document text. */
+.cm-editor .inline-latex-prompt-widget {
+  max-width: min(32em, 70%);
+  padding: 0.18em 0.5em 0.2em 0.4em;
+  border: 1px dashed color-mix(in srgb, var(--aaron-accent, #c9a45c), transparent 45%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--aaron-accent, #c9a45c), transparent 90%);
+  color: color-mix(in srgb, var(--aaron-ink, #e4ecff), transparent 25%);
+  vertical-align: 0.08em;
+}
+.cm-editor .inline-latex-prompt-text {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  font-style: italic;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .cm-editor .inline-latex-mark-widget[data-valid="false"] {
   color: var(--aaron-danger, #d14b4b);
   text-decoration: wavy underline;

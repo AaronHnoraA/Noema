@@ -38,7 +38,7 @@ import {
   relativeDateClass,
   relativeDateLabel,
 } from "../../../../date-syntax.ts";
-import { latexMark } from "../../../../../shared/latex-marks.mjs";
+import { LATEX_PROMPT_MARK, latexMark } from "../../../../../shared/latex-marks.mjs";
 
 declare global {
   interface Window {
@@ -554,22 +554,26 @@ class LatexMarkWidget extends MeasuredWidget {
   mark: string;
   from: number;
   to: number;
+  instruction: string;
 
-  constructor(mark: string, from: number, to: number) {
+  constructor(mark: string, from: number, to: number, instruction = "") {
     super();
     this.mark = mark;
     this.from = from;
     this.to = to;
+    this.instruction = instruction;
   }
 
   protected measureKey(): string { return this.mark; }
   protected get measuredBlock(): boolean { return false; }
 
   eq(other: LatexMarkWidget): boolean {
-    return this.mark === other.mark && this.from === other.from && this.to === other.to;
+    return this.mark === other.mark && this.from === other.from && this.to === other.to
+      && this.instruction === other.instruction;
   }
 
   toDOM(): HTMLElement {
+    if (this.mark === LATEX_PROMPT_MARK) return this.promptDOM();
     const marker = document.createElement("span");
     const spec = latexMark(this.mark);
     marker.className = "inline-latex-mark-widget inline-command-token";
@@ -587,6 +591,36 @@ class LatexMarkWidget extends MeasuredWidget {
     value.className = "inline-latex-mark-symbol";
     value.textContent = spec?.symbol || "?";
     marker.append(latex, value);
+    return marker;
+  }
+
+  /**
+   * `@@latexmk(prompt) [instruction]`: a quiet chip with the instruction for
+   * the typesetting Agent. It is never typeset; clicking opens the source.
+   */
+  private promptDOM(): HTMLElement {
+    const marker = document.createElement("span");
+    marker.className = "inline-latex-mark-widget inline-latex-prompt-widget inline-command-token";
+    marker.dataset.cmSourceFrom = String(this.from);
+    marker.dataset.cmSourceTo = String(this.to);
+    marker.dataset.cmOpenSource = "true";
+    marker.dataset.mark = this.mark;
+    const instruction = this.instruction.trim();
+    marker.dataset.valid = instruction ? "true" : "false";
+    marker.title = instruction
+      ? `Instruction for the typesetting Agent at LaTeX export (never typeset):\n${instruction}`
+      : "Empty instruction: write what the typesetting Agent should do inside [ ]";
+    marker.setAttribute("aria-label", `LaTeX export instruction: ${instruction || "empty"}`);
+    const latex = document.createElement("span");
+    latex.className = "inline-latex-mark-logo";
+    latex.textContent = "LaTeX";
+    const icon = document.createElement("span");
+    icon.className = "inline-latex-mark-symbol";
+    icon.textContent = "✎";
+    const text = document.createElement("span");
+    text.className = "inline-latex-prompt-text";
+    text.textContent = instruction || "instruction";
+    marker.append(latex, icon, text);
     return marker;
   }
 
@@ -1058,7 +1092,7 @@ function buildInlineCommandDecos(
       }
       if (cmd.name === "latexmk" && !cursorInside) {
         decos.push(
-          Decoration.replace({ widget: new LatexMarkWidget(cmd.switchValue.toLowerCase(), from, to) }).range(from, to),
+          Decoration.replace({ widget: new LatexMarkWidget(cmd.switchValue.toLowerCase(), from, to, cmd.context) }).range(from, to),
         );
       }
       // `@@slides(reveal) []` is a structural marker for the Reveal deck.  It

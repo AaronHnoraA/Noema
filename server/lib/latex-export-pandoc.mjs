@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { approvedEdiffMarkdown } from "../../shared/ediff-source.mjs";
-import { LATEX_MARKS, latexMark } from "../../shared/latex-marks.mjs";
+import { LATEX_MARKS, LATEX_PROMPT_MARK, latexMark } from "../../shared/latex-marks.mjs";
 import {
   layoutFromAttrs,
   layoutLatexFigure,
@@ -143,8 +143,28 @@ function environmentOpen(kind, title, options) {
   return { latex: `\\begin{${env}}${latexEnvironmentTitle(label)}`, env };
 }
 
+/**
+ * `\noemaprompt{…}` around an author instruction. The macro discards its
+ * argument unexpanded, so TeX in the instruction ("use \small") is kept for
+ * the Agent to read; only what would break the argument is escaped.
+ */
+export function latexPromptMarker(instruction) {
+  const text = String(instruction || "").trim().replace(/\s+/g, " ")
+    .replace(/\\?([{}%])/g, (_match, ch) => `\\${ch}`);
+  return `\\noemaprompt{${text}}`;
+}
+
+/** Remove every `\noemaprompt{…}`: the final document never typesets an instruction. */
+export function stripLatexPromptMarkers(latex) {
+  return String(latex || "").replace(/[ \t]*\\noemaprompt\{(?:\\.|[^{}\\])*\}/g, "");
+}
+
 function validateLatexMark(command, lineText, context = {}) {
   const key = command.switchValue.trim().toLowerCase();
+  if (key === LATEX_PROMPT_MARK) {
+    if (!command.context.trim()) throw new Error("@@latexmk(prompt) needs an instruction: @@latexmk(prompt) [what to do]");
+    return { key, spec: null };
+  }
   const spec = latexMark(key);
   if (!spec) throw new Error(`Unknown @@latexmk mark: ${key || "(empty)"}`);
   const trimmed = lineText.trim();
@@ -153,7 +173,7 @@ function validateLatexMark(command, lineText, context = {}) {
   if (spec.placement === "prefix" && (lineText.slice(0, command.fullFrom).trim() || context.atParagraphStart === false)) {
     throw new Error(`@@latexmk(${key}) must appear at the start of a paragraph`);
   }
-  const adjacentMark = visibleLatexMarkCommands(lineText).some((other) => other.fullFrom !== command.fullFrom
+  const adjacentMark = typesetLatexMarkCommands(lineText).some((other) => other.fullFrom !== command.fullFrom
     && ((other.fullTo <= command.fullFrom && !lineText.slice(other.fullTo, command.fullFrom).trim())
       || (other.fullFrom >= command.fullTo && !lineText.slice(command.fullTo, other.fullFrom).trim())));
   if (spec.placement === "between" && adjacentMark) throw new Error(`@@latexmk(${key}) must sit between visible inline content`);
@@ -205,7 +225,9 @@ function transformInlineCommands(line, options, context = {}) {
     }
     else if (command.name === "latexmk") {
       const { spec } = validateLatexMark(command, line, context);
-      out += rawLatexInline(spec.latex);
+      // An instruction for the typesetting Agent travels as a macro that
+      // typesets nothing; the host strips any the Agent leaves behind.
+      out += rawLatexInline(spec ? spec.latex : latexPromptMarker(command.context));
     }
     cursor = command.fullTo;
   }
@@ -423,6 +445,11 @@ function visibleLatexMarkCommands(line) {
   const protectedRanges = protectedInlineRanges(line);
   return scanInlineCommands(line, "latexmk")
     .filter((command) => !protectedRanges.some((range) => command.fullFrom >= range.from && command.fullFrom < range.to));
+}
+
+/** Marks that typeset something; an Agent instruction is not one of them. */
+function typesetLatexMarkCommands(line) {
+  return visibleLatexMarkCommands(line).filter((command) => command.switchValue.trim().toLowerCase() !== LATEX_PROMPT_MARK);
 }
 
 function withoutVisibleLatexMarks(line) {
@@ -695,6 +722,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
     }
     for (const command of visibleLatexMarkCommands(line)) {
       const { key, spec } = validateLatexMark(command, line, markContext);
+      if (!spec) continue;
       if (spec.placement === "block-once" && singletonMarks.has(key)) throw new Error(`@@latexmk(${key}) may appear only once`);
       if (spec.placement === "block-once") singletonMarks.add(key);
     }

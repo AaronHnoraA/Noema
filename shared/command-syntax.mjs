@@ -191,8 +191,17 @@ export function scanInlineCommands(input, name = "") {
   const markerRe = /@@latexmk\(([^)\n]+)\)/gi;
   let markerMatch;
   while ((markerMatch = markerRe.exec(text))) {
-    push("latexmk", markerMatch[1].trim(), markerMatch.index + markerMatch[0].length,
-      markerMatch.index + markerMatch[0].length, markerMatch.index, markerRe.lastIndex);
+    const value = markerMatch[1].trim();
+    const end = markerMatch.index + markerMatch[0].length;
+    // `@@latexmk(prompt) [instruction]` carries its instruction in brackets.
+    const bracket = value.toLowerCase() === "prompt" ? /^[ \t]*\[/.exec(text.slice(end)) : null;
+    const close = bracket ? findInlineCommandClose(text, end + bracket[0].length - 1, "]") : -1;
+    if (close >= 0) {
+      push("latexmk", value, end + bracket[0].length, close, markerMatch.index, close + 1);
+      markerRe.lastIndex = close + 1;
+      continue;
+    }
+    push("latexmk", value, end, end, markerMatch.index, markerRe.lastIndex);
   }
 
   const tagRe = /@@tag\[/gi;
