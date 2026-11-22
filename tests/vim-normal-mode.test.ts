@@ -97,3 +97,42 @@ describe("dd leaves a legal Normal-mode cursor", () => {
     s.done();
   });
 });
+
+describe("Escape from Insert with a selection", () => {
+  test("keeps the selection in Visual; a second Escape clears it", () => {
+    const s = mount("hello world", 0);
+    s.keys("i");
+    expect(s.vim.mode()).toBe("insert");
+    s.editor.setSelection(0, 5);
+    s.keys("Escape");
+    expect(s.vim.mode()).toBe("visual");
+    // Visual is inclusive: the selected characters are still "hello".
+    const range = s.editor.getMarkdownSelectionRange();
+    expect([Math.min(range.anchor, range.head), Math.max(range.anchor, range.head)]).toEqual([0, 5]);
+    s.keys("d");
+    expect(s.markdown()).toBe(" world");
+    s.done();
+  });
+
+  test("the second Escape returns to Normal without a selection", () => {
+    const s = mount("hello world", 0);
+    s.keys("i");
+    s.editor.setSelection(6, 11);
+    s.keys("Escape");
+    expect(s.vim.mode()).toBe("visual");
+    s.keys("Escape");
+    expect(s.vim.mode()).toBe("normal");
+    const range = s.editor.getMarkdownSelectionRange();
+    expect(range.head - range.anchor).toBeLessThanOrEqual(1);
+    s.done();
+  });
+
+  test("without a selection Escape still goes to Normal", () => {
+    const s = mount("hello", 3);
+    s.keys("i");
+    s.keys("Escape");
+    expect(s.vim.mode()).toBe("normal");
+    expect(s.head()).toBe(2);
+    s.done();
+  });
+});

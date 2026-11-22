@@ -2727,16 +2727,36 @@ export function createVimLite(
     });
   }
 
-  function escapeToNormal(): void {
-    const leavingInsert = mode === "insert";
-    if (leavingInsert) lastInsertPos = currentHead(editor);
-    activeRegister = "";
-    if (leavingInsert && insertSession) {
+  /** Finish the insert session: its repeat count, `.` record and undo group. */
+  function closeInsertSession(repeat = true): void {
+    lastInsertPos = currentHead(editor);
+    if (insertSession) {
       const edit = insertSessionEdit();
-      if (edit && insertSession.count > 1) repeatInsertedText(edit, insertSession.count - 1);
+      if (repeat && edit && insertSession.count > 1) repeatInsertedText(edit, insertSession.count - 1);
       if (pendingInsertChange && edit) lastChange = { keys: pendingInsertChange, insert: edit };
       closeUndoGroup(insertSession.undoDepth);
     }
+  }
+
+  /**
+   * Escape from Insert with text selected (by mouse, Shift+Arrow, Cmd+A)
+   * keeps the selection and enters Visual; the next Escape clears it.
+   * A deliberate difference from native Vim (docs/noema/guide/vim.md).
+   */
+  function escapeInsertSelectionToVisual(): boolean {
+    if (mode !== "insert" || editor.view.state.selection.main.empty) return false;
+    // A count would repeat the typed text over the selection.
+    closeInsertSession(false);
+    activeRegister = "";
+    adoptEditorSelection();
+    return true;
+  }
+
+  function escapeToNormal(): void {
+    if (escapeInsertSelectionToVisual()) return;
+    const leavingInsert = mode === "insert";
+    activeRegister = "";
+    if (leavingInsert) closeInsertSession();
     const visualExitPositions = mode === "visual-line"
       ? visualLineStates?.map((state) => state.head) ?? null
       : mode === "visual"
