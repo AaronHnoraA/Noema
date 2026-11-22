@@ -719,6 +719,47 @@ Proof text.
     expect(macros).not.toContain("\\todo[fancyline");
   });
 
+  test.each(["xelatex", "lualatex"])("keeps side-comment colour inside each margin box (%s)", async (engine) => {
+    if ([engine, "mutool"].some((command) => spawnSync(command, ["-v"]).error?.code === "ENOENT")) return;
+    const { notes } = await setupRoot();
+    await writeFile(join(notes, "noema-macros.sty"), latexMacrosPackage({}));
+    const longNote = "A note with enough words to extend across several pages. ".repeat(35);
+    await writeFile(join(notes, "color.tex"), String.raw`\documentclass{article}
+\usepackage{xcolor,geometry}
+\usepackage[marginnotes]{noema-macros}
+\definecolor{BodyInk}{HTML}{272521}
+\color{BodyInk}
+\begin{document}
+BODYBEFORE
+
+ANCHORBEFORE \sidecomment{MARGINSHORT} ANCHORAFTER.
+
+BODYBETWEEN
+
+Another anchor. \sidecomment{MARGINSTART ${longNote} MARGINEND}
+
+BODYAFTER
+\end{document}
+`);
+    for (let pass = 0; pass < 2; pass++) {
+      const compiled = spawnSync(engine, ["-interaction=nonstopmode", "-halt-on-error", "color.tex"],
+        { cwd: notes, encoding: "utf8" });
+      expect(compiled.status, compiled.stdout + compiled.stderr).toBe(0);
+    }
+    const rendered = spawnSync("mutool", ["draw", "-q", "-F", "stext", join(notes, "color.pdf")], { encoding: "utf8" });
+    expect(rendered.status, rendered.stderr).toBe(0);
+    const lines = [...rendered.stdout.matchAll(/<line\b[^>]*>([\s\S]*?)<\/line>/g)].map((match) => {
+      const glyphs = [...match[1].matchAll(/<char\b[^>]*\bc="([^"]*)"[^>]*\bcolor="(#[0-9a-f]+)"/gi)];
+      return { text: glyphs.map((glyph) => glyph[1]).join(""), colors: [...new Set(glyphs.map((glyph) => glyph[2]))] };
+    });
+    for (const marker of ["BODYBEFORE", "ANCHORBEFORE", "ANCHORAFTER", "BODYBETWEEN", "BODYAFTER"]) {
+      expect(lines.find((line) => line.text.includes(marker))?.colors, marker).toEqual(["#272521"]);
+    }
+    for (const marker of ["MARGINSHORT", "MARGINSTART", "MARGINEND"]) {
+      expect(lines.find((line) => line.text.includes(marker))?.colors, marker).toEqual(["#5a4a3e"]);
+    }
+  });
+
   test("writes export and remembers the last path per note", async () => {
     const { notes } = await setupRoot();
     const note = join(notes, "a.md");

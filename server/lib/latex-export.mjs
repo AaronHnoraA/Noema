@@ -654,17 +654,21 @@ export function latexSideCommentPreamble(enabled) {
 \newbox\noema@sidebox
 \newbox\noema@sidepart
 \newdimen\noema@sidechunkheight
+% Keep the colour push and pop within each final margin box. marginfix can
+% place a split chunk before the paragraph that contains its source mark.
+\def\noema@margin@sidepart#1{%
+  \marginpar{\begingroup\color{AaronSideCommentText}\unvbox#1\endgroup}}
 \def\noema@send@sidebox{%
   \ifdim\dimexpr\ht\noema@sidebox+\dp\noema@sidebox\relax>\noema@sidechunkheight
     \setbox\noema@sidepart=\vsplit\noema@sidebox to \noema@sidechunkheight
     \ifdim\ht\noema@sidepart<1pt
       \sidecommentinline{\noema@sideoriginal}%
     \else
-      \marginpar{\unvbox\noema@sidepart}%
+      \noema@margin@sidepart\noema@sidepart
       \expandafter\noema@send@sidebox
     \fi
   \else
-    \marginpar{\unvbox\noema@sidebox}%
+    \noema@margin@sidepart\noema@sidebox
   \fi}
 \def\noema@mpfootnote{mpfootnote}
 \newif\ifnoema@infootnote
@@ -684,7 +688,7 @@ export function latexSideCommentPreamble(enabled) {
       \def\noema@sideoriginal{#1}%
       \noema@sidechunkheight=.68\textheight
       \setbox\noema@sidebox=\vbox{\hsize=\marginparwidth
-        \raggedright\footnotesize\upshape\color{AaronSideCommentText}%
+        \raggedright\footnotesize\upshape%
         \noindent\zlabel{noema-side-note-\noema@sideid}%
         \tikz[remember picture,overlay]\coordinate (noema-side-note-\noema@sideid);%
         \ifnum\zref@extractdefault{noema-side-source-\noema@sideid}{abspage}{0}=\zref@extractdefault{noema-side-note-\noema@sideid}{abspage}{-1}\relax
