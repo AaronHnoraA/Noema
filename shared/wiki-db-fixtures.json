@@ -1,0 +1,636 @@
+{
+ "version": 1,
+ "index": {
+  "repositories": [
+   {
+    "id": "public/notes",
+    "uid": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2",
+    "identityStatus": "managed",
+    "name": "notes",
+    "namespace": "notes",
+    "qualifiedNamespace": "public/notes",
+    "namespaceAliases": [
+     "notes"
+    ],
+    "partition": "public",
+    "path": "$ROOT/public/notes",
+    "public": true,
+    "headSha": "b896fc39cd20228f27f8a1446031f7f3e0856cb0"
+   },
+   {
+    "id": "private/math",
+    "uid": "01a202ba-75ab-77a8-84d0-98b5777bc2de",
+    "identityStatus": "managed",
+    "name": "math",
+    "namespace": "math",
+    "qualifiedNamespace": "private/math",
+    "namespaceAliases": [
+     "math"
+    ],
+    "partition": "private",
+    "path": "$ROOT/private/math",
+    "public": false,
+    "headSha": "d0d8b9ba4d89d7b2da3bf710edeaa17772ae577a"
+   }
+  ],
+  "files": [
+   {
+    "repositoryId": "public/notes",
+    "repositoryUid": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2",
+    "partition": "public",
+    "file": "$ROOT/public/notes/.gitignore",
+    "path": "public/notes/.gitignore",
+    "repositoryPath": ".gitignore",
+    "name": ".gitignore",
+    "ext": "",
+    "size": 144,
+    "mtimeMs": 1795342104028.5845,
+    "kind": "file",
+    "gitStatus": "clean"
+   },
+   {
+    "repositoryId": "public/notes",
+    "repositoryUid": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2",
+    "partition": "public",
+    "file": "$ROOT/public/notes/noema.toml",
+    "path": "public/notes/noema.toml",
+    "repositoryPath": "noema.toml",
+    "name": "noema.toml",
+    "ext": "toml",
+    "size": 66,
+    "mtimeMs": 1795342104028.4568,
+    "kind": "file",
+    "gitStatus": "clean"
+   },
+   {
+    "repositoryId": "public/notes",
+    "repositoryUid": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2",
+    "partition": "public",
+    "file": "$ROOT/public/notes/qun.md",
+    "path": "public/notes/qun.md",
+    "repositoryPath": "qun.md",
+    "name": "qun.md",
+    "ext": "md",
+    "size": 195,
+    "mtimeMs": 1795342104161.0486,
+    "kind": "note",
+    "gitStatus": "??"
+   },
+   {
+    "repositoryId": "private/math",
+    "repositoryUid": "01a202ba-75ab-77a8-84d0-98b5777bc2de",
+    "partition": "private",
+    "file": "$ROOT/private/math/.gitignore",
+    "path": "private/math/.gitignore",
+    "repositoryPath": ".gitignore",
+    "name": ".gitignore",
+    "ext": "",
+    "size": 144,
+    "mtimeMs": 1795342103981.0747,
+    "kind": "file",
+    "gitStatus": "clean"
+   },
+   {
+    "repositoryId": "private/math",
+    "repositoryUid": "01a202ba-75ab-77a8-84d0-98b5777bc2de",
+    "partition": "private",
+    "file": "$ROOT/private/math/group.md",
+    "path": "private/math/group.md",
+    "repositoryPath": "group.md",
+    "name": "group.md",
+    "ext": "md",
+    "size": 227,
+    "mtimeMs": 1795342104160.827,
+    "kind": "note",
+    "gitStatus": "??"
+   },
+   {
+    "repositoryId": "private/math",
+    "repositoryUid": "01a202ba-75ab-77a8-84d0-98b5777bc2de",
+    "partition": "private",
+    "file": "$ROOT/private/math/noema.toml",
+    "path": "private/math/noema.toml",
+    "repositoryPath": "noema.toml",
+    "name": "noema.toml",
+    "ext": "toml",
+    "size": 66,
+    "mtimeMs": 1795342103980.9092,
+    "kind": "file",
+    "gitStatus": "clean"
+   },
+   {
+    "repositoryId": "private/math",
+    "repositoryUid": "01a202ba-75ab-77a8-84d0-98b5777bc2de",
+    "partition": "private",
+    "file": "$ROOT/private/math/ring.md",
+    "path": "private/math/ring.md",
+    "repositoryPath": "ring.md",
+    "name": "ring.md",
+    "ext": "md",
+    "size": 300,
+    "mtimeMs": 1795342104160.9534,
+    "kind": "note",
+    "gitStatus": "??"
+   }
+  ],
+  "diagnostics": [],
+  "generation": "3637e8a8717067387bbb",
+  "notes": [
+   {
+    "key": "01a202ba-7645-726e-9567-bf7445b8f34d",
+    "pageKey": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md",
+    "id": "01a202ba-7645-726e-9567-bf7445b8f34d",
+    "title": "群论笔记",
+    "namespace": "notes",
+    "qualifiedNamespace": "public/notes",
+    "qualifiedTitle": "notes:群论笔记",
+    "fullTitle": "public/notes:群论笔记",
+    "namespaceSource": "page",
+    "namespaceAliases": [],
+    "kind": "page",
+    "redirectTo": "",
+    "identityStatus": "managed",
+    "aliases": [],
+    "tags": [],
+    "private": false,
+    "file": "$ROOT/public/notes/qun.md",
+    "path": "public/notes/qun.md",
+    "link": "public/notes/qun.md",
+    "repositoryPath": "qun.md",
+    "repository": "notes",
+    "repositoryId": "public/notes",
+    "repositoryUid": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2",
+    "partition": "public",
+    "mtimeMs": 1795342104161.0486,
+    "createdMs": 1795266000000,
+    "size": 195,
+    "blocks": [],
+    "duplicateBlockIds": [],
+    "dependencies": [],
+    "wikiLinks": [
+     {
+      "target": "Group",
+      "label": "Group"
+     }
+    ],
+    "refs": [
+     "01a202ba-75fc-70d9-8c45-3f33571cd38e"
+    ],
+    "backlinks": [
+     "01a202ba-7627-7548-a702-415ca49ae25c"
+    ],
+    "unresolvedLinks": [],
+    "searchText": "#+begin meta\nid: 01a202ba-7645-726e-9567-bf7445b8f34d\ntitle: 群论笔记\nnamespace: notes\ndate: 2026-11-22\nkind: page\ntags: \nrefs: \n#+end meta\n\n# 群论笔记\n\n群的定义与性质。[[Group]]\n"
+   },
+   {
+    "key": "01a202ba-75fc-70d9-8c45-3f33571cd38e",
+    "pageKey": "01a202ba-75ab-77a8-84d0-98b5777bc2de:group.md",
+    "id": "01a202ba-75fc-70d9-8c45-3f33571cd38e",
+    "title": "Group",
+    "namespace": "math",
+    "qualifiedNamespace": "private/math",
+    "qualifiedTitle": "math:Group",
+    "fullTitle": "private/math:Group",
+    "namespaceSource": "page",
+    "namespaceAliases": [],
+    "kind": "page",
+    "redirectTo": "",
+    "identityStatus": "managed",
+    "aliases": [],
+    "tags": [],
+    "private": true,
+    "file": "$ROOT/private/math/group.md",
+    "path": "private/math/group.md",
+    "link": "private/math/group.md",
+    "repositoryPath": "group.md",
+    "repository": "math",
+    "repositoryId": "private/math",
+    "repositoryUid": "01a202ba-75ab-77a8-84d0-98b5777bc2de",
+    "partition": "private",
+    "mtimeMs": 1795342104160.827,
+    "createdMs": 1795266000000,
+    "size": 227,
+    "blocks": [
+     {
+      "id": "grp-def",
+      "kind": "anchor",
+      "envKind": "",
+      "label": "grp-def",
+      "offset": 188
+     }
+    ],
+    "duplicateBlockIds": [],
+    "dependencies": [
+     {
+      "kind": "asset",
+      "raw": "images/missing.png",
+      "status": "missing",
+      "path": "images/missing.png"
+     }
+    ],
+    "wikiLinks": [
+     {
+      "target": "Ring",
+      "label": "Ring"
+     },
+     {
+      "target": "Field",
+      "label": "Field"
+     }
+    ],
+    "refs": [
+     "01a202ba-7627-7548-a702-415ca49ae25c"
+    ],
+    "backlinks": [
+     "01a202ba-7645-726e-9567-bf7445b8f34d",
+     "01a202ba-7627-7548-a702-415ca49ae25c"
+    ],
+    "unresolvedLinks": [
+     "Field"
+    ],
+    "searchText": "#+begin meta\nid: 01a202ba-75fc-70d9-8c45-3f33571cd38e\ntitle: Group\nnamespace: math\ndate: 2026-11-22\nkind: page\ntags: \nrefs: \nprivate: true\n#+end meta\n\n# Group\n\nSee [[Ring]] and [[Field]]. {#grp-def}\n\n![fig](images/missing.png)\n"
+   },
+   {
+    "key": "01a202ba-7627-7548-a702-415ca49ae25c",
+    "pageKey": "01a202ba-75ab-77a8-84d0-98b5777bc2de:ring.md",
+    "id": "01a202ba-7627-7548-a702-415ca49ae25c",
+    "title": "Ring",
+    "namespace": "math",
+    "qualifiedNamespace": "private/math",
+    "qualifiedTitle": "math:Ring",
+    "fullTitle": "private/math:Ring",
+    "namespaceSource": "page",
+    "namespaceAliases": [],
+    "kind": "page",
+    "redirectTo": "",
+    "identityStatus": "managed",
+    "aliases": [],
+    "tags": [],
+    "private": true,
+    "file": "$ROOT/private/math/ring.md",
+    "path": "private/math/ring.md",
+    "link": "private/math/ring.md",
+    "repositoryPath": "ring.md",
+    "repository": "math",
+    "repositoryId": "private/math",
+    "repositoryUid": "01a202ba-75ab-77a8-84d0-98b5777bc2de",
+    "partition": "private",
+    "mtimeMs": 1795342104160.9534,
+    "createdMs": 1795266000000,
+    "size": 300,
+    "blocks": [
+     {
+      "id": "thm-unit",
+      "kind": "org-env",
+      "envKind": "theorem",
+      "label": "theorem · Unit",
+      "offset": 181
+     }
+    ],
+    "duplicateBlockIds": [],
+    "dependencies": [],
+    "wikiLinks": [
+     {
+      "target": "Group#grp-def",
+      "label": "Group#grp-def"
+     },
+     {
+      "target": "roam://01a202ba-75fc-70d9-8c45-3f33571cd38e",
+      "label": "roam://01a202ba-75fc-70d9-8c45-3f33571cd38e"
+     },
+     {
+      "target": "notes:群论笔记",
+      "label": "notes:群论笔记"
+     }
+    ],
+    "refs": [
+     "01a202ba-75fc-70d9-8c45-3f33571cd38e",
+     "01a202ba-7645-726e-9567-bf7445b8f34d"
+    ],
+    "backlinks": [
+     "01a202ba-75fc-70d9-8c45-3f33571cd38e"
+    ],
+    "unresolvedLinks": [],
+    "searchText": "#+begin meta\nid: 01a202ba-7627-7548-a702-415ca49ae25c\ntitle: Ring\nnamespace: math\ndate: 2026-11-22\nkind: page\ntags: \nrefs: \nprivate: true\n#+end meta\n\n# Ring\n\n#+begin theorem Unit {#thm-unit}\nBody\n#+end theorem\n\n[[Group#grp-def]] [[roam://01a202ba-75fc-70d9-8c45-3f33571cd38e]] [[notes:群论笔记]]\n"
+   }
+  ]
+ },
+ "tables": {
+  "repositories": [
+   {
+    "location_id": "public/notes",
+    "repository_id": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2",
+    "identity_status": "managed",
+    "partition": "public",
+    "name": "notes",
+    "namespace": "notes",
+    "qualified_namespace": "public/notes",
+    "namespace_aliases": "[\"notes\"]",
+    "path": "$ROOT/public/notes"
+   },
+   {
+    "location_id": "private/math",
+    "repository_id": "01a202ba-75ab-77a8-84d0-98b5777bc2de",
+    "identity_status": "managed",
+    "partition": "private",
+    "name": "math",
+    "namespace": "math",
+    "qualified_namespace": "private/math",
+    "namespace_aliases": "[\"math\"]",
+    "path": "$ROOT/private/math"
+   }
+  ],
+  "files": [
+   {
+    "repository_id": "public/notes",
+    "path": ".gitignore",
+    "file": "$ROOT/public/notes/.gitignore",
+    "kind": "file",
+    "extension": "",
+    "size": 144,
+    "mtime": 1795342104028.5845,
+    "git_status": "clean"
+   },
+   {
+    "repository_id": "public/notes",
+    "path": "noema.toml",
+    "file": "$ROOT/public/notes/noema.toml",
+    "kind": "file",
+    "extension": "toml",
+    "size": 66,
+    "mtime": 1795342104028.4568,
+    "git_status": "clean"
+   },
+   {
+    "repository_id": "public/notes",
+    "path": "qun.md",
+    "file": "$ROOT/public/notes/qun.md",
+    "kind": "note",
+    "extension": "md",
+    "size": 195,
+    "mtime": 1795342104161.0486,
+    "git_status": "??"
+   },
+   {
+    "repository_id": "private/math",
+    "path": ".gitignore",
+    "file": "$ROOT/private/math/.gitignore",
+    "kind": "file",
+    "extension": "",
+    "size": 144,
+    "mtime": 1795342103981.0747,
+    "git_status": "clean"
+   },
+   {
+    "repository_id": "private/math",
+    "path": "group.md",
+    "file": "$ROOT/private/math/group.md",
+    "kind": "note",
+    "extension": "md",
+    "size": 227,
+    "mtime": 1795342104160.827,
+    "git_status": "??"
+   },
+   {
+    "repository_id": "private/math",
+    "path": "noema.toml",
+    "file": "$ROOT/private/math/noema.toml",
+    "kind": "file",
+    "extension": "toml",
+    "size": 66,
+    "mtime": 1795342103980.9092,
+    "git_status": "clean"
+   },
+   {
+    "repository_id": "private/math",
+    "path": "ring.md",
+    "file": "$ROOT/private/math/ring.md",
+    "kind": "note",
+    "extension": "md",
+    "size": 300,
+    "mtime": 1795342104160.9534,
+    "git_status": "??"
+   }
+  ],
+  "pages": [
+   {
+    "page_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md",
+    "page_id": "01a202ba-7645-726e-9567-bf7445b8f34d",
+    "identity_status": "managed",
+    "title": "群论笔记",
+    "namespace": "notes",
+    "qualified_namespace": "public/notes",
+    "namespace_source": "page",
+    "kind": "page",
+    "file": "$ROOT/public/notes/qun.md",
+    "workspace_path": "public/notes/qun.md",
+    "repository_path": "qun.md",
+    "repository_id": "public/notes",
+    "partition": "public",
+    "private": 0,
+    "redirect_to": "",
+    "mtime": 1795342104161.0486,
+    "created": 1795266000000
+   },
+   {
+    "page_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:group.md",
+    "page_id": "01a202ba-75fc-70d9-8c45-3f33571cd38e",
+    "identity_status": "managed",
+    "title": "Group",
+    "namespace": "math",
+    "qualified_namespace": "private/math",
+    "namespace_source": "page",
+    "kind": "page",
+    "file": "$ROOT/private/math/group.md",
+    "workspace_path": "private/math/group.md",
+    "repository_path": "group.md",
+    "repository_id": "private/math",
+    "partition": "private",
+    "private": 1,
+    "redirect_to": "",
+    "mtime": 1795342104160.827,
+    "created": 1795266000000
+   },
+   {
+    "page_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:ring.md",
+    "page_id": "01a202ba-7627-7548-a702-415ca49ae25c",
+    "identity_status": "managed",
+    "title": "Ring",
+    "namespace": "math",
+    "qualified_namespace": "private/math",
+    "namespace_source": "page",
+    "kind": "page",
+    "file": "$ROOT/private/math/ring.md",
+    "workspace_path": "private/math/ring.md",
+    "repository_path": "ring.md",
+    "repository_id": "private/math",
+    "partition": "private",
+    "private": 1,
+    "redirect_to": "",
+    "mtime": 1795342104160.9534,
+    "created": 1795266000000
+   }
+  ],
+  "blocks": [
+   {
+    "block_id": "grp-def",
+    "page_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:group.md",
+    "kind": "anchor",
+    "env_kind": "",
+    "label": "grp-def",
+    "source_offset": 188
+   },
+   {
+    "block_id": "thm-unit",
+    "page_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:ring.md",
+    "kind": "org-env",
+    "env_kind": "theorem",
+    "label": "theorem · Unit",
+    "source_offset": 181
+   }
+  ],
+  "aliases": [],
+  "tags": [],
+  "links": [
+   {
+    "source_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md",
+    "raw_target": "Group",
+    "target_id": "01a202ba-75fc-70d9-8c45-3f33571cd38e",
+    "target_block_id": null,
+    "target_title": "Group",
+    "status": "resolved"
+   },
+   {
+    "source_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:group.md",
+    "raw_target": "Ring",
+    "target_id": "01a202ba-7627-7548-a702-415ca49ae25c",
+    "target_block_id": null,
+    "target_title": "Ring",
+    "status": "resolved"
+   },
+   {
+    "source_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:group.md",
+    "raw_target": "Field",
+    "target_id": null,
+    "target_block_id": null,
+    "target_title": "Field",
+    "status": "missing"
+   },
+   {
+    "source_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:ring.md",
+    "raw_target": "Group#grp-def",
+    "target_id": "01a202ba-75fc-70d9-8c45-3f33571cd38e",
+    "target_block_id": "grp-def",
+    "target_title": "Group",
+    "status": "resolved"
+   },
+   {
+    "source_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:ring.md",
+    "raw_target": "roam://01a202ba-75fc-70d9-8c45-3f33571cd38e",
+    "target_id": "01a202ba-75fc-70d9-8c45-3f33571cd38e",
+    "target_block_id": null,
+    "target_title": "Group",
+    "status": "resolved"
+   },
+   {
+    "source_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:ring.md",
+    "raw_target": "notes:群论笔记",
+    "target_id": "01a202ba-7645-726e-9567-bf7445b8f34d",
+    "target_block_id": null,
+    "target_title": "群论笔记",
+    "status": "resolved"
+   }
+  ],
+  "dependencies": [
+   {
+    "source_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:group.md",
+    "kind": "asset",
+    "raw_target": "images/missing.png",
+    "target_path": "images/missing.png",
+    "status": "missing"
+   }
+  ],
+  "diagnostics": [],
+  "page_bigrams": [
+   {
+    "bigram": "笔记",
+    "page_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:ring.md"
+   },
+   {
+    "bigram": "群论",
+    "page_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:ring.md"
+   },
+   {
+    "bigram": "论笔",
+    "page_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:ring.md"
+   },
+   {
+    "bigram": "与性",
+    "page_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md"
+   },
+   {
+    "bigram": "义与",
+    "page_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md"
+   },
+   {
+    "bigram": "定义",
+    "page_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md"
+   },
+   {
+    "bigram": "性质",
+    "page_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md"
+   },
+   {
+    "bigram": "的定",
+    "page_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md"
+   },
+   {
+    "bigram": "笔记",
+    "page_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md"
+   },
+   {
+    "bigram": "群的",
+    "page_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md"
+   },
+   {
+    "bigram": "群论",
+    "page_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md"
+   },
+   {
+    "bigram": "论笔",
+    "page_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md"
+   },
+   {
+    "bigram": "质。",
+    "page_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md"
+   }
+  ],
+  "pages_fts": [
+   {
+    "page_key": "01a202ba-75dc-77f2-9c5f-cf1ba9435fd2:qun.md",
+    "title": "群论笔记",
+    "aliases": "notes:群论笔记 public/notes:群论笔记",
+    "tags": "",
+    "path": "public/notes/qun.md",
+    "body": "#+begin meta\nid: 01a202ba-7645-726e-9567-bf7445b8f34d\ntitle: 群论笔记\nnamespace: notes\ndate: 2026-11-22\nkind: page\ntags: \nrefs: \n#+end meta\n\n# 群论笔记\n\n群的定义与性质。[[Group]]\n"
+   },
+   {
+    "page_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:group.md",
+    "title": "Group",
+    "aliases": "math:Group private/math:Group",
+    "tags": "",
+    "path": "private/math/group.md",
+    "body": "#+begin meta\nid: 01a202ba-75fc-70d9-8c45-3f33571cd38e\ntitle: Group\nnamespace: math\ndate: 2026-11-22\nkind: page\ntags: \nrefs: \nprivate: true\n#+end meta\n\n# Group\n\nSee [[Ring]] and [[Field]]. {#grp-def}\n\n![fig](images/missing.png)\n"
+   },
+   {
+    "page_key": "01a202ba-75ab-77a8-84d0-98b5777bc2de:ring.md",
+    "title": "Ring",
+    "aliases": "math:Ring private/math:Ring",
+    "tags": "",
+    "path": "private/math/ring.md",
+    "body": "#+begin meta\nid: 01a202ba-7627-7548-a702-415ca49ae25c\ntitle: Ring\nnamespace: math\ndate: 2026-11-22\nkind: page\ntags: \nrefs: \nprivate: true\n#+end meta\n\n# Ring\n\n#+begin theorem Unit {#thm-unit}\nBody\n#+end theorem\n\n[[Group#grp-def]] [[roam://01a202ba-75fc-70d9-8c45-3f33571cd38e]] [[notes:群论笔记]]\n"
+   }
+  ],
+  "user_version": 11
+ }
+}
