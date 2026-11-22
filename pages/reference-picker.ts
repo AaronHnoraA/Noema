@@ -3,6 +3,8 @@
 // mode "references") and inserts the text the kernel wrote for the chosen
 // item.  It matches nothing itself and knows no link syntax.
 
+import { revealInList } from "./list-reveal.ts";
+
 export type ReferenceItem = {
   kind: "page" | "heading" | "anchor" | "block" | "file" | "cite" | "create";
   label: string;
@@ -126,7 +128,7 @@ export function createReferencePicker(options: ReferencePickerOptions): Referenc
     active = Math.max(0, Math.min(index, items.length - 1));
     list.querySelectorAll<HTMLElement>("[role='option']").forEach((row, rowIndex) => {
       row.setAttribute("aria-selected", String(rowIndex === active));
-      if (rowIndex === active) row.scrollIntoView({ block: "nearest" });
+      if (rowIndex === active) revealInList(list, row);
     });
   };
 

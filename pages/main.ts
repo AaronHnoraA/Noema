@@ -118,6 +118,7 @@ import {
   reclaimHostInputFocus,
   releaseHostInputFocus,
 } from "./host-input-focus.ts";
+import { revealInList } from "./list-reveal.ts";
 import { installFileDropGuard } from "./host-file-drop.ts";
 import {
   ProseCheckLifecycle,
@@ -1399,8 +1400,8 @@ function selectLiveTexPaletteItem(index: number, focus = false): void {
     const selected = Number(button.dataset.livetexPaletteIndex) === liveTexPaletteSelectedIndex;
     button.parentElement?.classList.toggle("is-selected", selected);
     if (selected && focus) {
-      button.focus();
-      button.scrollIntoView({ block: "nearest", inline: "nearest" });
+      button.focus({ preventScroll: true });
+      revealInList(liveTexPaletteItems, button);
     }
   }
 }
@@ -12073,14 +12074,7 @@ function renderSnippetPopup(prefix: string, rect: { left: number; top: number; b
 }
 
 function revealSnippetPopupActiveOption(): void {
-  const option = snippetPopup.querySelector<HTMLElement>(".noema-snippet-option.is-active");
-  if (!option || snippetPopup.clientHeight <= 0) return;
-  const top = option.offsetTop;
-  const bottom = top + option.offsetHeight;
-  if (top < snippetPopup.scrollTop) snippetPopup.scrollTop = top;
-  else if (bottom > snippetPopup.scrollTop + snippetPopup.clientHeight) {
-    snippetPopup.scrollTop = bottom - snippetPopup.clientHeight;
-  }
+  revealInList(snippetPopup, snippetPopup.querySelector<HTMLElement>(".noema-snippet-option.is-active"));
 }
 
 function updateSnippetPopupActiveOption(): void {

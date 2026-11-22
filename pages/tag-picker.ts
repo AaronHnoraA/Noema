@@ -35,6 +35,7 @@ import {
   tagChangesBetween,
   tagIdentity,
 } from "./note-tag-transaction.ts";
+import { revealInList } from "./list-reveal.ts";
 
 export function parseTagPickerValue(value: unknown): string[] {
   return Array.isArray(value) ? stableTagList(value) : parseTagListText(value);
@@ -233,7 +234,7 @@ export function createTagPicker(options: TagPickerOptions): TagPickerController 
         const delta = event.key === "ArrowDown" ? 1 : -1;
         focusedIndex = (focusedIndex + delta + options.length) % options.length;
         render();
-        choices.querySelector<HTMLElement>(".is-focused")?.scrollIntoView({ block: "nearest" });
+        revealInList(choices, choices.querySelector<HTMLElement>(".is-focused"));
       }
       return;
     }

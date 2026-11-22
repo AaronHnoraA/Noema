@@ -1,6 +1,7 @@
 import type { WikiNote, WikiSearchResult } from "./api-client.ts";
 import { renderSearchExcerpt } from "./search-excerpt.ts";
 import { markdownLinkPrimaryModifier } from "../src/cm6/markdown-link-events.ts";
+import { revealInList } from "./list-reveal.ts";
 
 export type KnowledgeSearchController = { refresh: () => void; close: () => void; destroy: () => void };
 
@@ -87,7 +88,7 @@ export function createKnowledgeSearch(options: {
       event.preventDefault();
       active = (active + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
       popup.querySelectorAll<HTMLElement>("[role='option']").forEach((item, index) => item.setAttribute("aria-selected", String(index === active)));
-      popup.querySelector<HTMLElement>(`[role='option']:nth-child(${active + 1})`)?.scrollIntoView({ block: "nearest" });
+      revealInList(popup, popup.querySelector<HTMLElement>(`[role='option']:nth-child(${active + 1})`));
     } else if (event.key === "Enter" && items[active]) {
       event.preventDefault();
       openItem(items[active], markdownLinkPrimaryModifier(event) || event.altKey);
