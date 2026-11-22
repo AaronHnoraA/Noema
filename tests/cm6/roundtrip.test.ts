@@ -1595,13 +1595,16 @@ y^2
         expect(document.querySelector(".cm-tikz-env-widget")).toBe(updatedPreview);
         expect(renderCalls).toHaveLength(2);
       }
+      // A change to the body made while the caret is elsewhere (an agent's
+      // save, a reload) compiles too; it used to leave the old picture.
       const outsideEdit = editor.getMarkdown().indexOf("(4,1)") + 1;
       editor.view.dispatch({
         changes: { from: outsideEdit, to: outsideEdit + 1, insert: "5" },
         selection: { anchor: 0 },
       });
       await new Promise((resolve) => window.setTimeout(resolve, 500));
-      expect(renderCalls).toHaveLength(2);
+      expect(renderCalls).toHaveLength(3);
+      expect(renderCalls.at(-1)).toContain("(5,1)");
       editor.setMarkdownSelection(outsideEdit);
       editor.view.dispatch({
         changes: { from: outsideEdit, to: outsideEdit + 1, insert: "6" },
@@ -1609,7 +1612,7 @@ y^2
       });
       editor.setMarkdownSelection(editor.getMarkdown().length);
       await new Promise((resolve) => window.setTimeout(resolve, 500));
-      expect(renderCalls).toHaveLength(3);
+      expect(renderCalls).toHaveLength(4);
       expect(renderCalls.at(-1)).toContain("(6,1)");
     } finally {
       cleanup();

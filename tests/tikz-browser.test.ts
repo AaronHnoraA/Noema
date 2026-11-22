@@ -154,3 +154,21 @@ describe("browser TikZ rendering", () => {
     }
   });
 });
+
+describe("TikZ colours that are not hex", () => {
+  test("a colour name or rgb() is lightened for the dark page too", async () => {
+    const { cssColorHex } = await import("../src/tikz-browser.ts");
+    expect(cssColorHex("blue")).toBe("#0000ff");
+    expect(cssColorHex("darkgray")).toBe("#404040");
+    expect(cssColorHex("rgb(0, 0, 153)")).toBe("#000099");
+    expect(cssColorHex("#123")).toBe("#123");
+    const host = document.createElement("div");
+    host.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg"><path stroke="blue" /><path stroke="rgb(0,0,153)" /></svg>';
+    const svg = host.querySelector("svg")!;
+    prepareTikzSvg(svg);
+    for (const path of svg.querySelectorAll("path")) {
+      expect(path.hasAttribute("data-noema-tikz-dark-stroke")).toBe(true);
+      expect(path.style.getPropertyValue("--note-tikz-dark-stroke")).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+});

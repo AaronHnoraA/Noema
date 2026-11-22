@@ -3458,8 +3458,11 @@ class TikzWidget extends MeasuredWidget {
       figure.append(tikzPlaceholder("Rendering TikZ…"));
     }
 
-    const blockKey = tikzSourceCacheKey(file, meta.id);
-    if (!tikzRequestedBlocks.has(blockKey) || tikzDirtyBlocks.has(blockKey) || !previous?.svg) {
+    // No result exists for this body, so it must compile, wherever the change
+    // came from: an agent's save or a reload changes a block the caret never
+    // entered, and waiting for the block to be marked dirty by typing left its
+    // old picture on screen for good. requestTikzAsset coalesces and debounces.
+    {
       requestTikzAsset(file, meta.id, this.body, (result) => {
         if (!figure.isConnected) return;
         figure.replaceChildren(result.ok && result.svg

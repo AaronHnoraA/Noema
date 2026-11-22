@@ -192,6 +192,40 @@ export function sanitizedTikzSvg(svg: string): string {
   return String(DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true } }));
 }
 
+let colorCanvas: CanvasRenderingContext2D | null | undefined;
+
+/**
+ * A CSS colour as `#rrggbb` when the browser can say so. TikZ output can carry a
+ * colour name or `rgb(...)`; only hex was lightened for the dark page.
+ */
+export function cssColorHex(value: string): string {
+  if (/^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i.test(value)) return value;
+  const named = TIKZ_XCOLOR_HEX[value.toLowerCase()];
+  if (named) return named;
+  const rgb = /^rgb\(\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*\)$/i.exec(value);
+  if (rgb) return `#${rgb.slice(1, 4).map((part) => Math.min(255, Number(part)).toString(16).padStart(2, "0")).join("")}`;
+  if (colorCanvas === undefined) {
+    try {
+      colorCanvas = typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
+    } catch {
+      colorCanvas = null;
+    }
+  }
+  if (!colorCanvas) return value;
+  colorCanvas.fillStyle = "#000001";
+  colorCanvas.fillStyle = value;
+  const resolved = String(colorCanvas.fillStyle);
+  return resolved === "#000001" ? value : resolved;
+}
+
+/** xcolor's base names, which differ from CSS (xcolor green is #00ff00, purple #bf0040). */
+const TIKZ_XCOLOR_HEX: Record<string, string> = {
+  red: "#ff0000", green: "#00ff00", blue: "#0000ff", cyan: "#00ffff", magenta: "#ff00ff",
+  yellow: "#ffff00", orange: "#ff8000", violet: "#800080", purple: "#bf0040", teal: "#008080",
+  brown: "#bf8040", olive: "#808000", gray: "#808080", darkgray: "#404040", lightgray: "#bfbfbf",
+  lime: "#bfff00", pink: "#ffbfbf",
+};
+
 /** Keep authored SVG colours for light themes, with readable equivalents for dark themes. */
 export function prepareTikzSvg(svg: SVGSVGElement): void {
   const background = [20, 26, 39]; // Noema's dark page.
@@ -204,7 +238,7 @@ export function prepareTikzSvg(svg: SVGSVGElement): void {
     0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
   const backgroundLuminance = luminance(background);
   const rgbFromHex = (value: string): number[] | null => {
-    const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
+    const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(cssColorHex(value.trim()));
     if (!hex) return null;
     const digits = hex[1].length === 3
       ? [...hex[1]].map((part) => part + part)
