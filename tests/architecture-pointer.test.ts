@@ -33,8 +33,8 @@ function code(path: string): string {
 const OWNERS: Record<string, string> = {
   "src/cm6/pointer-position.ts": "the mapping itself, and its fallback",
   "src/cm6/viewport-stability.ts": "a scroll anchor for a press, never a caret",
-  "src/cm6/screen-rows.ts": "fallback after pointerPosition for a Vim row column",
-  "pages/vim-lite.ts": "fallback after positionAtPoint for H/M/L",
+  "src/cm6/screen-rows.ts": "Vim's row geometry (j/k column), kept as it was on purpose",
+  "pages/vim-lite.ts": "Vim's H/M/L row lookup, kept as it was on purpose",
 };
 
 describe("pointer positions have one owner", () => {

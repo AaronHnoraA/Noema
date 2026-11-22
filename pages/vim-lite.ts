@@ -1891,7 +1891,7 @@ export function createVimLite(
     const bottom = Math.min(scroller.bottom, content.bottom);
     if (bottom <= top) return null;
     const y = which === "top" ? top + 2 : which === "bottom" ? bottom - 2 : (top + bottom) / 2;
-    const pos = editor.positionAtPoint(content.left + 1, y) ?? view.posAtCoords({ x: content.left + 1, y }, false);
+    const pos = view.posAtCoords({ x: content.left + 1, y }, false);
     const row = vimRowAt(editor, pos, 1, { scope: null });
     if (which === "middle") return row;
     return stepRows(editor, row, count - 1, which === "top" ? 1 : -1).row;

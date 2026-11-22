@@ -23,7 +23,6 @@
  * `VimRowLayout` interface so tests can substitute a fixed-width wrap model.
  */
 
-import { pointerPosition } from "./pointer-position.ts";
 import { EditorSelection, type SelectionRange, type Text } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { nextGraphemePosition, previousGraphemePosition } from "./text-boundaries.ts";
@@ -202,8 +201,7 @@ export const domRowLayout: VimRowLayout = {
     const band = visibleBand(view, row.from, row.to);
     if (!band) return row.from;
     const rect = view.contentDOM.getBoundingClientRect();
-    const y = (band.top + band.bottom) / 2;
-    const hit = pointerPosition(view, rect.left + x, y) ?? view.posAtCoords({ x: rect.left + x, y }, false);
+    const hit = view.posAtCoords({ x: rect.left + x, y: (band.top + band.bottom) / 2 }, false);
     return clamp(hit, row.from, row.to);
   },
 };
