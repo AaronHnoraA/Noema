@@ -102,7 +102,7 @@ import { NOEMA_EDITOR_SETTINGS, noemaEditorDefaults } from "../shared/editor-set
 import { createMenuController, type NoemaMenuItem } from "../src/menu-system.ts";
 import { figureLayoutMenuItems, figureLayoutTarget } from "../src/cm6/figure-layout-menu.ts";
 import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
-import { previewPlacement } from "./preview-placement.ts";
+import { completionPlacement, previewPlacement, type CompletionSide } from "./preview-placement.ts";
 import { blobToBase64 } from "../src/paste.ts";
 import { collectFindMatches, createFindPattern, findMatchIndexFrom, replacementText, type FindMatch, type FindOptions } from "./find.ts";
 import { AssistScheduler, assistScrollPolicy, type AssistUpdateFlags, type AssistUpdateOptions } from "./assist-scheduler.ts";
@@ -11308,6 +11308,7 @@ function hideSnippetPopup(): void {
   snippetPopupMatchKey = "";
   snippetKeyboardPointerPosition = null;
   snippetPopupChooseHandler = null;
+  snippetPopupSide = null;
   if (wasVisible) repositionMathPreviewForCompletion();
 }
 
@@ -11318,24 +11319,27 @@ function repositionMathPreviewForCompletion(): void {
     Number.parseFloat(mathPreview.style.width) || mathPreviewWidth || 320, session.bottomRect);
 }
 
+let snippetPopupSide: CompletionSide | null = null;
+
 function placeFloating(el: HTMLElement, rect: { left: number; top: number; bottom: number } | null, width = 340): void {
   if (!rect) {
     el.hidden = true;
     return;
   }
+  // Width first: the height read below depends on it.
   const margin = 8;
-  const resolvedWidth = Math.min(width, Math.max(220, window.innerWidth - margin * 2));
-  const left = Math.min(
-    Math.max(margin, rect.left),
-    Math.max(margin, window.innerWidth - resolvedWidth - margin),
+  el.style.width = `${Math.min(width, Math.max(220, window.innerWidth - margin * 2))}px`;
+  const maxHeight = Number.parseFloat(getComputedStyle(el).maxHeight) || 240;
+  const placement = completionPlacement(
+    rect,
+    { width, height: el.offsetHeight || Math.min(180, maxHeight), maxHeight },
+    { width: window.innerWidth, height: window.innerHeight },
+    el === snippetPopup ? snippetPopupSide : null,
   );
-  const height = Math.min(el.offsetHeight || 180, Math.max(160, window.innerHeight - margin * 2));
-  let top = rect.bottom + 8;
-  if (top + height > window.innerHeight - margin) top = rect.top - height - 8;
-  if (top < margin) top = Math.max(margin, window.innerHeight - height - margin);
-  el.style.left = `${left}px`;
-  el.style.top = `${top}px`;
-  el.style.width = `${resolvedWidth}px`;
+  if (el === snippetPopup) snippetPopupSide = placement.side;
+  el.style.left = `${placement.left}px`;
+  el.style.top = `${placement.top}px`;
+  el.style.width = `${placement.width}px`;
 }
 
 function placeFloatingAbove(

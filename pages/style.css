@@ -927,6 +927,11 @@ body[data-host-mode="server"][data-server-reader-editing-aids="false"] :is(
 }
 
 .noema-snippet-option.is-active::after {
+  /* Pinned to the first row's last column: auto-placed, it would follow a
+   * full-width preview onto a row of its own and make the active option
+   * taller, so every arrow key would move the rows below it. */
+  grid-column: 4;
+  grid-row: 1;
   content: "CR";
   color: var(--aaron-red-dark);
   font: 800 10px/1 var(--aaron-font-sans);
