@@ -67,6 +67,16 @@ export class EditorSaveChangeTracker {
   reset(): void {
     this.pending = null;
   }
+
+  /** The unsaved changes since the last captured save, without taking them. */
+  peek(): ChangeSet | null {
+    return this.pending && !this.pending.empty ? this.pending : null;
+  }
+
+  /** Replace the unsaved changes, after they were rebased over another writer's save. */
+  replace(changeSet: ChangeSet): void {
+    this.pending = changeSet.empty ? null : changeSet;
+  }
 }
 
 export type SourceLineEnding = "lf" | "crlf";

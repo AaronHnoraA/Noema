@@ -5,7 +5,7 @@ import "./style.css";
 import "../src/styles/aaron-ui-tokens.css";
 import "../src/styles/aaron-ui-elegant.css";
 import "../src/styles/theme-loader.ts";
-import type { Text } from "@codemirror/state";
+import { Text, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { MathfieldElement } from "mathlive";
 
@@ -103,6 +103,7 @@ import { createMenuController, type NoemaMenuItem } from "../src/menu-system.ts"
 import { figureLayoutMenuItems, figureLayoutTarget } from "../src/cm6/figure-layout-menu.ts";
 import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
 import { completionPlacement, previewPlacement, type CompletionSide } from "./preview-placement.ts";
+import { mergeExternalText } from "./merge-external.ts";
 import { blobToBase64 } from "../src/paste.ts";
 import { collectFindMatches, createFindPattern, findMatchIndexFrom, replacementText, type FindMatch, type FindOptions } from "./find.ts";
 import { AssistScheduler, assistScrollPolicy, type AssistUpdateFlags, type AssistUpdateOptions } from "./assist-scheduler.ts";
@@ -2202,9 +2203,13 @@ editor.onViewUpdate((update) => {
   if (update.docChanged) markFindStale();
   if (update.docChanged) noteMacros.noteEdited(update.changes, update.state.doc);
 });
+// The text this pane last loaded or saved: the base its unsaved changes
+// (editorSaveChanges) start from, so another writer's save can be merged.
+let savedBaseDoc: Text | null = null;
 editor.onDocumentReset(() => {
   editorSaveChanges.reset();
   forceFullEditorSave = false;
+  savedBaseDoc = editor.view.state.doc;
 });
 
 type EditorPerfResult = {
@@ -6111,6 +6116,7 @@ function incrementalEditorSaveReady(): boolean {
 type EditorSaveSnapshot = {
   file: string;
   revision: number;
+  doc: Text;
   changeToken: EditorSaveChangeToken | null;
   body: ReturnType<typeof saveBody>;
 };
@@ -6132,6 +6138,7 @@ const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof ap
     return {
       file: currentFile,
       revision,
+      doc: editor.view.state.doc,
       changeToken,
       body: saveBody(changeToken),
     };
@@ -6167,6 +6174,7 @@ const saveDrain = new SaveDrain<EditorSaveSnapshot, Awaited<ReturnType<typeof ap
     currentVersion = String(result.version || currentVersion);
     if (typeof result.incrementalSave === "boolean") currentIncrementalSave = result.incrementalSave && currentLineEnding.patchable;
     forceFullEditorSave = false;
+    savedBaseDoc = snapshot.doc;
     applyIndexPayload(result);
     savedRevision = Math.max(savedRevision, snapshot.revision);
     updateTitle();
@@ -6921,6 +6929,8 @@ async function reviewSaveConflict(): Promise<void> {
     savedRevision = Math.max(savedRevision, draftRevision);
     lastSaveProblem = null;
     editorSaveChanges.reset();
+    // Disk now holds the reviewed draft, not a text this pane tracks changes from.
+    savedBaseDoc = null;
     forceFullEditorSave = revision !== savedRevision;
     updateTitle();
     setStatus(forceFullEditorSave ? "Draft saved; saving newer edits…" : "Draft saved over the reviewed disk version");
@@ -6981,13 +6991,56 @@ async function refreshPendingExternalSaveOnFocus(): Promise<void> {
   }
 }
 
+/**
+ * Another writer saved this note while the person has unsaved typing. Rebase
+ * that save over the typing and apply it in place, so the person keeps
+ * writing (agent-management C74). Only a change to the very text the person
+ * also changed is left for review. Returns whether the save was merged.
+ */
+async function mergeExternalSaveUnderTyping(file: string): Promise<boolean> {
+  if (currentReadOnly || currentRemote || !currentLineEnding.patchable) return false;
+  await saveDrain.whenIdle();
+  if (currentFile !== file) return false;
+  const opened = await api.notes.open(file);
+  await saveDrain.whenIdle();
+  // Everything from here is synchronous: no save or keystroke can interleave.
+  const base = savedBaseDoc;
+  const local = editorSaveChanges.peek();
+  const remoteText = String(opened.content ?? "");
+  if (currentFile !== file || !base || !local || forceFullEditorSave || remoteText.includes("\r")) return false;
+  if (String(opened.version || "") === currentVersion) return false;
+  const merged = mergeExternalText(base.toString(), remoteText, local);
+  if (!merged.ok) return false;
+  applyingContent = true;
+  try {
+    editor.view.dispatch({
+      changes: merged.remote,
+      annotations: [Transaction.addToHistory.of(false), Transaction.remote.of(true)],
+    });
+  } finally {
+    applyingContent = false;
+  }
+  editorSaveChanges.replace(merged.local);
+  savedBaseDoc = merged.remote.empty ? base : Text.of(remoteText.split("\n"));
+  currentVersion = String(opened.version || currentVersion);
+  currentMtimeMs = Number(opened.mtimeMs) || currentMtimeMs;
+  if (pendingExternalSave?.file === file) pendingExternalSave = null;
+  setStatus("Merged another edit; your typing kept");
+  scheduleSave();
+  return true;
+}
+
 function noteExternalFileChanged(file: string, mtimeMs = 0, immediate = false): void {
   if (!currentFile || file !== currentFile) return;
   const markChanged = (): void => {
     if (currentFile !== file) return;
     pendingExternalSave = { file, mtimeMs };
     if (revision !== savedRevision) {
-      setStatus("Changed on disk; local edits kept — review before saving");
+      void mergeExternalSaveUnderTyping(file).then((merged) => {
+        if (!merged && currentFile === file && pendingExternalSave?.file === file) {
+          setStatus("Changed on disk; local edits kept — review before saving");
+        }
+      });
     } else if (immediate && !paused) {
       void refreshPendingExternalSaveOnFocus();
     }

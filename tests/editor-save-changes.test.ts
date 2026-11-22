@@ -45,3 +45,21 @@ describe("incremental editor save changes", () => {
     });
   });
 });
+
+describe("unsaved changes rebased over another writer's save", () => {
+  test("peek leaves the changes in place and replace swaps them", async () => {
+    const { ChangeSet } = await import("@codemirror/state");
+    const { EditorSaveChangeTracker } = await import("../pages/editor-save-changes.ts");
+    const tracker = new EditorSaveChangeTracker();
+    expect(tracker.peek()).toBeNull();
+    const typed = ChangeSet.of([{ from: 2, insert: "x" }], 5);
+    tracker.record(typed);
+    expect(tracker.peek()).toBe(typed);
+    expect(tracker.hasPending()).toBe(true);
+    const rebased = ChangeSet.of([{ from: 4, insert: "x" }], 7);
+    tracker.replace(rebased);
+    expect(tracker.capture()?.changeSet).toBe(rebased);
+    tracker.replace(ChangeSet.empty(3));
+    expect(tracker.hasPending()).toBe(false);
+  });
+});
