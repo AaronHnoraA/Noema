@@ -206,11 +206,40 @@ func WriteDatabase(db *sql.DB, idx Index, now string) error {
 	if _, err := tx.Exec(wikiSchema + fmt.Sprintf("PRAGMA user_version=%d;", SchemaVersion)); err != nil {
 		return err
 	}
+	insert := map[string]string{}
+	emit(idx, now, func(table string, values ...any) {
+		if err != nil {
+			return
+		}
+		query, ok := insert[table]
+		if !ok {
+			verb := "INSERT"
+			if table == "page_bigrams" {
+				verb = "INSERT OR IGNORE"
+			}
+			query = verb + " INTO " + table + " VALUES (" + strings.TrimSuffix(strings.Repeat("?, ", len(values)), ", ") + ")"
+			insert[table] = query
+		}
+		_, err = tx.Exec(query, values...)
+	})
 	exec := func(query string, args ...any) {
 		if err == nil {
 			_, err = tx.Exec(query, args...)
 		}
 	}
+	for _, meta := range [][2]string{{"generation", idx.Generation}, {"updated_at", now}, {"last_mode", "full"},
+		{"last_reason", "kernel"}, {"last_error", ""}, {"last_changed_files", "[]"}, {"last_full_at", now}} {
+		exec("INSERT INTO wiki_meta VALUES (?, ?)", meta[0], meta[1])
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// emit hands PUT every row a full build of IDX writes, table by table: the
+// one description WriteDatabase inserts and ApplyIndex reconciles against.
+func emit(idx Index, now string, put func(table string, values ...any)) {
 	for _, repo := range idx.Repositories {
 		uid := repo.UID
 		if uid == "" {
@@ -233,16 +262,15 @@ func WriteDatabase(db *sql.DB, idx Index, now string) error {
 			aliases = []string{}
 		}
 		aliasJSON, _ := json.Marshal(aliases)
-		exec("INSERT INTO repositories VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			repo.ID, uid, status, repo.Partition, repo.Name, namespace, qualified, string(aliasJSON), repo.Path)
-		exec("INSERT INTO repository_index_state VALUES (?, ?, ?, ?)", repo.ID, uid, repo.HeadSHA, now)
+		put("repositories", repo.ID, uid, status, repo.Partition, repo.Name, namespace, qualified, string(aliasJSON), repo.Path)
+		put("repository_index_state", repo.ID, uid, repo.HeadSHA, now)
 	}
 	for _, file := range idx.Files {
 		gitStatus := file.GitStatus
 		if gitStatus == "" {
 			gitStatus = "clean"
 		}
-		exec("INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?, ?)", file.RepositoryID, file.RepositoryPath,
+		put("files", file.RepositoryID, file.RepositoryPath,
 			file.File, file.Kind, file.Ext, int64(file.Size), file.MtimeMs, gitStatus)
 	}
 	pages := make([]Page, len(idx.Notes))
@@ -272,8 +300,7 @@ func WriteDatabase(db *sql.DB, idx Index, now string) error {
 		if note.Private {
 			private = 1
 		}
-		exec("INSERT INTO pages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			key, note.ID, note.IdentityStatus, note.Title, namespace, qualified, source, kind, note.File,
+		put("pages", key, note.ID, note.IdentityStatus, note.Title, namespace, qualified, source, kind, note.File,
 			note.Path, note.RepositoryPath, note.RepositoryID, note.Partition, private, note.RedirectTo,
 			note.MtimeMs, note.CreatedMs)
 		for _, block := range note.Blocks {
@@ -281,19 +308,19 @@ func WriteDatabase(db *sql.DB, idx Index, now string) error {
 			if label == "" {
 				label = block.ID
 			}
-			exec("INSERT INTO blocks VALUES (?, ?, ?, ?, ?, ?)", block.ID, key, block.Kind, block.EnvKind, label, block.Offset)
+			put("blocks", block.ID, key, block.Kind, block.EnvKind, label, block.Offset)
 		}
 		for _, alias := range note.Aliases {
-			exec("INSERT INTO aliases VALUES (?, ?)", key, alias)
+			put("aliases", key, alias)
 		}
 		for _, tag := range note.Tags {
-			exec("INSERT INTO tags VALUES (?, ?)", key, tag)
+			put("tags", key, tag)
 		}
 		for _, row := range linkRows(pages, l, index) {
-			exec("INSERT INTO links VALUES (?, ?, ?, ?, ?, ?)", key, row.rawTarget, row.targetID, row.targetBlockID, row.targetTitle, row.status)
+			put("links", key, row.rawTarget, row.targetID, row.targetBlockID, row.targetTitle, row.status)
 		}
 		for _, dep := range note.Dependencies {
-			exec("INSERT INTO dependencies VALUES (?, ?, ?, ?, ?)", key, dep.Kind, dep.Raw, dep.Path, dep.Status)
+			put("dependencies", key, dep.Kind, dep.Raw, dep.Path, dep.Status)
 		}
 		searchAliases := []string{}
 		for _, value := range append([]string{note.QualifiedTitle, note.FullTitle}, note.Aliases...) {
@@ -304,21 +331,13 @@ func WriteDatabase(db *sql.DB, idx Index, now string) error {
 		aliasText := strings.Join(searchAliases, " ")
 		tagText := strings.Join(note.Tags, " ")
 		pathText := note.RepositoryID + "/" + note.RepositoryPath
-		exec("INSERT INTO pages_fts VALUES (?, ?, ?, ?, ?, ?)", key, note.Title, aliasText, tagText, pathText, note.SearchText)
-		exec("INSERT INTO pages_fts_trigram VALUES (?, ?, ?, ?, ?, ?)", key, note.Title, aliasText, tagText, pathText, note.SearchText)
+		put("pages_fts", key, note.Title, aliasText, tagText, pathText, note.SearchText)
+		put("pages_fts_trigram", key, note.Title, aliasText, tagText, pathText, note.SearchText)
 		for _, pair := range cjkPairs(note.Title, aliasText, tagText, note.SearchText) {
-			exec("INSERT OR IGNORE INTO page_bigrams VALUES (?, ?)", pair, key)
+			put("page_bigrams", pair, key)
 		}
 	}
 	for _, diagnostic := range idx.Diagnostics {
-		exec("INSERT INTO diagnostics VALUES (?, ?, ?, ?)", diagnostic.Code, diagnostic.Severity, diagnostic.Message, diagnostic.Path)
+		put("diagnostics", diagnostic.Code, diagnostic.Severity, diagnostic.Message, diagnostic.Path)
 	}
-	for _, meta := range [][2]string{{"generation", idx.Generation}, {"updated_at", now}, {"last_mode", "full"},
-		{"last_reason", "kernel"}, {"last_error", ""}, {"last_changed_files", "[]"}, {"last_full_at", now}} {
-		exec("INSERT INTO wiki_meta VALUES (?, ?)", meta[0], meta[1])
-	}
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
 }
