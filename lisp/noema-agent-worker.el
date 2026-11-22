@@ -1411,6 +1411,7 @@ made durably failed without sending an ACP prompt."
   (+agent-acp-prompt
    :buffer (noema-agent-worker-buffer worker)
    :run-id (noema-agent-worker-run-id worker)
+   :freeze-input t
    :content (noema-agent-worker--content-blocks worker)
    :on-success (lambda (response)
                  (let ((reason (format "%s" (or (map-elt response 'stopReason) ""))))
