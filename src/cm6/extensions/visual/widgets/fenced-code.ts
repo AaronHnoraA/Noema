@@ -28,6 +28,7 @@ import { syntaxTree } from "@codemirror/language";
 import type { Range } from "@codemirror/state";
 import { highlightCodeForEditor, onCodeHighlightReady } from "../../../../code-highlight-async.ts";
 import { supportedDiagramLang } from "../../../../diagram-langs.ts";
+import { parseCodeInfo } from "../../../../code-info.ts";
 import { writeSystemClipboard } from "../../../../system-clipboard.ts";
 import { getBlockMathRanges, rangeAtPosition, rangeInsideAny, rangeOverlapsAny } from "../../../math-ranges.ts";
 import { applyLayoutAttrs, layoutFromAttrs, layoutIsDefault, readLayoutAttrsLine, type LayoutAttrs } from "../../../../layout-attrs.ts";
@@ -61,19 +62,22 @@ class LangBadgeWidget extends MeasuredWidget {
   lang: string;
   from: number;
   to: number;
+  fileTitle: string;
 
-  constructor(lang: string, from: number, to: number) {
+  constructor(lang: string, from: number, to: number, fileTitle = "") {
     super();
     this.lang = lang;
     this.from = from;
     this.to = to;
+    this.fileTitle = fileTitle;
   }
 
   protected measureKey(): string { return ""; }
   protected get measuredBlock(): boolean { return false; }
 
   eq(other: LangBadgeWidget): boolean {
-    return this.lang === other.lang && this.from === other.from && this.to === other.to;
+    return this.lang === other.lang && this.from === other.from && this.to === other.to
+      && this.fileTitle === other.fileTitle;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -82,6 +86,19 @@ class LangBadgeWidget extends MeasuredWidget {
     span.textContent = this.lang || "lang";
     span.title = "Click to edit code language";
     span.tabIndex = 0;
+    this.wireLangEditor(span, view);
+    if (!this.fileTitle) return span;
+    // The file name sits before the language, as a code card's caption.
+    const caption = document.createElement("span");
+    caption.className = "cm-code-file-title";
+    caption.textContent = this.fileTitle;
+    const group = document.createElement("span");
+    group.className = "cm-code-caption";
+    group.append(caption, span);
+    return group;
+  }
+
+  private wireLangEditor(span: HTMLElement, view: EditorView): void {
     const edit = (): void => {
       if (span.querySelector("input")) return;
       const input = document.createElement("input");
@@ -134,7 +151,6 @@ class LangBadgeWidget extends MeasuredWidget {
         edit();
       }
     });
-    return span;
   }
 
   ignoreEvent(): boolean { return true; }
@@ -812,12 +828,12 @@ function buildFencedCodeDecos(view: EditorView): DecorationSet {
         const infoNode = node.node.getChild("CodeInfo");
         const textNode = node.node.getChild("CodeText");
 
-        const lang = infoNode
-          ? doc.sliceString(infoNode.from, infoNode.to).trim()
-          : "";
+        const infoText = infoNode ? doc.sliceString(infoNode.from, infoNode.to) : "";
+        const info = parseCodeInfo(infoText);
+        const lang = info.lang;
 
         // Mermaid is handled by the StateField above — skip here
-        if (supportedDiagramLang(lang)) return false;
+        if (supportedDiagramLang(infoText.trim())) return false;
 
         const codeBody = textNode
           ? doc.sliceString(textNode.from, textNode.to)
@@ -845,16 +861,27 @@ function buildFencedCodeDecos(view: EditorView): DecorationSet {
         pushMark(decos, openFenceLine.from, fenceMarkEnd, onOpenFence ? "syntax-hint" : "syntax-hidden");
 
         // Editable language badge, shown even for an unlabelled fence.
+        // The badge edits only the language word, so title and line marks survive.
         decos.push(
           Decoration.widget({
             widget: new LangBadgeWidget(
               lang,
-              infoNode?.from ?? fenceMarkEnd,
-              infoNode?.to ?? fenceMarkEnd,
+              infoNode ? infoNode.from + info.langFrom : fenceMarkEnd,
+              infoNode ? infoNode.from + info.langTo : fenceMarkEnd,
+              info.title,
             ),
             side: 1,
           }).range(fenceMarkEnd),
         );
+        if (textNode && info.highlight.length > 0 && !folded) {
+          const firstBodyLine = doc.lineAt(textNode.from).number;
+          const lastBodyLine = doc.lineAt(Math.max(textNode.from, textNode.to)).number;
+          for (const n of info.highlight) {
+            const lineNumber = firstBodyLine + n - 1;
+            if (lineNumber > lastBodyLine) break;
+            decos.push(Decoration.line({ class: "cm-code-line-highlight" }).range(doc.line(lineNumber).from));
+          }
+        }
         if (textNode) {
           decos.push(
             Decoration.widget({ widget: new CodeCopyButtonWidget(codeBody), side: 2 }).range(fenceMarkEnd),

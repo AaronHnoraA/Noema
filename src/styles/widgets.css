@@ -2607,6 +2607,28 @@ iframe.noema-embed-fullscreen {
   cursor: text;
   pointer-events: auto;
 }
+/* `title="file.py"` in the info string: the file name leads the caption. */
+.cm-editor .cm-code-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+}
+.cm-editor .cm-code-file-title {
+  max-width: 28em;
+  overflow: hidden;
+  color: var(--aaron-ink, #e4ecff);
+  font: 600 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+/* `{2-3}` in the info string: a quiet band with an accent rule at the left,
+ * drawn inside the line box so the line keeps its height. */
+.cm-editor .cm-line.cm-code-line-highlight {
+  background: color-mix(in srgb, var(--aaron-highlight, #d8b45a), transparent 82%);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--aaron-accent, #d8b45a), transparent 25%);
+}
 .cm-editor .cm-code-lang-input {
   box-sizing: border-box;
   width: 7.5em;

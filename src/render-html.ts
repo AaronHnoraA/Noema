@@ -9,6 +9,7 @@ import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { cleanEditorHTML } from "./export-html.ts";
 import { approvedEdiffMarkdown } from "../shared/ediff-source.mjs";
 import { markdownItCjkEmphasis } from "./cjk-emphasis.ts";
+import { parseCodeInfo } from "./code-info.ts";
 import { supportedDiagramLang } from "./diagram-langs.ts";
 import { hydrateDiagramForeignObjectMarkup, sanitizeDiagramSvg } from "./diagram-sanitize.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
@@ -1656,7 +1657,17 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
       const layout = consumeLayoutAttrsParagraph(tokens, idx + 1) ?? layoutFromAttrs({});
       return renderDiagramFence(token, layout, options.diagrams);
     }
-    return originalFence(tokens, idx, opts, env, self);
+    const info = parseCodeInfo(token.info);
+    if (!info.title && info.highlight.length === 0) return originalFence(tokens, idx, opts, env, self);
+    // Only the language reaches markdown-it's highlighter; the title becomes
+    // the code card's caption and the marked lines a data attribute.
+    const original = token.info;
+    token.info = info.lang;
+    const code = originalFence(tokens, idx, opts, env, self);
+    token.info = original;
+    const lines = info.highlight.length ? ` data-highlight-lines="${info.highlight.join(",")}"` : "";
+    const caption = info.title ? `<figcaption class="noema-code-title">${escapeHtml(info.title)}</figcaption>` : "";
+    return `<figure class="noema-code"${lines}>${caption}${code}</figure>\n`;
   };
 
   const originalImage = md.renderer.rules.image ?? ((tokens, idx, opts, _env, self) => self.renderToken(tokens, idx, opts));
