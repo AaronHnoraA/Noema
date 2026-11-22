@@ -595,6 +595,12 @@ export interface Editor {
   getMarkdownSelection(): { from: number; to: number };
   /** Current selection as markdown-source offsets preserving direction (anchor/head). */
   getMarkdownSelectionRange(): { anchor: number; head: number };
+  /**
+   * The document position under a pointer, read from the painted layout
+   * (src/cm6/pointer-position.ts). Use it for every click, hover or context
+   * menu lookup instead of the view's `posAtCoords`.
+   */
+  positionAtPoint(x: number, y: number): number | null;
   /** Replace a markdown-source range. */
   replaceMarkdownRange(from: number, to: number, text: string, select?: SelectionMode): { from: number; to: number };
   /** Current active-surface selection. */

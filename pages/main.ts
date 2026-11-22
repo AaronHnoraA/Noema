@@ -2862,7 +2862,7 @@ editor.view.dom.addEventListener("pointermove", (event) => {
     linkPreview.dismissTransient();
     return;
   }
-  const pos = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  const pos = editor.positionAtPoint(event.clientX, event.clientY);
   const href = typeof pos === "number" ? markdownHrefAt(editor.view.state, pos) || "" : "";
   if (!href || href === hoveredInternalHref) return;
   window.clearTimeout(linkHoverTimer);
@@ -4888,7 +4888,7 @@ function jupyterCellFromPointer(event: MouseEvent, fallbackToSelection = true): 
       ?? null;
     if (fromWidget) return fromWidget;
   }
-  const posAtCoords = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  const posAtCoords = editor.positionAtPoint(event.clientX, event.clientY);
   if (typeof posAtCoords !== "number") return fallbackToSelection ? selectedJupyterCell() : null;
   return jupyterCellAtCommandPosition(posAtCoords) ?? (fallbackToSelection ? selectedJupyterCell() : null);
 }
@@ -5021,7 +5021,7 @@ function markdownHrefFromPointer(event: MouseEvent): string {
   const element = event.target instanceof Element ? event.target : event.target instanceof Node ? event.target.parentElement : null;
   const renderedHref = element?.closest<HTMLAnchorElement>("a[href]")?.getAttribute("href") || "";
   if (renderedHref) return cleanHref(renderedHref);
-  const pos = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  const pos = editor.positionAtPoint(event.clientX, event.clientY);
   if (typeof pos !== "number") return "";
   return cleanHref(markdownHrefAt(editor.view.state, pos) || "");
 }
@@ -5106,7 +5106,7 @@ function mathTargetFromSourceElement(target: EventTarget | null): ContextMathTar
 function mathTargetFromPointer(event: MouseEvent): ContextMathTarget | null {
   const elementTarget = mathTargetFromSourceElement(event.target);
   if (elementTarget) return elementTarget;
-  const pos = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  const pos = editor.positionAtPoint(event.clientX, event.clientY);
   return typeof pos === "number" ? mathTargetAtPosition(pos) : null;
 }
 
@@ -9407,7 +9407,7 @@ function planningNodeAtPointer(event: MouseEvent): PlanningNodeLike | null {
       || nodes.find((node) => Number.isFinite(from) && node.span.from <= from && from <= node.span.to)
       || null;
   }
-  const pos = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  const pos = editor.positionAtPoint(event.clientX, event.clientY);
   if (typeof pos !== "number") return null;
   return nodes.find((node) => node.span.from <= pos && pos <= node.span.to) || null;
 }
@@ -14425,7 +14425,7 @@ host.addEventListener("click", (event) => {
     if (!prosePopover.contains(event.target as Node)) hideProsePopover();
     return;
   }
-  const position = editor.view.posAtCoords({ x: event.clientX, y: event.clientY });
+  const position = editor.positionAtPoint(event.clientX, event.clientY);
   if (position == null) return;
   const diagnostic = proseDiagnosticsAt(editor.view, position)[0];
   if (!diagnostic) return;

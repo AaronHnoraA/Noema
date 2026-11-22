@@ -17,8 +17,8 @@ import { foldedRanges, syntaxTree } from "@codemirror/language";
 import { EditorSelection, type EditorState } from "@codemirror/state";
 import { createEditor } from "../../src/editor-api.ts";
 import { setTikzRendererForTests } from "../../src/tikz-browser.ts";
+import { pointerPosition } from "../../src/cm6/pointer-position.ts";
 import {
-  calibrateWrappedLayoutClick,
   markdownHrefAt,
   selectNextMarkdownOccurrence,
 } from "../../src/cm6/editor-cm6.ts";
@@ -3666,8 +3666,8 @@ after
     cleanup();
   });
 
-  test("wrapped layout clicks use native text hit-testing when CM coords drift", async () => {
-    const md = "![alt](missing.png){size:160; align:left; wrap:on}\n\nhello world";
+  test("every click maps through the painted layout when CM coords drift, wrapped figures or not", async () => {
+    const md = "![alt](missing.png)\n\nhello world";
     const { editor, cleanup } = mountCM6(md);
     editor.setMarkdownSelection(md.length);
 
@@ -3699,18 +3699,14 @@ after
     });
 
     try {
-      const event = new MouseEvent("mousedown", {
-        bubbles: true,
-        cancelable: true,
-        button: 0,
-        clientX: 10,
-        clientY: 10,
-      });
-      const handled = calibrateWrappedLayoutClick(editor.view, event);
+      // The one mapping every click and drag uses.
+      expect(pointerPosition(editor.view, 10, 10)).toBe(md.indexOf("hello") + 2);
+      // A real press goes through CodeMirror's mouse selection with that mapping.
+      textNode!.parentElement!.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true, cancelable: true, button: 0, detail: 1, clientX: 10, clientY: 10,
+      }));
+      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0, clientX: 10, clientY: 10 }));
       await new Promise((resolve) => window.setTimeout(resolve, 0));
-
-      expect(handled).toBe(true);
-      expect(event.defaultPrevented).toBe(true);
       expect(editor.getMarkdownSelection().from).toBe(md.indexOf("hello") + 2);
     } finally {
       if (originalCaretRangeFromPoint) docWithCaret.caretRangeFromPoint = originalCaretRangeFromPoint;

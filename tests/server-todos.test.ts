@@ -7,7 +7,7 @@ import { join } from "node:path";
 // @ts-ignore The server is a Node ESM module outside the TS app graph.
 import * as serverIndex from "../server/lib/index.mjs";
 // @ts-ignore Shared ESM registry.
-import { latexMarkNames, latexMarkSnippetDefinitions } from "../shared/latex-marks.mjs";
+import { latexMarkChoiceNames, latexMarkNames, latexMarkSnippetDefinitions } from "../shared/latex-marks.mjs";
 
 const {
   canonicalTodoArgs,
@@ -144,7 +144,7 @@ describe("server todo scan", () => {
 
   test("provides an individual snippet for every typed LaTeX mark", () => {
     const snippets = latexMarkSnippetDefinitions();
-    expect(snippets.map((snippet: { key: string }) => snippet.key)).toEqual(latexMarkNames());
+    expect(snippets.map((snippet: { key: string }) => snippet.key)).toEqual(latexMarkChoiceNames());
     expect(snippets.find((snippet: { key: string }) => snippet.key === "newline")?.body)
       .toBe("@@latexmk(newline)$0");
     expect(latexMarkNames()).toEqual(expect.arrayContaining(["nbsp", "noindent", "newpage", "clearpage", "nopagebreak", "appendix"]));

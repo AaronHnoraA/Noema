@@ -62,6 +62,7 @@ import {
 import { adaptPasteText, pasteTransactionSpec } from "./paste-context.ts";
 import { joinTypingEvent, lastEditKindField } from "./history-grouping.ts";
 import { selectionColumnClip } from "./selection-column-clip.ts";
+import { pointerPosition, pointerSelectionStyle } from "./pointer-position.ts";
 import { isPointerSelecting, passiveReaderFacet, updateHasPointerSelectionEffect } from "./extensions/visual/selection.ts";
 import { exitFencedCode } from "./code-block-input.ts";
 import { renderMarkdownHTML } from "../render-html.ts";
@@ -164,75 +165,6 @@ function widgetSourcePosition(view: EditorView, source: HTMLElement): number | n
     // The element may already be detached from the current view tree.
     return null;
   }
-}
-
-function eventTargetElement(target: EventTarget | Node | null): Element | null {
-  if (target instanceof Element) return target;
-  if (target instanceof Text) return target.parentElement;
-  return null;
-}
-
-type NativeCaretPosition = { node: Node; offset: number };
-
-function nativeCaretPositionFromPoint(x: number, y: number): NativeCaretPosition | null {
-  const doc = document as Document & {
-    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-    caretRangeFromPoint?: (x: number, y: number) => Range | null;
-  };
-  const caret = doc.caretPositionFromPoint?.(x, y);
-  if (caret?.offsetNode) return { node: caret.offsetNode, offset: caret.offset };
-  const range = doc.caretRangeFromPoint?.(x, y);
-  if (range) return { node: range.startContainer, offset: range.startOffset };
-  return null;
-}
-
-function hasWrappedLayout(view: EditorView): boolean {
-  return Boolean(view.dom.querySelector(".noema-block-layout-wrap"));
-}
-
-function realRectContainsY(el: Element, y: number): boolean {
-  const rects = Array.from(el.getClientRects()).filter((rect) => rect.width > 0 || rect.height > 0);
-  if (rects.length === 0) return true;
-  return rects.some((rect) => y >= rect.top - 4 && y <= rect.bottom + 4);
-}
-
-export function calibrateWrappedLayoutClick(view: EditorView, event: MouseEvent): boolean {
-  if (event.button !== 0 || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return false;
-  const target = eventTargetElement(event.target);
-  if (
-    target?.closest("input, textarea, select, button, a, [contenteditable='true'], .cm-diagram-toolbar, .cm-diagram-interactive svg")
-    || sourceRangeElement(event.target)
-    || !hasWrappedLayout(view)
-  ) {
-    return false;
-  }
-
-  const caret = nativeCaretPositionFromPoint(event.clientX, event.clientY);
-  if (!caret || !view.contentDOM.contains(caret.node)) return false;
-  const line = eventTargetElement(caret.node)?.closest<HTMLElement>(".cm-line");
-  if (!line || !realRectContainsY(line, event.clientY)) return false;
-
-  let anchor: number;
-  try {
-    anchor = view.posAtDOM(caret.node, caret.offset);
-  } catch {
-    return false;
-  }
-  if (!Number.isFinite(anchor)) return false;
-
-  const mapped = view.posAtCoords({ x: event.clientX, y: event.clientY });
-  if (mapped != null && Math.abs(mapped - anchor) <= 1) return false;
-
-  event.preventDefault();
-  event.stopPropagation();
-  window.setTimeout(() => {
-    if (!view.dom.isConnected) return;
-    view.dispatch({ selection: { anchor } });
-    window.setTimeout(() => {
-      if (view.dom.isConnected) view.focus();
-    }, 0);
-  }, 0);
-  return true;
 }
 
 function hrefFromLinkNode(state: EditorState, from: number, to: number): string | null {
@@ -363,7 +295,7 @@ export function markdownHrefAt(state: EditorState, pos: number): string | null {
 
 function openMarkdownLinkFromEvent(view: EditorView, event: MouseEvent): boolean {
   if (!isMarkdownLinkOpenEvent(event)) return false;
-  const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  const pos = pointerPosition(view, event.clientX, event.clientY);
   if (pos == null) return false;
   const href = markdownHrefAt(view.state, pos);
   if (!href) return false;
@@ -391,7 +323,7 @@ function openMarkdownLinkFromEvent(view: EditorView, event: MouseEvent): boolean
 
 function previewMarkdownLinkFromEvent(view: EditorView, event: MouseEvent): boolean {
   if (!markdownLinkPrimaryModifier(event)) return false;
-  const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  const pos = pointerPosition(view, event.clientX, event.clientY);
   if (pos == null) return false;
   const href = markdownHrefAt(view.state, pos);
   if (!href) return false;
@@ -461,7 +393,7 @@ function openAttachmentSmartFromEvent(view: EditorView, event: MouseEvent): bool
 function openAttachmentContextMenuFromEvent(view: EditorView, event: MouseEvent): boolean {
   if (event.defaultPrevented) return false;
   if (markdownLinkPrimaryModifier(event)) return previewMarkdownLinkFromEvent(view, event);
-  const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  const pos = pointerPosition(view, event.clientX, event.clientY);
   if (pos == null) return false;
   const href = markdownHrefAt(view.state, pos);
   if (!href || !attachmentHref(href)) return false;
@@ -969,6 +901,10 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       return { from, to };
     },
 
+    positionAtPoint(x: number, y: number): number | null {
+      return pointerPosition(view, x, y);
+    },
+
     getMarkdownSelectionRange(): { anchor: number; head: number } {
       const { anchor, head } = view.state.selection.main;
       return { anchor, head };
@@ -1344,6 +1280,8 @@ function buildExtensions(
       passiveReaderFacet.of(!!options.passiveReader),
     ] : []),
     EditorView.clickAddsSelectionRange.of((event) => event.altKey || event.metaKey || event.ctrlKey),
+    // Every click and drag maps the pointer through the painted layout (pointer-position.ts).
+    pointerSelectionStyle,
     ...(standalone ? [
       drawSelection({ cursorBlinkRate: -1 }),
       selectionColumnClip,
@@ -1410,7 +1348,6 @@ function buildExtensions(
       mousedown: (event, eventView) => event.button === 0 && (
         openAttachmentSmartFromEvent(eventView, event)
         || openMarkdownLinkFromEvent(eventView, event)
-        || calibrateWrappedLayoutClick(eventView, event)
       ),
       auxclick: (event, eventView) => event.button === 1 && (
         openMarkdownLinkFromEvent(eventView, event)
@@ -1462,7 +1399,7 @@ export function dropAttachmentFiles(view: EditorView, event: DragEvent, options:
   const data = event.dataTransfer;
   if (!data || options.readOnly || !options.pasteAssets?.uploadBlobAsset) return false;
   if (Array.from(data.files ?? []).length === 0) return false;
-  const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  const pos = pointerPosition(view, event.clientX, event.clientY);
   if (pos == null) return false;
   event.preventDefault();
   view.dispatch({ selection: { anchor: pos }, userEvent: "select.pointer" });
