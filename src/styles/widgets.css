@@ -152,6 +152,30 @@
   padding-left: 0.5em;
   padding-right: 0.5em;
 }
+/* A code block reads as one card, as in AutumnMark and Typora: hairline
+ * sides, rounded ends, and the fence line as a quiet header carrying the
+ * language and the tools. Borders and padding only, never margins, so CM6's
+ * line heights stay exact. */
+.cm-editor .cm-md-code-block {
+  border-left: 1px solid color-mix(in srgb, var(--aaron-paper-line, #435574), transparent 55%);
+  border-right: 1px solid color-mix(in srgb, var(--aaron-paper-line, #435574), transparent 55%);
+}
+.cm-editor .cm-md-code-block.cm-md-code-first {
+  border-top: 1px solid color-mix(in srgb, var(--aaron-paper-line, #435574), transparent 55%);
+  border-top-left-radius: 7px;
+  border-top-right-radius: 7px;
+}
+.cm-editor .cm-md-code-block.cm-md-code-header {
+  padding-top: 0.2em;
+  padding-bottom: 0.2em;
+  background: color-mix(in srgb, var(--aaron-code-bg, #1e2638), var(--aaron-ink, #e4ecff) 4%);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--aaron-paper-line, #435574), transparent 70%);
+}
+.cm-editor .cm-md-code-block.cm-md-code-last {
+  border-bottom: 1px solid color-mix(in srgb, var(--aaron-paper-line, #435574), transparent 55%);
+  border-bottom-left-radius: 7px;
+  border-bottom-right-radius: 7px;
+}
 .cm-editor .cm-md-table {
   font-family: var(--aaron-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   font-size: 0.9em;

@@ -53,3 +53,24 @@ describe("code fence attributes in exported HTML", () => {
     expect(html).not.toContain("title=&quot;");
   });
 });
+
+describe("code block card lines", () => {
+  test("the fence opener is the card's header and the closer its last line", async () => {
+    const { createEditor } = await import("../src/editor-api.ts");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { initialContent: "intro\n\n```js\nlet a = 1;\nlet b = 2;\n```\n\nafter" });
+    try {
+      editor.setMarkdownSelection(0);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const lines = [...host.querySelectorAll(".cm-line.cm-md-code-block")];
+      expect(lines).toHaveLength(4);
+      expect(lines[0]!.classList.contains("cm-md-code-header")).toBe(true);
+      expect(lines[3]!.classList.contains("cm-md-code-last")).toBe(true);
+      expect(lines.filter((line) => line.classList.contains("cm-md-code-first"))).toHaveLength(1);
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+});

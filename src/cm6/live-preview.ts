@@ -2688,6 +2688,16 @@ function buildLineDecoRanges(
       }
       if (node.name === "FencedCode" || node.name === "CodeBlock") {
         pushLineRange(node.from, node.to, "cm-md-code-block");
+        // The first and last lines close the block into one card; a fence's
+        // first line is also its header, where the language and tools sit.
+        const first = doc.lineAt(node.from);
+        const last = doc.lineAt(Math.max(node.from, node.to - (node.to > node.from && doc.sliceString(node.to - 1, node.to) === "\n" ? 1 : 0)));
+        if (first.number >= firstLine && first.number <= lastWindowLine) {
+          decos.push(lineClassDecoration(node.name === "FencedCode" ? "cm-md-code-first cm-md-code-header" : "cm-md-code-first").range(first.from));
+        }
+        if (last.number >= firstLine && last.number <= lastWindowLine) {
+          decos.push(lineClassDecoration("cm-md-code-last").range(last.from));
+        }
         return false;
       }
     },
