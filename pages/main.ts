@@ -933,7 +933,8 @@ selectionTool.innerHTML = `
   <button type="button" data-selection-command="link" title="Link">@</button>
   <span aria-hidden="true"></span>
   <button type="button" data-selection-command="comment" title="Comment (⌘⌥M)">Comment</button>
-  <button type="button" data-selection-command="copy" title="Copy">Copy</button>
+  <button type="button" data-selection-command="cut" title="Cut (${primaryShortcut("X")})">Cut</button>
+  <button type="button" data-selection-command="copy" title="Copy (${primaryShortcut("C")})">Copy</button>
   <button type="button" data-selection-command="more" title="More actions">...</button>
   <div class="noema-selection-more" data-selection-more hidden>
     <button type="button" data-selection-command="ai-context" data-emacs-only>Add to AI context (C-c A .)</button>
@@ -13208,6 +13209,11 @@ function runSelectionCommand(command: string): void {
   }
   if (command === "copy") {
     void copyEditorSelection();
+    return;
+  }
+  if (command === "cut") {
+    if (rejectReadOnlyAction("Read-only pane")) return;
+    void copyEditorSelection(true);
     return;
   }
   if (command === "more") {
