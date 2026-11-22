@@ -393,3 +393,13 @@ describe("diagram render helpers", () => {
     expect(newWindow).toBe(true);
   });
 });
+
+describe("Mermaid theme follows the page's colour scheme", () => {
+  test("a dark scheme draws with Mermaid's dark palette, anything else with the light one", async () => {
+    const { mermaidThemeForScheme } = await import("../src/diagram-render.ts");
+    expect(mermaidThemeForScheme("dark")).toBe("dark");
+    expect(mermaidThemeForScheme("light")).toBe("default");
+    expect(mermaidThemeForScheme("light dark")).toBe("default");
+    expect(mermaidThemeForScheme("")).toBe("default");
+  });
+});

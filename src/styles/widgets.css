@@ -2831,9 +2831,8 @@ iframe.noema-embed-fullscreen {
 .cm-editor .cm-mermaid-block-preview {
   cursor: default;
 }
-/* Mermaid paints with the editor's own palette (diagramThemeVariables), so a
- * diagram sits on the page like any other figure. The white card this rule used
- * to draw existed only to carry Mermaid's light default theme. */
+/* A diagram keeps Mermaid's own palette, its light or dark theme chosen from
+ * the page's colour scheme (mermaidThemeForScheme), on the figure sheet. */
 .cm-editor .cm-mermaid-block:not(.cm-diagram-error),
 .cm-editor .cm-mermaid-block-preview:not(.cm-diagram-error),
 .cm-editor pre .cb-diagram-preview:not(.cm-diagram-error) {
@@ -5803,3 +5802,23 @@ body.has-diagram-fullscreen {
 }
 .cm-editor .noema-ediff-inline-rendered del, .cm-editor .noema-ediff-inline-rendered ins { display: block; }
 .cm-editor .noema-ediff-inline-rendered del { opacity: .6; }
+
+/* A live preview whose source does not parse yet keeps its last drawing,
+ * dimmed, with the error on one line over the bottom edge (no extra height). */
+.cm-editor .cm-mermaid-widget.cm-diagram-stale > .cm-mermaid-block-preview svg {
+  opacity: 0.4;
+  transition: opacity 120ms ease-out;
+}
+.cm-editor .cm-mermaid-widget > .cm-diagram-error-line {
+  position: relative;
+  height: 1.4em;
+  margin-top: -1.4em;
+  padding: 0 0.6em;
+  overflow: hidden;
+  color: var(--aaron-red, #e45756);
+  font: 0.78em/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: auto;
+}

@@ -248,6 +248,20 @@ function aaronMindmapThemeSource(source: string): string {
   ].join("\n");
 }
 
+/**
+ * Mermaid's own theme for the page's colour scheme. A diagram keeps Mermaid's
+ * palette (its colours are content), but the light "default" palette draws
+ * near-black edges and labels that vanish on a dark sheet such as Noema Night.
+ */
+export function mermaidThemeForScheme(scheme: string): "dark" | "default" {
+  return /\bdark\b/.test(scheme) && !/\blight\b/.test(scheme) ? "dark" : "default";
+}
+
+function currentMermaidTheme(): "dark" | "default" {
+  if (typeof document === "undefined" || typeof getComputedStyle !== "function") return "default";
+  return mermaidThemeForScheme(getComputedStyle(document.documentElement).colorScheme || "");
+}
+
 function diagramHrefFromAnchor(anchor: SVGElement): string {
   return anchor.getAttribute("href")
     || anchor.getAttribute("xlink:href")
@@ -906,6 +920,7 @@ export async function renderDiagramSVG(
   const staticMindmap = staticAaronMindmap(lang);
   const renderSource = staticMindmap ? aaronMindmapThemeSource(trimmed) : trimmed;
   const textLabels = options.textLabels === true;
+  // Exported figures go on white paper: always the light palette.
   const key = `mermaid\n${staticMindmap ? "aaron-mindmap" : "interactive"}${textLabels ? "\ntext-labels" : ""}\n${renderSource}`;
 
   const cached = cachedMermaid(key);
@@ -954,12 +969,13 @@ export function renderMermaidLazy(
   source: string,
   element: HTMLElement,
   onError: (message: string) => void,
-  options: { lang?: string; onRender?: () => void } = {},
+  options: { lang?: string; onRender?: () => void; keepPrevious?: boolean } = {},
 ): void {
   const trimmed = normalizeMermaidSource(source, options.lang).trim();
   const staticMindmap = staticAaronMindmap(options.lang);
   const renderSource = staticMindmap ? aaronMindmapThemeSource(trimmed) : trimmed;
-  const key = `mermaid\n${staticMindmap ? "aaron-mindmap" : "interactive"}\n${renderSource}`;
+  const theme = staticMindmap ? "default" : currentMermaidTheme();
+  const key = `mermaid\n${staticMindmap ? "aaron-mindmap" : `interactive:${theme}`}\n${renderSource}`;
   element.setAttribute("data-diagram-render-key", key);
   element.classList.remove("noema-diagram-error");
   element.classList.toggle("cm-aaron-mindmap", staticMindmap);
@@ -988,7 +1004,8 @@ export function renderMermaidLazy(
   }
 
   const seq = ++renderSeq;
-  element.textContent = "Rendering diagram...";
+  // A live preview keeps the drawing it has while the next one renders.
+  if (!(options.keepPrevious && element.querySelector("svg"))) element.textContent = "Rendering diagram...";
   void (async () => {
     await new Promise<void>((resolve) => {
       const idle = window.requestIdleCallback ?? ((cb: IdleRequestCallback) => window.setTimeout(() => cb({ didTimeout: false, timeRemaining: () => 0 }), 16));
@@ -1006,7 +1023,7 @@ export function renderMermaidLazy(
       if (staticMindmap) {
         mermaid.initialize({ startOnLoad: false, securityLevel: "antiscript", legacyMathML: true });
       } else {
-        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default", legacyMathML: true });
+        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme, legacyMathML: true });
       }
       const id = `noema-mermaid-${Date.now()}-${seq}`;
       const result = await mermaid.render(id, renderSource);

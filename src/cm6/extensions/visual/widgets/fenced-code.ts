@@ -395,7 +395,6 @@ class MermaidPreviewWidget extends MeasuredWidget {
   source: string;
   lang: string;
   layout: LayoutAttrs;
-  private disposeRender: () => void = () => {};
 
   constructor(source: string, lang: string, layout: LayoutAttrs) {
     super();
@@ -441,21 +440,64 @@ class MermaidPreviewWidget extends MeasuredWidget {
     div.className = "cm-mermaid-block-preview";
     applyLayoutAttrs(div, "diagram", this.layout);
     wrap.append(div);
-    this.disposeRender = renderMermaidWidget(this.source, this.lang, div, wrap, this.estimatedHeight, view);
+    previewRenders.set(wrap, renderMermaidWidget(this.source, this.lang, div, wrap, this.estimatedHeight, view, true));
     return this.registerMeasured(wrap, view);
+  }
+
+  /**
+   * Typing in the source gives a new widget per keystroke. Reuse the figure so
+   * the last drawing stays on screen until the next one is ready.
+   */
+  updateDOM(dom: HTMLElement, view: EditorView): boolean {
+    const div = dom.querySelector<HTMLElement>(":scope > .cm-mermaid-block-preview");
+    if (!div || this.layout.wrap || dom.classList.contains("noema-diagram-wrap")) return false;
+    previewRenders.get(dom)?.();
+    applyLayoutAttrs(div, "diagram", this.layout);
+    dom.dataset.cmMeasureKey = this.measureKey();
+    previewRenders.set(dom, renderMermaidWidget(this.source, this.lang, div, dom, this.estimatedHeight, view, true));
+    return true;
   }
 
   ignoreEvent(): boolean { return true; }
 
   destroy(dom: HTMLElement): void {
-    this.disposeRender();
+    previewRenders.get(dom)?.();
+    previewRenders.delete(dom);
     super.destroy(dom);
   }
 }
 
+/** The running render of each live-preview figure, owned by its DOM, not by one widget instance. */
+const previewRenders = new WeakMap<HTMLElement, () => void>();
+
+/**
+ * While the source of a live preview is being typed, an unfinished diagram
+ * does not replace the last one that rendered: it stays, dimmed, with the
+ * error on one line over its bottom edge, so the block keeps its height.
+ */
+export function showPreviewError(div: HTMLElement, wrap: HTMLElement, message: string): boolean {
+  if (!div.querySelector("svg")) return false;
+  wrap.classList.add("cm-diagram-stale");
+  let line = wrap.querySelector<HTMLElement>(":scope > .cm-diagram-error-line");
+  if (!line) {
+    line = document.createElement("div");
+    line.className = "cm-diagram-error-line";
+    wrap.append(line);
+  }
+  const summary = message.split("\n").filter((part) => part.trim());
+  line.textContent = summary.length > 1 ? `${summary[0]} ${summary[summary.length - 1]}` : (summary[0] ?? message);
+  line.title = message;
+  return true;
+}
+
+export function clearPreviewError(wrap: HTMLElement): void {
+  wrap.classList.remove("cm-diagram-stale");
+  wrap.querySelector(":scope > .cm-diagram-error-line")?.remove();
+}
+
 function renderMermaidWidget(
   source: string, lang: string, div: HTMLElement, wrap: HTMLElement,
-  estimatedHeight: number, view: EditorView,
+  estimatedHeight: number, view: EditorView, keepPrevious = false,
 ): () => void {
   let disposed = false;
   let disposeInteraction = () => {};
@@ -469,7 +511,9 @@ function renderMermaidWidget(
   // again. Keep its measured space until then, rather than briefly measuring
   // the much shorter loading label and moving the surrounding text twice.
   wrap.setAttribute("aria-busy", "true");
-  if (estimatedHeight > 0 && !wrap.classList.contains("noema-diagram-wrap")) {
+  const keeps = keepPrevious && Boolean(div.querySelector("svg"));
+  // A kept drawing already holds the block's height.
+  if (!keeps && estimatedHeight > 0 && !wrap.classList.contains("noema-diagram-wrap")) {
     wrap.style.minHeight = `${estimatedHeight}px`;
   }
   const finish = () => {
@@ -478,15 +522,24 @@ function renderMermaidWidget(
     wrap.style.removeProperty("min-height");
     if (wrap.isConnected) view.requestMeasure();
   };
-  div.textContent = "Loading diagram renderer...";
+  if (!keeps) div.textContent = "Loading diagram renderer...";
   void import("../../../../diagram-render.ts")
     .then(({ renderMermaidLazy, disposeDiagramInteraction }) => {
       if (disposed || div.dataset.diagramRenderKey !== key) return;
       disposeInteraction = () => disposeDiagramInteraction(div);
+      let failed = false;
       renderMermaidLazy(source, div, (err) => {
+        failed = true;
+        if (keepPrevious && showPreviewError(div, wrap, err)) return;
         div.classList.add("cm-diagram-error");
         div.textContent = err;
-      }, { lang, onRender: finish });
+      }, { lang, keepPrevious, onRender: () => {
+        if (!failed) {
+          div.classList.remove("cm-diagram-error");
+          clearPreviewError(wrap);
+        }
+        finish();
+      } });
     })
     .catch((err: unknown) => {
       if (disposed || div.dataset.diagramRenderKey !== key) return;
