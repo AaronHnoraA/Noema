@@ -221,7 +221,7 @@ import {
 } from "./bibliography-state.ts";
 import type { CursorPosition, NoteSummary, ReadingNeighbor, SnippetSummary } from "./types.ts";
 import { createAgendaNavigator } from "./agenda-navigation.ts";
-import { createVimLite, type VimLiteKey, type VimLiteMode } from "./vim-lite.ts";
+import { createVimLite, inputMethodKey, type VimLiteKey, type VimLiteMode } from "./vim-lite.ts";
 import { ceilCommandGeneratedId, ceilLanguageForKernel } from "../src/cm6/extensions/visual/widgets/ceil-shared.ts";
 import {
   CEIL_READONLY_TEXT_SELECTOR,
@@ -2097,7 +2097,9 @@ function renderModeToggleLabel(mode: VimLiteMode): void {
 let inputSourceSent: "normal" | "insert" | "" = "";
 function syncInputSource(mode: VimLiteMode | null): void {
   if (serverReaderMode) return;
-  const wanted = mode && mode !== "insert" && editor.view.hasFocus && document.hasFocus() ? "normal" : "insert";
+  // The embedded WebKit often reports document.hasFocus() false while it
+  // takes keys, so the editor element holding focus is the test.
+  const wanted = mode && mode !== "insert" && document.activeElement === editor.view.contentDOM ? "normal" : "insert";
   if (wanted === inputSourceSent || (wanted === "insert" && !inputSourceSent)) return;
   inputSourceSent = wanted;
   void api.inputSource.mode(wanted).catch(() => {});
@@ -3742,6 +3744,18 @@ const vim = createVimLite(editor, host, {
 // Entering the editor in Normal makes the keyboard Latin; leaving it (to Emacs,
 // a page input or another application) gives the person's input method back.
 editor.view.contentDOM.addEventListener("focus", () => syncInputSource(vim.mode()));
+// An input method key outside Insert is the moment the switch is needed: the
+// key itself is dropped (inputMethodKey), and the ones after it are Latin.
+const switchOnInputMethodKey = (event: Event): void => {
+  if (serverReaderMode || vim.mode() === "insert") return;
+  if (event.type === "keydown" && !inputMethodKey(event as KeyboardEvent)) return;
+  // A page input (find, rename) keeps the person's input method.
+  if ((event.target as Element | null)?.closest?.("input, textarea, select, [contenteditable='true']:not(.cm-content)")) return;
+  inputSourceSent = "normal";
+  void api.inputSource.mode("normal").catch(() => {});
+};
+document.addEventListener("keydown", switchOnInputMethodKey, true);
+document.addEventListener("compositionstart", switchOnInputMethodKey, true);
 editor.view.contentDOM.addEventListener("blur", () => syncInputSource(null));
 window.addEventListener("blur", () => syncInputSource(null));
 const focusQuiescence = createFocusQuiescenceController({
