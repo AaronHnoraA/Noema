@@ -2826,17 +2826,41 @@ iframe.noema-embed-fullscreen {
 }
 
 /* ─── CM6 fenced code: syntax highlight tokens ───────────────────── */
+/* The token palette follows the theme's colour scheme: the pastel defaults
+   are for dark grounds and wash out on a light page, so light themes get the
+   saturated palette the light slide view already uses. */
+:root {
+  --noema-code-string: #bbf7b8;
+  --noema-code-keyword: #d8b8ff;
+  --noema-code-number: #ffc69c;
+  --noema-code-function: #a9cbff;
+  --noema-code-attr: #f9e2af;
+  --noema-code-tag: #ff9db7;
+  --noema-code-variable: #f4f7ff;
+  --noema-code-punctuation: #c7d0ea;
+}
+:root[data-noema-theme="daylight"],
+:root[data-noema-theme="mediki"] {
+  --noema-code-string: #25733b;
+  --noema-code-keyword: #6d3fb0;
+  --noema-code-number: #9b4f13;
+  --noema-code-function: #225fa5;
+  --noema-code-attr: #08727c;
+  --noema-code-tag: #9b2948;
+  --noema-code-variable: var(--aaron-ink, #24211d);
+  --noema-code-punctuation: #6b6459;
+}
 .cm-editor .code-token-comment { color: var(--aaron-faint, #6f748b); font-style: italic; }
-.cm-editor .code-token-string  { color: #bbf7b8; }
-.cm-editor .code-token-keyword { color: #d8b8ff; font-weight: 650; }
-.cm-editor .code-token-number  { color: #ffc69c; }
-.cm-editor .code-token-function { color: #a9cbff; }
+.cm-editor .code-token-string  { color: var(--noema-code-string); }
+.cm-editor .code-token-keyword { color: var(--noema-code-keyword); font-weight: 650; }
+.cm-editor .code-token-number  { color: var(--noema-code-number); }
+.cm-editor .code-token-function { color: var(--noema-code-function); }
 .cm-editor .code-token-property,
-.cm-editor .code-token-attr    { color: #f9e2af; }
-.cm-editor .code-token-tag     { color: #ff9db7; }
-.cm-editor .code-token-variable { color: #f4f7ff; }
+.cm-editor .code-token-attr    { color: var(--noema-code-attr); }
+.cm-editor .code-token-tag     { color: var(--noema-code-tag); }
+.cm-editor .code-token-variable { color: var(--noema-code-variable); }
 .cm-editor .code-token-operator,
-.cm-editor .code-token-punctuation { color: #c7d0ea; }
+.cm-editor .code-token-punctuation { color: var(--noema-code-punctuation); }
 
 /* ─── CM6 mermaid / diagram widgets ─────────────────────────────── */
 .cm-editor .cm-mermaid-widget {
@@ -4813,16 +4837,16 @@ body.has-diagram-fullscreen {
 }
 .cm-editor pre.cb-lang-focus .play-caret { display: none; }
 .cm-editor pre .code-token-comment { color: var(--aaron-faint, #6f748b); font-style: italic; }
-.cm-editor pre .code-token-string { color: #bbf7b8; }
-.cm-editor pre .code-token-keyword { color: #d8b8ff; font-weight: 650; }
-.cm-editor pre .code-token-number { color: #ffc69c; }
-.cm-editor pre .code-token-function { color: #a9cbff; }
+.cm-editor pre .code-token-string { color: var(--noema-code-string); }
+.cm-editor pre .code-token-keyword { color: var(--noema-code-keyword); font-weight: 650; }
+.cm-editor pre .code-token-number { color: var(--noema-code-number); }
+.cm-editor pre .code-token-function { color: var(--noema-code-function); }
 .cm-editor pre .code-token-property,
-.cm-editor pre .code-token-attr { color: #f9e2af; }
-.cm-editor pre .code-token-tag { color: #ff9db7; }
-.cm-editor pre .code-token-variable { color: #f4f7ff; }
+.cm-editor pre .code-token-attr { color: var(--noema-code-attr); }
+.cm-editor pre .code-token-tag { color: var(--noema-code-tag); }
+.cm-editor pre .code-token-variable { color: var(--noema-code-variable); }
 .cm-editor pre .code-token-operator,
-.cm-editor pre .code-token-punctuation { color: #c7d0ea; }
+.cm-editor pre .code-token-punctuation { color: var(--noema-code-punctuation); }
 .cm-editor pre .cb-diagram-preview {
   display: none;
   box-sizing: border-box;
