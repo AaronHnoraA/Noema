@@ -74,3 +74,6 @@ kernel/**/logging.log
 app/conf/
 app/data/
 app/temp/
+
+# Editor backups
+*~
