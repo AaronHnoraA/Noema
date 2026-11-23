@@ -170,7 +170,18 @@ with several views asks which one."
                  (noema-attribute-view--render-status
                   (format "Evaluation failed: %s" (noema--value error-object "message" error-object)))
                (setq noema-attribute-view--result result)
+               (noema-attribute-view--name-after result)
                (noema-attribute-view--render result)))))))))
+
+(defun noema-attribute-view--name-after (result)
+  "Name this buffer after RESULT's title, which the host has cleaned.
+The title in the note can carry a block anchor; the host's answer is the
+one parse of it, so the name is taken from there rather than re-parsed."
+  (let ((title (noema--value result "title" "")))
+    (unless (string-empty-p title)
+      (let ((name (format "*Noema view: %s*" title)))
+        (unless (equal (buffer-name) name)
+          (rename-buffer name t))))))
 
 ;;;; Drawing
 

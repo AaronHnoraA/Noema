@@ -74,6 +74,13 @@ source: todo
       (should (string-match-p "Read" text))
       (should (string-match-p "prio sum +3" text)))))
 
+(ert-deftest noema-attribute-view-takes-its-name-from-the-host-title ()
+  (noema-attribute-view-tests--with-view calls
+    (rename-buffer "*Noema view: Open work {#fig:x}*" t)
+    (noema-attribute-view-refresh)
+    (funcall (nth 2 (car calls)) noema-attribute-view-tests--result nil)
+    (should (equal "*Noema view: Open work*" (buffer-name)))))
+
 (ert-deftest noema-attribute-view-drops-stale-answers ()
   (noema-attribute-view-tests--with-view calls
     (noema-attribute-view-refresh)
