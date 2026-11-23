@@ -214,6 +214,19 @@ button.is-primary { border-color: var(--aaron-accent); background: var(--aaron-a
 .noema-wiki-appearance button.is-active { color: var(--aaron-ink); font-weight: 750; }
 .noema-wiki-appearance button.is-active > span { border: 4px solid var(--aaron-accent); }
 .noema-wiki-panel-toggle { display: none; }
+/* The panel toggles sit on the header's edges, outside its grid: as grid
+   items they took the brand's column, stretched into an input-looking box
+   and pushed the brand and search out of place. */
+.noema-wiki-panel-toggle {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  align-items: center; min-height: 28px; padding: 3px 10px;
+  border: 1px solid var(--aaron-paper-line); border-radius: 999px;
+  background: var(--aaron-paper, transparent); color: var(--aaron-muted);
+  font: 650 11px/1 var(--aaron-font-sans, system-ui, sans-serif); cursor: pointer;
+}
+.noema-wiki-panel-toggle:hover { color: var(--aaron-ink); background: var(--aaron-accent-soft); }
+[data-toggle-tools].noema-wiki-panel-toggle { right: 8px; }
+[data-toggle-nav].noema-wiki-panel-toggle { left: 4px; }
 
 .noema-wiki-home-intro { border-bottom: 1px solid var(--aaron-paper-line); padding: 4px 0 28px; }
 .noema-wiki-home-intro > p { max-width: 980px; margin: 0; font: 1.2em/1.65 var(--aaron-font-serif, Georgia, serif); }
@@ -365,18 +378,20 @@ button.is-danger { border-color: var(--aaron-danger) !important; color: var(--aa
 .noema-wiki-git-dialog iframe { width: 100%; height: calc(100% - 48px); border: 0; background: #fff; }
 
 @media (max-width: 1439px) {
-  .noema-wiki-site-header { grid-template-columns: minmax(200px, 250px) minmax(300px, 1fr) auto; gap: 20px; }
+  .noema-wiki-site-header { grid-template-columns: minmax(200px, 250px) minmax(300px, 1fr) auto; gap: 20px; padding-right: 76px; }
   .noema-wiki-shell { grid-template-columns: 230px minmax(0, 1fr); }
   .noema-wiki-tools {
     display: none; position: fixed; z-index: 35; top: 86px; right: 0; width: min(300px, 88vw);
     box-shadow: -12px 0 40px color-mix(in srgb, #000, transparent 78%);
+    /* Floating over the page, the panel needs its own opaque ground. */
+    background: var(--noema-bg, var(--aaron-paper, #f4f0e8));
   }
   #wiki-app.is-tools-open .noema-wiki-tools { display: block; }
   [data-toggle-tools].noema-wiki-panel-toggle { display: inline-flex; }
 }
 
 @media (max-width: 1023px) {
-  .noema-wiki-site-header { grid-template-columns: minmax(190px, 230px) minmax(260px, 1fr); padding-inline: 22px; }
+  .noema-wiki-site-header { grid-template-columns: minmax(190px, 230px) minmax(260px, 1fr); padding-inline: 44px 76px; }
   .noema-wiki-site-actions { display: none; }
   .noema-wiki-shell { grid-template-columns: 1fr; }
   .noema-wiki-sidebar {
@@ -389,7 +404,7 @@ button.is-danger { border-color: var(--aaron-danger) !important; color: var(--aa
 }
 
 @media (max-width: 760px) {
-  .noema-wiki-site-header { min-height: 76px; grid-template-columns: 1fr; gap: 10px; padding: 10px 16px; }
+  .noema-wiki-site-header { min-height: 76px; grid-template-columns: 1fr; gap: 10px; padding: 10px 76px 10px 44px; }
   .noema-wiki-site-brand { display: none; }
   .noema-wiki-shell { min-height: calc(100vh - 76px); }
   .noema-wiki-sidebar, .noema-wiki-tools { top: 76px; height: calc(100vh - 76px); }
