@@ -17,7 +17,7 @@ KERNEL_BIN_LINK ?= $(HOME)/.local/bin/$(KERNEL_BIN_NAME)
 
 .DEFAULT_GOAL := build
 
-.PHONY: all bootstrap build build-web check-env check-go clean clean-all dev \
+.PHONY: all bootstrap build build-web check-env check-go clean clean-all dev kernel-test \
 	disk-audit help \
 	init-data install jupyter-bootstrap kernel-build kernel-install \
 	nvm-install prune-legacy-garbage server-build \
@@ -133,6 +133,14 @@ dev: check-env init-data
 
 test: check-env
 	npm test
+
+# Noema's own Go packages and the MCP tools.  wikiindex and wikisearch need
+# SQLite's FTS5, which go-sqlite3 compiles in only with the tag the kernel
+# build uses; without it they fail with "no such module: fts5".  The Elisp
+# tests need the Emacs configuration's agent layer and run from its
+# scripts/test-all.
+kernel-test: check-go
+	cd kernel && go test -tags fts5 ./noema/... ./mcp/...
 
 prune-legacy-garbage:
 	rm -rf "$(CURDIR)/release"
