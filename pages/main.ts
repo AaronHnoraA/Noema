@@ -127,6 +127,7 @@ import {
   type ProseCheckState,
 } from "./prose-check-lifecycle.ts";
 import { createFloatingTocPanel, inlineTagAnchorsFromText, markdownHeadingsFromText } from "./floating-toc.ts";
+import { trashLinkNotice } from "./trash-notice.ts";
 import { createSlideDeckController, type SlideDeckController } from "./slide-deck.ts";
 import { normalizeDateValue, todayDateValue } from "../src/planning-values.ts";
 import { NOEMA_AUTHORING_SNIPPETS } from "../src/authoring-syntax.ts";
@@ -11011,7 +11012,7 @@ async function trashCurrentNoteTool(): Promise<void> {
     label: `Type TRASH to move ${name} to the ${platformLabels.trash}`,
     required: true,
     placeholder: "TRASH",
-    description: `Current edits will be saved first. The document remains recoverable from the ${platformLabels.trash}.`,
+    description: `${trashLinkNotice(deletingFile, notes)}Current edits will be saved first. The document remains recoverable from the ${platformLabels.trash}.`,
   }], `Move to ${platformLabels.trash}`);
   if (!result) return;
   if (result.confirm.trim() !== "TRASH") {
