@@ -1,3 +1,5 @@
+import { parseOrgEnvIdentityTitle } from "./block-identity.mjs";
+
 const DEFAULT_COLUMNS = ["text", "status", "project", "file"];
 const PLANNING_KINDS = new Set(["todo", "project", "milestone", "clock"]);
 const BLOCK_KINDS = new Set(["prose", "org-env"]);
@@ -26,10 +28,10 @@ function diagnostic(line, kind, message) {
   return { line, kind, message };
 }
 
+// The trailing `{#id}` is split by the one block-identity parser, so a label
+// anchor (`{#fig:views}`) leaves the title as it does for every other block.
 function cleanTitle(title) {
-  return String(title || "")
-    .replace(/\s*\{#[0-9a-f-]{36}(?:\s+[^{}\r\n]*)?\}\s*$/i, "")
-    .trim() || "Attribute view";
+  return parseOrgEnvIdentityTitle("av", String(title || "")).title || "Attribute view";
 }
 
 function splitList(raw) {

@@ -13,7 +13,9 @@ import (
 var (
 	keyPattern   = regexp.MustCompile(`(?i)^[a-z][a-z0-9_-]*$`)
 	sortPattern  = regexp.MustCompile(`(?i)^([a-z][a-z0-9_-]*)(?:\s+(asc|desc))?$`)
-	identityTail = regexp.MustCompile(`(?i)\s*\{#[0-9a-f-]{36}(?:\s+[^{}\r\n]*)?\}\s*$`)
+	// Same anchor grammar as shared/block-identity.mjs (BLOCK_ID_SOURCE): a
+	// label anchor such as {#fig:views} leaves the title too.
+	identityTail = regexp.MustCompile(`(?:^|[ \t]+)\{#[A-Za-z0-9][A-Za-z0-9._:-]{2,127}(?:[ \t]+[^{}\r\n]*)?\}[ \t]*$`)
 )
 
 var defaultColumns = []string{"text", "status", "project", "file"}

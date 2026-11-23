@@ -186,5 +186,53 @@
         { "key": "effort", "operator": "template", "type": "number", "value": "2 rows / 10 points" }
       ]
     }
+  },
+  {
+    "name": "titles drop a trailing label anchor",
+    "request": {
+      "title": "Open work {#fig:views}",
+      "source": "source: todo\ncolumns: text, status",
+      "items": [
+        { "id": "#a", "kind": "todo", "status": "todo", "text": "Draft", "file": "/p.md", "noteTitle": "P", "line": 3, "canon": {} }
+      ]
+    },
+    "expected": {
+      "title": "Open work",
+      "source": "todo",
+      "columns": [
+        { "key": "text", "label": "Task" },
+        { "key": "status", "label": "Status" }
+      ],
+      "rows": [
+        { "id": "#a", "kind": "todo", "file": "/p.md", "index": 0, "line": 3, "cells": [{ "key": "text", "value": "Draft" }, { "key": "status", "value": "todo" }] }
+      ],
+      "total": 1,
+      "truncated": false,
+      "diagnostics": []
+    }
+  },
+  {
+    "name": "titles drop a trailing UUID anchor with properties",
+    "request": {
+      "title": "Open work {#0192f3a4-5b6c-7d8e-9f01-23456789abcd owner=me}",
+      "source": "source: todo\ncolumns: text, status",
+      "items": [
+        { "id": "#a", "kind": "todo", "status": "todo", "text": "Draft", "file": "/p.md", "noteTitle": "P", "line": 3, "canon": {} }
+      ]
+    },
+    "expected": {
+      "title": "Open work",
+      "source": "todo",
+      "columns": [
+        { "key": "text", "label": "Task" },
+        { "key": "status", "label": "Status" }
+      ],
+      "rows": [
+        { "id": "#a", "kind": "todo", "file": "/p.md", "index": 0, "line": 3, "cells": [{ "key": "text", "value": "Draft" }, { "key": "status", "value": "todo" }] }
+      ],
+      "total": 1,
+      "truncated": false,
+      "diagnostics": []
+    }
   }
 ]
