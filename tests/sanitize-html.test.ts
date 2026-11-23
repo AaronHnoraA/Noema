@@ -47,9 +47,6 @@ describe("sanitizeEmbeddedHtml", () => {
     expect(out).toContain("<th>A</th>");
     expect(out).toContain("<td>B</td>");
   });
-  // One vector per call: happy-dom's node iterator skips the siblings of an
-  // element DOMPurify removes, so a combined input would test happy-dom, not
-  // the policy.  WebKit's iterator follows the spec.
   test("nothing submits a form or floats over the editor", () => {
     const form = sanitizeEmbeddedHtml('<form action="https://evil.example/"><input name="q">go</form>');
     expect(form).not.toContain("<form");
@@ -68,5 +65,18 @@ describe("sanitizeEmbeddedHtml", () => {
 
   test("keeps inline style for layout", () => {
     expect(sanitizeEmbeddedHtml('<div style="display:flex">a</div>')).toContain('style="display:flex"');
+  });
+  test("siblings of a removed element are sanitized too", () => {
+    // happy-dom skips them in one DOMPurify pass; the export runs under it.
+    const out = sanitizeEmbeddedHtml(
+      '<iframe src="https://e.example"></iframe><form action="x">f</form>'
+      + '<button formaction="x" popovertarget="p">b</button><img src="y" onerror="alert(1)"><dialog>d</dialog>');
+    expect(out).not.toContain("iframe");
+    expect(out).not.toContain("<form");
+    expect(out).not.toContain("formaction");
+    expect(out).not.toContain("popovertarget");
+    expect(out).not.toContain("onerror");
+    expect(out).not.toContain("<dialog");
+    expect(out).toContain("<button>b</button>");
   });
 });

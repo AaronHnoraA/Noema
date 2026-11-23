@@ -12,6 +12,7 @@ import { markdownItCjkEmphasis } from "./cjk-emphasis.ts";
 import { parseCodeInfo } from "./code-info.ts";
 import { supportedDiagramLang } from "./diagram-langs.ts";
 import { hydrateDiagramForeignObjectMarkup, sanitizeDiagramSvg } from "./diagram-sanitize.ts";
+import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
 import { layoutClasses, layoutFromAttrs, layoutStyle, readLayoutAttrSuffix, readLayoutAttrsLine, type LayoutAttrs } from "./layout-attrs.ts";
 import { layoutGroupClasses, layoutGroupFromTitle, layoutGroupStyle } from "./layout-group.ts";
@@ -1271,7 +1272,8 @@ function renderOrgEnv(
   // Pending review is editor-only; published/exported content is the approved note.
   if (kind.toLowerCase() === "ediff") return "";
   if (kind.toLowerCase() === "html") {
-    return meta.body.trim() ? `<div class="noema-html">${meta.body}</div>` : "";
+    // The editor's policy, so a published page shows what the editor showed.
+    return meta.body.trim() ? `<div class="noema-html">${sanitizeEmbeddedHtml(meta.body)}</div>` : "";
   }
   if (kind.toLowerCase() === "tikz") {
     if (!meta.body.trim()) return "";
