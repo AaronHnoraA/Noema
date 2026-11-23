@@ -37,6 +37,7 @@ import { wikiLinkAt } from "../../shared/wiki-link.mjs";
 import { vscodeCloseBrackets } from "./close-brackets-vscode.ts";
 import { cjkTyping } from "./cjk-typing.ts";
 import { inputLineBreakGuard } from "./input-line-break-guard.ts";
+import { compositionDomRepair, repairDrawnText } from "./composition-repair.ts";
 import { texSourceInput } from "./tex-source-input.ts";
 import { runEditorDelete, runEditorEnter, runEditorMovement, runEditorSoftBreak, runEditorTab } from "./input-commands.ts";
 import { isWordChar } from "./text-boundaries.ts";
@@ -51,7 +52,11 @@ import {
   runCommandCM6,
   getBlockContextCM6,
   createQuickInsertRegistry,
+  handleTablePipeInput,
+  tableDeleteToCellStart,
   tableInsertRowBelow,
+  tableMoveCellBoundary,
+  tableSelectAll,
 } from "./commands/index.ts";
 import {
   pasteDataTransfer,
@@ -60,7 +65,7 @@ import {
   type EditorPasteOptions,
   type EditorPasteSource,
 } from "../paste.ts";
-import { adaptPasteText, pasteTransactionSpec } from "./paste-context.ts";
+import { adaptPasteText, pasteTransactionSpec, tableGridPasteTransactionSpec } from "./paste-context.ts";
 import { joinTypingEvent, lastEditKindField } from "./history-grouping.ts";
 import { selectionColumnClip } from "./selection-column-clip.ts";
 import { pointerPosition, pointerSelectionStyle } from "./pointer-position.ts";
@@ -696,6 +701,17 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     // link destination). Vim register and line/character placements insert
     // the register text exactly as it was yanked.
     const adapt = !insertion.vimRegister && !(pasteOptions?.placement && "where" in pasteOptions.placement);
+    if (adapt && insertion.ranges.length === 1) {
+      const only = insertion.ranges[0]!;
+      const gridSpec = tableGridPasteTransactionSpec(view.state, EditorSelection.range(only.from, only.to), {
+        markdown: only.text,
+        plainText: source?.plainText,
+      });
+      if (gridSpec) {
+        view.dispatch(gridSpec);
+        return true;
+      }
+    }
     const ranges = adapt
       ? insertion.ranges.map((range) => ({
           ...range,
@@ -1127,6 +1143,9 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
         view.dispatch(setVisualMode(false));
         view.dispatch(setVisualMode(true));
       }, undefined, anchor);
+      // CodeMirror reuses line DOM across the toggle; a line whose drawing an
+      // input method corrupted is redrawn here so Refresh really refreshes.
+      repairDrawnText(view);
     },
 
     focus(): void {
@@ -1291,24 +1310,38 @@ function buildExtensions(
     ] : []),
     texSourceInput(),
     inputLineBreakGuard(),
+    compositionDomRepair(),
     cjkTyping(),
     pasteTargetExtension,
     vscodeCloseBrackets(),
     closeBrackets(),
+    EditorView.inputHandler.of(handleTablePipeInput),
     EditorView.inputHandler.of(wrapSelectedMarkdownInput),
     ...(standalone ? [rectangularSelection()] : []),
     keymap.of([
       { key: "Backspace", run: (view) => runEditorDelete(view, "backward") },
       { key: "Delete", run: (view) => runEditorDelete(view, "forward") },
+      { key: "Mod-Backspace", run: tableDeleteToCellStart },
+      { key: "Mod-a", run: tableSelectAll },
       { key: "Enter", run: runEditorEnter },
       { key: "Shift-Enter", run: runEditorSoftBreak },
       { key: "Mod-Enter", run: (view) => tableInsertRowBelow(view) || exitCurrentOrgEnv(view) || exitFencedCode(view) },
       // One movement function for native keys and the xwidget host alike.
-      ...(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"] as const).map((key) => ({
+      ...(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"] as const).map((key) => ({
         key,
         run: (view: EditorView) => runEditorMovement(view, key) !== false,
         shift: (view: EditorView) => runEditorMovement(view, key, true) !== false,
       })),
+      {
+        key: "Mod-ArrowLeft",
+        run: (view) => tableMoveCellBoundary(view, false),
+        shift: (view) => tableMoveCellBoundary(view, false, true),
+      },
+      {
+        key: "Mod-ArrowRight",
+        run: (view) => tableMoveCellBoundary(view, true),
+        shift: (view) => tableMoveCellBoundary(view, true, true),
+      },
       { key: "Tab", run: (view) => runEditorTab(view) },
       { key: "Shift-Tab", run: (view) => runEditorTab(view, true) },
       { key: "Mod-d", run: selectNextMarkdownOccurrence },
