@@ -58,16 +58,19 @@ describe("figure layout context menu", () => {
     } finally { cleanup(); setTikzRendererForTests(null); }
   });
 
-  test("shared bottom-edge height control edits each figure's existing attrs", () => {
+  test("bottom-edge height handle is scoped strictly to fixed-viewport figures (HTML embeds and Mermaid diagrams)", () => {
     setTikzRendererForTests(async () => '<svg viewBox="0 0 20 10"></svg>');
-    const cases = [
+    const withHeight = [
+      ["[](demo.html)\nend", ".cm-image-widget"],
+      ["```mermaid\ngraph TD\nA-->B\n```\nend", ".cm-mermaid-widget:not(.cm-mermaid-widget-preview)"],
+    ] as const;
+    const withoutHeight = [
       ["![a](one.png)\nend", ".cm-image-widget:not(.cm-tikz-env-widget)"],
       ["| A | B |\n|---|---|\n| 1 | 2 |\n# end", ".cm-table-editable-block"],
       ["#+begin tikz aaa\n\\draw (0,0) -- (1,1);\n#+end tikz\nend", ".cm-tikz-env-widget"],
-      ["```mermaid\ngraph TD\nA-->B\n```\nend", ".cm-mermaid-widget:not(.cm-mermaid-widget-preview)"],
     ] as const;
     try {
-      for (const [source, selector] of cases) {
+      for (const [source, selector] of withHeight) {
         const { editor, host, cleanup } = mount(source);
         try {
           const handle = host.querySelector<HTMLButtonElement>(`${selector} > .cm-figure-height-handle`);
@@ -78,18 +81,24 @@ describe("figure layout context menu", () => {
           expect(editor.getMarkdown(), selector).toBe(source);
         } finally { cleanup(); }
       }
+      for (const [source, selector] of withoutHeight) {
+        const { host, cleanup } = mount(source);
+        try {
+          expect(host.querySelector(`${selector} > .cm-figure-height-handle`), selector).toBeNull();
+        } finally { cleanup(); }
+      }
     } finally { setTikzRendererForTests(null); }
   });
 
-  test("all block figures expose the same source-backed layout toolbar", () => {
+  test("all figures expose the same unified layout controls (inline bar or table toolbar popover)", () => {
     setTikzRendererForTests(async () => '<svg viewBox="0 0 20 10"></svg>');
-    const cases = [
-      ["| A | B |\n|---|---|\n| 1 | 2 |\n# end", ".cm-table-editable-block"],
+    const inlineCases = [
+      ["![a](one.png)\nend", ".cm-image-widget"],
       ["#+begin tikz aaa\n\\draw (0,0) -- (1,1);\n#+end tikz\nend", ".cm-tikz-env-widget"],
       ["```mermaid\ngraph TD\nA-->B\n```\nend", ".cm-mermaid-widget:not(.cm-mermaid-widget-preview)"],
     ] as const;
     try {
-      for (const [source, selector] of cases) {
+      for (const [source, selector] of inlineCases) {
         const { editor, host, cleanup } = mount(source);
         try {
           const toolbar = host.querySelector<HTMLElement>(`${selector} > .cm-figure-layout-toolbar`);
@@ -100,6 +109,21 @@ describe("figure layout context menu", () => {
           expect(editor.getMarkdown()).toBe(source);
         } finally { cleanup(); }
       }
+      // Tables keep ONE top-right toolbar with a `◫` layout popover (never two stacked toolbars).
+      const tableSource = "| A | B |\n|---|---|\n| 1 | 2 |\n# end";
+      const { editor, host, cleanup } = mount(tableSource);
+      try {
+        expect(host.querySelector(".cm-table-editable-block > .cm-figure-layout-toolbar")).toBeNull();
+        const openBtn = host.querySelector<HTMLButtonElement>('.cm-table-toolbar button[aria-label="Table layout"]');
+        expect(openBtn).toBeTruthy();
+        openBtn!.click();
+        const popover = host.querySelector<HTMLElement>(".cm-table-layout-popover");
+        expect(popover).toBeTruthy();
+        popover!.querySelector<HTMLButtonElement>('button[aria-label="Wrap text right"]')!.click();
+        expect(editor.getMarkdown()).toContain("{wrap=right}");
+        editor.undo();
+        expect(editor.getMarkdown()).toBe(tableSource);
+      } finally { cleanup(); }
     } finally { setTikzRendererForTests(null); }
   });
 
@@ -129,7 +153,8 @@ describe("figure layout context menu", () => {
     const source = "| A | B |\n|---|---|\n| 1 | 2 |\n\n#+begin tikz aaa\n\\draw (0,0) -- (1,1);\n#+end tikz";
     const { editor, host, cleanup } = mount(source);
     try {
-      const button = host.querySelector<HTMLButtonElement>('.cm-table-editable-block > .cm-figure-layout-toolbar button[aria-label="Place beside next figure"]');
+      host.querySelector<HTMLButtonElement>('.cm-table-toolbar button[aria-label="Table layout"]')!.click();
+      const button = host.querySelector<HTMLButtonElement>('.cm-table-layout-popover button[aria-label="Place beside next figure"]');
       expect(button).toBeTruthy();
       const tableTarget = figureLayoutTarget(editor.view, host.querySelector(".cm-table-editable-block"));
       const tikzTarget = figureLayoutTarget(editor.view, host.querySelector(".cm-tikz-env-widget"));
@@ -162,27 +187,94 @@ describe("figure layout context menu", () => {
     }
   });
 
-  test("table, TikZ and diagram resize handles write their existing width attrs", () => {
+  test("image, table, TikZ and diagram resize handles write responsive percentage widths", () => {
     setTikzRendererForTests(async () => '<svg viewBox="0 0 20 10"></svg>');
     const cases = [
-      ["| A | B |\n|---|---|\n| 1 | 2 |\n# end", ".cm-table-editable-block", "table"],
-      ["#+begin tikz aaa\n\\draw (0,0) -- (1,1);\n#+end tikz\nend", ".cm-tikz-env-widget", "tikz"],
-      ["```mermaid\ngraph TD\nA-->B\n```\nend", ".cm-mermaid-widget:not(.cm-mermaid-widget-preview)", "diagram"],
+      ["![plot](plot.png){width=50%}\nend", ".cm-image-widget", "image", "{width=55%}"],
+      ["| A | B |\n|---|---|\n| 1 | 2 |\n{width=60%}\n# end", ".cm-table-editable-block", "table", "{width=65%}"],
+      ["#+begin tikz aaa {width=50%}\n\\draw (0,0) -- (1,1);\n#+end tikz\nend", ".cm-tikz-env-widget", "tikz", "{width=55%}"],
+      ["```mermaid\ngraph TD\nA-->B\n```\n{width=50%}\nend", ".cm-mermaid-widget:not(.cm-mermaid-widget-preview)", "diagram", "{width=55%}"],
     ] as const;
     try {
-      for (const [source, selector, kind] of cases) {
+      for (const [source, selector, kind, expected] of cases) {
         const { editor, host, cleanup } = mount(source);
         try {
           const figure = host.querySelector<HTMLElement>(selector)!;
           const handle = figure.querySelector<HTMLButtonElement>(".cm-figure-resize-handle");
           expect(handle, kind).toBeTruthy();
           handle!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
-          expect(editor.getMarkdown(), kind).toMatch(/\{width=\d+px\}/);
+          expect(editor.getMarkdown(), kind).toContain(expected);
           editor.undo();
           expect(editor.getMarkdown(), kind).toBe(source);
         } finally { cleanup(); }
       }
     } finally { setTikzRendererForTests(null); }
+  });
+
+  test("right-aligned image drag expands leftward, Escape cancels, and width preset clears stale height", async () => {
+    const source = "before\n![a](pic.png){align=right width=50% height=240px}\nafter";
+    const { editor, host, cleanup } = mount(source);
+    try {
+      const figure = host.querySelector<HTMLElement>(".cm-image-widget")!;
+      // Clicking width preset on an aspect-preserving image clears stale height.
+      figure.querySelector<HTMLButtonElement>('button[title="Width 75%"]')!.click();
+      expect(editor.getMarkdown()).toBe("before\n![a](pic.png){align=right width=75%}\nafter");
+
+      // Dragging left on a right-aligned image increases percentage width.
+      const updated = host.querySelector<HTMLElement>(".cm-image-widget")!;
+      const handle = updated.querySelector<HTMLButtonElement>(".cm-figure-resize-handle")!;
+      handle.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, clientX: 200 }));
+      handle.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, cancelable: true, button: 0, clientX: 128 }));
+      await new Promise(requestAnimationFrame);
+      expect(handle.querySelector(".cm-figure-resize-badge")?.textContent).toMatch(/^\d+%$/);
+      // Escape cancels without touching markdown.
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      expect(handle.querySelector(".cm-figure-resize-badge")).toBeNull();
+      expect(editor.getMarkdown()).toBe("before\n![a](pic.png){align=right width=75%}\nafter");
+
+      // Re-drag and release commits responsive `%` width larger than 75%.
+      handle.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, clientX: 200 }));
+      handle.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, cancelable: true, button: 0, clientX: 128 }));
+      handle.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, cancelable: true, button: 0, clientX: 128 }));
+      const match = editor.getMarkdown().match(/width=(\d+)%/);
+      expect(match).toBeTruthy();
+      expect(Number(match![1])).toBeGreaterThan(75);
+    } finally { cleanup(); }
+  });
+
+  test("wrapped Mermaid uses shared .cm-float-anchor and keeps handles on the real figure box", () => {
+    const source = "before\n\n```mermaid\ngraph LR\nA-->B\n```\n{wrap=right width=45%}\n\nafter";
+    const { host, cleanup } = mount(source);
+    try {
+      const figure = host.querySelector<HTMLElement>(".cm-mermaid-widget")!;
+      expect(figure.parentElement?.className).toBe("cm-float-anchor");
+      expect(figure.classList.contains("noema-diagram-wrap")).toBe(true);
+      expect(figure.classList.contains("noema-layout-has-width")).toBe(true);
+      expect(figure.querySelector(".cm-figure-resize-handle")).toBeTruthy();
+      expect(figure.querySelector(".cm-figure-height-handle")).toBeTruthy();
+    } finally { cleanup(); }
+  });
+
+  test("editing table resolves figureLayoutTarget from source rows and resizes from bottom edge widget", () => {
+    const source = "before\n\n| A | B |\n|---|---|\n| 1 | 2 |\n{width=60%}\n\n# end";
+    const { editor, host, cleanup } = mount(source);
+    try {
+      editor.setMarkdownSelection(source.indexOf("1"));
+      const sourceRow = host.querySelector<HTMLElement>(".cm-table-source-row")!;
+      const rowTarget = figureLayoutTarget(editor.view, sourceRow);
+      expect(rowTarget).toMatchObject({ kind: "table", layout: { width: "60%" } });
+
+      // Top toolbar widget has no misplaced resize handle; bottom edge widget owns it.
+      const topBar = host.querySelector<HTMLElement>(".cm-table-source-toolbar")!;
+      const bottomEdge = host.querySelector<HTMLElement>(".cm-table-source-edge")!;
+      expect(topBar.querySelector(".cm-figure-resize-handle")).toBeNull();
+      const handle = bottomEdge.querySelector<HTMLButtonElement>(".cm-figure-resize-handle");
+      expect(handle).toBeTruthy();
+      handle!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
+      expect(editor.getMarkdown()).toContain("\n{width=65%}\n");
+      editor.undo();
+      expect(editor.getMarkdown()).toBe(source);
+    } finally { cleanup(); }
   });
 
   test("image alignment and width edit only its attrs and stay undoable", () => {

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -66,6 +67,10 @@ var (
 	layoutDimension       = regexp.MustCompile(`^(\d+(?:\.\d+)?)(%|px|em|rem|vw|vh|ch)?$`)
 	tikzDocumentPattern   = regexp.MustCompile(`(?i)\\documentclass\b|\\begin\s*\{\s*document\s*\}`)
 	tikzPicturePattern    = regexp.MustCompile(`(?is)\\begin\s*\{\s*tikzpicture\s*\}.*\\end\s*\{\s*tikzpicture\s*\}`)
+	columnsAnchorPattern  = regexp.MustCompile(`\s+\{#[0-9a-fA-F-]+\}\s*$`)
+	colMarkerPattern      = regexp.MustCompile(`(?i)^[ \t]*#\+col(?:[ \t]+(\{[^{}\r\n]*\}))?[ \t]*$`)
+	colOrgOpenPattern     = regexp.MustCompile(`(?i)^[ \t]*#\+begin[ \t]+([A-Za-z][\w-]*)\b`)
+	colOrgClosePattern    = regexp.MustCompile(`(?i)^[ \t]*#\+end[ \t]+([A-Za-z][\w-]*)[ \t]*$`)
 )
 
 var defaultEnvironment = map[string]string{
@@ -334,6 +339,460 @@ func boundedLatexWidth(width string) string {
 		return width
 	}
 	return "\\ifdim " + width + ">\\linewidth \\linewidth\\else " + width + "\\fi"
+}
+
+type columnsSpec struct {
+	Mode   string
+	Cols   int
+	Widths []int
+	Align  string
+	Valign string
+	Gap    string
+	Rule   string
+}
+
+type columnPane struct {
+	Body  string
+	Align string
+}
+
+func normalizeColumnWidths(raw []float64, count int) []int {
+	safeCount := count
+	if safeCount < 1 {
+		safeCount = 1
+	} else if safeCount > 6 {
+		safeCount = 6
+	}
+	if safeCount == 1 {
+		return []int{100}
+	}
+	minPct := 100 / safeCount
+	if minPct > 15 {
+		minPct = 15
+	}
+	values := make([]float64, safeCount)
+	validRaw := len(raw) == safeCount
+	if validRaw {
+		for _, v := range raw {
+			if math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
+				validRaw = false
+				break
+			}
+		}
+	}
+	if validRaw {
+		copy(values, raw)
+	} else {
+		for i := range values {
+			values[i] = 100.0 / float64(safeCount)
+		}
+	}
+	sum := 0.0
+	for _, v := range values {
+		sum += v
+	}
+	if sum == 0 {
+		sum = float64(safeCount)
+	}
+	pcts := make([]float64, safeCount)
+	for i, v := range values {
+		pcts[i] = (v / sum) * 100.0
+	}
+	fixed := make([]bool, safeCount)
+	fixedCount := 0
+	for {
+		changed := false
+		for i := 0; i < safeCount; i++ {
+			if !fixed[i] && pcts[i] < float64(minPct) {
+				fixed[i] = true
+				pcts[i] = float64(minPct)
+				fixedCount++
+				changed = true
+			}
+		}
+		if !changed || fixedCount >= safeCount {
+			break
+		}
+		remainingBudget := 100.0 - float64(fixedCount*minPct)
+		freeSum := 0.0
+		for i := 0; i < safeCount; i++ {
+			if !fixed[i] {
+				freeSum += pcts[i]
+			}
+		}
+		for i := 0; i < safeCount; i++ {
+			if !fixed[i] {
+				if freeSum > 0 {
+					pcts[i] = (pcts[i] / freeSum) * remainingBudget
+				} else {
+					pcts[i] = remainingBudget / float64(safeCount-fixedCount)
+				}
+			}
+		}
+	}
+	floors := make([]int, safeCount)
+	floorSum := 0
+	for i, s := range pcts {
+		f := int(math.Floor(s))
+		floors[i] = f
+		floorSum += f
+	}
+	remainder := 100 - floorSum
+	type fracEntry struct {
+		index int
+		frac  float64
+	}
+	order := make([]fracEntry, safeCount)
+	for i := range pcts {
+		order[i] = fracEntry{index: i, frac: pcts[i] - float64(floors[i])}
+	}
+	sort.Slice(order, func(i, j int) bool {
+		if order[i].frac != order[j].frac {
+			return order[i].frac > order[j].frac
+		}
+		return order[i].index < order[j].index
+	})
+	for i := 0; i < remainder; i++ {
+		floors[order[i%len(order)].index]++
+	}
+	return floors
+}
+
+func parseColumnsHeader(title string) columnsSpec {
+	rawTitle := strings.TrimSpace(columnsAnchorPattern.ReplaceAllString(title, ""))
+	attrs := layoutAttrsFromTitle(rawTitle)
+	mode := "columns"
+	if strings.EqualFold(attrs["mode"], "flow") {
+		mode = "flow"
+	}
+	cols := 0
+	if mode == "flow" {
+		cols = 2
+	}
+	colsRaw := attrs["cols"]
+	if colsRaw == "" {
+		colsRaw = attrs["columns"]
+	}
+	if n, err := strconv.Atoi(colsRaw); err == nil && n >= 1 && n <= 6 {
+		cols = n
+	}
+	align := "inherit"
+	switch strings.ToLower(attrs["align"]) {
+	case "left", "center", "right", "justify":
+		align = strings.ToLower(attrs["align"])
+	}
+	valign := "top"
+	switch strings.ToLower(attrs["valign"]) {
+	case "top", "center", "bottom", "stretch":
+		valign = strings.ToLower(attrs["valign"])
+	}
+	gap := "md"
+	switch strings.ToLower(attrs["gap"]) {
+	case "sm", "md", "lg":
+		gap = strings.ToLower(attrs["gap"])
+	}
+	rule := "on"
+	switch strings.ToLower(attrs["rule"]) {
+	case "off", "false", "0", "no", "none":
+		rule = "off"
+	case "on", "true", "1", "yes", "rule":
+		rule = "on"
+	}
+	var widths []int
+	if rawW := strings.TrimSpace(attrs["widths"]); rawW != "" {
+		parts := strings.FieldsFunc(rawW, func(r rune) bool { return r == '-' || r == ',' || r == ':' })
+		parsed := make([]float64, 0, len(parts))
+		valid := len(parts) >= 2 && len(parts) <= 6
+		for _, p := range parts {
+			v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
+			if err != nil || v <= 0 {
+				valid = false
+				break
+			}
+			parsed = append(parsed, v)
+		}
+		if valid {
+			widths = normalizeColumnWidths(parsed, len(parsed))
+		}
+	}
+	return columnsSpec{Mode: mode, Cols: cols, Widths: widths, Align: align, Valign: valign, Gap: gap, Rule: rule}
+}
+
+func splitColumnPanes(body string) []columnPane {
+	lines := strings.Split(body, "\n")
+	type colMarker struct {
+		lineIndex int
+		align     string
+	}
+	markers := []colMarker{}
+	var fenceChar byte
+	fenceLen := 0
+	inDisplayMath := false
+	inHtmlComment := false
+	envDepth := 0
+
+	for idx, raw := range lines {
+		trimmed := strings.TrimSpace(raw)
+		if inHtmlComment {
+			if strings.Contains(raw, "-->") {
+				inHtmlComment = false
+			}
+			continue
+		}
+		if fenceChar != 0 {
+			if ch, length, ok := fenceRun(raw, true); ok && ch == fenceChar && length >= fenceLen {
+				fenceChar = 0
+				fenceLen = 0
+			}
+			continue
+		}
+		if inDisplayMath {
+			if trimmed == "$$" || trimmed == "\\]" {
+				inDisplayMath = false
+			}
+			continue
+		}
+		if ch, length, ok := fenceRun(raw, false); ok {
+			fenceChar, fenceLen = ch, length
+			continue
+		}
+		if trimmed == "$$" || trimmed == "\\[" {
+			inDisplayMath = true
+			continue
+		}
+		if strings.Contains(raw, "<!--") && !strings.Contains(raw, "-->") {
+			inHtmlComment = true
+			continue
+		}
+		if colOrgOpenPattern.MatchString(raw) {
+			envDepth++
+			continue
+		}
+		if colOrgClosePattern.MatchString(raw) {
+			if envDepth > 0 {
+				envDepth--
+			}
+			continue
+		}
+		if envDepth == 0 {
+			if match := colMarkerPattern.FindStringSubmatch(raw); match != nil {
+				align := "inherit"
+				if match[1] != "" {
+					attrs := layoutAttrsFromTitle(match[1])
+					switch strings.ToLower(attrs["align"]) {
+					case "left", "center", "right", "justify":
+						align = strings.ToLower(attrs["align"])
+					}
+				}
+				markers = append(markers, colMarker{lineIndex: idx, align: align})
+			}
+		}
+	}
+
+	panes := make([]columnPane, 0, len(markers)+1)
+	start := 0
+	paneAlign := "inherit"
+	for _, m := range markers {
+		panes = append(panes, columnPane{Body: strings.Join(lines[start:m.lineIndex], "\n"), Align: paneAlign})
+		start = m.lineIndex + 1
+		paneAlign = m.align
+	}
+	panes = append(panes, columnPane{Body: strings.Join(lines[start:], "\n"), Align: paneAlign})
+	return panes
+}
+
+func resolvedColumnWidths(spec columnsSpec, paneCount int) []int {
+	if spec.Mode == "flow" {
+		cols := spec.Cols
+		if cols < 2 {
+			cols = 2
+		} else if cols > 4 {
+			cols = 4
+		}
+		return normalizeColumnWidths(nil, cols)
+	}
+	count := paneCount
+	if count < 1 {
+		count = 1
+	} else if count > 6 {
+		count = 6
+	}
+	if len(spec.Widths) == count {
+		raw := make([]float64, count)
+		for i, w := range spec.Widths {
+			raw[i] = float64(w)
+		}
+		return normalizeColumnWidths(raw, count)
+	}
+	return normalizeColumnWidths(nil, count)
+}
+
+func columnsLatexBlocks(spec columnsSpec, panes []columnPane) []string {
+	if spec.Mode == "flow" {
+		cols := spec.Cols
+		if cols < 2 {
+			cols = 2
+		} else if cols > 4 {
+			cols = 4
+		}
+		parts := []string{}
+		for _, p := range panes {
+			if t := strings.TrimSpace(p.Body); t != "" {
+				parts = append(parts, t)
+			}
+		}
+		return []string{
+			"",
+			"```{=latex}",
+			fmt.Sprintf("\\begin{multicols}{%d}", cols),
+			"```",
+			"",
+			strings.Join(parts, "\n\n"),
+			"",
+			"```{=latex}",
+			"\\end{multicols}",
+			"```",
+			"",
+		}
+	}
+	if len(panes) == 0 {
+		panes = []columnPane{{Body: "", Align: "inherit"}}
+	}
+	if len(panes) == 1 {
+		effAlign := panes[0].Align
+		if effAlign == "inherit" {
+			effAlign = spec.Align
+		}
+		body := strings.TrimSpace(panes[0].Body)
+		if effAlign == "center" || effAlign == "left" || effAlign == "right" {
+			env := "center"
+			if effAlign == "left" {
+				env = "flushleft"
+			} else if effAlign == "right" {
+				env = "flushright"
+			}
+			return []string{
+				"",
+				"```{=latex}",
+				"\\begin{" + env + "}",
+				"```",
+				"",
+				body,
+				"",
+				"```{=latex}",
+				"\\end{" + env + "}",
+				"```",
+				"",
+			}
+		}
+		if body != "" {
+			return []string{"", body, ""}
+		}
+		return []string{""}
+	}
+	widths := resolvedColumnWidths(spec, len(panes))
+	gapFraction := 0.03
+	if spec.Gap == "sm" {
+		gapFraction = 0.02
+	} else if spec.Gap == "lg" {
+		gapFraction = 0.045
+	}
+	usable := 1.0 - gapFraction*float64(len(panes)-1)
+	if usable < 0.5 {
+		usable = 0.5
+	}
+	vpos := "t"
+	if spec.Valign == "center" {
+		vpos = "c"
+	} else if spec.Valign == "bottom" {
+		vpos = "b"
+	}
+	alignDirective := func(paneAlign string) string {
+		eff := paneAlign
+		if eff == "inherit" {
+			eff = spec.Align
+		}
+		switch eff {
+		case "center":
+			return "\\centering"
+		case "left":
+			return "\\raggedright"
+		case "right":
+			return "\\raggedleft"
+		default:
+			return ""
+		}
+	}
+	openMinipage := func(i int, prefix string) string {
+		frac := roundedLatexNumber((float64(widths[i]) / 100.0) * usable)
+		alignCmd := alignDirective(panes[i].Align)
+		line := prefix + "\\begin{minipage}[" + vpos + "]{" + frac + "\\textwidth}"
+		if alignCmd != "" {
+			line += "\n" + alignCmd
+		}
+		return line
+	}
+	out := []string{
+		"",
+		"```{=latex}",
+		openMinipage(0, "\\noindent"),
+		"```",
+	}
+	for i := range panes {
+		body := strings.TrimSpace(panes[i].Body)
+		if body != "" {
+			out = append(out, "", body, "")
+		} else {
+			out = append(out, "")
+		}
+		if i < len(panes)-1 {
+			out = append(out,
+				"```{=latex}",
+				"\\end{minipage}%",
+				openMinipage(i+1, "\\hfill"),
+				"```",
+			)
+		} else {
+			out = append(out,
+				"```{=latex}",
+				"\\end{minipage}",
+				"```",
+				"",
+			)
+		}
+	}
+	return out
+}
+
+func columnsLatexExport(title, body string, options Options, unresolved *[]string) ([]string, error) {
+	spec := parseColumnsHeader(title)
+	appendWarnings := func(warnings []string) {
+		const prefix = "Unresolved Noema citation kept visibly: "
+		for _, w := range warnings {
+			if strings.HasPrefix(w, prefix) {
+				*unresolved = append(*unresolved, strings.TrimPrefix(w, prefix))
+			}
+		}
+	}
+	if spec.Mode == "flow" {
+		inner, err := Prepare(body, options)
+		if err != nil {
+			return nil, err
+		}
+		appendWarnings(inner.Warnings)
+		return columnsLatexBlocks(spec, []columnPane{{Body: inner.Markdown, Align: "inherit"}}), nil
+	}
+	panes := splitColumnPanes(body)
+	transformed := make([]columnPane, len(panes))
+	for i, pane := range panes {
+		inner, err := Prepare(pane.Body, options)
+		if err != nil {
+			return nil, err
+		}
+		appendWarnings(inner.Warnings)
+		transformed[i] = columnPane{Body: inner.Markdown, Align: pane.Align}
+	}
+	return columnsLatexBlocks(spec, transformed), nil
 }
 
 func yamlScalar(value string) string {
@@ -1240,6 +1699,13 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 		Line  int
 		Lines []string
 	}
+	type columnsBlock struct {
+		Title string
+		Line  int
+		Lines []string
+		Depth int
+		Fence *fenceState
+	}
 	stack := []openedBlock{}
 	hidden := ""
 	hiddenDepth := 0
@@ -1247,6 +1713,7 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 	displayMathDepth := -1
 	displayMathPrefix := ""
 	var rawTikz *tikzBlock
+	var rawColumns *columnsBlock
 	var private *braceState
 	htmlComment := false
 	singletons := map[string]bool{}
@@ -1301,6 +1768,41 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 			} else {
 				rawTikz.Lines = append(rawTikz.Lines, line)
 			}
+			continue
+		}
+		if rawColumns != nil {
+			if rawColumns.Fence != nil {
+				if ch, length, ok := fenceRun(line, true); ok && ch == rawColumns.Fence.Char && length >= rawColumns.Fence.Length {
+					rawColumns.Fence = nil
+				}
+				rawColumns.Lines = append(rawColumns.Lines, line)
+				continue
+			}
+			if ch, length, ok := fenceRun(line, false); ok {
+				rawColumns.Fence = &fenceState{Char: ch, Length: length}
+				rawColumns.Lines = append(rawColumns.Lines, line)
+				continue
+			}
+			if begin := orgOpen(line); begin != nil && begin.Kind == "columns" {
+				rawColumns.Depth++
+				rawColumns.Lines = append(rawColumns.Lines, line)
+				continue
+			}
+			if orgClose(line) == "columns" {
+				rawColumns.Depth--
+				if rawColumns.Depth == 0 {
+					block, err := columnsLatexExport(rawColumns.Title, strings.Join(rawColumns.Lines, "\n"), options, &unresolved)
+					if err != nil {
+						return PrepareResult{}, err
+					}
+					output = append(output, block...)
+					rawColumns = nil
+				} else {
+					rawColumns.Lines = append(rawColumns.Lines, line)
+				}
+				continue
+			}
+			rawColumns.Lines = append(rawColumns.Lines, line)
 			continue
 		}
 		if fence != nil && container.QuoteDepth != fence.QuoteDepth {
@@ -1430,6 +1932,10 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 				rawTikz = &tikzBlock{Title: begin.Title, Line: lineNumber, Lines: []string{}}
 				continue
 			}
+			if begin.Kind == "columns" {
+				rawColumns = &columnsBlock{Title: begin.Title, Line: lineNumber, Lines: []string{}, Depth: 1}
+				continue
+			}
 			opened, env := environmentOpen(begin.Kind, begin.Title, options)
 			stack = append(stack, openedBlock{begin.Kind, env})
 			output = append(output, rawLatexBlock(opened))
@@ -1487,6 +1993,9 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 	}
 	if rawTikz != nil {
 		return PrepareResult{}, errors.New("Unclosed Noema block: tikz")
+	}
+	if rawColumns != nil {
+		return PrepareResult{}, errors.New("Unclosed Noema block: columns")
 	}
 	if len(stack) > 0 {
 		return PrepareResult{}, fmt.Errorf("Unclosed Noema block: %s", stack[len(stack)-1].Kind)

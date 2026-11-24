@@ -15,7 +15,7 @@ import { hydrateDiagramForeignObjectMarkup, sanitizeDiagramSvg } from "./diagram
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
 import { layoutClasses, layoutFromAttrs, layoutStyle, readLayoutAttrSuffix, readLayoutAttrsLine, type LayoutAttrs } from "./layout-attrs.ts";
-import { layoutGroupClasses, layoutGroupFromTitle, layoutGroupStyle } from "./layout-group.ts";
+import { columnsClasses, columnsStyle, parseColumnsHeader, splitColumnPanes } from "./columns-layout.ts";
 import { katexStylesheetHref, mathRenderCacheGeneration, renderMathHTML } from "./math-render.ts";
 import { getKatexMacrosVersion } from "./katex-macros.ts";
 import { markdownLinkDestination } from "./markdown-link.ts";
@@ -314,13 +314,38 @@ function orgEnvBlockRule(state: StateBlock, startLine: number, endLine: number, 
   const kind = open[1]!;
   if (kind.toLowerCase() === "lean4") return false;
   if (kind.toLowerCase() === "meta" && startLine >= ORG_META_PREAMBLE_LINE_LIMIT) return false;
-  const closeRe = new RegExp(`^\\s*#\\+\\s*end\\s+${kind.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "i");
+  const escapedKind = kind.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const openSameRe = new RegExp(`^\\s*#\\+\\s*begin\\s+${escapedKind}(?:\\s|$)`, "i");
+  const closeRe = new RegExp(`^\\s*#\\+\\s*end\\s+${escapedKind}\\s*$`, "i");
 
   let closeLine = -1;
+  let depth = 1;
+  let fenceChar = "";
+  let fenceLen = 0;
   for (let line = startLine + 1; line < endLine; line++) {
-    if (closeRe.test(lineText(state, line))) {
-      closeLine = line;
-      break;
+    const text = lineText(state, line);
+    if (fenceChar) {
+      const closeFence = text.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
+      if (closeFence && closeFence[1]![0] === fenceChar && closeFence[1]!.length >= fenceLen) {
+        fenceChar = "";
+        fenceLen = 0;
+      }
+      continue;
+    }
+    const openFence = text.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+    if (openFence) {
+      fenceChar = openFence[1]![0]!;
+      fenceLen = openFence[1]!.length;
+      continue;
+    }
+    if (openSameRe.test(text)) {
+      depth++;
+    } else if (closeRe.test(text)) {
+      depth--;
+      if (depth === 0) {
+        closeLine = line;
+        break;
+      }
     }
   }
   if (closeLine < 0) return false;
@@ -1285,10 +1310,23 @@ function renderOrgEnv(
     const body = renderTikzFigureBody(meta.body, tikzTitleId(meta.title));
     return `<figure class="${escapeAttr(classes)}" data-noema-image-align="${escapeAttr(layout.align)}" data-noema-image-wrap="${layout.wrap ? "true" : "false"}"${styleAttr}>${body}</figure>`;
   }
-  if (kind.toLowerCase() === "layout") {
-    const group = layoutGroupFromTitle(meta.title);
-    const body = meta.body.trim() ? md.render(meta.body) : "";
-    return `<div class="${layoutGroupClasses(group)}" style="${layoutGroupStyle(group)}" data-cols="${group.columns}">${body}</div>`;
+  if (kind.toLowerCase() === "columns") {
+    const spec = parseColumnsHeader(meta.title);
+    const idAttr = meta.blockId ? ` data-block-id="${escapeAttr(meta.blockId)}"` : "";
+    if (spec.mode === "flow") {
+      const cols = Math.max(2, Math.min(4, spec.cols || 2));
+      const body = meta.body.trim() ? md.render(meta.body) : "";
+      return `<div class="${columnsClasses(spec, cols)}" style="${columnsStyle(spec, cols)}" data-cols="${cols}"${idAttr}>${body}</div>`;
+    }
+    const panes = splitColumnPanes(meta.body);
+    const inner = panes.map((pane, index) => {
+      const paneClass = pane.align !== "inherit"
+        ? `noema-column-pane noema-columns-align-${pane.align}`
+        : "noema-column-pane";
+      const html = pane.body.trim() ? md.render(pane.body) : "";
+      return `<div class="${paneClass}" data-col-index="${index}">${html}</div>`;
+    }).join("");
+    return `<div class="${columnsClasses(spec, panes.length)}" style="${columnsStyle(spec, panes.length)}" data-cols="${panes.length}"${idAttr}>${inner}</div>`;
   }
   const title = meta.title;
   const blockId = meta.blockId;

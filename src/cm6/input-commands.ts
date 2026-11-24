@@ -40,7 +40,9 @@ import {
   indentMarkdownBlock,
   tableBackspaceAtCellStart,
   tableCellLineBreak,
+  tableDeleteAtCellEnd,
   tableEnterSameColumn,
+  tableMoveCellBoundary,
   tableMoveHorizontal,
   tableMoveVertical,
   tableNavigateCell,
@@ -53,6 +55,9 @@ import {
 import { nextGraphemePosition, previousGraphemePosition } from "./text-boundaries.ts";
 import {
   activateInlineMathFromArrow,
+  columnsMoveHorizontal,
+  columnsMoveVertical,
+  columnsProtectBoundaryDelete,
   moveInsertLineWithDisplayMathEntry,
   orgEnvExitTarget,
 } from "./extensions/visual/index.ts";
@@ -154,13 +159,19 @@ export function runEditorMovement(
   key: EditorMovementKey,
   extend = false,
 ): EditorMovementResult {
+  if ((key === "Home" || key === "End")
+      && tableMoveCellBoundary(view, key === "End", extend)) return "cursor";
   if (!extend && (key === "ArrowLeft" || key === "ArrowRight")
       && tableMoveHorizontal(view, key === "ArrowRight" ? 1 : -1)) return "cursor";
+  if (!extend && (key === "ArrowLeft" || key === "ArrowRight")
+      && columnsMoveHorizontal(view, key === "ArrowRight" ? 1 : -1)) return "cursor";
   if (!extend && (key === "ArrowLeft" || key === "ArrowRight")
       && activateInlineMathFromArrow(view, key)) return "formula";
 
   if (!extend && (key === "ArrowUp" || key === "ArrowDown")
       && tableMoveVertical(view, key === "ArrowDown" ? 1 : -1)) return "cursor";
+  if (!extend && (key === "ArrowUp" || key === "ArrowDown")
+      && columnsMoveVertical(view, key === "ArrowDown" ? 1 : -1)) return "cursor";
   if (!extend && (key === "ArrowUp" || key === "ArrowDown")) {
     const moved = moveInsertLineWithDisplayMathEntry(view, key === "ArrowDown");
     if (moved) return moved;
@@ -366,6 +377,7 @@ export function runEditorDelete(
 
   if (direction === "backward") {
     return tableBackspaceAtCellStart(view)
+      || columnsProtectBoundaryDelete(view, "backward")
       || deleteTexSourceAutoPair(view)
       || selectObjectBeforeDelete(view, direction)
       || deleteBracketPair(view)
@@ -376,7 +388,9 @@ export function runEditorDelete(
       || deleteGraphemes(view, direction);
   }
 
-  return deleteTexSourceAutoPairForward(view)
+  return tableDeleteAtCellEnd(view)
+    || columnsProtectBoundaryDelete(view, "forward")
+    || deleteTexSourceAutoPairForward(view)
     || selectObjectBeforeDelete(view, direction)
     || deleteForwardJoinBlock(view)
     || deleteGraphemes(view, direction);

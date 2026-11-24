@@ -13,6 +13,10 @@ type ViewportSnapshot = {
   anchorPos: number;
   anchorOffset: number | null;
   preciseAnchor: boolean;
+  /** Anchor offset was captured from the real DOM top of the direct `.cm-content`
+   * child (`.cm-line` or block widget root) at `anchorPos`. Immune to both CM6
+   * height-map lag and internal chip/wrap mutations on the clicked line. */
+  domBlockAnchor?: boolean;
   scrollTop: number;
   scrollLeft: number;
   interaction: number;
@@ -20,6 +24,68 @@ type ViewportSnapshot = {
   lineTop?: number | null;
   scrollHeight?: number;
 };
+
+/** Return the outermost CM6 widget (`contenteditable="false"`) containing TARGET inside CONTENT. */
+function outermostWidgetInContent(target: Node, content: HTMLElement): HTMLElement | null {
+  let el: Element | null = target instanceof Element ? target : target.parentElement;
+  let found: HTMLElement | null = null;
+  while (el && el !== content) {
+    if (el instanceof HTMLElement && el.getAttribute("contenteditable") === "false") {
+      found = el;
+    }
+    el = el.parentElement;
+  }
+  return found;
+}
+
+/**
+ * Real painted viewport `top` of the direct `.cm-content` child (either a
+ * `.cm-line` or a block replacement widget root) owning POSITION. Returns null
+ * when unavailable (off-viewport gap or synthetic layoutless test DOM).
+ */
+function domTopForAnchor(view: EditorView, position: number): number | null {
+  if (typeof view.domAtPos !== "function") return null;
+  try {
+    const safePos = Math.max(0, Math.min(position, view.state.doc.length));
+    const { node, offset } = view.domAtPos(safePos);
+    const content = view.contentDOM;
+    let el: Element | null = null;
+    if (node === content) {
+      el = content.children[offset] ?? content.children[offset - 1] ?? null;
+    } else {
+      const base = node instanceof Element ? node : node.parentElement;
+      if (!base || !content.contains(base)) return null;
+      let cur: Element | null = base;
+      while (cur && cur.parentElement !== content) cur = cur.parentElement;
+      el = cur;
+    }
+    if (!el || el.classList.contains("cm-gap")) return null;
+    // Block decorations inserted with `side: -1` at `safePos` (such as
+    // `TableSourceToolbarWidget` at `table.from`) sit immediately before the
+    // `.cm-line` for `safePos` in `.cm-content`. Include them so the visual top
+    // of a block construct matches identically across preview (`Decoration.replace`)
+    // and editing (`side: -1` widget + `.cm-line`) states.
+    if (typeof view.posAtDOM === "function") {
+      let prev = el.previousElementSibling;
+      while (prev && !prev.classList.contains("cm-line") && !prev.classList.contains("cm-gap")) {
+        let prevPos: number | null = null;
+        try {
+          prevPos = view.posAtDOM(prev);
+        } catch {
+          prevPos = null;
+        }
+        if (prevPos !== safePos) break;
+        el = prev;
+        prev = el.previousElementSibling;
+      }
+    }
+    const rect = el.getBoundingClientRect();
+    if (rect.height === 0 && rect.width === 0 && rect.top === 0) return null;
+    return rect.top;
+  } catch {
+    return null;
+  }
+}
 
 type PrivateStateEffect = StateEffect<unknown> & {
   // StateEffect deliberately keeps its type private. CodeMirror exposes no
@@ -289,6 +355,12 @@ export class EditorViewportStabilizer {
     }, listenerOptions);
     scrollHost.addEventListener("touchmove", beginScrollInteraction, listenerOptions);
     scrollHost.addEventListener("scroll", () => {
+      if (this.forcedDepth > 0 && this.forcedSnapshot) {
+        if (Math.abs(this.scrollHost.scrollTop - this.forcedSnapshot.scrollTop) > 0.5) {
+          this.writeScrollTop(this.forcedSnapshot.scrollTop);
+        }
+        return;
+      }
       if (this.holdFocusGuard()) return;
       const expected = this.expectedProgrammaticScrollTop;
       if (expected != null) {
@@ -335,6 +407,13 @@ export class EditorViewportStabilizer {
             && snapshot
             && snapshot.interaction === this.interaction) {
           this.scheduleRestore({ ...snapshot }, Boolean(leased));
+        } else if (leased
+            && leased.interaction === this.interaction
+            && Math.abs(this.scrollHost.scrollTop - leased.scrollTop) > 0.5) {
+          // A WebKit async focus-reveal scroll landed while a preserved relayout
+          // restore is still in flight. Snap back synchronously before paint so
+          // the browser never composites a 1-frame jump.
+          this.writeScrollTop(leased.scrollTop);
         }
         return;
       }
@@ -450,8 +529,11 @@ export class EditorViewportStabilizer {
     preferredAnchorPos?: number,
   ): T {
     const outermost = this.forcedDepth === 0;
-    // An explicit relayout owns its own anchor.
-    if (outermost) this.pointerSnapshot = null;
+    // An explicit relayout owns its own anchor (and replaces any prior focus guard).
+    if (outermost) {
+      this.pointerSnapshot = null;
+      this.focusGuard = null;
+    }
     if (outermost && this.scrollIdleTimer) {
       // The command establishes a new atomic viewport boundary. An idle timer
       // from scrolling *before* the command must not advance generation in the
@@ -465,7 +547,7 @@ export class EditorViewportStabilizer {
     // stabilization it must capture the current geometry even inside the
     // short scroll-idle window; Cmd-/ commonly follows a reveal/selection
     // scroll and previously lost its viewport for exactly that reason.
-    if (outermost) this.forcedSnapshot = this.capture(preferredAnchorPos);
+    if (outermost) this.forcedSnapshot = this.capture(preferredAnchorPos, false, preferredAnchorPos != null);
     if (outermost) {
       // Fonts, formula widgets and WebKit's height map can settle well after
       // the first two animation frames. During this bounded lease, an
@@ -489,7 +571,7 @@ export class EditorViewportStabilizer {
               Math.min(this.view.state.doc.length, mapAnchor(originalAnchor)),
             );
           }
-          this.leasedSnapshot = { ...snapshot };
+          this.leasedSnapshot = snapshot;
           this.scheduleRestore(snapshot, true);
         } else {
           this.resetBaseline();
@@ -572,15 +654,69 @@ export class EditorViewportStabilizer {
     if (event.button !== 0
         || !(event.target instanceof Node)
         || !this.view.contentDOM.contains(event.target)) return;
+    const doc = this.view.state.doc;
+    const widget = outermostWidgetInContent(event.target, this.view.contentDOM);
+    if (widget) {
+      // Pressing a rendered widget (inline chip like `@@comment`/`@@todo` or a
+      // block widget like `columns`/`table`/`image`) must anchor on the START
+      // of its line/block via real DOM block top — never on `posAtCoords`
+      // (which can hit `widget.to` at the bottom of a block or a floating
+      // popup over the next line) and never on `coordsAtPos` (which shifts
+      // when a chip collapses into raw text or wraps).
+      let widgetPos: number | null = null;
+      try {
+        if (typeof this.view.posAtDOM === "function") {
+          widgetPos = this.view.posAtDOM(widget);
+        }
+      } catch {
+        widgetPos = null;
+      }
+      if (widgetPos == null || !Number.isFinite(widgetPos)) {
+        const attrFrom = Number(widget.dataset.cmSourceFrom);
+        if (Number.isFinite(attrFrom)) widgetPos = attrFrom;
+      }
+      if (widgetPos == null) {
+        try {
+          widgetPos = this.view.posAtCoords?.({ x: event.clientX, y: event.clientY }, false) ?? null;
+        } catch {
+          widgetPos = null;
+        }
+      }
+      const anchorPos = widgetPos != null && typeof doc.lineAt === "function"
+        ? doc.lineAt(Math.max(0, Math.min(widgetPos, doc.length))).from
+        : widgetPos ?? undefined;
+      const snapshot = this.capture(anchorPos, false, true);
+      if (!snapshot) return;
+      this.pointerSnapshot = snapshot;
+      this.pointerAnchorUntil = Infinity;
+      return;
+    }
     let position: number | null | undefined;
     try {
       position = this.view.posAtCoords?.({ x: event.clientX, y: event.clientY }, false);
     } catch {
       position = null;
     }
+    // Pressing ordinary text: prefer the line's real DOM top when the line
+    // starts inside the viewport (immune to both CM6 height-map lag and inline
+    // widgets opening/closing on the same line). Fall back to `coordsAtPos`
+    // only when the line top is scrolled above the viewport or layoutless.
+    if (position != null && typeof doc.lineAt === "function") {
+      const lineFrom = doc.lineAt(Math.max(0, Math.min(position, doc.length))).from;
+      const lineDomTop = domTopForAnchor(this.view, lineFrom);
+      const hostTop = this.scrollHost.getBoundingClientRect().top;
+      if (lineDomTop != null && lineDomTop - hostTop >= -1) {
+        const snapshot = this.capture(lineFrom, false, true);
+        if (snapshot) {
+          this.pointerSnapshot = snapshot;
+          this.pointerAnchorUntil = Infinity;
+          return;
+        }
+      }
+    }
     // One layout read per press. Layout is clean here: the press arrives
     // before CodeMirror has applied anything for it.
-    const snapshot = this.capture(position ?? undefined, true);
+    const snapshot = this.capture(position ?? undefined, true, false);
     if (!snapshot) return;
     this.pointerSnapshot = snapshot;
     this.pointerAnchorUntil = Infinity;
@@ -605,7 +741,11 @@ export class EditorViewportStabilizer {
     return null;
   }
 
-  private capture(preferredAnchorPos?: number, precisePreferredAnchor = false): ViewportSnapshot | null {
+  private capture(
+    preferredAnchorPos?: number,
+    precisePreferredAnchor = false,
+    preferDomBlock = false,
+  ): ViewportSnapshot | null {
     if (!this.view.dom.isConnected || !this.scrollHost.isConnected) return null;
     const scrollTop = this.scrollHost.scrollTop;
     const scrollLeft = this.scrollHost.scrollLeft;
@@ -615,10 +755,19 @@ export class EditorViewportStabilizer {
     ));
     let anchorOffset: number | null = null;
     let preciseAnchor = false;
+    let domBlockAnchor = false;
     let anchorCaptured = false;
     try {
       const hostTop = this.scrollHost.getBoundingClientRect().top;
       if (preferredAnchorPos != null) {
+        if (preferDomBlock) {
+          const domTop = domTopForAnchor(this.view, anchorPos);
+          if (domTop != null) {
+            anchorOffset = domTop - hostTop;
+            domBlockAnchor = true;
+            anchorCaptured = true;
+          }
+        }
         const captureCoordinates = (): void => {
           const coordinates = this.view.coordsAtPos?.(anchorPos);
           if (!coordinates) return;
@@ -629,17 +778,19 @@ export class EditorViewportStabilizer {
         // A press on ordinary text needs the DOM caret's position. CM6's
         // height map can lag a table's source/preview swap by one collapsed
         // line, even while the text itself has not moved at all.
-        if (precisePreferredAnchor) captureCoordinates();
-        if (!anchorCaptured && anchorPos >= this.view.viewport.from && anchorPos <= this.view.viewport.to) {
-          try {
-            const block = this.view.lineBlockAt(anchorPos);
-            anchorOffset = this.view.documentTop + block.top * this.view.scaleY - hostTop;
-            anchorCaptured = true;
-          } catch {
+        if (!anchorCaptured && precisePreferredAnchor) captureCoordinates();
+        if (!anchorCaptured) {
+          if (anchorPos >= this.view.viewport.from && anchorPos <= this.view.viewport.to) {
+            try {
+              const block = this.view.lineBlockAt(anchorPos);
+              anchorOffset = this.view.documentTop + block.top * this.view.scaleY - hostTop;
+              anchorCaptured = true;
+            } catch {
+              captureCoordinates();
+            }
+          } else {
             captureCoordinates();
           }
-        } else {
-          captureCoordinates();
         }
       }
       if (!anchorCaptured) {
@@ -678,6 +829,7 @@ export class EditorViewportStabilizer {
       anchorPos,
       anchorOffset,
       preciseAnchor,
+      domBlockAnchor,
       scrollTop,
       scrollLeft,
       interaction: this.interaction,
@@ -730,14 +882,21 @@ export class EditorViewportStabilizer {
       try {
         const hostTop = this.scrollHost.getBoundingClientRect().top;
         const position = Math.min(snapshot.anchorPos, this.view.state.doc.length);
-        const coordinates = snapshot.preciseAnchor
-          ? this.view.coordsAtPos?.(position)
-          : null;
-        const currentOffset = coordinates
-          ? coordinates.top - hostTop
-          : this.view.documentTop
-            + this.view.lineBlockAt(position).top * this.view.scaleY
-            - hostTop;
+        let currentOffset: number | null = null;
+        if (snapshot.domBlockAnchor) {
+          const domTop = domTopForAnchor(this.view, position);
+          if (domTop != null) currentOffset = domTop - hostTop;
+        }
+        if (currentOffset == null) {
+          const coordinates = snapshot.preciseAnchor
+            ? this.view.coordsAtPos?.(position)
+            : null;
+          currentOffset = coordinates
+            ? coordinates.top - hostTop
+            : this.view.documentTop
+              + this.view.lineBlockAt(position).top * this.view.scaleY
+              - hostTop;
+        }
         const correction = currentOffset - snapshot.anchorOffset;
         if (Number.isFinite(correction) && Math.abs(correction) > 0.5) {
           this.writeScrollTop(this.scrollHost.scrollTop + correction);
@@ -750,6 +909,14 @@ export class EditorViewportStabilizer {
     snapshot.scrollLeft = this.scrollHost.scrollLeft;
     snapshot.lineTop = this.anchorLineTop(snapshot);
     snapshot.scrollHeight = this.scrollHost.scrollHeight;
+    if (this.leasedSnapshot && this.leasedSnapshot.interaction === this.interaction) {
+      this.leasedSnapshot.scrollTop = snapshot.scrollTop;
+      this.leasedSnapshot.scrollLeft = snapshot.scrollLeft;
+    }
+    if (this.focusGuard && this.focusGuard.interaction === this.interaction) {
+      this.focusGuard.scrollTop = snapshot.scrollTop;
+      this.focusGuard.scrollLeft = snapshot.scrollLeft;
+    }
     this.stableSnapshot = snapshot;
   }
 

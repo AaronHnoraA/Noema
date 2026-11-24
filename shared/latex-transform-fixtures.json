@@ -316,6 +316,34 @@
           "usesTikz": false
         }
       }
+    },
+    {
+      "name": "columns-explicit-panes",
+      "markdown": "#+begin columns {widths=60-40 valign=center}\n### Left\n\nParagraph with \\(x^2\\).\n\n- Item A\n- Item B\n\n#+col {align=center}\n\n![Plot](plot.png)\n#+end columns",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n```{=latex}\n\\noindent\\begin{minipage}[c]{0.582\\textwidth}\n```\n\n### Left\n\nParagraph with `\\(x^2\\)`{=latex}.\n\n- Item A\n- Item B\n\n```{=latex}\n\\end{minipage}%\n\\hfill\\begin{minipage}[c]{0.388\\textwidth}\n\\centering\n```\n\n![Plot](plot.png)\n\n```{=latex}\n\\end{minipage}\n```\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "columns-flow-mode",
+      "markdown": "#+begin columns {mode=flow cols=3}\nFirst flowing paragraph.\n\nSecond flowing paragraph.\n#+end columns",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n```{=latex}\n\\begin{multicols}{3}\n```\n\nFirst flowing paragraph.\n\nSecond flowing paragraph.\n\n```{=latex}\n\\end{multicols}\n```\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
     }
   ],
   "errorCases": [

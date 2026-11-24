@@ -481,17 +481,18 @@ describe("editor api commands and writing modes", () => {
     }
   });
 
-  test("offers both native layout modes through quick insert", () => {
+  test("offers both multi-column modes through quick insert", () => {
     const mount = document.createElement("div");
     document.body.appendChild(mount);
     const editor = createEditor(mount, { initialContent: "" });
     try {
-      const grid = editor.getQuickInsertItems("图文").find((item) => item.id === "layout-grid");
-      const flow = editor.getQuickInsertItems("分栏").find((item) => item.id === "layout-flow");
-      expect(grid?.command).toBe("insert-layout");
+      const cols = editor.getQuickInsertItems("图文").find((item) => item.id === "columns");
+      const flow = editor.getQuickInsertItems("分栏").find((item) => item.id === "columns-flow");
+      expect(cols?.command).toBe("insert-columns");
       expect(flow?.value).toBe("flow");
-      expect(editor.runQuickInsert(grid!)).toBe(true);
-      expect(editor.getMarkdown()).toContain("#+begin layout {cols=2 mode=grid}");
+      expect(editor.runQuickInsert(cols!)).toBe(true);
+      expect(editor.getMarkdown()).toContain("#+begin columns");
+      expect(editor.getMarkdown()).toContain("#+col");
     } finally {
       editor.destroy();
       mount.remove();

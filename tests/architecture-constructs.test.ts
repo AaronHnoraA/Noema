@@ -259,6 +259,14 @@ const SAMPLE_NOTE = [
   "#+begin ediff Review preface",
   "+Preface.",
   "#+end ediff",
+  "",
+  "#+begin columns",
+  "Left pane.",
+  "",
+  "#+col",
+  "",
+  "Right pane.",
+  "#+end columns",
 ].join("\n");
 
 describe("rendered constructs: what is drawn and what the registry reports agree", () => {

@@ -845,6 +845,7 @@ export function latexMacrosPackage(macros, features = {}) {
     features.usesTikz ? "\\RequirePackage{tikz}" : "",
     features.usesTikz ? "\\usetikzlibrary{calc}" : "",
     features.usesWrapfig ? "\\RequirePackage{wrapfig}" : "",
+    features.usesMulticol ? "\\RequirePackage{multicol}" : "",
     String.raw`% Pandoc body compatibility
 \makeatletter
 \@ifundefined{c@none}{\newcounter{none}}{}

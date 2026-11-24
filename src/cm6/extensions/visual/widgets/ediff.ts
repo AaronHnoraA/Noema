@@ -4,6 +4,7 @@ import { EditorView } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
 import { shortHash } from "./measured-observer.ts";
 import { markEmbeddedSurface } from "../../../embedded-surface.ts";
+import { preserveEditorViewport } from "../../../viewport-stability.ts";
 import { dispatchConstructEdit } from "../constructs/index.ts";
 import { approvedEdiffMarkdown, ediffActionEdit, ediffSide, scanEdiffBlocks, EDIFF_FEEDBACK_EVENT, type EdiffAction, type EdiffBlock, type EdiffFeedbackDetail } from "../../../../ediff.ts";
 import { renderMarkdownHTML } from "../../../../render-html.ts";
@@ -148,8 +149,11 @@ export class EdiffWidget extends MeasuredWidget {
     });
     comment.disabled = view.state.readOnly;
     const edit = button("Edit diff", "Show the local diff source", () => {
-      view.dispatch({ selection: { anchor: this.from + 1 }, scrollIntoView: true });
-      view.focus();
+      const anchor = Math.max(0, Math.min(this.from + 1, view.state.doc.length));
+      preserveEditorViewport(view, () => {
+        view.dispatch({ selection: { anchor } });
+        view.focus();
+      }, view.state.doc.lineAt(Math.max(0, Math.min(this.from, view.state.doc.length))).from);
     });
     actions.append(accept, reject, comment, edit);
 

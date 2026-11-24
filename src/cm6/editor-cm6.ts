@@ -113,6 +113,7 @@ import {
   mapPositionAcrossText,
   minimalDocumentChange,
   installFocusOwner,
+  preserveEditorViewport,
 } from "./viewport-stability.ts";
 import {
   finishInlineMathEditing,
@@ -559,8 +560,14 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     } else if (mathBlock || inlineMath) {
       return;
     } else {
-      view.dispatch({ selection: { anchor } });
-      view.contentDOM.focus({ preventScroll: true });
+      // Anchor on the start of the clicked widget's line/block so expanding an
+      // inline chip (`@@comment`, `@@todo`, `@@cite`, …) or block construct
+      // (`org-env`, `image`, `fold`, `hr`, …) never shifts the viewport.
+      const lineAnchor = view.state.doc.lineAt(Math.max(0, Math.min(from, view.state.doc.length))).from;
+      preserveEditorViewport(view, () => {
+        view.dispatch({ selection: { anchor } });
+        view.contentDOM.focus({ preventScroll: true });
+      }, lineAnchor);
     }
     flashCaret();
   };

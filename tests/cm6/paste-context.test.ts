@@ -49,6 +49,20 @@ describe("paste destination rules", () => {
     expect(ed.getMarkdown()).toBe("| a | b |\n| - | - |\n| 1 | first<br>second \\| third |");
   });
 
+  it("expands a pasted GFM sub-table across table cells instead of corrupting the row", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |";
+    const ed = open(doc, doc.indexOf("2"));
+    ed.pastePlainText("| X | Y |\n| --- | --- |\n| P | Q |");
+    expect(ed.getMarkdown()).toBe("| A | B |  |\n| --- | --- | --- |\n| 1 | X | Y |\n| 3 | P | Q |");
+  });
+
+  it("expands a pasted TSV matrix across table cells and grows rows/columns as needed", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    const ed = open(doc, doc.indexOf("1"));
+    ed.pastePlainText("x\ty\nz\tw");
+    expect(ed.getMarkdown()).toBe("| A | B |\n| --- | --- |\n| x | y |\n| z | w |");
+  });
+
   it("inserts only the URL of a pasted link inside a link destination", () => {
     const ed = open("[docs]()", 7);
     ed.pastePlainText("[Example](https://example.com)");

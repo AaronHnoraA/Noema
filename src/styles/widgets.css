@@ -1061,62 +1061,112 @@
   font: 0.9em sans-serif;
 }
 
-/* Hover-reveal layout toolbar (align / wrap / width). */
-.noema-layout-group {
-  --noema-layout-gap: clamp(0.85rem, 1.8vw, 1.3rem);
-  --noema-layout-rule: color-mix(in srgb, var(--aaron-paper-line, #d8d0c2), transparent 30%);
-  --noema-layout-cell-rule: 1px solid var(--noema-layout-rule);
-  --noema-layout-cell-inset: clamp(0.85rem, 1.8vw, 1.3rem);
+/* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
+.noema-columns {
+  --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);
+  --noema-columns-rule: color-mix(in srgb, var(--aaron-paper-line, var(--border, rgba(148, 163, 184, 0.28))), transparent 25%);
   min-width: 0;
   clear: both;
 }
-.noema-layout-group:not([data-cols="1"]) {
-  margin-block: 1.5em;
-  border-block: 1px solid var(--noema-layout-rule);
-  padding-block: 1.1em;
+.noema-columns-gap-sm { --noema-columns-gap: 1rem; }
+.noema-columns-gap-md { --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem); }
+.noema-columns-gap-lg { --noema-columns-gap: clamp(2.25rem, 4.5vw, 3.25rem); }
+
+.noema-columns:not(.cm-columns-widget):not(.cm-columns-active-top):not([data-cols="1"]) {
+  margin-block: 1.25em;
+  border-block: 1px solid var(--noema-columns-rule);
+  padding-block: 0.95em;
 }
-.noema-layout-align-left { text-align: left; }
-.noema-layout-align-center { text-align: center; }
-.noema-layout-align-right { text-align: right; }
-.noema-layout-align-justify { text-align: justify; }
-.noema-layout-group:is(.noema-layout-align-left, .noema-layout-align-center, .noema-layout-align-right, .noema-layout-align-justify)
-  :is(p, li, blockquote) { text-align: inherit; }
-.noema-layout-group.noema-layout-grid:not(.cm-layout-group-widget),
-.noema-layout-grid > .cm-layout-group-content {
+.noema-columns-align-left { text-align: left; }
+.noema-columns-align-center { text-align: center; }
+.noema-columns-align-right { text-align: right; }
+.noema-columns-align-justify { text-align: justify; }
+.noema-columns:is(.noema-columns-align-left, .noema-columns-align-center, .noema-columns-align-right, .noema-columns-align-justify)
+  :is(p, li, blockquote),
+:is(.noema-column-pane, .cm-column-pane):is(.noema-columns-align-left, .noema-columns-align-center, .noema-columns-align-right, .noema-columns-align-justify)
+  :is(p, li, blockquote) {
+  text-align: inherit;
+}
+
+.noema-columns.noema-columns-columns:not(.cm-columns-widget):not(.cm-columns-active-top),
+.noema-columns-columns > .cm-columns-content {
   display: grid;
-  grid-template-columns: var(--noema-layout-tracks, repeat(var(--noema-layout-cols, 2), minmax(0, 1fr)));
+  grid-template-columns: var(--noema-columns-tracks, repeat(var(--noema-columns-count, 2), minmax(0, 1fr)));
   align-items: start;
-  gap: var(--noema-layout-gap);
+  gap: var(--noema-columns-gap);
 }
-.noema-layout-group.noema-layout-flow:not(.cm-layout-group-widget),
-.noema-layout-flow > .cm-layout-group-content {
-  column-count: var(--noema-layout-cols, 2);
-  column-gap: clamp(1.5rem, 3vw, 2.4rem);
-  column-rule: 1px solid var(--noema-layout-rule);
+.noema-columns-valign-top.noema-columns-columns:not(.cm-columns-widget):not(.cm-columns-active-top),
+.noema-columns-valign-top > .cm-columns-content { align-items: start; }
+.noema-columns-valign-center.noema-columns-columns:not(.cm-columns-widget):not(.cm-columns-active-top),
+.noema-columns-valign-center > .cm-columns-content { align-items: center; }
+.noema-columns-valign-bottom.noema-columns-columns:not(.cm-columns-widget):not(.cm-columns-active-top),
+.noema-columns-valign-bottom > .cm-columns-content { align-items: end; }
+.noema-columns-valign-stretch.noema-columns-columns:not(.cm-columns-widget):not(.cm-columns-active-top),
+.noema-columns-valign-stretch > .cm-columns-content { align-items: stretch; }
+
+.noema-columns.noema-columns-flow:not(.cm-columns-widget):not(.cm-columns-active-top),
+.noema-columns-flow > .cm-columns-content {
+  column-count: var(--noema-columns-count, 2);
+  column-gap: var(--noema-columns-gap);
+  column-rule: 1px solid var(--noema-columns-rule);
 }
-.noema-layout-flow :is(h2, h3, h4, h5, h6) { break-after: avoid; }
-.noema-layout-grid:not(.cm-layout-group-widget) > :is(p, figure, table, blockquote, pre),
-.noema-layout-grid > .cm-layout-group-content > .cm-layout-cell {
-  padding-block: 0.25em;
+.noema-columns-flow.noema-columns-rule-off:not(.cm-columns-widget):not(.cm-columns-active-top),
+.noema-columns-flow.noema-columns-rule-off > .cm-columns-content {
+  column-rule: 0;
 }
-:is(.noema-layout-grid:not(.cm-layout-group-widget)[data-cols="2"] > :nth-child(2n),
-    .noema-layout-grid:not(.cm-layout-group-widget)[data-cols="3"] > :not(:nth-child(3n + 1)),
-    .noema-layout-grid:not(.cm-layout-group-widget)[data-cols="4"] > :not(:nth-child(4n + 1)),
-    .noema-layout-grid[data-cols="2"] > .cm-layout-group-content > :nth-child(2n),
-    .noema-layout-grid[data-cols="3"] > .cm-layout-group-content > :not(:nth-child(3n + 1)),
-    .noema-layout-grid[data-cols="4"] > .cm-layout-group-content > :not(:nth-child(4n + 1))) {
-  border-inline-start: var(--noema-layout-cell-rule);
-  padding-inline-start: var(--noema-layout-cell-inset);
+.noema-columns-flow :is(h1, h2, h3, h4, h5, h6) { break-after: avoid; }
+.noema-columns-flow > :is(figure, table, pre, org-env-block),
+.noema-columns-flow > .cm-columns-content > :is(figure, table, pre, org-env-block) { break-inside: avoid; }
+
+.noema-column-pane,
+.cm-column-pane {
+  position: relative;
+  min-width: 0;
 }
-.noema-layout-group > :is(p, figure, table, blockquote, pre),
-.cm-layout-group-content > :is(p, figure, table, blockquote, pre) { margin-block: 0; min-width: 0; }
-/* Published Markdown uses the same figure layout attributes as CM6. Apply
- * geometry by the shared class/variables, independent of the figure kind. */
+.noema-columns-rule-on.noema-columns-columns:not(.cm-columns-widget):not(.cm-columns-active-top) > .noema-column-pane + .noema-column-pane::before,
+.noema-columns-rule-on.noema-columns-columns > .cm-columns-content > .cm-column-pane + .cm-column-pane::before {
+  content: "";
+  position: absolute;
+  top: 0.15em;
+  bottom: 0.15em;
+  inset-inline-start: calc(var(--noema-columns-gap) * -0.5);
+  width: 1px;
+  background: var(--noema-columns-rule);
+  pointer-events: none;
+}
+.noema-column-pane > :first-child,
+.cm-column-pane-body > :first-child { margin-top: 0; }
+.noema-column-pane > :last-child,
+.cm-column-pane-body > :last-child { margin-bottom: 0; }
+.noema-column-pane > *,
+.cm-column-pane-body > * { min-width: 0; max-width: 100%; }
+.noema-column-pane :is(img, video, svg, table),
+.cm-column-pane-body :is(img, video, svg, table) { max-width: 100%; }
+.cm-column-pane-empty {
+  margin: 0;
+  padding: 0.18em 0.5em;
+  border: 1px dashed var(--noema-columns-rule);
+  border-radius: 5px;
+  color: var(--muted, #8b949e);
+  font-size: 0.86em;
+  line-height: inherit;
+  text-align: center;
+  opacity: 0.68;
+}
+/* Published Markdown uses the same responsive figure layout contract as CM6. */
 .published-note-page .noema-layout {
   box-sizing: border-box;
   max-width: 100%;
   width: var(--noema-block-layout-width, auto);
   height: var(--noema-block-layout-height, auto);
+}
+.published-note-page figure.noema-layout.noema-layout-has-width {
+  width: var(--noema-block-layout-width);
+  max-width: 100%;
+}
+.published-note-page figure.noema-layout.noema-layout-has-width > :is(img, video, svg, iframe, .cm-image-render, .noema-tikz-image, .noema-visual-embed) {
+  width: 100%;
+  max-width: 100%;
 }
 .published-note-page :is(img, figure, pre).noema-layout { display: block; }
 .published-note-page .noema-block-layout-align-left { margin-left: 0; margin-right: auto; }
@@ -1125,108 +1175,455 @@
 .published-note-page .noema-block-layout-wrap.noema-block-layout-align-left {
   float: left;
   width: var(--noema-block-layout-width, min(45%, 32rem));
+  max-width: 100%;
   margin: 0 1em 0.5em 0;
 }
 .published-note-page .noema-block-layout-wrap.noema-block-layout-align-right {
   float: right;
   width: var(--noema-block-layout-width, min(45%, 32rem));
+  max-width: 100%;
   margin: 0 0 0.5em 1em;
 }
-.noema-layout-flow > :is(figure, table, pre),
-.noema-layout-flow > .cm-layout-group-content > :is(figure, table, pre),
-.noema-layout-flow > .cm-layout-group-content > .cm-layout-cell:has(:is(figure, table, pre)) { break-inside: avoid; }
-.cm-editor .cm-layout-group-widget { position: relative; padding-top: 1.6rem; }
-.cm-editor .cm-layout-cell { position: relative; min-width: 0; }
-.cm-editor .cm-layout-cell > :not(.cm-layout-cell-grip) { max-width: 100%; }
-.cm-editor .cm-layout-cell-grip {
+@media (max-width: 560px) {
+  .cm-editor .noema-block-layout-wrap,
+  .published-note-page .noema-block-layout-wrap {
+    float: none !important;
+    width: min(100%, var(--noema-block-layout-width, 100%)) !important;
+    max-width: 100% !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
+}
+/* Float containment: structural boundaries and non-wrapped block figures clear
+ * earlier wrapped floats so headings, horizontal rules, org-env ends, and full-
+ * width tables/math/diagrams never overlap or pull beside a previous section's
+ * float. Paired floats (both carrying `.noema-*-wrap`) remain side by side, and
+ * prose paragraphs/lists wrap beside floats normally. */
+.cm-editor .cm-content::after {
+  content: "";
+  display: block;
+  clear: both;
+}
+.cm-editor :is(
+  .cm-line.cm-md-h1,
+  .cm-line.cm-md-h2,
+  .cm-line.cm-md-h3,
+  .cm-line.cm-md-h4,
+  .cm-line.cm-md-h5,
+  .cm-line.cm-md-h6,
+  .noema-section-heading,
+  .cm-horizontal-rule,
+  .cm-org-env-heading-widget,
+  .cm-org-env-end-widget,
+  .cm-org-env-block,
+  .cm-math-block,
+  .cm-table-block:not(.noema-table-wrap),
+  .cm-table-source-toolbar:not(.noema-table-wrap),
+  .cm-mermaid-widget:not(.noema-diagram-wrap),
+  .cm-tikz-env-widget:not(.noema-image-wrap),
+  .cm-image-widget:not(.noema-image-wrap):not(.cm-image-row-item)
+),
+.published-note-page :is(
+  h1, h2, h3, h4, h5, h6,
+  hr,
+  org-env-block,
+  .noema-section-heading,
+  .noema-math-block,
+  table:not(.noema-block-layout-wrap),
+  figure:not(.noema-block-layout-wrap)
+) {
+  clear: both;
+}
+/* CM6 Columns preview & editing-state banners (zero vertical margin on MeasuredWidget roots). */
+.cm-editor .cm-columns-widget {
+  position: relative;
+  margin: 0;
+  padding-block: 0.75em;
+}
+.cm-editor .cm-columns-widget:not([data-cols="1"]) > .cm-columns-content {
+  border-block: 1px solid var(--noema-columns-rule);
+  padding-block: 0.85em;
+}
+.cm-editor .cm-column-pane-grip {
   position: absolute;
   top: 0;
   right: 0;
   z-index: 4;
-  border: 0;
-  border-radius: 4px;
-  padding: 2px 5px;
-  background: var(--noema-surface, #252a35);
-  color: var(--noema-text, #e4e8f0);
+  border: 1px solid color-mix(in srgb, var(--border, rgba(148, 163, 184, 0.26)), transparent 15%);
+  border-radius: 5px;
+  padding: 1px 5px;
+  background: var(--noema-panel-bg, var(--noema-surface, #252a35));
+  color: var(--muted, var(--noema-text, #cbd5e1));
+  font-size: 0.78rem;
+  line-height: 1.25;
   cursor: grab;
   opacity: 0;
+  transition: opacity 0.14s ease, color 0.14s ease, border-color 0.14s ease;
 }
-.cm-editor .cm-layout-cell:hover > .cm-layout-cell-grip,
-.cm-editor .cm-layout-cell:focus-within > .cm-layout-cell-grip { opacity: 1; }
-.cm-editor .cm-layout-column-divider {
+.cm-editor .cm-column-pane:hover > .cm-column-pane-grip,
+.cm-editor .cm-column-pane:focus-within > .cm-column-pane-grip { opacity: 0.92; }
+.cm-editor .cm-column-pane-grip:hover {
+  color: var(--ink, var(--noema-text, #f8fafc));
+  border-color: var(--accent, #6e9fff);
+}
+.cm-editor .cm-column-pane.is-dragging { opacity: 0.55; }
+.cm-editor .cm-column-pane.is-drag-over {
+  outline: 1.5px dashed var(--accent, #6e9fff);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.cm-editor .cm-columns-divider {
   position: absolute;
-  top: 1.6rem;
-  bottom: 0;
-  z-index: 3;
+  top: 0.75em;
+  bottom: 0.75em;
+  z-index: 5;
   width: 12px;
+  padding: 0;
   transform: translateX(-50%);
   border: 0;
-  border-left: 2px solid transparent;
   background: transparent;
   cursor: col-resize;
   touch-action: none;
 }
-.cm-editor .cm-layout-column-divider:hover,
-.cm-editor .cm-layout-column-divider:focus-visible {
-  border-left-color: var(--aaron-link, #6e9fff);
-}
-.cm-editor .cm-layout-group-tools {
+.cm-editor .cm-columns-divider::after {
+  content: "";
   position: absolute;
-  top: 0;
-  right: 0;
-  z-index: 6;
-  display: flex;
-  gap: 2px;
-  opacity: 0;
+  top: 0.35em;
+  bottom: 0.35em;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.14s ease;
+}
+.cm-editor .cm-columns-divider:hover::after,
+.cm-editor .cm-columns-divider:focus-visible::after,
+.cm-editor .cm-columns-divider.is-dragging::after {
+  background: var(--accent, var(--aaron-link, #6e9fff));
+}
+.cm-editor .cm-columns-resize-badge {
+  top: 50%;
+  transform: translate(-50%, -50%);
   pointer-events: none;
 }
-.cm-editor .cm-layout-group-widget:hover > .cm-layout-group-tools,
-.cm-editor .cm-layout-group-widget:focus-within > .cm-layout-group-tools {
+
+.cm-editor .cm-columns-toolbar {
+  position: absolute;
+  bottom: calc(100% - 0.55em);
+  right: 0;
+  z-index: 8;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.24));
+  border-radius: 7px;
+  background: var(--noema-panel-bg, var(--noema-surface, rgba(28, 33, 44, 0.94)));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease;
+}
+.cm-editor .cm-columns-widget:hover > .cm-columns-toolbar,
+.cm-editor .cm-columns-widget:focus-within > .cm-columns-toolbar,
+.cm-editor .cm-columns-active-top:hover > .cm-columns-toolbar,
+.cm-editor .cm-columns-active-top:focus-within > .cm-columns-toolbar {
   opacity: 1;
   pointer-events: auto;
 }
-.cm-editor .cm-layout-group-tools button {
+/* In WYSIWYG active editing mode, keep toolbar quietly reachable at top-right. */
+.cm-editor .cm-columns-active-top > .cm-columns-toolbar {
+  bottom: calc(100% - 0.35em);
+  opacity: 0.42;
+  pointer-events: auto;
+}
+.cm-editor .cm-columns-active-top > .cm-columns-toolbar:hover {
+  opacity: 1;
+}
+
+/* Single-surface WYSIWYG side-by-side column editing stage. */
+.cm-editor .cm-columns-active-top {
+  display: block;
+  position: relative;
+  margin: 0;
+  padding: 0.75em 0 0;
+  border: 0;
+}
+.cm-editor .cm-columns-active-top-border {
+  height: 0.85em;
+  border-top: 1px solid var(--noema-columns-rule);
+}
+.cm-editor .cm-columns-active-top[data-cols="1"] > .cm-columns-active-top-border {
+  border-top: 0;
+  height: 0.25em;
+}
+.cm-editor .cm-columns-sibling-stage {
+  position: relative;
+  width: 100%;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.cm-editor .cm-columns-active-backdrop {
+  position: absolute;
+  box-sizing: content-box;
+  top: -0.25em;
+  height: calc(var(--cm-columns-stage-height, 24px) + 0.5em);
+  margin-left: -6px;
+  padding-inline: 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent, #6e9fff) 4.5%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent, #6e9fff) 24%, transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+.cm-editor .cm-columns-sibling-pane {
+  position: absolute;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-height: var(--cm-columns-stage-height, 24px);
+  box-sizing: border-box;
+  min-width: 0;
+  pointer-events: auto;
+  cursor: text;
+  z-index: 5;
+}
+.cm-editor .cm-columns-sibling-stage[data-valign="center"] > .cm-columns-sibling-pane {
+  justify-content: center;
+}
+.cm-editor .cm-columns-sibling-stage[data-valign="bottom"] > .cm-columns-sibling-pane {
+  justify-content: flex-end;
+}
+.cm-editor .cm-columns-sibling-pane:hover > .cm-column-pane-grip,
+.cm-editor .cm-columns-sibling-pane:focus-within > .cm-column-pane-grip {
+  opacity: 0.92;
+}
+.cm-editor .cm-columns-stage-rule {
+  position: absolute;
+  top: 0.1em;
+  height: max(12px, calc(var(--cm-columns-stage-height, 24px) - 0.2em));
+  width: 1px;
+  background: var(--noema-columns-rule);
+  pointer-events: none;
+  z-index: 1;
+}
+.cm-editor .cm-columns-sibling-stage > .cm-columns-divider {
+  top: 0;
+  bottom: auto;
+  height: max(24px, var(--cm-columns-stage-height, 24px));
+  z-index: 6;
+  pointer-events: auto;
+}
+.cm-editor .cm-line.cm-columns-active-line {
+  position: relative;
+  z-index: 2;
+  box-sizing: border-box;
+  padding-left: var(--cm-col-left, 0px);
+  padding-right: var(--cm-col-right, 0px);
+  overflow-wrap: anywhere;
+}
+.cm-editor .cm-line.cm-columns-active-line.cm-org-env-line {
+  padding-left: calc(var(--cm-col-left, 0px) + var(--org-env-depth, 0) * 1.1rem + 1rem + 3px);
+}
+.cm-editor .cm-content > .cm-columns-active-top ~ :not(.cm-line):not(.cm-columns-active-bottom):not(.cm-columns-active-bottom ~ *) {
+  position: relative;
+  z-index: 2;
+  box-sizing: border-box;
+  padding-left: var(--cm-active-col-left, 0px);
+  padding-right: var(--cm-active-col-right, 0px);
+}
+.cm-editor .cm-line.cm-columns-flow-editing-line {
+  position: relative;
+  z-index: 2;
+}
+.cm-editor .cm-columns-active-bottom {
+  position: relative;
+  margin: 0;
+  padding: calc(var(--cm-columns-bottom-spacer, 0px) + 0.85em) 0 0.75em;
+  pointer-events: none;
+}
+.cm-editor .cm-columns-active-bottom-border {
+  border-bottom: 1px solid var(--noema-columns-rule);
+}
+.cm-editor .cm-columns-active-bottom[data-cols="1"] > .cm-columns-active-bottom-border {
+  border-bottom: 0;
+}
+.cm-editor .cm-columns-tool-btn {
   border: 0;
   border-radius: 4px;
   padding: 2px 6px;
-  background: var(--noema-surface, #252a35);
-  color: var(--noema-text, #e4e8f0);
+  background: transparent;
+  color: var(--ink, var(--noema-text, #e4e8f0));
+  font: 500 11.5px/1.35 var(--ui-font, system-ui, sans-serif);
   cursor: pointer;
+  white-space: nowrap;
 }
-@media (max-width: 640px) {
-  .noema-layout-group {
-    --noema-layout-cell-rule: 0;
-    --noema-layout-cell-inset: 0;
-  }
-  .noema-layout-group.noema-layout-grid:not(.cm-layout-group-widget),
-  .noema-layout-grid > .cm-layout-group-content { grid-template-columns: minmax(0, 1fr); }
-  .noema-layout-group.noema-layout-flow:not(.cm-layout-group-widget),
-  .noema-layout-flow > .cm-layout-group-content { column-count: 1; column-rule: 0; }
-  .cm-editor .cm-layout-column-divider { display: none; }
+.cm-editor .cm-columns-tool-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent, #6e9fff) 16%, transparent);
 }
-.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) {
-  position: absolute;
-  top: 0.5rem;
-  left: 50%;
-  transform: translateX(-50%) translateY(-4px);
-  z-index: 5;
+.cm-editor .cm-columns-tool-btn.is-active {
+  background: color-mix(in srgb, var(--accent, #6e9fff) 24%, transparent);
+  color: var(--accent, #7cb4ff);
+}
+.cm-editor .cm-columns-tool-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.cm-editor .cm-columns-tool-sep {
+  width: 1px;
+  height: 12px;
+  margin-inline: 2px;
+  background: var(--border, rgba(148, 163, 184, 0.24));
+}
+
+/* Editing-state column banners (zero vertical margin on MeasuredWidget roots). */
+.cm-editor .cm-columns-open-banner {
   display: flex;
   align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--noema-columns-rule, rgba(148, 163, 184, 0.28));
+  background: color-mix(in srgb, var(--accent, #6e9fff) 6%, transparent);
+  border-radius: 6px 6px 0 0;
+  font: 500 11.5px/1.3 var(--ui-font, system-ui, sans-serif);
+  color: var(--muted, #94a3b8);
+  cursor: pointer;
+}
+.cm-editor .cm-columns-banner-badge {
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  font-size: 10.5px;
+  color: var(--accent, #7cb4ff);
+}
+.cm-editor .cm-columns-banner-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  opacity: 0.85;
+}
+.cm-editor .cm-columns-banner-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cm-editor .cm-columns-banner-btn {
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.26));
+  border-radius: 4px;
+  padding: 1px 7px;
+  background: transparent;
+  color: var(--ink, var(--noema-text, #e4e8f0));
+  font: 500 11px/1.35 var(--ui-font, system-ui, sans-serif);
+  cursor: pointer;
+}
+.cm-editor .cm-columns-banner-btn:hover {
+  border-color: var(--accent, #6e9fff);
+  color: var(--accent, #7cb4ff);
+}
+.cm-editor .cm-columns-banner-done {
+  background: color-mix(in srgb, var(--accent, #6e9fff) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #6e9fff) 45%, transparent);
+}
+.cm-editor .cm-columns-col-banner,
+.cm-editor .cm-columns-close-banner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0.3rem 0;
+  cursor: pointer;
+}
+.cm-editor .cm-columns-col-banner::before,
+.cm-editor .cm-columns-close-banner::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--noema-columns-rule, rgba(148, 163, 184, 0.26));
+}
+.cm-editor .cm-columns-col-pill,
+.cm-editor .cm-columns-close-pill {
+  position: relative;
+  z-index: 1;
+  padding: 0.08rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--noema-columns-rule, rgba(148, 163, 184, 0.28));
+  background: var(--bg, var(--noema-bg, #151922));
+  color: var(--muted, #94a3b8);
+  font: 500 10.5px/1.35 var(--ui-font, system-ui, sans-serif);
+  letter-spacing: 0.03em;
+}
+.cm-editor .cm-columns-source-directive {
+  font-family: var(--mono-font, ui-monospace, monospace);
+  font-size: 0.88em;
+}
+
+@media (max-width: 640px) {
+  .noema-columns.noema-columns-columns:not(.cm-columns-widget):not(.cm-columns-active-top),
+  .noema-columns-columns > .cm-columns-content { grid-template-columns: minmax(0, 1fr); }
+  .noema-columns-rule-on.noema-columns-columns:not(.cm-columns-widget):not(.cm-columns-active-top) > .noema-column-pane + .noema-column-pane::before,
+  .noema-columns-rule-on.noema-columns-columns > .cm-columns-content > .cm-column-pane + .cm-column-pane::before {
+    display: none;
+  }
+  .noema-columns.noema-columns-flow:not(.cm-columns-widget):not(.cm-columns-active-top),
+  .noema-columns-flow > .cm-columns-content { column-count: 1; column-rule: 0; }
+  .cm-editor .cm-columns-divider { display: none; }
+  .cm-editor .cm-columns-sibling-stage { display: none; }
+  .cm-editor .cm-line.cm-columns-active-line,
+  .cm-editor .cm-content > .cm-columns-active-top ~ :not(.cm-line):not(.cm-columns-active-bottom):not(.cm-columns-active-bottom ~ *) {
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .cm-editor .cm-columns-active-bottom {
+    --cm-columns-bottom-spacer: 0px;
+  }
+}
+/* Unified floating layout toolbar shared by images, TikZ, diagrams, and table popovers. */
+.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) {
+  position: absolute;
+  top: 0.45rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(-4px);
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
   gap: 1px;
-  padding: 2px;
+  width: max-content;
+  padding: 2px 3px;
+  border: 1px solid color-mix(in srgb, var(--aaron-paper-line, #414b61), transparent 20%);
   border-radius: 7px;
-  background: var(--noema-surface, rgba(32, 33, 36, 0.92));
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  background: color-mix(in srgb, var(--aaron-panel, rgba(32, 33, 36, 0.94)), transparent 4%);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
   opacity: 0;
   pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
 }
-.cm-editor .cm-image-widget:hover .cm-image-toolbar,
-.cm-editor .cm-image-widget:focus-within .cm-image-toolbar,
-.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget):hover > .cm-figure-layout-toolbar,
-.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget):focus-within > .cm-figure-layout-toolbar {
+/* Edge-safe anchoring so narrow left/right aligned or wrapped figures never clip the bar. */
+.cm-editor .noema-block-layout-align-left > :is(.cm-image-toolbar, .cm-figure-layout-toolbar) {
+  left: 4px;
+  right: auto;
+  transform: translateY(-4px);
+}
+.cm-editor .noema-block-layout-align-right > :is(.cm-image-toolbar, .cm-figure-layout-toolbar) {
+  left: auto;
+  right: 4px;
+  transform: translateY(-4px);
+}
+.cm-editor :is(.cm-image-widget, .cm-tikz-env-widget, .cm-mermaid-widget):hover > :is(.cm-image-toolbar, .cm-figure-layout-toolbar),
+.cm-editor :is(.cm-image-widget, .cm-tikz-env-widget, .cm-mermaid-widget):focus-within > :is(.cm-image-toolbar, .cm-figure-layout-toolbar) {
   opacity: 1;
   pointer-events: auto;
   transform: translateX(-50%) translateY(0);
+}
+.cm-editor .noema-block-layout-align-left:is(:hover, :focus-within) > :is(.cm-image-toolbar, .cm-figure-layout-toolbar),
+.cm-editor .noema-block-layout-align-right:is(:hover, :focus-within) > :is(.cm-image-toolbar, .cm-figure-layout-toolbar) {
+  transform: translateY(0);
 }
 .cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-image-tool-button {
   appearance: none;
@@ -1249,18 +1646,26 @@
   background: rgba(120, 170, 255, 0.32);
   color: #fff;
 }
-.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-figure-move-grip {
+.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-figure-move-grip,
+.cm-editor .cm-table-toolbar .cm-figure-move-grip {
   appearance: none;
   border: 0;
   background: transparent;
-  color: rgba(255, 255, 255, 0.82);
+  color: inherit;
   font: inherit;
   line-height: 1;
   padding: 4px 6px;
   border-radius: 5px;
   cursor: grab;
 }
-.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-figure-move-grip:active { cursor: grabbing; }
+.cm-editor .cm-table-toolbar .cm-figure-move-grip {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  color: var(--aaron-muted, #a9bed3);
+}
+.cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-figure-move-grip:active,
+.cm-editor .cm-table-toolbar .cm-figure-move-grip:active { cursor: grabbing; }
 .cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-figure-move-grip:hover,
 .cm-editor :is(.cm-image-toolbar, .cm-figure-layout-toolbar) .cm-figure-move-grip:focus-visible {
   background: rgba(255, 255, 255, 0.16);
@@ -1272,76 +1677,94 @@
   margin: 2px 3px;
   background: rgba(255, 255, 255, 0.18);
 }
-.cm-editor .cm-image-resize-handle {
+/* Unified responsive `%` width resize corner handle shared by ALL 4 figure kinds. */
+.cm-editor :is(.cm-image-widget, .cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget) > :is(.cm-figure-resize-handle, .cm-image-resize-handle) {
   position: absolute;
   right: 3px;
   bottom: 3px;
-  z-index: 6;
-  width: 17px;
-  height: 17px;
+  z-index: 8;
+  width: 16px;
+  height: 16px;
   padding: 0;
   border: 0;
-  border-right: 2px solid color-mix(in srgb, var(--aaron-link, #9de7ff), transparent 18%);
-  border-bottom: 2px solid color-mix(in srgb, var(--aaron-link, #9de7ff), transparent 18%);
+  border-right: 2px solid color-mix(in srgb, var(--aaron-link, #6e9fff), transparent 15%);
+  border-bottom: 2px solid color-mix(in srgb, var(--aaron-link, #6e9fff), transparent 15%);
   background: transparent;
   cursor: nwse-resize;
-  opacity: 0;
   touch-action: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
-.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget) > .cm-figure-resize-handle {
-  position: absolute;
+/* On preview tables, sit flush on the table's bottom-right corner above the 14px `+ row` strip. */
+.cm-editor .cm-table-block > .cm-figure-resize-handle {
+  bottom: 15px;
   right: 2px;
-  bottom: 2px;
-  z-index: 7;
-  width: 17px;
-  height: 17px;
-  border: 0;
-  border-right: 2px solid var(--aaron-link, #6e9fff);
-  border-bottom: 2px solid var(--aaron-link, #6e9fff);
-  background: transparent;
-  cursor: nwse-resize;
-  touch-action: none;
-  opacity: 0;
 }
-.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget):hover > .cm-figure-resize-handle,
-.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget):focus-within > .cm-figure-resize-handle,
-.cm-editor .cm-figure-resize-handle.is-resizing { opacity: 0.9; }
-.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget).is-resizing { user-select: none; }
-.cm-editor :is(.cm-image-widget, .cm-table-editable-block, .cm-mermaid-widget) > .cm-figure-height-handle {
+/* On editing tables, sit in the bottom-right corner of the edge widget beside `+ col`. */
+.cm-editor .cm-table-source-edge > .cm-figure-resize-handle {
+  bottom: 2px;
+  right: 0;
+  width: 14px;
+  height: 12px;
+}
+.cm-editor :is(.cm-image-widget, .cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget):hover > :is(.cm-figure-resize-handle, .cm-image-resize-handle),
+.cm-editor :is(.cm-image-widget, .cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget):focus-within > :is(.cm-figure-resize-handle, .cm-image-resize-handle),
+.cm-editor :is(.cm-figure-resize-handle, .cm-image-resize-handle).is-resizing {
+  opacity: 0.9;
+}
+.cm-editor :is(.cm-image-widget, .cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget).is-resizing {
+  user-select: none;
+}
+/* Live percentage / pixel feedback pill displayed only while actively dragging. */
+.cm-editor .cm-figure-resize-badge {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 25;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--aaron-panel, rgba(24, 28, 38, 0.94));
+  border: 1px solid color-mix(in srgb, var(--aaron-link, #6e9fff), transparent 40%);
+  color: var(--aaron-ink, #e4ecff);
+  font: 600 11px/1.2 var(--aaron-font-mono, ui-monospace, monospace);
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 32%);
+}
+/* Bottom-edge height handle: scoped strictly to fixed-viewport figures (HTML embeds & diagrams). */
+.cm-editor :is(.cm-image-widget, .cm-mermaid-widget) > .cm-figure-height-handle {
   position: absolute;
   left: 50%;
   bottom: 2px;
   transform: translateX(-50%);
-  z-index: 7;
+  z-index: 8;
   width: 28px;
   height: 9px;
   padding: 0;
   border: 0;
-  border-bottom: 2px solid var(--aaron-link, #6e9fff);
+  border-bottom: 2px solid color-mix(in srgb, var(--aaron-link, #6e9fff), transparent 15%);
   border-radius: 2px;
   background: transparent;
   cursor: ns-resize;
   touch-action: none;
   opacity: 0;
+  transition: opacity 120ms ease;
 }
-.cm-editor :is(.cm-image-widget, .cm-table-editable-block, .cm-mermaid-widget):hover > .cm-figure-height-handle,
-.cm-editor :is(.cm-image-widget, .cm-table-editable-block, .cm-mermaid-widget):focus-within > .cm-figure-height-handle,
-.cm-editor .cm-figure-height-handle.is-resizing { opacity: 0.9; }
-.cm-editor :is(.cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget).noema-image-align-right > .cm-figure-resize-handle,
-.cm-editor .cm-table-editable-block.noema-table-align-right > .cm-figure-resize-handle,
-.cm-editor .cm-mermaid-widget.noema-diagram-align-right > .cm-figure-resize-handle {
+.cm-editor :is(.cm-image-widget, .cm-mermaid-widget):hover > .cm-figure-height-handle,
+.cm-editor :is(.cm-image-widget, .cm-mermaid-widget):focus-within > .cm-figure-height-handle,
+.cm-editor .cm-figure-height-handle.is-resizing {
+  opacity: 0.9;
+}
+.cm-editor :is(.cm-image-widget, .cm-table-editable-block, .cm-tikz-env-widget, .cm-mermaid-widget).noema-block-layout-align-right > :is(.cm-figure-resize-handle, .cm-image-resize-handle) {
   right: auto;
   left: 2px;
   border-right: 0;
-  border-left: 2px solid var(--aaron-link, #6e9fff);
+  border-left: 2px solid color-mix(in srgb, var(--aaron-link, #6e9fff), transparent 15%);
+  cursor: nesw-resize;
 }
-.cm-editor .cm-image-widget:hover .cm-image-resize-handle,
-.cm-editor .cm-image-widget:focus-within .cm-image-resize-handle,
-.cm-editor .cm-image-resize-handle.is-resizing {
-  opacity: 0.9;
-}
-.cm-editor .cm-image-widget.is-resizing {
-  user-select: none;
+.cm-editor .noema-block-layout-align-right > :is(.cm-figure-resize-handle, .cm-image-resize-handle) .cm-figure-resize-badge {
+  right: auto;
+  left: 0;
 }
 .noema-visual-attachment {
   display: block;
@@ -1371,28 +1794,38 @@
   margin-right: 0;
   text-align: right;
 }
-.cm-editor .cm-image-widget.noema-image-wrap.noema-image-align-left {
-  float: left;
+/* When explicit width (`%` or legacy `px`) is authored, the figure wrapper owns
+ * the horizontal measure once against the prose column, and its artwork fills
+ * 100% of that box — preventing `%`-inside-`fit-content` collapse and double-% shrinkage. */
+.cm-editor .cm-image-widget.noema-layout-has-width {
+  width: var(--noema-image-width);
+  max-width: 100%;
+}
+.cm-editor .cm-image-widget.noema-layout-has-width > :is(.cm-image-render, .cm-tikz-env-image, .cm-visual-embed, .cm-visual-file-card) {
+  width: 100%;
+  max-width: 100%;
+}
+.cm-editor .cm-image-widget.noema-image-wrap {
+  padding: 0.15em 0 0.25em;
+}
+.cm-editor .cm-image-widget.noema-image-wrap:not(.noema-layout-has-width),
+.noema-visual-attachment.noema-image-wrap:not(.noema-layout-has-width) {
   width: fit-content;
   max-width: var(--note-float-width, 45%);
-  margin: 0 1em 0.4em 0;
 }
+.cm-editor .cm-image-widget.noema-image-wrap.noema-layout-has-width,
+.noema-visual-attachment.noema-image-wrap.noema-layout-has-width {
+  width: var(--noema-image-width);
+  max-width: 100%;
+}
+.cm-editor .cm-image-widget.noema-image-wrap.noema-image-align-left,
 .noema-visual-attachment.noema-image-wrap.noema-image-align-left {
   float: left;
-  width: fit-content;
-  max-width: var(--noema-image-max-width, var(--note-float-width, 45%));
   margin: 0 1em 0.4em 0;
 }
-.cm-editor .cm-image-widget.noema-image-wrap.noema-image-align-right {
-  float: right;
-  width: fit-content;
-  max-width: var(--note-float-width, 45%);
-  margin: 0 0 0.4em 1em;
-}
+.cm-editor .cm-image-widget.noema-image-wrap.noema-image-align-right,
 .noema-visual-attachment.noema-image-wrap.noema-image-align-right {
   float: right;
-  width: fit-content;
-  max-width: var(--noema-image-max-width, var(--note-float-width, 45%));
   margin: 0 0 0.4em 1em;
 }
 /* An image is artwork, not a UI card: no frame, no plate, no height crop.
@@ -1428,14 +1861,18 @@
 }
 .cm-editor img.noema-image.noema-image-align-left { margin-left: 0; margin-right: auto; }
 .cm-editor img.noema-image.noema-image-align-right { margin-left: auto; margin-right: 0; }
+.cm-editor img.noema-image.noema-image-wrap:not(.noema-layout-has-width) {
+  max-width: var(--note-float-width, 45%);
+}
+.cm-editor img.noema-image.noema-image-wrap.noema-layout-has-width {
+  max-width: 100%;
+}
 .cm-editor img.noema-image.noema-image-wrap.noema-image-align-left {
   float: left;
-  max-width: var(--noema-image-max-width, var(--note-float-width, 45%));
   margin: 0 1em 0.4em 0;
 }
 .cm-editor img.noema-image.noema-image-wrap.noema-image-align-right {
   float: right;
-  max-width: var(--noema-image-max-width, var(--note-float-width, 45%));
   margin: 0 0 0.4em 1em;
 }
 /* A draw.io diagram is artwork: the host exports it to SVG, so it has an
@@ -1552,17 +1989,17 @@ iframe.noema-embed-fullscreen {
 }
 .cm-editor .cm-image-widget.noema-image-align-left .cm-image-render { margin-left: 0; margin-right: auto; }
 .cm-editor .cm-image-widget.noema-image-align-right .cm-image-render { margin-left: auto; margin-right: 0; }
-.cm-editor .cm-image-widget.noema-image-wrap .cm-image-render {
-  width: var(--noema-image-width, auto);
+.cm-editor .cm-image-widget.noema-image-wrap:not(.noema-layout-has-width) .cm-image-render {
+  width: auto;
   max-width: 100%;
 }
 .cm-editor .cm-image-widget.noema-image-wrap .cm-visual-embed {
-  width: var(--noema-image-width, min(100%, 100%));
+  width: 100%;
   min-width: 0;
   max-width: 100%;
 }
 .noema-visual-attachment.noema-image-wrap .noema-visual-embed {
-  width: var(--noema-image-width, min(100%, 100%));
+  width: 100%;
 }
 .cm-editor .cm-line:has(.cm-image-widget.noema-image-wrap) {
   contain: none;
@@ -2868,21 +3305,41 @@ iframe.noema-embed-fullscreen {
 .cm-editor .code-token-punctuation { color: var(--noema-code-punctuation); }
 
 /* ─── CM6 mermaid / diagram widgets ─────────────────────────────── */
+/* Diagram figures share the exact same `.cm-float-anchor` wrap contract as
+ * TikZ and tables: `.cm-float-anchor` owns the 0px CM6 height-map anchor while
+ * `.cm-mermaid-widget` is the real floated/sized box so resize handles always
+ * stay anchored at the real bottom edge. */
 .cm-editor .cm-mermaid-widget {
   position: relative;
   display: flow-root;
-  width: 100%;
+  box-sizing: border-box;
+  width: var(--noema-diagram-width, 100%);
   max-width: 100%;
-  margin: 0;
+  margin: 0 auto;
   padding: 0;
 }
-/* Wrap variant: outer is a zero-height non-BFC anchor so CM6 records 0 in the
- * height map; the inner .cm-mermaid-block floats out and text wraps beside it. */
+.cm-editor .cm-mermaid-widget.noema-diagram-align-left {
+  margin-left: 0;
+  margin-right: auto;
+}
+.cm-editor .cm-mermaid-widget.noema-diagram-align-right {
+  margin-left: auto;
+  margin-right: 0;
+}
 .cm-editor .cm-mermaid-widget.noema-diagram-wrap {
-  display: block; /* override flow-root so inner float escapes to cm-content */
-  height: 0;      /* CM6 getBoundingClientRect() → 0 → no height-map drift */
+  z-index: 2;
+  width: var(--noema-diagram-width, var(--note-float-width, 45%));
+  max-width: 100%;
+  height: auto;
   overflow: visible;
-  padding: 0;
+}
+.cm-editor .cm-mermaid-widget.noema-diagram-wrap.noema-diagram-align-left {
+  float: left;
+  margin: 0 1em 0.4em 0;
+}
+.cm-editor .cm-mermaid-widget.noema-diagram-wrap.noema-diagram-align-right {
+  float: right;
+  margin: 0 0 0.4em 1em;
 }
 /* A diagram reads as a figure, so it gets the measure and no frame — the same
  * treatment GitHub/GitLab give a rendered mermaid block. The old 460px height
@@ -2933,7 +3390,7 @@ noema-tikz {
  * definite measure, and size the SVG inside that measure only once. */
 .cm-editor .cm-image-widget.cm-tikz-env-widget.noema-image-wrap {
   width: var(--noema-image-width, var(--note-float-width, 45%));
-  max-width: var(--noema-image-max-width, min(100%, var(--note-float-width, 45%)));
+  max-width: 100%;
 }
 .cm-editor .cm-tikz-env-widget.noema-image-wrap .cm-tikz-env-image {
   box-sizing: border-box;
@@ -2953,12 +3410,18 @@ noema-tikz {
   display: block;
   box-sizing: content-box;
   width: var(--noema-image-width, var(--noema-tikz-natural-width, auto));
+  height: var(--noema-image-height, auto);
   max-width: var(--noema-image-max-width, min(100%, var(--note-image-max, 100%)));
   max-height: var(--noema-image-max-height, var(--note-image-max-height, none));
   margin: 0 auto;
   padding: var(--note-figure-paper-pad, 0.55em);
   border-radius: 4px;
   background: transparent;
+}
+.cm-editor .cm-tikz-env-widget.noema-layout-has-width .cm-tikz-env-image {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
 }
 .cm-editor .cm-tikz-env-widget.noema-image-align-left .cm-tikz-env-image,
 .noema-tikz.noema-image-align-left .noema-tikz-image {
@@ -3013,11 +3476,6 @@ noema-tikz {
   overflow-x: auto;
   text-align: left;
 }
-.cm-editor .cm-mermaid-widget > .cm-mermaid-block,
-.cm-editor .cm-mermaid-widget > .cm-mermaid-block-preview {
-  margin-top: 0;
-  margin-bottom: 0;
-}
 .cm-editor .cm-mermaid-block.noema-diagram-align-left,
 .cm-editor .cm-mermaid-block-preview.noema-diagram-align-left {
   margin-left: 0;
@@ -3028,17 +3486,12 @@ noema-tikz {
   margin-left: auto;
   margin-right: 0;
 }
-.cm-editor .cm-mermaid-block.noema-diagram-wrap.noema-diagram-align-left,
-.cm-editor .cm-mermaid-block-preview.noema-diagram-wrap.noema-diagram-align-left {
-  float: left;
-  width: var(--noema-diagram-width, var(--note-float-width, 45%));
-  margin: 0 1em 0.4em 0;
-}
-.cm-editor .cm-mermaid-block.noema-diagram-wrap.noema-diagram-align-right,
-.cm-editor .cm-mermaid-block-preview.noema-diagram-wrap.noema-diagram-align-right {
-  float: right;
-  width: var(--noema-diagram-width, var(--note-float-width, 45%));
-  margin: 0 0 0.4em 1em;
+.cm-editor .cm-mermaid-widget > .cm-mermaid-block,
+.cm-editor .cm-mermaid-widget > .cm-mermaid-block-preview {
+  float: none;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
 }
 .cm-editor .cm-diagram-figure {
   position: relative;
@@ -4934,19 +5387,95 @@ body.has-diagram-fullscreen {
   text-align: left;
 }
 
-/* ─── Table layout (structural — always on; theme styles cells) ──── */
+/* ─── Unified table layout (preview & live editing share one token set) ──── */
+.cm-editor {
+  --noema-table-cell-py: 0.44em;
+  --noema-table-cell-px: 0.66em;
+  --noema-table-line-height: 1.42;
+  --noema-table-border-color: color-mix(in srgb, var(--aaron-paper-line, #414b61), transparent 45%);
+  --noema-table-outer-border: var(--aaron-paper-line, #414b61);
+  --noema-table-header-border: var(--aaron-paper-line, #414b61);
+  --noema-table-header-bg: var(--aaron-panel, #232b3d);
+  --noema-table-alt-bg: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), transparent 55%);
+  --noema-table-focus-ring: var(--aaron-link, var(--accent, #3b82f6));
+}
 .cm-editor .cm-line.cm-table-source-row {
-  display: flex;
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--noema-table-col-template, repeat(var(--noema-table-cols, 2), minmax(0, 1fr)));
   align-items: stretch;
   white-space: normal;
   box-sizing: border-box;
-  width: var(--noema-table-width, 100%);
-  max-width: var(--noema-table-max-width, 100%);
+  --noema-table-effective-width: min(100%, var(--noema-table-width, 100%));
+  width: var(--noema-table-effective-width);
+  max-width: 100%;
   padding: 0;
   border-left: 0;
   background: transparent;
   font-family: inherit;
   font-size: inherit;
+  line-height: var(--noema-table-line-height);
+  font-variant-numeric: tabular-nums;
+}
+/* CodeMirror inserts `<img class="cm-widgetBuffer">` around every inline
+ * widget. Pull all non-cell children out of CSS Grid flow on inactive rows so
+ * they can never occupy grid tracks or stack cells vertically. */
+.cm-editor .cm-line.cm-table-source-row:not(.cm-table-source-has-active) > :not(.cm-table-source-cell) {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+/* The active row uses native CM6 block flow constrained to the active column
+ * via left/right padding; inactive cells sit positioned in their exact columns.
+ * Percentage CSS padding resolves against `.cm-content` (100%), NOT the row's
+ * own width, so multiply by `--noema-table-effective-width` so sized tables
+ * (`{width=75%}`, `{width=500px}`, `{wrap=left}`) never expand or crush the active cell. */
+.cm-editor .cm-line.cm-table-source-row.cm-table-source-has-active {
+  display: block;
+  white-space: break-spaces;
+  min-height: var(--noema-table-active-row-min-h, calc(var(--noema-table-line-height) * 1em + var(--noema-table-cell-py) * 2));
+  padding-top: var(--noema-table-cell-py);
+  padding-bottom: var(--noema-table-cell-py);
+  padding-left: calc(var(--noema-table-effective-width) * var(--noema-table-active-left-ratio, 0) + var(--noema-table-cell-px));
+  padding-right: calc(var(--noema-table-effective-width) * var(--noema-table-active-right-ratio, 0) + var(--noema-table-cell-px));
+  border-bottom: 1px solid var(--noema-table-border-color);
+  text-align: var(--noema-table-active-align, left);
+  overflow-wrap: anywhere;
+}
+.cm-editor .cm-line.cm-table-source-row.cm-table-source-has-active::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--noema-table-active-left, 0%);
+  width: var(--noema-table-active-width, 100%);
+  box-sizing: border-box;
+  border-left: 1px solid var(--noema-table-border-color);
+  background: color-mix(in srgb, var(--noema-table-focus-ring), transparent 92%);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--noema-table-focus-ring), transparent 34%);
+  pointer-events: none;
+  z-index: 1;
+}
+.cm-editor .cm-line.cm-table-source-row.cm-table-source-active-is-last::before {
+  border-right: 1px solid var(--noema-table-border-color);
+}
+.cm-editor .cm-line.cm-table-source-header {
+  border-top: 2px solid var(--noema-table-outer-border);
+}
+.cm-editor .cm-line.cm-table-source-header.cm-table-source-has-active {
+  border-bottom: 1.5px solid var(--noema-table-header-border);
+  background: var(--noema-table-header-bg);
+  font-weight: 600;
+  font-variant-caps: var(--noema-table-header-caps, normal);
+  letter-spacing: var(--noema-table-header-tracking, normal);
+}
+.cm-editor .cm-line.cm-table-source-row.cm-table-source-last-row,
+.cm-editor .cm-line.cm-table-source-row.cm-table-source-last-row.cm-table-source-has-active {
+  border-bottom: 2px solid var(--noema-table-outer-border);
 }
 .cm-editor .cm-line.cm-table-source-explicit-height {
   min-height: calc(var(--noema-table-height) / var(--noema-table-row-count));
@@ -4955,114 +5484,136 @@ body.has-diagram-fullscreen {
   min-height: calc(var(--noema-table-height) / var(--noema-table-row-count) + 1px);
 }
 .cm-editor .cm-table-source-toolbar {
+  position: relative;
   box-sizing: border-box;
   width: var(--noema-table-width, 100%);
-  max-width: var(--noema-table-max-width, 100%);
-  padding-top: 4px;
+  max-width: 100%;
+  height: 6px;
+  padding: 0;
+  overflow: visible;
 }
-.cm-editor :is(.cm-table-source-toolbar, .cm-line.cm-table-source-row).noema-table-align-left {
+.cm-editor .cm-table-source-edge {
+  position: relative;
+  box-sizing: border-box;
+  width: var(--noema-table-width, 100%);
+  max-width: 100%;
+  height: 14px;
+  padding: 0;
+  overflow: visible;
+}
+.cm-editor :is(.cm-table-source-toolbar, .cm-table-source-edge, .cm-line.cm-table-source-row).noema-table-align-left {
   margin-left: 0;
   margin-right: auto;
 }
-.cm-editor :is(.cm-table-source-toolbar, .cm-line.cm-table-source-row).noema-table-align-center {
+.cm-editor :is(.cm-table-source-toolbar, .cm-table-source-edge, .cm-line.cm-table-source-row).noema-table-align-center {
   margin-left: auto;
   margin-right: auto;
 }
-.cm-editor :is(.cm-table-source-toolbar, .cm-line.cm-table-source-row).noema-table-align-right {
+.cm-editor :is(.cm-table-source-toolbar, .cm-table-source-edge, .cm-line.cm-table-source-row).noema-table-align-right {
   margin-left: auto;
   margin-right: 0;
 }
-.cm-editor :is(.cm-table-source-toolbar, .cm-line.cm-table-source-row).noema-table-wrap.noema-table-align-left {
+/* While actively editing a wrapped table, keep its source lines in clean
+ * aligned block flow (matching its authored width/side) instead of floating
+ * individual `.cm-line` elements where surrounding prose would weave between rows. */
+.cm-editor :is(.cm-table-source-toolbar, .cm-table-source-edge, .cm-line.cm-table-source-row).noema-table-wrap.noema-table-align-left {
   position: relative;
-  z-index: 2;
-  float: left;
-  clear: left;
-  width: var(--noema-table-width, min(56%, 520px));
-  margin: 0 1rem 0 0;
+  --noema-table-effective-width: min(100%, var(--noema-table-width, min(56%, 520px)));
+  width: var(--noema-table-effective-width);
+  max-width: 100%;
+  margin-left: 0;
+  margin-right: auto;
 }
-.cm-editor :is(.cm-table-source-toolbar, .cm-line.cm-table-source-row).noema-table-wrap.noema-table-align-right {
+.cm-editor :is(.cm-table-source-toolbar, .cm-table-source-edge, .cm-line.cm-table-source-row).noema-table-wrap.noema-table-align-right {
   position: relative;
-  z-index: 2;
-  float: right;
-  clear: right;
-  width: var(--noema-table-width, min(56%, 520px));
-  margin: 0 0 0 1rem;
-}
-.cm-editor .cm-line.cm-table-source-last-row {
-  margin-bottom: 16px;
-}
-.cm-editor .cm-table-source-last-row .cm-table-source-cell {
-  padding-bottom: 5px;
+  --noema-table-effective-width: min(100%, var(--noema-table-width, min(56%, 520px)));
+  width: var(--noema-table-effective-width);
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: 0;
 }
 .cm-editor .cm-line.cm-table-source-alt-row {
-  background: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), transparent 55%);
+  background: var(--noema-table-alt-bg);
 }
 .cm-editor .cm-table-source-cell {
-  display: inline-block;
+  display: block;
   box-sizing: border-box;
-  flex: 1 1 0;
   min-width: 0;
-  padding: 4px 8px;
-  border: 1px solid var(--aaron-paper-line, #414b61);
+  padding: var(--noema-table-cell-py) var(--noema-table-cell-px);
+  border: 1px solid var(--noema-table-border-color);
   border-top: 0;
   border-right: 0;
-  line-height: 1.42;
+  line-height: var(--noema-table-line-height);
   overflow-wrap: anywhere;
 }
 .cm-editor .cm-table-source-header .cm-table-source-cell {
-  border-top: 1px solid var(--aaron-paper-line, #414b61);
-  border-bottom: 0;
-  box-shadow: inset 0 -1px 0 var(--aaron-paper-line, #414b61);
+  border-bottom: 1.5px solid var(--noema-table-header-border);
+  font-weight: 600;
+  font-variant-caps: var(--noema-table-header-caps, normal);
+  letter-spacing: var(--noema-table-header-tracking, normal);
+  background: var(--noema-table-header-bg);
   text-align: center;
 }
-.cm-editor .cm-table-source-last-cell {
-  border-right: 1px solid var(--aaron-paper-line, #414b61);
+.cm-editor .cm-table-source-last-row .cm-table-source-cell {
+  border-bottom: 0;
+}
+.cm-editor .cm-table-source-cell.cm-table-source-last-cell {
+  border-right: 1px solid var(--noema-table-border-color);
 }
 .cm-editor .cm-table-source-rendered-cell {
   white-space: normal;
   cursor: text;
 }
-.cm-editor .cm-table-source-active-cell {
-  background: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), transparent 45%);
+.cm-editor .cm-line.cm-table-source-row .cm-table-source-positioned-cell {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding: 0;
+  border-bottom: 0;
+  white-space: normal;
+  z-index: 2;
 }
-.cm-editor .cm-table-source-header .cm-table-source-cell {
-  font-weight: 600;
-  background: var(--aaron-panel, #232b3d);
+.cm-editor .cm-table-source-cell-content {
+  display: block;
+  box-sizing: border-box;
+  padding: var(--noema-table-cell-py) var(--noema-table-cell-px);
 }
-.cm-editor .cm-table-source-pipe {
-  display: inline-block;
-  flex: 0 0 0;
+.cm-editor .cm-line.cm-table-source-row .cm-table-source-cell.cm-table-source-active-cell {
+  position: relative;
+  z-index: 2;
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.cm-editor .cm-table-source-row > .cm-table-source-pipe {
+  position: absolute;
+  left: 0;
+  top: 0;
   width: 0;
+  height: 0;
   overflow: hidden;
-  color: transparent;
+  opacity: 0;
+  pointer-events: none;
 }
 /* The active cell owns its closing delimiter. Keep its text line box so
  * WebKit can place a full-height IME caret before the hidden pipe. */
 .cm-editor .cm-table-source-active-cell > .cm-table-source-pipe {
-  display: inline;
-}
-/* CM6 can split the active cell's mark around another inline widget. In that
- * case preserve source order rather than letting the fragments become columns. */
-.cm-editor .cm-line.cm-table-source-row:has(> [contenteditable="false"]:not(.cm-table-source-rendered-cell)) {
-  display: block;
-  padding: 0.35em 0.55em;
-  border: 1px solid var(--aaron-paper-line, #414b61);
-}
-.cm-editor .cm-table-source-row:has(> [contenteditable="false"]:not(.cm-table-source-rendered-cell)) .cm-table-source-cell {
-  display: inline;
-  padding: 0;
-  border: 0;
-}
-.cm-editor .cm-table-source-row:has(> [contenteditable="false"]:not(.cm-table-source-rendered-cell)) .cm-table-source-pipe {
+  position: static;
   display: inline;
   width: auto;
-  color: var(--aaron-muted, #a9bed3);
+  height: auto;
+  opacity: 1;
+  color: transparent;
+  pointer-events: none;
 }
 .cm-editor .cm-line.cm-table-source-rule:not(.cm-table-source-rule-active) {
   height: 0;
   min-height: 0;
   overflow: hidden;
+  margin: 0;
   padding: 0;
+  border: 0;
   font-size: 0;
   line-height: 0;
   pointer-events: none;
@@ -5087,7 +5638,7 @@ body.has-diagram-fullscreen {
  * The cell border / padding / header bg come from the theme. */
 .cm-editor table {
   width: var(--noema-table-width, 100%);
-  max-width: var(--noema-table-max-width, 100%);
+  max-width: 100%;
   height: var(--noema-table-height, auto);
   max-height: var(--noema-table-max-height, none);
   table-layout: fixed;
@@ -5148,12 +5699,12 @@ body.has-diagram-fullscreen {
   display: block;
   box-sizing: border-box;
   width: var(--noema-table-width, 100%);
-  max-width: var(--noema-table-max-width, 100%);
+  max-width: 100%;
   height: var(--noema-table-height, auto);
   max-height: var(--noema-table-max-height, none);
   margin: 0;
-  padding: 4px 0 16px;
-  overflow-x: auto;
+  padding: 6px 0 14px;
+  overflow: visible;
 }
 .cm-editor .cm-table-block.cm-table-explicit-height {
   height: auto;
@@ -5191,49 +5742,115 @@ body.has-diagram-fullscreen {
   width: 100%;
   max-width: 100%;
   margin-bottom: 0;
+  border-top: 2px solid var(--noema-table-outer-border);
+  border-bottom: 2px solid var(--noema-table-outer-border);
 }
 .cm-editor .cm-markdown-table-preview th,
 .cm-editor .cm-markdown-table-preview td {
-  padding: 4px 8px;
-  border: 1px solid var(--aaron-paper-line, #414b61);
+  position: relative;
+  padding: var(--noema-table-cell-py) var(--noema-table-cell-px);
+  border: 1px solid var(--noema-table-border-color);
   vertical-align: top;
-  line-height: 1.42;
+  line-height: var(--noema-table-line-height);
+  font-variant-numeric: tabular-nums;
 }
 .cm-editor .cm-markdown-table-preview th {
+  border-bottom: 1.5px solid var(--noema-table-header-border);
   font-weight: 600;
-  background: var(--aaron-panel, #232b3d);
+  font-variant-caps: var(--noema-table-header-caps, normal);
+  letter-spacing: var(--noema-table-header-tracking, normal);
+  background: var(--noema-table-header-bg);
 }
 .cm-editor .cm-markdown-table-preview tr:nth-child(2n) {
-  background: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), transparent 55%);
+  background: var(--noema-table-alt-bg);
 }
 .cm-editor .cm-markdown-table-preview.cm-table-explicit-height tr {
   height: calc(var(--noema-table-height) / var(--noema-table-row-count));
 }
+/* Floating toolbar: anchored top-right so it never covers left-aligned
+ * headings or org-env titles above the table. Hidden at rest in preview,
+ * subtle while editing and full contrast on hover/focus. */
 .cm-editor .cm-table-toolbar {
+  position: absolute;
+  bottom: calc(100% - 1px);
+  right: 0;
+  left: auto;
+  z-index: 15;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  margin: 0 0 6px;
-  padding: 3px 4px;
+  gap: 1px;
+  padding: 2px 3px;
   border: 1px solid var(--aaron-paper-line, #414b61);
-  border-radius: 5px;
-  background: var(--aaron-panel, #232b3d);
-  box-shadow: var(--aaron-shadow, 0 18px 46px rgb(0 0 0 / 38%));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--aaron-panel, #232b3d), transparent 6%);
+  box-shadow: var(--aaron-shadow, 0 8px 24px rgb(0 0 0 / 24%));
+  transition: opacity 120ms ease;
+}
+.cm-editor .cm-table-block > .cm-table-toolbar {
+  opacity: 0;
+  pointer-events: none;
+}
+.cm-editor .cm-table-block:hover > .cm-table-toolbar,
+.cm-editor .cm-table-block:focus-within > .cm-table-toolbar {
+  opacity: 1;
+  pointer-events: auto;
+}
+.cm-editor .cm-table-source-toolbar > .cm-table-toolbar {
+  opacity: 0.34;
+  pointer-events: auto;
+}
+.cm-editor .cm-table-source-toolbar:hover > .cm-table-toolbar,
+.cm-editor .cm-table-source-toolbar:focus-within > .cm-table-toolbar {
+  opacity: 1;
+}
+/* Table layout popover hosted inside `.cm-table-toolbar` (`◫`) — one toolbar on tables, never two. */
+.cm-editor .cm-table-layout-popover-host {
+  position: relative;
+  display: inline-flex;
+}
+.cm-editor .cm-table-layout-popover.cm-figure-layout-toolbar {
+  position: absolute;
+  top: calc(100% + 5px);
+  bottom: auto;
+  right: 0;
+  left: auto;
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 20;
+}
+.cm-editor .cm-table-toolbar-sep {
+  width: 1px;
+  height: 12px;
+  margin: 0 2px;
+  background: color-mix(in srgb, var(--aaron-paper-line, #414b61), transparent 35%);
 }
 .cm-editor .cm-table-toolbar button {
-  min-width: 28px;
-  height: 24px;
-  padding: 0 7px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
   border: 0;
-  border-radius: 3px;
+  border-radius: 4px;
   background: transparent;
   color: var(--aaron-muted, #a9bed3);
   cursor: pointer;
-  font: 700 11px/1 var(--aaron-font-sans, system-ui, sans-serif);
+  font: 600 10.5px/1 var(--aaron-font-sans, system-ui, sans-serif);
 }
-.cm-editor .cm-table-toolbar button:hover {
+.cm-editor .cm-table-toolbar button:hover:not(:disabled) {
   background: var(--aaron-paper-soft, #1e2536);
   color: var(--aaron-ink, #e4ecff);
+}
+.cm-editor .cm-table-toolbar button.is-active {
+  background: color-mix(in srgb, var(--noema-table-focus-ring), transparent 80%);
+  color: var(--aaron-ink, #e4ecff);
+}
+.cm-editor .cm-table-toolbar button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.cm-editor .cm-table-toolbar button.cm-table-toolbar-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--aaron-callout-danger, #ff96b4), transparent 84%);
+  color: var(--aaron-callout-danger, #ff96b4);
 }
 .cm-editor .cm-table-size-picker-host {
   position: relative;
@@ -5242,17 +5859,31 @@ body.has-diagram-fullscreen {
 .cm-editor .cm-table-size-picker {
   position: absolute;
   top: calc(100% + 5px);
-  left: 0;
-  z-index: 12;
+  right: 0;
+  left: auto;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: max-content;
+  padding: 8px;
+  border: 1px solid var(--aaron-paper-line, #414b61);
+  border-radius: 6px;
+  background: var(--aaron-panel, #232b3d);
+  box-shadow: var(--aaron-shadow, 0 18px 46px rgb(0 0 0 / 38%));
+}
+.cm-editor .cm-table-size-grid {
   display: grid;
   grid-template-columns: repeat(8, 15px);
   gap: 3px;
-  width: max-content;
-  padding: 7px;
-  border: 1px solid var(--aaron-paper-line, #414b61);
-  border-radius: 5px;
-  background: var(--aaron-panel, #232b3d);
-  box-shadow: var(--aaron-shadow, 0 18px 46px rgb(0 0 0 / 38%));
+}
+.cm-editor .cm-table-size-label {
+  text-align: center;
+  font: 600 11px/1.2 var(--aaron-font-sans, system-ui, sans-serif);
+  color: var(--aaron-muted, #a9bed3);
+}
+.cm-editor .cm-table-size-label.is-shrink {
+  color: var(--aaron-callout-danger, #ff96b4);
 }
 .cm-editor .cm-table-toolbar .cm-table-size-cell {
   min-width: 15px;
@@ -5263,51 +5894,139 @@ body.has-diagram-fullscreen {
   border-radius: 2px;
   background: var(--aaron-paper-soft, #1e2536);
 }
+.cm-editor .cm-table-toolbar .cm-table-size-cell.is-in-range,
 .cm-editor .cm-table-toolbar .cm-table-size-cell:hover {
-  border-color: var(--aaron-link, #9de7ff);
-  background: color-mix(in srgb, var(--aaron-link, #9de7ff), transparent 62%);
+  border-color: var(--noema-table-focus-ring);
+  background: color-mix(in srgb, var(--noema-table-focus-ring), transparent 62%);
 }
+.cm-editor .cm-table-toolbar .cm-table-size-cell.is-current {
+  border-color: color-mix(in srgb, var(--aaron-paper-line, #414b61), var(--aaron-ink, #e4ecff) 25%);
+}
+.cm-editor .cm-table-toolbar .cm-table-size-cell.is-shrink {
+  border-color: color-mix(in srgb, var(--aaron-callout-danger, #ff96b4), transparent 35%);
+  background: color-mix(in srgb, var(--aaron-callout-danger, #ff96b4), transparent 80%);
+}
+/* Positioned out of text flow so preview and editing cells have identical
+ * horizontal text alignment with zero 17px jump when clicking into a cell. */
 .cm-editor .cm-table-drag-handle {
+  position: absolute;
+  z-index: 3;
   display: inline-grid;
   place-items: center;
-  width: 11px;
-  margin-right: 3px;
+  width: 13px;
+  height: 14px;
+  margin: 0;
+  border-radius: 3px;
   color: var(--aaron-faint, #6f748b);
   cursor: grab;
-  font: 700 12px/1 ui-monospace, monospace;
+  font: 700 11px/1 ui-monospace, monospace;
   opacity: 0;
   user-select: none;
+  transition: opacity 100ms ease, background 100ms ease;
+}
+.cm-editor .cm-table-row-drag-handle {
+  left: 1px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.cm-editor .cm-table-column-drag-handle {
+  top: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.cm-editor .cm-table-drag-handle:hover {
+  background: color-mix(in srgb, var(--noema-table-focus-ring), transparent 82%);
+  color: var(--aaron-ink, #e4ecff);
 }
 .cm-editor .cm-markdown-table-editable th:hover .cm-table-drag-handle,
 .cm-editor .cm-markdown-table-editable td:hover .cm-table-drag-handle,
 .cm-editor .cm-table-drag-handle:focus {
-  opacity: 0.8;
+  opacity: 0.85;
 }
 .cm-editor .cm-table-drag-handle:active { cursor: grabbing; }
 .cm-editor .cm-markdown-table-editable tr.is-row-hover > *,
 .cm-editor .cm-markdown-table-editable .is-column-hover {
-  background: color-mix(in srgb, var(--aaron-link, #9de7ff), transparent 88%);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--aaron-link, #9de7ff), transparent 55%);
+  background: color-mix(in srgb, var(--noema-table-focus-ring), transparent 90%);
 }
+.cm-editor .cm-markdown-table-editable tr.is-row-drop-before > * {
+  box-shadow: inset 0 2.5px 0 var(--noema-table-focus-ring);
+}
+.cm-editor .cm-markdown-table-editable tr.is-row-drop-after > * {
+  box-shadow: inset 0 -2.5px 0 var(--noema-table-focus-ring);
+}
+.cm-editor .cm-markdown-table-editable .is-col-drop-before {
+  box-shadow: inset 2.5px 0 0 var(--noema-table-focus-ring);
+}
+.cm-editor .cm-markdown-table-editable .is-col-drop-after {
+  box-shadow: inset -2.5px 0 0 var(--noema-table-focus-ring);
+}
+/* Hover-only edge `+` strips contained strictly within the table's 100% width
+ * so they never widen scrollWidth or create a horizontal scrollbar. */
 .cm-editor .cm-table-edge-add {
   position: absolute;
   z-index: 4;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
   padding: 0;
-  border: 1px solid var(--aaron-paper-line, #414b61);
-  border-radius: 50%;
-  background: var(--aaron-panel, #232b3d);
+  border: 1px solid color-mix(in srgb, var(--aaron-paper-line, #414b61), transparent 35%);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--aaron-panel, #232b3d), transparent 15%);
   color: var(--aaron-muted, #a9bed3);
+  font: 700 11px/1 var(--aaron-font-sans, system-ui, sans-serif);
   cursor: pointer;
   opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+.cm-editor .cm-table-edge-add:hover {
+  background: color-mix(in srgb, var(--noema-table-focus-ring), transparent 82%);
+  border-color: var(--noema-table-focus-ring);
+  color: var(--aaron-ink, #e4ecff);
 }
 .cm-editor .cm-table-block:hover .cm-table-edge-add,
-.cm-editor .cm-table-block:focus-within .cm-table-edge-add { opacity: 0.9; }
-.cm-editor .cm-table-edge-add-row { left: 50%; bottom: 0; transform: translateX(-50%); }
-.cm-editor .cm-table-edge-add-column { right: 0; top: 55%; transform: translateY(-50%); }
+.cm-editor .cm-table-block:focus-within .cm-table-edge-add,
+.cm-editor .cm-table-source-edge:hover .cm-table-edge-add,
+.cm-editor .cm-table-source-edge:focus-within .cm-table-edge-add {
+  opacity: 0.9;
+}
+.cm-editor .cm-table-edge-add-row {
+  left: 0;
+  right: 0;
+  bottom: 1px;
+  height: 11px;
+  width: auto;
+}
+.cm-editor .cm-table-edge-add-column {
+  left: auto;
+  right: 1px;
+  top: 8px;
+  bottom: 34px;
+  width: 12px;
+  height: auto;
+}
+.cm-editor .cm-table-source-edge .cm-table-edge-add-row {
+  left: 0;
+  right: 44px;
+  top: 2px;
+  bottom: 1px;
+  height: auto;
+  width: auto;
+  opacity: 0;
+}
+.cm-editor .cm-table-source-edge .cm-table-source-edge-add-column {
+  left: auto;
+  right: 20px;
+  top: 2px;
+  bottom: 1px;
+  width: 20px;
+  height: auto;
+  opacity: 0;
+}
+.cm-editor .cm-table-source-edge:hover .cm-table-edge-add-row,
+.cm-editor .cm-table-source-edge:focus-within .cm-table-edge-add-row,
+.cm-editor .cm-table-source-edge:hover .cm-table-source-edge-add-column,
+.cm-editor .cm-table-source-edge:focus-within .cm-table-source-edge-add-column {
+  opacity: 0.9;
+}
 .cm-editor .cm-markdown-table-editable th,
 .cm-editor .cm-markdown-table-editable td {
   cursor: text;
@@ -5315,95 +6034,8 @@ body.has-diagram-fullscreen {
 }
 .cm-editor .cm-markdown-table-editable th:focus,
 .cm-editor .cm-markdown-table-editable td:focus {
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--aaron-red, #b31b1b), transparent 35%);
-  background: color-mix(in srgb, var(--aaron-paper-soft, #1e2536), var(--aaron-red, #d79a9a) 7%);
-}
-
-/* ─── Table toolbar (body-mounted floating UI) ───────────────────── */
-.table-toolbar {
-  position: fixed;
-  display: none;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  background: var(--aaron-panel, #232b3d);
-  border: 1px solid var(--aaron-paper-line, #414b61);
-  border-radius: 6px;
-  box-shadow: var(--aaron-shadow, 0 18px 46px rgb(0 0 0 / 38%));
-  z-index: 10;
-  font-family: system-ui, -apple-system, sans-serif;
-}
-.table-tb-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--aaron-muted, #a9bed3);
-  border-radius: 4px;
-  cursor: pointer;
-}
-.table-tb-btn:hover { background: var(--aaron-paper-soft, #1e2536); }
-.table-tb-btn.active { background: color-mix(in srgb, var(--aaron-accent-2, #d8b8ff), transparent 84%); color: var(--aaron-ink, #e4ecff); }
-.table-tb-trash:hover { background: color-mix(in srgb, var(--aaron-callout-danger, #ff96b4), transparent 86%); color: var(--aaron-callout-danger, #ff96b4); }
-.table-tb-sep {
-  width: 1px;
-  align-self: stretch;
-  background: var(--aaron-paper-line, #414b61);
-  margin: 2px 4px;
-}
-.table-tb-spacer { flex: 1; min-width: 12px; }
-
-.table-resize-popup {
-  position: fixed;
-  display: none;
-  background: var(--aaron-panel, #232b3d);
-  border: 1px solid var(--aaron-paper-line, #414b61);
-  border-radius: 8px;
-  box-shadow: var(--aaron-shadow, 0 18px 46px rgb(0 0 0 / 38%));
-  padding: 14px;
-  z-index: 11;
-}
-.table-resize-grid {
-  display: grid;
-  grid-template-columns: repeat(10, 18px);
-  gap: 3px;
-  margin-bottom: 12px;
-}
-.table-resize-cell {
-  width: 18px;
-  height: 18px;
-  border: 1px solid var(--aaron-paper-line, #414b61);
-  border-radius: 2px;
-  background: var(--aaron-paper, #171b28);
-  cursor: pointer;
-}
-.table-resize-cell.hover {
-  background: color-mix(in srgb, var(--aaron-accent, #9de7ff), transparent 62%);
-  border-color: var(--aaron-accent, #9de7ff);
-}
-.table-resize-inputs {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border-top: 1px solid var(--aaron-paper-line, #414b61);
-  padding-top: 10px;
-  font: 13px/1 system-ui, -apple-system, sans-serif;
-  color: var(--aaron-muted, #a9bed3);
-}
-.table-resize-inputs input {
-  width: 36px;
-  padding: 4px 6px;
-  border: 1px solid var(--aaron-paper-line, #414b61);
-  border-radius: 4px;
-  text-align: center;
-  font: inherit;
-  background: var(--aaron-paper, #171b28);
-  color: var(--aaron-ink, #e4ecff);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--noema-table-focus-ring), transparent 25%);
+  background: color-mix(in srgb, var(--noema-table-focus-ring), transparent 92%);
 }
 
 /* CM6 block widgets are measured by their border box. Vertical whitespace on

@@ -11,6 +11,8 @@
 import { afterEach, describe, expect, it } from "@voidzero-dev/vite-plus-test";
 import { createEditor, type Editor } from "../../src/editor-api.ts";
 import { cellTarget } from "../../src/cm6/commands/index.ts";
+import { runEditorTextInput } from "../../src/cm6/input-commands.ts";
+import { fixedWidthRowLayout, setVimRowLayoutForTesting } from "../../src/cm6/screen-rows.ts";
 
 const markdown = "before\n\n| A | B |\n| --- | --- |\n| one | two |\n| three | four |\n\nafter";
 const editors: Editor[] = [];
@@ -76,12 +78,120 @@ describe("table cells are edited in the source", () => {
 });
 
 describe("table keyboard movement", () => {
-  it("ArrowDown and ArrowUp move to the same column", () => {
+  it("ArrowDown and ArrowUp move to the same column preserving horizontal offset", () => {
     const { editor } = open(markdown, 1, 1);
     expect(press(editor, { key: "ArrowDown" }).defaultPrevented).toBe(true);
-    expect(caretCell(editor)).toMatchObject({ row: 2, col: 1, offset: 0 });
+    expect(caretCell(editor)).toMatchObject({ row: 2, col: 1, offset: 3 });
     press(editor, { key: "ArrowUp" });
     expect(caretCell(editor)).toMatchObject({ row: 1, col: 1, offset: 3 });
+  });
+
+  it("ArrowDown and ArrowUp step through wrapped visual rows inside a cell before crossing rows", () => {
+    const doc = "| A | B |\n| --- | --- |\n| long wrapped cell text | two |\n| next | four |";
+    const { editor } = open(doc, 1, 0);
+    const restore = setVimRowLayoutForTesting(fixedWidthRowLayout(10));
+    try {
+      const cellStart = doc.indexOf("long wrapped");
+      editor.view.dispatch({ selection: { anchor: cellStart + 2 } });
+      expect(press(editor, { key: "ArrowDown" }).defaultPrevented).toBe(true);
+      // Stayed on row 1, col 0 (moved onto next wrapped visual row inside the cell)
+      expect(caretCell(editor)?.row).toBe(1);
+      expect(caretCell(editor)?.col).toBe(0);
+      expect(editor.view.state.selection.main.head).toBeGreaterThan(cellStart + 2);
+      // Reaching the last visual row of the cell then crosses into row 2
+      press(editor, { key: "ArrowDown" });
+      press(editor, { key: "ArrowDown" });
+      expect(caretCell(editor)?.row).toBe(2);
+      expect(caretCell(editor)?.col).toBe(0);
+    } finally {
+      restore();
+    }
+  });
+
+  it("forward Delete at cell end moves to the next cell without deleting the pipe", () => {
+    const { editor } = open(markdown, 1, 0);
+    press(editor, { key: "Delete" });
+    expect(editor.getMarkdown()).toBe(markdown);
+    expect(caretCell(editor)).toMatchObject({ row: 1, col: 1, offset: 0 });
+  });
+
+  it("Home, End, Mod-Arrow and Mod-Backspace stay scoped to the active cell", () => {
+    const { editor } = open(markdown, 1, 1);
+    const twoStart = markdown.indexOf("two");
+    const twoEnd = twoStart + 3;
+    press(editor, { key: "Home" });
+    expect(editor.view.state.selection.main.head).toBe(twoStart);
+    press(editor, { key: "End" });
+    expect(editor.view.state.selection.main.head).toBe(twoEnd);
+    press(editor, { key: "ArrowLeft", [MOD]: true });
+    expect(editor.view.state.selection.main.head).toBe(twoStart);
+    press(editor, { key: "ArrowRight", [MOD]: true });
+    expect(editor.view.state.selection.main.head).toBe(twoEnd);
+    press(editor, { key: "Backspace", [MOD]: true });
+    expect(editor.getMarkdown()).toBe("before\n\n| A | B |\n| --- | --- |\n| one |  |\n| three | four |\n\nafter");
+  });
+
+  it("Mod-A escalates from active cell to table to entire document", () => {
+    const { editor } = open(markdown, 1, 0);
+    const oneFrom = markdown.indexOf("one");
+    press(editor, { key: "a", [MOD]: true });
+    expect(editor.getMarkdownSelection()).toEqual({ from: oneFrom, to: oneFrom + 3 });
+    press(editor, { key: "a", [MOD]: true });
+    expect(editor.getMarkdownSelection()).toEqual({
+      from: markdown.indexOf("| A | B |"),
+      to: markdown.indexOf("| three | four |") + "| three | four |".length,
+    });
+    press(editor, { key: "a", [MOD]: true });
+    expect(editor.getMarkdownSelection()).toEqual({ from: 0, to: markdown.length });
+  });
+
+  it("typing | inside a table cell auto-escapes it instead of splitting columns", () => {
+    const { editor } = open(markdown, 1, 0);
+    expect(runEditorTextInput(editor.view, "|")).toBe(true);
+    expect(editor.getMarkdown()).toContain("| one\\| | two |");
+    // Already preceded by backslash: stays single escaped pipe.
+    expect(runEditorTextInput(editor.view, "\\")).toBe(true);
+    expect(runEditorTextInput(editor.view, "|")).toBe(true);
+    expect(editor.getMarkdown()).toContain("| one\\|\\| | two |");
+  });
+
+  it("Tab and Enter navigate without reformatting earlier rows or adding undo steps", () => {
+    const unformatted = "| A | Long Header |\n| --- | --- |\n| x | y |\n| z | w |";
+    const { editor } = open(unformatted, 1, 0);
+    const docBefore = editor.view.state.doc;
+    press(editor, { key: "Tab" });
+    expect(editor.view.state.doc).toBe(docBefore);
+    expect(editor.getMarkdown()).toBe(unformatted);
+    press(editor, { key: "Enter" });
+    expect(editor.view.state.doc).toBe(docBefore);
+    expect(editor.getMarkdown()).toBe(unformatted);
+  });
+
+  it("outer-pipe-less GFM tables support Tab, Enter, arrows, Backspace, Delete and commands", () => {
+    const pipeless = "A | B\n--- | ---\none | two\nthree | four";
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: pipeless });
+    editors.push(editor);
+    editor.view.dispatch({ selection: { anchor: pipeless.indexOf("one") + 3 } });
+    // Tab moves to "two" and selects it
+    press(editor, { key: "Tab" });
+    expect(editor.getMarkdownSelection()).toEqual({
+      from: pipeless.indexOf("two"),
+      to: pipeless.indexOf("two") + 3,
+    });
+    // ArrowDown moves to "four" in same column
+    editor.view.dispatch({ selection: { anchor: pipeless.indexOf("two") + 2 } });
+    press(editor, { key: "ArrowDown" });
+    expect(editor.view.state.selection.main.head).toBe(pipeless.indexOf("four") + 2);
+    // Delete at end of "three" jumps to "four" without deleting |
+    editor.view.dispatch({ selection: { anchor: pipeless.indexOf("three") + 5 } });
+    press(editor, { key: "Delete" });
+    expect(editor.getMarkdown()).toBe(pipeless);
+    expect(editor.view.state.selection.main.head).toBe(pipeless.indexOf("four"));
+    // Commands also work on pipe-less tables
+    expect(editor.runCommand("table-insert-row")).toBe(true);
+    expect(editor.getMarkdown().split("\n")).toHaveLength(5);
   });
 
   it("ArrowUp from the first body row skips the delimiter row", () => {

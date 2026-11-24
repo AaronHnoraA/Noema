@@ -1,5 +1,6 @@
 import type { EditorView } from "@codemirror/view";
 import { applyPortableAttributeViewFitWidths } from "../../../../attribute-view-column-width.ts";
+import { preserveEditorViewport } from "../../../viewport-stability.ts";
 import { MeasuredWidget } from "./measured-widget.ts";
 import { shortHash } from "./measured-observer.ts";
 
@@ -480,8 +481,11 @@ export class AttributeViewWidget extends MeasuredWidget {
     source.addEventListener("mousedown", stopEditorEvent);
     source.addEventListener("click", (event) => {
       stopEditorEvent(event);
-      view.dispatch({ selection: { anchor: this.from }, scrollIntoView: true });
-      view.focus();
+      const anchor = Math.max(0, Math.min(this.from, view.state.doc.length));
+      preserveEditorViewport(view, () => {
+        view.dispatch({ selection: { anchor } });
+        view.focus();
+      }, view.state.doc.lineAt(anchor).from);
     });
     root.addEventListener("mousedown", (event) => event.stopPropagation());
     queueMicrotask(request);

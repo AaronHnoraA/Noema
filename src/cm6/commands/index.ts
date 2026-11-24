@@ -10,11 +10,31 @@
  */
 
 import { EditorView } from "@codemirror/view";
-import type { ChangeSet, EditorState, Line, Text, TransactionSpec } from "@codemirror/state";
+import { EditorSelection, type ChangeSet, type EditorState, type Line, type Text, type TransactionSpec } from "@codemirror/state";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
-import { parseTableModel, formatTableLines, splitTableCells, sortTableBodyRows, tableRowsToCSV, tableTooLarge, type TableAlign } from "../table-model.ts";
-import { tablePipeOffsets } from "../table-source-cells.ts";
+import {
+  buildMarkdownTableSource,
+  parseMarkdownTable,
+  parseTableModel,
+  formatTableLines,
+  splitTableCells,
+  sortTableBodyRows,
+  tableRowsToCSV,
+  tableTooLarge,
+  type TableAlign,
+} from "../table-model.ts";
+import {
+  findTableAtPos,
+  hasUnescapedPipe,
+  isTableSeparatorLine,
+  tableCellTarget,
+  tableSourceRowParts,
+} from "../table-source-cells.ts";
+import { getFencedCodeRanges } from "../code-ranges.ts";
+import { getBlockMathRanges } from "../math-ranges.ts";
+import { moveByVisualRow, rowLayoutAvailable, screenRowAt } from "../screen-rows.ts";
+import { readLayoutAttrsLine } from "../../layout-attrs.ts";
 import { writeSystemClipboard } from "../../system-clipboard.ts";
 import type {
   EditorBlockContext,
@@ -1073,7 +1093,7 @@ function codeBlockAtCursor(view: EditorView): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Table manipulation (text-level)
+// Table manipulation (unified GFM model — works with or without outer pipes)
 // ---------------------------------------------------------------------------
 
 type TableInfo = {
@@ -1081,26 +1101,25 @@ type TableInfo = {
   startLineNum: number; // 1-based doc line number
   currentRowIdx: number; // 0-based index within table
   currentColIdx: number; // 0-based index within current row
+  from: number;
+  sourceTo: number;
+  sepIdx: number;
 };
 
 function findTableInfo(view: EditorView): TableInfo | null {
-  const { from } = view.state.selection.main;
-  const doc = view.state.doc;
-  const curLine = doc.lineAt(from);
-  if (!/^\s*\|.*\|\s*$/.test(curLine.text)) return null;
-
-  let start = curLine.number;
-  while (start > 1 && /^\s*\|.*\|\s*$/.test(doc.line(start - 1).text)) start--;
-  let end = curLine.number;
-  while (end < doc.lines && /^\s*\|.*\|\s*$/.test(doc.line(end + 1).text)) end++;
-
-  const lines: string[] = [];
-  for (let i = start; i <= end; i++) lines.push(doc.line(i).text);
+  const state = view.state;
+  const { from } = state.selection.main;
+  const excluded = [...getBlockMathRanges(state), ...getFencedCodeRanges(state)];
+  const found = findTableAtPos(state.doc, from, excluded);
+  if (!found) return null;
   return {
-    lines,
-    startLineNum: start,
-    currentRowIdx: curLine.number - start,
-    currentColIdx: columnIndexAtOffset(curLine.text, from - curLine.from),
+    lines: found.lines,
+    startLineNum: found.startLineNum,
+    currentRowIdx: found.currentRowIdx,
+    currentColIdx: found.currentColIdx,
+    from: found.from,
+    sourceTo: found.sourceTo,
+    sepIdx: found.sepLineNum - found.startLineNum,
   };
 }
 
@@ -1113,19 +1132,7 @@ function buildRow(cells: string[]): string {
 }
 
 function isSeparatorRow(row: string): boolean {
-  const compact = row.replace(/\s/g, "");
-  return compact.includes("-") && /^\|[-|:]+\|$/.test(compact);
-}
-
-function columnIndexAtOffset(row: string, offset: number): number {
-  const cellCount = splitCells(row).length;
-  if (cellCount <= 0) return 0;
-  let col = 0;
-  for (const pipe of tablePipeOffsets(row)) {
-    if (pipe >= offset) break;
-    col++;
-  }
-  return Math.max(0, Math.min(cellCount - 1, col - 1));
+  return isTableSeparatorLine(row);
 }
 
 function rowOffset(lines: string[], rowIdx: number): number {
@@ -1133,105 +1140,129 @@ function rowOffset(lines: string[], rowIdx: number): number {
 }
 
 function cellOffset(row: string, colIdx: number): number {
-  const pipe = tablePipeOffsets(row)[colIdx];
-  if (pipe != null) return Math.min(row.length, pipe + (row[pipe + 1] === " " ? 2 : 1));
-  return Math.max(0, row.length - 1);
+  return tableCellTarget(row, colIdx).anchor;
 }
 
 /**
  * Where Tab/Enter lands in cell COLIDX of ROW, relative to the row: the cell's
- * text selected, so typing replaces it as in a spreadsheet — HyperMD's `tab`,
- * files.md's `tableEnterCell` and prosemirror-tables' `goToNextCell` all
- * select the next cell's content — or the caret inside an empty cell.
+ * text selected, so typing replaces it as in a spreadsheet — or the caret
+ * inside an empty cell. Works for rows with or without outer pipes.
  */
 export function cellTarget(row: string, colIdx: number): { anchor: number; head: number } {
-  const pipes = tablePipeOffsets(row);
-  const open = pipes[colIdx];
-  if (open == null) {
-    const at = cellOffset(row, colIdx);
-    return { anchor: at, head: at };
+  const { anchor, head } = tableCellTarget(row, colIdx);
+  return { anchor, head };
+}
+
+function emptyRowMatchingStyle(sampleLine: string, colCount: number): string {
+  const { hasLeadingPipe, hasTrailingPipe } = tableSourceRowParts(sampleLine);
+  if (!hasLeadingPipe && !hasTrailingPipe) {
+    return Array(colCount).fill(" ").join(" | ");
   }
-  const close = pipes[colIdx + 1] ?? row.length;
-  let from = open + 1;
-  let to = close;
-  while (from < to && row[from] === " ") from++;
-  while (to > from && row[to - 1] === " ") to--;
-  if (from === to) {
-    const at = cellOffset(row, colIdx);
-    return { anchor: at, head: at };
-  }
-  return { anchor: from, head: to };
+  return `| ${Array(colCount).fill("").join(" | ")} |`;
 }
 
 function runTableCommandCM6(view: EditorView, command: EditorCommand): boolean {
   const info = findTableInfo(view);
   if (!info) return false;
-  const { lines, startLineNum, currentRowIdx, currentColIdx } = info;
+  const { lines, startLineNum, currentRowIdx, currentColIdx, sepIdx } = info;
   const doc = view.state.doc;
   const { from } = view.state.selection.main;
-  const startPos = doc.line(startLineNum).from;
-  const endPos = doc.line(startLineNum + lines.length - 1).to;
+  const startPos = info.from;
+  const endPos = info.sourceTo;
+  const colCount = Math.max(1, splitCells(lines[0] ?? "").length);
+
+  if (command === "table-delete-table") {
+    const lastLineNum = startLineNum + lines.length - 1;
+    let removeTo = endPos;
+    if (lastLineNum < doc.lines && readLayoutAttrsLine(doc.line(lastLineNum + 1).text)) {
+      removeTo = doc.line(lastLineNum + 1).to;
+    }
+    const to = removeTo < doc.length && doc.sliceString(removeTo, removeTo + 1) === "\n" ? removeTo + 1 : removeTo;
+    view.dispatch({
+      changes: { from: startPos, to },
+      selection: { anchor: startPos },
+      scrollIntoView: true,
+    });
+    return true;
+  }
 
   let newLines = [...lines];
   let newCursorRow = currentRowIdx;
   let newCursorCol = currentColIdx;
 
   if (command === "table-insert-row") {
-    const colCount = splitCells(lines[0] ?? "").length;
     const emptyRow = buildRow(Array(colCount).fill(" "));
-    // A new row is a body row. From the header it goes below the delimiter
-    // row; between the two it would end the table.
-    const insertAt = Math.max(currentRowIdx + 1, lines.findIndex(isSeparatorRow) + 1);
+    const insertAt = Math.max(currentRowIdx + 1, sepIdx + 1);
     newLines.splice(insertAt, 0, emptyRow);
     newCursorRow = insertAt;
+  } else if (command === "table-insert-row-above") {
+    const emptyRow = buildRow(Array(colCount).fill(" "));
+    const insertAt = Math.max(sepIdx + 1, currentRowIdx);
+    newLines.splice(insertAt, 0, emptyRow);
+    newCursorRow = insertAt;
+  } else if (command === "table-duplicate-row") {
+    if (currentRowIdx <= sepIdx) return false;
+    const insertAt = currentRowIdx + 1;
+    newLines.splice(insertAt, 0, lines[currentRowIdx]!);
+    newCursorRow = insertAt;
   } else if (command === "table-delete-row") {
-    // Don't delete header (row 0) or separator (row 1)
-    if (lines.length <= 2 || currentRowIdx <= 1 || isSeparatorRow(lines[currentRowIdx] ?? "")) {
+    if (lines.length <= 2 || currentRowIdx <= sepIdx || isSeparatorRow(lines[currentRowIdx] ?? "")) {
       return false;
     }
     newLines.splice(currentRowIdx, 1);
-    newCursorRow = Math.max(2, currentRowIdx - 1);
-  } else if (command === "table-insert-column") {
-    newCursorCol = currentColIdx + 1;
+    newCursorRow = Math.max(sepIdx + 1, currentRowIdx - 1);
+  } else if (command === "table-insert-column" || command === "table-insert-column-left") {
+    newCursorCol = command === "table-insert-column-left" ? currentColIdx : currentColIdx + 1;
     newLines = newLines.map((line, rowIdx) => {
       const cells = splitCells(line);
-      const cell = rowIdx === 1 ? "---" : " ";
+      while (cells.length < colCount) cells.push(" ");
+      const cell = rowIdx === sepIdx ? "---" : " ";
       cells.splice(newCursorCol, 0, cell);
       return buildRow(cells);
     });
+  } else if (command === "table-duplicate-column") {
+    newCursorCol = currentColIdx + 1;
+    newLines = newLines.map((line) => {
+      const cells = splitCells(line);
+      while (cells.length < colCount) cells.push(" ");
+      cells.splice(newCursorCol, 0, cells[currentColIdx] ?? " ");
+      return buildRow(cells);
+    });
   } else if (command === "table-delete-column") {
-    const colCount = splitCells(lines[0] ?? "").length;
     if (colCount <= 1) return false;
     const cursorCol = Math.max(0, Math.min(colCount - 1, currentColIdx));
     newLines = newLines.map((line) => {
       const cells = splitCells(line);
+      while (cells.length < colCount) cells.push(" ");
       if (cells.length > 1) cells.splice(cursorCol, 1);
       return buildRow(cells);
     });
     newCursorCol = Math.max(0, Math.min(cursorCol, colCount - 2));
+  } else if (command === "table-clear-cell") {
+    if (currentRowIdx === sepIdx) return false;
+    const data = parseMarkdownTable(lines.join("\n"));
+    const dataRow = currentRowIdx === 0 ? 0 : currentRowIdx - 1;
+    if (data.rows[dataRow]) data.rows[dataRow]![currentColIdx] = "";
+    newLines = buildMarkdownTableSource(data).split("\n");
   } else if (command === "table-align-left" || command === "table-align-center" || command === "table-align-right") {
-    const model = parseTableModel(lines, startLineNum, currentRowIdx, from - (doc.line(startLineNum + currentRowIdx).from));
+    const model = parseTableModel(lines, startLineNum, currentRowIdx, from - doc.line(startLineNum + currentRowIdx).from);
     if (model.sepIdx < 0) return false;
     const targetAlign: TableAlign = command === "table-align-left" ? "left" : command === "table-align-center" ? "center" : "right";
     const currentAlign = model.aligns[currentColIdx] ?? "none";
     model.aligns[currentColIdx] = currentAlign === targetAlign ? "none" : targetAlign;
-    if (!tableTooLarge(model)) {
-      newLines = formatTableLines(model);
-    } else {
-      // Only update separator row
-      const sepCells = splitCells(lines[model.sepIdx] ?? "");
-      const colCount = sepCells.length;
-      for (let c = 0; c < colCount; c++) {
-        if (c === currentColIdx) {
-          sepCells[c] = model.aligns[c] === "center" ? `:---:` : model.aligns[c] === "left" ? `:---` : model.aligns[c] === "right" ? `---:` : `---`;
-        }
-      }
-      newLines[model.sepIdx] = buildRow(sepCells);
-    }
+    const sepCells = splitCells(lines[model.sepIdx] ?? "");
+    while (sepCells.length < colCount) sepCells.push("---");
+    sepCells[currentColIdx] = model.aligns[currentColIdx] === "center"
+      ? ":---:"
+      : model.aligns[currentColIdx] === "left"
+        ? ":---"
+        : model.aligns[currentColIdx] === "right"
+          ? "---:"
+          : "---";
+    newLines[model.sepIdx] = buildRow(sepCells);
     newCursorRow = currentRowIdx;
     newCursorCol = currentColIdx;
   } else if (command === "table-move-row-up" || command === "table-move-row-down") {
-    const sepIdx = lines.findIndex(isSeparatorRow);
     const firstBodyRow = sepIdx >= 0 ? sepIdx + 1 : 2;
     if (currentRowIdx < firstBodyRow) return false;
     if (command === "table-move-row-up" && currentRowIdx === firstBodyRow) return false;
@@ -1243,11 +1274,11 @@ function runTableCommandCM6(view: EditorView, command: EditorCommand): boolean {
     newLines[swapWith] = tmp;
     newCursorRow = swapWith;
   } else if (command === "table-move-column-left" || command === "table-move-column-right") {
-    const colCount = splitCells(lines[0] ?? "").length;
     const swapWith = command === "table-move-column-left" ? currentColIdx - 1 : currentColIdx + 1;
     if (swapWith < 0 || swapWith >= colCount) return false;
     newLines = newLines.map((line) => {
       const cells = splitCells(line);
+      while (cells.length < colCount) cells.push(" ");
       const tmp = cells[currentColIdx]!;
       cells[currentColIdx] = cells[swapWith]!;
       cells[swapWith] = tmp;
@@ -1255,7 +1286,7 @@ function runTableCommandCM6(view: EditorView, command: EditorCommand): boolean {
     });
     newCursorCol = swapWith;
   } else if (command === "table-format") {
-    const model = parseTableModel(lines, startLineNum, currentRowIdx, from - (doc.line(startLineNum + currentRowIdx).from));
+    const model = parseTableModel(lines, startLineNum, currentRowIdx, from - doc.line(startLineNum + currentRowIdx).from);
     if (tableTooLarge(model)) return false;
     newLines = formatTableLines(model);
     newCursorRow = currentRowIdx;
@@ -1276,8 +1307,6 @@ function runTableCommandCM6(view: EditorView, command: EditorCommand): boolean {
   }
 
   const newText = newLines.join("\n");
-  // The row may no longer exist (the only body row was deleted); the cursor
-  // then stays in the table's last row instead of past its end.
   const cursorRowIdx = Math.max(0, Math.min(newCursorRow, newLines.length - 1));
   const cursorRow = newLines[cursorRowIdx] ?? "";
   const cursor = startPos + rowOffset(newLines, cursorRowIdx) + cellOffset(cursorRow, newCursorCol);
@@ -1290,25 +1319,22 @@ function runTableCommandCM6(view: EditorView, command: EditorCommand): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Table navigation
+// Table navigation & native cell editing ergonomics
 // ---------------------------------------------------------------------------
 
-/** Tab / Shift-Tab cell navigation. Tab at last cell of last row creates a new row. */
+/**
+ * Tab / Shift-Tab cell navigation. Moves cleanly without rewriting existing
+ * rows' whitespace (zero phantom undo steps or Git diff churn). Tab at the
+ * last cell of the last row appends a new empty row and enters its first cell.
+ */
 export function tableNavigateCell(view: EditorView, dir: 1 | -1): boolean {
   const info = findTableInfo(view);
   if (!info) return false;
-  const { lines, startLineNum, currentRowIdx, currentColIdx } = info;
+  const { lines, startLineNum, currentRowIdx, currentColIdx, sepIdx } = info;
   const doc = view.state.doc;
-  const startPos = doc.line(startLineNum).from;
-  const endPos = doc.line(startLineNum + lines.length - 1).to;
-  const { from } = view.state.selection.main;
+  const endPos = info.sourceTo;
+  const colCount = Math.max(1, splitCells(lines[0] ?? "").length);
 
-  const sepIdx = lines.findIndex(isSeparatorRow);
-  // Pipes without a delimiter row are not a table; Tab indents as usual.
-  if (sepIdx < 0) return false;
-  const colCount = splitCells(lines[0] ?? "").length;
-
-  // Build flat cell list (skip separator)
   type Cell = { rowIdx: number; colIdx: number };
   const cells: Cell[] = [];
   for (let r = 0; r < lines.length; r++) {
@@ -1318,19 +1344,13 @@ export function tableNavigateCell(view: EditorView, dir: 1 | -1): boolean {
   const curCellIdx = cells.findIndex((c) => c.rowIdx === currentRowIdx && c.colIdx === currentColIdx);
   const targetCellIdx = curCellIdx + dir;
 
-  // Append a new row when Tab past last cell
+  // Append a new row when Tabbing past the last cell (without touching earlier rows).
   if (dir === 1 && targetCellIdx >= cells.length) {
-    const emptyRow = buildRow(Array(colCount).fill(" "));
-    const newLines = [...lines, emptyRow];
-    // Format if not too large
-    const model = parseTableModel(newLines, startLineNum, newLines.length - 1, 0);
-    const formatted = tableTooLarge(model) ? newLines : formatTableLines(model);
-    const newText = formatted.join("\n");
-    const targetRow = formatted.length - 1;
-    const targetRowText = formatted[targetRow] ?? "";
-    const cursor = startPos + rowOffset(formatted, targetRow) + cellOffset(targetRowText, 0);
+    const emptyRow = emptyRowMatchingStyle(lines[lines.length - 1] ?? lines[0] ?? "", colCount);
+    const cell = tableCellTarget(emptyRow, 0);
+    const cursor = endPos + 1 + cell.anchor;
     view.dispatch({
-      changes: { from: startPos, to: endPos, insert: newText },
+      changes: { from: endPos, to: endPos, insert: `\n${emptyRow}` },
       selection: { anchor: cursor },
       scrollIntoView: true,
     });
@@ -1339,106 +1359,133 @@ export function tableNavigateCell(view: EditorView, dir: 1 | -1): boolean {
   if (targetCellIdx < 0 || targetCellIdx >= cells.length) return false;
 
   const target = cells[targetCellIdx]!;
-  // Format first if not too large
-  const model = parseTableModel(lines, startLineNum, currentRowIdx, from - doc.line(startLineNum + currentRowIdx).from);
-  const formatted = tableTooLarge(model) ? lines : formatTableLines(model);
-  const newText = formatted.join("\n");
-  const targetRowText = formatted[target.rowIdx] ?? "";
-  const rowStart = startPos + rowOffset(formatted, target.rowIdx);
-  const cell = cellTarget(targetRowText, target.colIdx);
-  const selection = { anchor: rowStart + cell.anchor, head: rowStart + cell.head };
-  if (newText === lines.join("\n")) {
-    view.dispatch({ selection, scrollIntoView: true });
-  } else {
-    view.dispatch({
-      changes: { from: startPos, to: endPos, insert: newText },
-      selection,
-      scrollIntoView: true,
-    });
-  }
+  const targetLine = doc.line(startLineNum + target.rowIdx);
+  const cell = tableCellTarget(targetLine.text, target.colIdx);
+  view.dispatch({
+    selection: { anchor: targetLine.from + cell.anchor, head: targetLine.from + cell.head },
+    scrollIntoView: true,
+    userEvent: "select",
+  });
   return true;
 }
 
 /**
  * Enter at the end of a lone `| a | b |` line makes it a table header: the
  * delimiter row and an empty body row are added and the caret moves into the
- * first body cell, as HyperMD's newlineAndContinue and MarkText's Enter
- * conversion do. Without a delimiter row the pipes are not a table at all, so
- * any other pipe-only text keeps the ordinary Enter.
+ * first body cell.
  */
-function createTableFromHeaderRow(view: EditorView, info: TableInfo): boolean {
-  const { lines, startLineNum } = info;
-  if (lines.length !== 1) return false;
-  const line = view.state.doc.line(startLineNum);
-  const { from, to } = view.state.selection.main;
-  if (from !== to || from !== line.to) return false;
-  const columns = splitCells(lines[0] ?? "").length;
+function createTableFromHeaderRow(view: EditorView): boolean {
+  const state = view.state;
+  const { from, to } = state.selection.main;
+  if (from !== to) return false;
+  const line = state.doc.lineAt(from);
+  if (from !== line.to || !/^\s*\|.*\|\s*$/.test(line.text)) return false;
+  const doc = state.doc;
+  if (line.number > 1 && /^\s*\|.*\|\s*$/.test(doc.line(line.number - 1).text)) return false;
+  if (line.number < doc.lines && /^\s*\|.*\|\s*$/.test(doc.line(line.number + 1).text)) return false;
+  const columns = splitCells(line.text).length;
   if (columns < 2) return false;
-  const draft = [lines[0]!, buildRow(Array(columns).fill("---")), buildRow(Array(columns).fill(" "))];
-  const model = parseTableModel(draft, startLineNum, 2, 0);
-  const formatted = tableTooLarge(model) ? draft : formatTableLines(model);
-  const cursor = line.from + rowOffset(formatted, 2) + cellOffset(formatted[2] ?? "", 0);
+  const sep = buildRow(Array(columns).fill("---"));
+  const body = `| ${Array(columns).fill("").join(" | ")} |`;
+  const insert = `${line.text}\n${sep}\n${body}`;
+  const cursor = line.from + line.text.length + 1 + sep.length + 1 + tableCellTarget(body, 0).anchor;
   view.dispatch({
-    changes: { from: line.from, to: line.to, insert: formatted.join("\n") },
+    changes: { from: line.from, to: line.to, insert },
     selection: { anchor: cursor },
     scrollIntoView: true,
   });
   return true;
 }
 
-/** The table cell holding the caret: its row's line, column, and text span (absolute). */
+/** The table cell holding the caret: its row's line, column, raw and text spans (absolute). */
 type CaretTableCell = {
   info: TableInfo;
   separator: number;
-  rowLine: { from: number; text: string };
+  rowLine: Line;
   col: number;
   colCount: number;
+  raw: { from: number; to: number };
   text: { from: number; to: number };
 };
 
-function caretTableCell(view: EditorView): CaretTableCell | null {
+function caretTableCell(view: EditorView, allowNonEmptyInCell = false): CaretTableCell | null {
   const range = view.state.selection.main;
-  if (!range.empty || view.state.selection.ranges.length > 1) return null;
+  if (view.state.selection.ranges.length > 1) return null;
+  if (!allowNonEmptyInCell && !range.empty) return null;
   const info = findTableInfo(view);
-  if (!info) return null;
-  const separator = info.lines.findIndex(isSeparatorRow);
-  if (separator < 0 || info.currentRowIdx === separator) return null;
+  if (!info || info.sepIdx < 0 || info.currentRowIdx === info.sepIdx) return null;
   const line = view.state.doc.line(info.startLineNum + info.currentRowIdx);
-  const target = cellTarget(line.text, info.currentColIdx);
+  if (allowNonEmptyInCell && (range.from < line.from || range.to > line.to)) return null;
+  const target = tableCellTarget(line.text, info.currentColIdx);
+  const rawFrom = line.from + target.from;
+  const rawTo = line.from + target.to;
+  if (allowNonEmptyInCell && (range.from < rawFrom || range.to > rawTo)) return null;
   return {
     info,
-    separator,
-    rowLine: { from: line.from, text: line.text },
+    separator: info.sepIdx,
+    rowLine: line,
     col: info.currentColIdx,
-    colCount: splitCells(info.lines[0] ?? "").length,
+    colCount: Math.max(1, splitCells(info.lines[0] ?? "").length),
+    raw: { from: rawFrom, to: rawTo },
     text: { from: line.from + Math.min(target.anchor, target.head), to: line.from + Math.max(target.anchor, target.head) },
   };
 }
 
-/** Put the caret in cell COL of table row ROW (an index into INFO.lines), at the cell text's START or end. */
+/** Put the caret in cell COL of table row ROW at start or end of its text. */
 function moveToTableCell(view: EditorView, info: TableInfo, row: number, col: number, atStart: boolean): boolean {
   const line = view.state.doc.line(info.startLineNum + row);
-  const target = cellTarget(line.text, col);
+  const target = tableCellTarget(line.text, col);
   const at = line.from + (atStart ? Math.min(target.anchor, target.head) : Math.max(target.anchor, target.head));
   view.dispatch({ selection: { anchor: at }, scrollIntoView: true, userEvent: "select" });
   return true;
 }
 
+/** Put the caret in cell COL of table row ROW preserving horizontal character offset. */
+function moveToTableCellAtOffset(view: EditorView, info: TableInfo, row: number, col: number, offset: number): boolean {
+  const line = view.state.doc.line(info.startLineNum + row);
+  const target = tableCellTarget(line.text, col);
+  const textFrom = line.from + Math.min(target.anchor, target.head);
+  const textTo = line.from + Math.max(target.anchor, target.head);
+  const at = Math.max(textFrom, Math.min(textTo, textFrom + offset));
+  view.dispatch({ selection: { anchor: at }, scrollIntoView: true, userEvent: "select" });
+  return true;
+}
+
 /**
- * ArrowDown/ArrowUp in a table cell: the same column of the next or previous
- * row, skipping the delimiter row — the caret at the cell's start going down
- * and its end going up, as MarkText's table cells move. Past the first or last
- * row it returns false and the caret leaves the table as text does; below a
- * table that ends the note it opens a line.
+ * ArrowDown/ArrowUp in a table cell: step through wrapped visual rows inside
+ * the active cell first (`screen-rows.ts`); at the cell's first/last visual
+ * row, move to the same column of the previous/next table row (skipping the
+ * separator row) while preserving horizontal offset. Past the first or last
+ * row it leaves the table cleanly (opening a line at EOF).
  */
 export function tableMoveVertical(view: EditorView, dir: 1 | -1): boolean {
   const cell = caretTableCell(view);
   if (!cell) return false;
+  const range = view.state.selection.main;
+  if (rowLayoutAvailable(view)) {
+    const visualRow = screenRowAt(view, range.head, range.assoc < 0 ? -1 : 1);
+    const hasMoreVisualRowsInCell = dir > 0
+      ? visualRow.to < cell.text.to
+      : visualRow.from > cell.text.from;
+    if (hasMoreVisualRowsInCell) {
+      const moved = moveByVisualRow(view, range, dir > 0);
+      if (moved.head >= cell.rowLine.from && moved.head <= cell.rowLine.to) {
+        const clamped = Math.max(cell.text.from, Math.min(cell.text.to, moved.head));
+        if (clamped !== range.head) {
+          view.dispatch({
+            selection: EditorSelection.cursor(clamped, moved.assoc, undefined, moved.goalColumn),
+            scrollIntoView: true,
+            userEvent: "select",
+          });
+          return true;
+        }
+      }
+    }
+  }
+
   let row = cell.info.currentRowIdx + dir;
   if (row === cell.separator) row += dir;
   if (row >= cell.info.lines.length) {
-    // A table that ends the note gets a line to land on, as MarkText appends
-    // a paragraph when ArrowDown leaves its last block.
     const doc = view.state.doc;
     if (cell.info.startLineNum + cell.info.lines.length - 1 !== doc.lines) return false;
     view.dispatch({
@@ -1450,7 +1497,8 @@ export function tableMoveVertical(view: EditorView, dir: 1 | -1): boolean {
     return true;
   }
   if (row < 0) return false;
-  return moveToTableCell(view, cell.info, row, cell.col, dir > 0);
+  const offsetInCell = Math.max(0, range.head - cell.text.from);
+  return moveToTableCellAtOffset(view, cell.info, row, cell.col, offsetInCell);
 }
 
 /**
@@ -1485,12 +1533,126 @@ export function tableBackspaceAtCellStart(view: EditorView): boolean {
 }
 
 /**
- * Shift-Enter in a table cell: a line break inside the cell. A newline would
- * end the row, so the cell gets `<br>`, as GFM tables and MarkText write it.
+ * Forward Delete at a cell text's end: move to the next cell's start, never
+ * deleting the closing pipe delimiter. In the last cell it does nothing.
+ */
+export function tableDeleteAtCellEnd(view: EditorView): boolean {
+  const cell = caretTableCell(view);
+  if (!cell) return false;
+  const head = view.state.selection.main.head;
+  if (head < cell.text.to) return false;
+  return tableMoveHorizontal(view, 1) || true;
+}
+
+/**
+ * Cell-scoped Home / End / Mod-ArrowLeft / Mod-ArrowRight: stay inside the
+ * active cell's text span instead of jumping across pipes into another column.
+ */
+export function tableMoveCellBoundary(view: EditorView, forward: boolean, extend = false): boolean {
+  const cell = caretTableCell(view, true);
+  if (!cell) return false;
+  const range = view.state.selection.main;
+  const target = forward ? cell.text.to : cell.text.from;
+  const selection = extend
+    ? EditorSelection.range(range.anchor, target)
+    : EditorSelection.cursor(target);
+  if (selection.anchor === range.anchor && selection.head === range.head) return true;
+  view.dispatch({ selection, scrollIntoView: true, userEvent: "select" });
+  return true;
+}
+
+/**
+ * Cell-scoped Mod-Backspace: delete back to the start of the active cell's text,
+ * never eating preceding columns or pipe delimiters.
+ */
+export function tableDeleteToCellStart(view: EditorView): boolean {
+  if (view.state.readOnly) return false;
+  const cell = caretTableCell(view, true);
+  if (!cell) return false;
+  const range = view.state.selection.main;
+  if (!range.empty) return false;
+  const from = cell.text.from;
+  if (range.head <= from) return true;
+  view.dispatch({
+    changes: { from, to: range.head },
+    selection: EditorSelection.cursor(from),
+    scrollIntoView: true,
+    userEvent: "delete.backward",
+  });
+  return true;
+}
+
+/**
+ * Three-stage Obsidian/Typora Select All inside a table:
+ * 1) Select active cell's text; 2) Select the entire table; 3) Fall through to document.
+ */
+export function tableSelectAll(view: EditorView): boolean {
+  const info = findTableInfo(view);
+  if (!info || info.sepIdx < 0) return false;
+  const range = view.state.selection.main;
+  if (view.state.selection.ranges.length > 1) return false;
+  const doc = view.state.doc;
+  const lastLineNum = info.startLineNum + info.lines.length - 1;
+  const tableTo = lastLineNum < doc.lines && readLayoutAttrsLine(doc.line(lastLineNum + 1).text)
+    ? doc.line(lastLineNum + 1).to
+    : info.sourceTo;
+
+  if (info.currentRowIdx !== info.sepIdx) {
+    const line = doc.line(info.startLineNum + info.currentRowIdx);
+    const cell = tableCellTarget(line.text, info.currentColIdx);
+    const cellFrom = line.from + Math.min(cell.anchor, cell.head);
+    const cellTo = line.from + Math.max(cell.anchor, cell.head);
+    if (cellFrom < cellTo && range.from >= cellFrom && range.to <= cellTo
+        && (range.from !== cellFrom || range.to !== cellTo)) {
+      view.dispatch({ selection: { anchor: cellFrom, head: cellTo }, userEvent: "select" });
+      return true;
+    }
+  }
+
+  if (range.from !== info.from || range.to !== tableTo) {
+    view.dispatch({ selection: { anchor: info.from, head: tableTo }, userEvent: "select" });
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Auto-escape a typed `|` inside an active table cell to `\|` so typing math
+ * absolute values or conditional probabilities never splits table columns.
+ */
+export function handleTablePipeInput(
+  view: EditorView,
+  from: number,
+  to: number,
+  text: string,
+): boolean {
+  if (text !== "|" || view.compositionStarted || view.state.readOnly) return false;
+  const state = view.state;
+  const excluded = [...getBlockMathRanges(state), ...getFencedCodeRanges(state)];
+  const found = findTableAtPos(state.doc, from, excluded);
+  if (!found || found.currentRowIdx === found.sepLineNum - found.startLineNum) return false;
+  const line = state.doc.lineAt(from);
+  if (state.doc.lineAt(to).number !== line.number) return false;
+  // If the author already typed an odd number of backslashes right before `|`, keep literal `|`.
+  let slashes = 0;
+  for (let i = from - line.from - 1; i >= 0 && line.text[i] === "\\"; i--) slashes++;
+  if (slashes % 2 === 1) return false;
+  view.dispatch({
+    changes: { from, to, insert: "\\|" },
+    selection: EditorSelection.cursor(from + 2),
+    scrollIntoView: true,
+    userEvent: "input.type",
+  });
+  return true;
+}
+
+/**
+ * Shift-Enter in a table cell: a line break inside the cell (`<br>`).
  */
 export function tableCellLineBreak(view: EditorView): boolean {
   const info = findTableInfo(view);
-  if (!info || !info.lines.some(isSeparatorRow)) return false;
+  if (!info || info.sepIdx < 0) return false;
   const { from, to } = view.state.selection.main;
   view.dispatch({
     changes: { from, to, insert: "<br>" },
@@ -1504,10 +1666,10 @@ export function tableCellLineBreak(view: EditorView): boolean {
 /** Mod-Enter in a table: a new body row below the current one, caret in its first cell. */
 export function tableInsertRowBelow(view: EditorView): boolean {
   const info = findTableInfo(view);
-  if (!info || !info.lines.some(isSeparatorRow)) return false;
+  if (!info || info.sepIdx < 0) return false;
   if (!runTableCommandCM6(view, "table-insert-row")) return false;
   const row = view.state.doc.lineAt(view.state.selection.main.head);
-  const target = cellTarget(row.text, 0);
+  const target = tableCellTarget(row.text, 0);
   view.dispatch({ selection: { anchor: row.from + target.anchor, head: row.from + target.head }, scrollIntoView: true });
   return true;
 }
@@ -1515,35 +1677,41 @@ export function tableInsertRowBelow(view: EditorView): boolean {
 /** Enter in a table cell: move to same column in next body row; on empty last row exit the table. */
 export function tableEnterSameColumn(view: EditorView): boolean {
   const info = findTableInfo(view);
-  if (!info) return false;
-  const { lines, startLineNum, currentRowIdx, currentColIdx } = info;
+  if (!info) return createTableFromHeaderRow(view);
+  const { lines, startLineNum, currentRowIdx, currentColIdx, sepIdx } = info;
   const doc = view.state.doc;
-  const startPos = doc.line(startLineNum).from;
-  const endPos = doc.line(startLineNum + lines.length - 1).to;
-  const { from } = view.state.selection.main;
+  const startPos = info.from;
+  const endPos = info.sourceTo;
 
-  const sepIdx = lines.findIndex(isSeparatorRow);
-  if (sepIdx < 0) return createTableFromHeaderRow(view, info);
   const firstBodyRow = sepIdx + 1;
-  const colCount = splitCells(lines[0] ?? "").length;
+  const colCount = Math.max(1, splitCells(lines[0] ?? "").length);
 
-  // If cursor is in last row and the row is empty → delete it and move below table
-  if (currentRowIdx === lines.length - 1 && currentRowIdx >= firstBodyRow) {
+  // If cursor is on an empty final table row (or empty final piped row before
+  // non-piped prose) → delete that empty row and move below the table.
+  const isFinalRow = currentRowIdx === lines.length - 1
+    || (hasUnescapedPipe(lines[currentRowIdx] ?? "") && !hasUnescapedPipe(lines[currentRowIdx + 1] ?? ""));
+  if (isFinalRow && currentRowIdx >= firstBodyRow) {
     const cells = splitCells(lines[currentRowIdx] ?? "");
     const isEmpty = cells.every((c) => c.trim() === "");
     if (isEmpty) {
-      const newLines = lines.slice(0, currentRowIdx);
-      const newText = newLines.join("\n");
-      // At EOF the removed row owned the document's final line, so create the
-      // blank line we are moving into. With following content, the existing
-      // newline after endPos already provides that boundary. Selection
-      // coordinates must be expressed in the post-change document.
-      const replacement = endPos === doc.length ? `${newText}\n` : newText;
-      view.dispatch({
-        changes: { from: startPos, to: endPos, insert: replacement },
-        selection: { anchor: startPos + newText.length + 1 },
-        scrollIntoView: true,
-      });
+      const curLine = doc.line(startLineNum + currentRowIdx);
+      if (currentRowIdx === lines.length - 1) {
+        const newLines = lines.slice(0, currentRowIdx);
+        const newText = newLines.join("\n");
+        const replacement = endPos === doc.length ? `${newText}\n` : newText;
+        view.dispatch({
+          changes: { from: startPos, to: endPos, insert: replacement },
+          selection: { anchor: startPos + newText.length + 1 },
+          scrollIntoView: true,
+        });
+      } else {
+        // Remove the empty piped row + its trailing newline, landing on the following line.
+        view.dispatch({
+          changes: { from: curLine.from, to: curLine.to + 1, insert: "" },
+          selection: { anchor: curLine.from },
+          scrollIntoView: true,
+        });
+      }
       return true;
     }
   }
@@ -1552,39 +1720,24 @@ export function tableEnterSameColumn(view: EditorView): boolean {
   let nextRow = currentRowIdx + 1;
   if (nextRow === sepIdx) nextRow++;
   if (nextRow >= lines.length) {
-    // Append a new row
-    const emptyRow = buildRow(Array(colCount).fill(" "));
-    const newLines = [...lines, emptyRow];
-    const model = parseTableModel(newLines, startLineNum, newLines.length - 1, 0);
-    const formatted = tableTooLarge(model) ? newLines : formatTableLines(model);
-    const newText = formatted.join("\n");
-    const targetRow = formatted.length - 1;
-    const targetRowText = formatted[targetRow] ?? "";
-    const cursor = startPos + rowOffset(formatted, targetRow) + cellOffset(targetRowText, currentColIdx);
+    const emptyRow = emptyRowMatchingStyle(lines[lines.length - 1] ?? lines[0] ?? "", colCount);
+    const cell = tableCellTarget(emptyRow, currentColIdx);
+    const cursor = endPos + 1 + cell.anchor;
     view.dispatch({
-      changes: { from: startPos, to: endPos, insert: newText },
+      changes: { from: endPos, to: endPos, insert: `\n${emptyRow}` },
       selection: { anchor: cursor },
       scrollIntoView: true,
     });
     return true;
   }
 
-  const model = parseTableModel(lines, startLineNum, currentRowIdx, from - doc.line(startLineNum + currentRowIdx).from);
-  const formatted = tableTooLarge(model) ? lines : formatTableLines(model);
-  const newText = formatted.join("\n");
-  const targetRowText = formatted[nextRow] ?? "";
-  const rowStart = startPos + rowOffset(formatted, nextRow);
-  const cell = cellTarget(targetRowText, currentColIdx);
-  const selection = { anchor: rowStart + cell.anchor, head: rowStart + cell.head };
-  if (newText === lines.join("\n")) {
-    view.dispatch({ selection, scrollIntoView: true });
-  } else {
-    view.dispatch({
-      changes: { from: startPos, to: endPos, insert: newText },
-      selection,
-      scrollIntoView: true,
-    });
-  }
+  const targetLine = doc.line(startLineNum + nextRow);
+  const cell = tableCellTarget(targetLine.text, currentColIdx);
+  view.dispatch({
+    selection: { anchor: targetLine.from + cell.anchor, head: targetLine.from + cell.head },
+    scrollIntoView: true,
+    userEvent: "select",
+  });
   return true;
 }
 
@@ -1779,7 +1932,19 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
   if (command === "code-block") return toggleCodeBlock(view, value || "");
 
   if (command === "insert-table") {
-    insertBlock(view, "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |", 2);
+    const md = "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |";
+    const { from } = view.state.selection.main;
+    const line = view.state.doc.lineAt(from);
+    const needNewline = line.text.trim().length > 0;
+    const prefix = needNewline ? "\n\n" : "";
+    const insertPos = needNewline ? line.to : line.from;
+    const replaceTo = needNewline ? line.to : line.to;
+    const start = insertPos + prefix.length;
+    view.dispatch({
+      changes: { from: insertPos, to: replaceTo, insert: prefix + md },
+      selection: { anchor: start + 2, head: start + 10 },
+      scrollIntoView: true,
+    });
     return true;
   }
 
@@ -1805,15 +1970,20 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
     return true;
   }
 
-  if (command === "insert-layout") {
-    const requested = /^(grid|flow)(?::([1-4]))?$/.exec(value || "grid");
-    const mode = requested?.[1] === "flow" ? "flow" : "grid";
-    const columns = requested?.[2] ?? "2";
-    const open = `#+begin layout {cols=${columns} mode=${mode}}`;
-    const close = "#+end layout";
+  if (command === "insert-columns") {
+    const requested = /^(columns|flow)(?::([2-6]))?$/i.exec((value || "columns").trim());
+    const mode = requested?.[1]?.toLowerCase() === "flow" ? "flow" : "columns";
+    const count = Math.max(2, Math.min(mode === "flow" ? 4 : 6, Number(requested?.[2] || 2)));
+    const open = mode === "flow" ? `#+begin columns {mode=flow cols=${count}}` : "#+begin columns";
+    const close = "#+end columns";
     const { from, to } = view.state.selection.main;
     if (from === to) {
-      insertBlock(view, `${open}\n\n${close}`, open.length + 1);
+      if (mode === "flow") {
+        insertBlock(view, `${open}\n\n${close}`, open.length + 1);
+        return true;
+      }
+      const dividers = Array.from({ length: count - 1 }, () => "#+col").join("\n\n");
+      insertBlock(view, `${open}\n\n${dividers}\n\n${close}`, open.length + 1);
       return true;
     }
     // Like the existing block commands, a selection claims every touched line.
@@ -1822,9 +1992,84 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
     const start = doc.lineAt(from).from;
     const end = doc.lineAt(to - 1).to;
     const body = doc.sliceString(start, end);
+    if (mode === "flow") {
+      view.dispatch({
+        changes: { from: start, to: end, insert: `${open}\n${body}\n${close}` },
+        selection: { anchor: start + open.length + 1, head: start + open.length + 1 + body.length },
+        scrollIntoView: true,
+      });
+      return true;
+    }
+    // Split selected top-level blank-line chunks outside fenced code / org envs.
+    const rawLines = body.split("\n");
+    const chunks: string[] = [];
+    let currentChunk: string[] = [];
+    let fenceChar = "";
+    let fenceLen = 0;
+    let envDepth = 0;
+    for (const rawLine of rawLines) {
+      if (fenceChar) {
+        currentChunk.push(rawLine);
+        const closeFence = /^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/.exec(rawLine);
+        if (closeFence && closeFence[1]![0] === fenceChar && closeFence[1]!.length >= fenceLen) {
+          fenceChar = "";
+          fenceLen = 0;
+        }
+        continue;
+      }
+      const openFence = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(rawLine);
+      if (openFence) {
+        fenceChar = openFence[1]![0]!;
+        fenceLen = openFence[1]!.length;
+        currentChunk.push(rawLine);
+        continue;
+      }
+      if (/^[ \t]*#\+begin[ \t]+\S+/i.test(rawLine)) {
+        envDepth++;
+        currentChunk.push(rawLine);
+        continue;
+      }
+      if (/^[ \t]*#\+end[ \t]+\S+[ \t]*$/i.test(rawLine)) {
+        if (envDepth > 0) envDepth--;
+        currentChunk.push(rawLine);
+        continue;
+      }
+      if (envDepth === 0 && !rawLine.trim()) {
+        if (currentChunk.length > 0) {
+          chunks.push(currentChunk.join("\n"));
+          currentChunk = [];
+        }
+      } else {
+        currentChunk.push(rawLine);
+      }
+    }
+    if (currentChunk.length > 0) chunks.push(currentChunk.join("\n"));
+
+    if (chunks.length <= 1) {
+      // Single selected block (e.g. "Put in 2 columns" on a figure or table):
+      // put it in Column 1 and place caret directly in Column 2 ready to type.
+      const extraPanes = Array.from({ length: count - 1 }, () => "").join("\n\n#+col\n\n");
+      const wrappedBody = `${body}\n\n#+col\n${extraPanes}`;
+      const caretPos = start + open.length + 1 + body.length + "\n\n#+col\n".length;
+      view.dispatch({
+        changes: { from: start, to: end, insert: `${open}\n${wrappedBody}\n${close}` },
+        selection: { anchor: caretPos },
+        scrollIntoView: true,
+      });
+      return true;
+    }
+
+    // Multiple selected blocks: distribute cleanly across `count` columns.
+    const groups: string[] = [];
+    for (let col = 0; col < count; col++) {
+      const sliceFrom = Math.floor((col * chunks.length) / count);
+      const sliceTo = Math.floor(((col + 1) * chunks.length) / count);
+      groups.push(chunks.slice(sliceFrom, sliceTo).join("\n\n"));
+    }
+    const wrappedBody = groups.join("\n\n#+col\n\n");
     view.dispatch({
-      changes: { from: start, to: end, insert: `${open}\n${body}\n${close}` },
-      selection: { anchor: start + open.length + 1, head: start + open.length + 1 + body.length },
+      changes: { from: start, to: end, insert: `${open}\n${wrappedBody}\n${close}` },
+      selection: { anchor: start + open.length + 1, head: start + open.length + 1 + wrappedBody.length },
       scrollIntoView: true,
     });
     return true;
@@ -1850,9 +2095,15 @@ export function runCommandCM6(view: EditorView, command: EditorCommand, value = 
   // ── Table ────────────────────────────────────────────────────────────────
   if (
     command === "table-insert-row" ||
+    command === "table-insert-row-above" ||
     command === "table-insert-column" ||
+    command === "table-insert-column-left" ||
     command === "table-delete-row" ||
     command === "table-delete-column" ||
+    command === "table-duplicate-row" ||
+    command === "table-duplicate-column" ||
+    command === "table-clear-cell" ||
+    command === "table-delete-table" ||
     command === "table-align-left" ||
     command === "table-align-center" ||
     command === "table-align-right" ||

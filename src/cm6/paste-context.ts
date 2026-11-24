@@ -25,6 +25,15 @@ import {
   type TransactionSpec,
 } from "@codemirror/state";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
+import { getFencedCodeRanges } from "./code-ranges.ts";
+import { getBlockMathRanges } from "./math-ranges.ts";
+import {
+  applyTableGridPaste,
+  buildMarkdownTableSource,
+  parseMarkdownTable,
+  parseTablePasteGrid,
+} from "./table-model.ts";
+import { findTableAtPos, tableCellTarget } from "./table-source-cells.ts";
 
 export type PasteSourceText = {
   /** The Markdown the clipboard pipeline produced. */
@@ -52,6 +61,10 @@ function contextAt(state: EditorState, range: SelectionRange): PasteContextKind 
     if (CODE_BLOCK_NODES.has(node.name)) return "code-block";
     if (node.name === "InlineCode" && range.from > node.from && range.from < node.to) return "inline-code";
     if (TABLE_NODES.has(node.name) && doc.lineAt(range.to).number === line.number) return "table-row";
+  }
+  if (doc.lineAt(range.to).number === line.number) {
+    const excluded = [...getBlockMathRanges(state), ...getFencedCodeRanges(state)];
+    if (findTableAtPos(doc, range.from, excluded)) return "table-row";
   }
   const before = doc.sliceString(line.from, range.from);
   const after = doc.sliceString(range.to, line.to);
@@ -135,9 +148,38 @@ function escapeTablePipes(text: string): string {
   return out;
 }
 
-function looksLikeMarkdownTable(text: string): boolean {
-  const lines = text.trim().split("\n");
-  return lines.length >= 2 && lines.every((line) => /^\s*\|.*\|\s*$/.test(line));
+/**
+ * Try pasting a GFM sub-table or TSV matrix across table cells starting at RANGE.
+ * Returns a single-transaction spec when a grid paste applies, or null for single-cell paste.
+ */
+export function tableGridPasteTransactionSpec(
+  state: EditorState,
+  range: SelectionRange,
+  source: PasteSourceText,
+): TransactionSpec | null {
+  if (state.doc.lineAt(range.from).number !== state.doc.lineAt(range.to).number) return null;
+  const excluded = [...getBlockMathRanges(state), ...getFencedCodeRanges(state)];
+  const found = findTableAtPos(state.doc, range.from, excluded);
+  if (!found || found.currentRowIdx === 1) return null;
+  const grid = parseTablePasteGrid(source.markdown)
+    ?? (source.plainText ? parseTablePasteGrid(source.plainText) : null);
+  if (!grid) return null;
+  const dataRow = found.currentRowIdx === 0 ? 0 : found.currentRowIdx - 1;
+  const data = parseMarkdownTable(state.doc.sliceString(found.from, found.sourceTo));
+  const merged = applyTableGridPaste(data, dataRow, found.currentColIdx, grid);
+  const insert = buildMarkdownTableSource(merged);
+  const endDataRow = dataRow + grid.length - 1;
+  const endCol = found.currentColIdx + Math.max(0, (grid[grid.length - 1]?.length ?? 1) - 1);
+  const lines = insert.split("\n");
+  const targetSourceRow = endDataRow === 0 ? 0 : endDataRow + 1;
+  const rowStart = lines.slice(0, targetSourceRow).reduce((sum, l) => sum + l.length + 1, 0);
+  const cell = tableCellTarget(lines[targetSourceRow] ?? "", endCol);
+  return {
+    changes: { from: found.from, to: found.sourceTo, insert },
+    selection: EditorSelection.cursor(found.from + rowStart + cell.head),
+    scrollIntoView: true,
+    userEvent: "input.paste",
+  };
 }
 
 /** The text a paste of SOURCE should insert over RANGE. */
@@ -149,7 +191,12 @@ export function adaptPasteText(state: EditorState, range: SelectionRange, source
     case "inline-code":
       return literal.replace(/\s*\n\s*/g, " ");
     case "table-row": {
-      if (looksLikeMarkdownTable(source.markdown)) return source.markdown;
+      const grid = parseTablePasteGrid(source.markdown)
+        ?? (source.plainText ? parseTablePasteGrid(source.plainText) : null);
+      if (grid) {
+        // Fallback when a caller only replaces one range (never break the table with raw pipes/newlines).
+        return escapeTablePipes(grid.map((row) => row.join(" ")).join("<br>"));
+      }
       return escapeTablePipes(source.markdown.trim().replace(/[ \t]*\r?\n[ \t]*/g, "<br>"));
     }
     case "link-destination": {
@@ -181,6 +228,10 @@ export function pasteTransactionSpec(
   source: PasteSourceText,
   ranges: readonly SelectionRange[] = state.selection.ranges,
 ): TransactionSpec {
+  if (ranges.length === 1) {
+    const gridPaste = tableGridPasteTransactionSpec(state, ranges[0]!, source);
+    if (gridPaste) return gridPaste;
+  }
   const lines = source.markdown.split(/\r?\n/);
   const distribute = ranges.length > 1 && lines.length === ranges.length;
   const ordered = ranges.map((range, index) => ({ range, index })).sort((a, b) => a.range.from - b.range.from);

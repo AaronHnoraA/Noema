@@ -30,6 +30,8 @@ const constructs = [
   "\\[\n\\int_0^1 f(x)\\,dx = \\sum_{k=0}^{n} a_k\n\\]",
   "Inline math \\(\\alpha + \\beta^2\\) inside a sentence, and a footnote[^1] too.",
   "#+begin theorem Main\nA statement with \\(x\\) in it.\n#+end theorem",
+  "#+begin columns\nLeft column prose.\n\n#+col\n\nRight column prose.\n#+end columns",
+  "A sentence with @@comment [inline note] attached.",
   "```python\nprint('hello')\nfor i in range(3):\n    print(i)\n```",
   "A task list:\n\n- [ ] open item\n- [x] done item",
   "---",
@@ -100,6 +102,7 @@ try {
       const targets = [
         ["image", "![Plot]"], ["table", "| name |"], ["display math", "\\[\n\\int"],
         ["inline math", "\\(\\alpha"], ["org env", "#+begin theorem"],
+        ["columns", "#+begin columns"], ["inline comment", "@@comment [inline note]"],
         ["code block", "```python"], ["task box", "- [ ] open", "edits"], ["rule", "\n---\n"],
         ["ediff", "#+begin ediff"],
         ["footnote", "[^1] too", "navigates"],

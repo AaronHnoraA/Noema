@@ -410,33 +410,52 @@ maybeDescribe("CM6 runCommand — block insert", () => {
     ed.destroy();
   });
 
-  it("insert-layout: inserts a native layout and places the caret inside", async () => {
+  it("insert-columns: inserts a 2-column block and places the caret in column 1", async () => {
     const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
     const host = document.createElement("div");
     const ed = createEditorCM6(host, { initialContent: "" });
-    ed.runCommand("insert-layout", "grid");
-    expect(ed.getMarkdown()).toBe("#+begin layout {cols=2 mode=grid}\n\n#+end layout");
-    expect(ed.getMarkdownSelection().from).toBe("#+begin layout {cols=2 mode=grid}\n".length);
+    ed.runCommand("insert-columns", "columns");
+    expect(ed.getMarkdown()).toBe("#+begin columns\n\n#+col\n\n#+end columns");
+    expect(ed.getMarkdownSelection().from).toBe("#+begin columns\n".length);
     ed.destroy();
   });
 
-  it("insert-layout: wraps complete selected lines without changing their Markdown", async () => {
+  it("insert-columns: wraps multi-block selection across columns and flow wraps verbatim", async () => {
     const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
     const host = document.createElement("div");
     const source = "Before\nLeft text\n\n![Graph](graph.png)\nAfter";
     const ed = createEditorCM6(host, { initialContent: source });
     ed.setSelection(source.indexOf("Left") + 2, source.indexOf("After"));
-    ed.runCommand("insert-layout", "flow");
-    expect(ed.getMarkdown()).toBe("Before\n#+begin layout {cols=2 mode=flow}\nLeft text\n\n![Graph](graph.png)\n#+end layout\nAfter");
+    ed.runCommand("insert-columns", "columns");
+    expect(ed.getMarkdown()).toBe("Before\n#+begin columns\nLeft text\n\n#+col\n\n![Graph](graph.png)\n#+end columns\nAfter");
+    ed.destroy();
+
+    const flowHost = document.createElement("div");
+    const flowEd = createEditorCM6(flowHost, { initialContent: source });
+    flowEd.setSelection(source.indexOf("Left") + 2, source.indexOf("After"));
+    flowEd.runCommand("insert-columns", "flow");
+    expect(flowEd.getMarkdown()).toBe("Before\n#+begin columns {mode=flow cols=2}\nLeft text\n\n![Graph](graph.png)\n#+end columns\nAfter");
+    flowEd.destroy();
+  });
+
+  it("insert-columns: wraps a single selected block into column 1 and places caret in column 2", async () => {
+    const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
+    const host = document.createElement("div");
+    const source = "![Chart](chart.png)";
+    const ed = createEditorCM6(host, { initialContent: source });
+    ed.setSelection(0, source.length);
+    ed.runCommand("insert-columns", "columns");
+    expect(ed.getMarkdown()).toBe("#+begin columns\n![Chart](chart.png)\n\n#+col\n\n#+end columns");
+    expect(ed.getMarkdownSelection().from).toBe("#+begin columns\n![Chart](chart.png)\n\n#+col\n".length);
     ed.destroy();
   });
 
-  it("insert-layout: accepts a column count from host commands", async () => {
+  it("insert-columns: accepts a column count from host commands", async () => {
     const { createEditorCM6 } = await import("../../src/cm6/editor-cm6.ts");
     const host = document.createElement("div");
     const ed = createEditorCM6(host, { initialContent: "" });
-    ed.runCommand("insert-layout", "grid:3");
-    expect(ed.getMarkdown()).toBe("#+begin layout {cols=3 mode=grid}\n\n#+end layout");
+    ed.runCommand("insert-columns", "columns:3");
+    expect(ed.getMarkdown()).toBe("#+begin columns\n\n#+col\n\n#+col\n\n#+end columns");
     ed.destroy();
   });
 });

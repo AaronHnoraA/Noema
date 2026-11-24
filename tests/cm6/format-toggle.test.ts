@@ -475,8 +475,8 @@ describe("table quick create", () => {
   it("Enter after a lone header row adds the delimiter and a body row", () => {
     const ed = open("| a | b |", 9);
     runEditorEnter(ed.view);
-    expect(ed.getMarkdown()).toBe("| a   | b   |\n| --- | --- |\n|     |     |");
-    expect(ed.getMarkdownSelection()).toEqual({ from: 30, to: 30 });
+    expect(ed.getMarkdown()).toBe("| a | b |\n| --- | --- |\n|  |  |");
+    expect(ed.getMarkdownSelection()).toEqual({ from: 26, to: 26 });
   });
 
   it("a single pipe cell is not mistaken for a table", () => {

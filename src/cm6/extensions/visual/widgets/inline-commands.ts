@@ -16,6 +16,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
+import { preserveEditorViewport } from "../../../viewport-stability.ts";
 import { decodeRevisionAttribute, decodeRevisionContext } from "../../../../authoring-syntax.ts";
 import { revisionKindOf } from "../../../../revision-kinds.ts";
 import { findInlineCommandClose, isEscapedCommandStart, parseCommandArgs, scanInlineCommands, type InlineCommand } from "../../../../command-syntax.ts";
@@ -790,23 +791,26 @@ class RevisionWidget extends MeasuredWidget {
       button.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); run(); });
       return button;
     };
+    const lineAnchor = () => view.state.doc.lineAt(Math.max(0, Math.min(this.cmd.fullFrom, view.state.doc.length))).from;
     actions.append(
       action("Accept", "Replace original text with the suggestion", () => {
         if (!advice) return;
-        dispatchConstructEdit(view, {
-          changes: { from: this.cmd.fullFrom, to: this.cmd.fullTo, insert: advice },
-          selection: { anchor: this.cmd.fullFrom + advice.length },
-          scrollIntoView: true,
-        });
-        view.focus();
+        preserveEditorViewport(view, () => {
+          dispatchConstructEdit(view, {
+            changes: { from: this.cmd.fullFrom, to: this.cmd.fullTo, insert: advice },
+            selection: { anchor: this.cmd.fullFrom + advice.length },
+          });
+          view.focus();
+        }, lineAnchor());
       }),
       action("Keep", "Keep the original text", () => {
-        dispatchConstructEdit(view, {
-          changes: { from: this.cmd.fullFrom, to: this.cmd.fullTo, insert: original },
-          selection: { anchor: this.cmd.fullFrom + original.length },
-          scrollIntoView: true,
-        });
-        view.focus();
+        preserveEditorViewport(view, () => {
+          dispatchConstructEdit(view, {
+            changes: { from: this.cmd.fullFrom, to: this.cmd.fullTo, insert: original },
+            selection: { anchor: this.cmd.fullFrom + original.length },
+          });
+          view.focus();
+        }, lineAnchor());
       }),
       // Selecting the whole raw command used to be the only "edit": the next
       // keypress then destroyed it. Ask the shell for the revision form
@@ -826,10 +830,13 @@ class RevisionWidget extends MeasuredWidget {
           cancelable: true,
         }));
         if (!handled) {
-          view.dispatch({
-            selection: { anchor: this.cmd.fullFrom, head: this.cmd.fullTo },
-            scrollIntoView: true,
-          });
+          preserveEditorViewport(view, () => {
+            view.dispatch({
+              selection: { anchor: this.cmd.fullFrom, head: this.cmd.fullTo },
+            });
+            view.focus();
+          }, lineAnchor());
+          return;
         }
         view.focus();
       }),

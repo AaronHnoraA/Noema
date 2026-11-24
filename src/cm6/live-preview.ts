@@ -56,12 +56,28 @@ import { sanitizeEmbeddedHtml } from "../sanitize-html.ts";
 import { renderInlineMarkdownHTML } from "../render-html.ts";
 import { tableCellMathRanges } from "./table-cell-assist.ts";
 import { openRenderedFormulaSource, renderedFormulaClickRatio } from "./rendered-formula-click.ts";
-import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "./figure-layout-menu.ts";
+import { figureLayoutToolbar, figureMoveGrip, figureResizeHandle } from "./figure-layout-menu.ts";
 import { scanEmojiShortcodes } from "../emoji-shortcodes.ts";
 import { writeSystemClipboard } from "../system-clipboard.ts";
-import { sortTableBodyRows, tableRowsToCSV } from "./table-model.ts";
-import { cellTarget } from "./commands/index.ts";
-import { tableSourceRowParts } from "./table-source-cells.ts";
+import {
+  buildMarkdownTableSource,
+  computeTableColumnPercentages,
+  parseMarkdownTable,
+  sortTableBodyRows,
+  tableRowsToCSV,
+  type MarkdownTableData,
+} from "./table-model.ts";
+import {
+  isTableBodyLine,
+  isTableSeparatorLine,
+  isTableStart,
+  mapRenderedOffsetToSource,
+  tableCellColumnAtOffset,
+  tableCellTarget,
+  tableSourceRowParts,
+} from "./table-source-cells.ts";
+import { isMarkdownLinkOpenEvent, markdownLinkOpensNewWindow } from "./markdown-link-events.ts";
+import { renderedTextOffsetAtPoint } from "./pointer-position.ts";
 import {
   clearRectCells,
   rectCellSources,
@@ -1047,81 +1063,6 @@ interface MarkdownTable {
   layout: LayoutAttrs;
 }
 
-interface MarkdownTableData {
-  rows: string[][];
-  aligns: Array<"left" | "center" | "right" | "">;
-}
-
-function splitTableRow(line: string): string[] {
-  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  const cells: string[] = [];
-  let cell = "";
-  for (let i = 0; i < trimmed.length; i++) {
-    const ch = trimmed[i]!;
-    if (ch === "\\" && i + 1 < trimmed.length) {
-      const next = trimmed[++i]!;
-      // The widget edits cell text, so decode only the table delimiter escape.
-      // Serialization adds that escape back exactly once on commit.
-      cell += next === "|" ? "|" : `\\${next}`;
-      continue;
-    }
-    if (ch === "|") {
-      cells.push(cell.trim());
-      cell = "";
-      continue;
-    }
-    cell += ch;
-  }
-  cells.push(cell.trim());
-  return cells;
-}
-
-/** GFM delimiter row: one hyphen per cell is enough (`|-|:-:|`), as in export. */
-function isTableSeparatorLine(line: string): boolean {
-  const cells = splitTableRow(line);
-  return cells.length > 0 && cells.every((cell) => /^:?-+:?$/.test(cell.replace(/\s+/g, "")));
-}
-
-/** Whether LINE has a `|` that is not backslash-escaped. */
-function hasUnescapedPipe(line: string): boolean {
-  for (let index = line.indexOf("|"); index >= 0; index = line.indexOf("|", index + 1)) {
-    let slashes = 0;
-    for (let pos = index - 1; pos >= 0 && line[pos] === "\\"; pos--) slashes++;
-    if (slashes % 2 === 0) return true;
-  }
-  return false;
-}
-
-/** A row's cells without the optional outer pipes. */
-function tableRowCells(line: string): string[] {
-  return splitTableRow(line);
-}
-
-/**
- * GFM table start, by the rules export's markdown-it applies: the header has
- * an unescaped pipe, the delimiter row is made of `-`, `:`, `|` and spaces
- * with as many cells as the header, and neither is indented as code. Outer
- * pipes are optional (`a | b` / `--- | ---`).
- */
-function isTableStart(header: string, delimiter: string): boolean {
-  if (/^(?: {4}|\t)/u.test(header) || /^(?: {4}|\t)/u.test(delimiter)) return false;
-  if (!hasUnescapedPipe(header)) return false;
-  if (!/^\s*[-:|][-:|\s]*$/u.test(delimiter) || /^\s*-\s/u.test(delimiter)) return false;
-  if (!isTableSeparatorLine(delimiter)) return false;
-  return tableRowCells(header).length === tableRowCells(delimiter).length;
-}
-
-/** A line that starts another block and so ends a table body (blank lines end it too). */
-const TABLE_BODY_BREAK_RE = /^(?: {0,3}(?:#{1,6}(?:\s|$)|>|[-*+]\s|\d{1,9}[.)]\s|`{3,}|~{3,}|<[A-Za-z/!?]|(?:\*\s*){3,}$|(?:-\s*){3,}$|(?:_\s*){3,}$)| {4}|\t)/u;
-
-function isTableBodyLine(line: string): boolean {
-  // A `{...}` layout line belongs to the table as its attributes, not a row.
-  // A local review card occupies this source span. Let its own block widget
-  // render here instead of swallowing it as an editable table row.
-  return line.trim().length > 0 && !/^#\+begin ediff(?:\s|$)/i.test(line)
-    && !TABLE_BODY_BREAK_RE.test(line) && !readLayoutAttrsLine(line);
-}
-
 function nextLayoutAttrsLine(doc: Text, sourceTo: number): { to: number; layout: LayoutAttrs } | null {
   const currentLine = doc.lineAt(sourceTo);
   if (currentLine.number >= doc.lines) return null;
@@ -1337,52 +1278,6 @@ function updateMarkdownTablesNearChanges(
   return mapped.slice(0, first).concat(rescanned, mapped.slice(first));
 }
 
-function cellAlign(separatorCell: string): "left" | "center" | "right" | "" {
-  const compact = separatorCell.replace(/\s+/g, "");
-  const left = compact.startsWith(":");
-  const right = compact.endsWith(":");
-  if (left && right) return "center";
-  if (right) return "right";
-  if (left) return "left";
-  return "";
-}
-
-function parseMarkdownTable(source: string): MarkdownTableData {
-  const lines = source.split(/\r?\n/).filter((line) => line.trim().length > 0);
-  const headerCells = splitTableRow(lines[0] ?? "");
-  const separatorCells = splitTableRow(lines[1] ?? "");
-  const bodyRows = lines.slice(2).map(splitTableRow);
-  const colCount = Math.max(1, headerCells.length, ...bodyRows.map((row) => row.length));
-  const normalize = (row: string[]): string[] => Array.from({ length: colCount }, (_, index) => row[index] ?? "");
-  return {
-    rows: [normalize(headerCells), ...bodyRows.map(normalize)],
-    aligns: Array.from({ length: colCount }, (_, index) => cellAlign(separatorCells[index] ?? "")),
-  };
-}
-
-function separatorForAlign(align: "left" | "center" | "right" | ""): string {
-  if (align === "left") return ":---";
-  if (align === "center") return ":---:";
-  if (align === "right") return "---:";
-  return "---";
-}
-
-function escapeTableCell(cell: string): string {
-  return cell.replace(/\r?\n/g, " ").replace(/\|/g, "\\|");
-}
-
-function buildMarkdownTableSource(data: MarkdownTableData): string {
-  const header = data.rows[0] ?? [""];
-  const body = data.rows.slice(1);
-  const aligns = Array.from({ length: header.length }, (_, index) => data.aligns[index] ?? "");
-  const rowSource = (row: string[]): string => `| ${row.map(escapeTableCell).join(" | ")} |`;
-  return [
-    rowSource(header),
-    rowSource(aligns.map(separatorForAlign)),
-    ...body.map(rowSource),
-  ].join("\n");
-}
-
 type TableFocusTarget = {
   row: number;
   col: number;
@@ -1391,6 +1286,8 @@ type TableFocusTarget = {
   select?: boolean;
   /** Where the caret lands in an edited cell when nothing is selected. */
   caret?: "start" | "end";
+  /** Clicked rendered text offset from pointer-position.ts, mapped to cell source. */
+  caretHit?: { offset: number; total: number } | null;
 };
 
 /** Whole-table writes a rectangular cell selection needs from its widget. */
@@ -1402,17 +1299,91 @@ type TableStructureActions = {
 
 type TableFocusResolver = TableFocusTarget | ((data: MarkdownTableData) => TableFocusTarget | null);
 
+/** Apply colgroup widths matching computeTableColumnPercentages to a preview table. */
+function syncPreviewTableColgroup(table: HTMLTableElement, colWidths: readonly number[]): void {
+  let colgroup = table.querySelector("colgroup");
+  if (!colgroup) {
+    colgroup = document.createElement("colgroup");
+    table.prepend(colgroup);
+  }
+  const existing = Array.from(colgroup.children) as HTMLTableColElement[];
+  if (existing.length === colWidths.length) {
+    colWidths.forEach((width, index) => {
+      existing[index]!.style.width = `${width}%`;
+    });
+    return;
+  }
+  colgroup.replaceChildren(...colWidths.map((width) => {
+    const col = document.createElement("col");
+    col.style.width = `${width}%`;
+    return col;
+  }));
+}
+
 /** The same table controls in the preview and in the live document grid. */
 function createTableToolbar(
   apply: (mutate: (next: MarkdownTableData) => void, focus?: TableFocusResolver) => void,
   active: () => { row: number; col: number },
-  readRows: () => string[][],
-): HTMLElement {
+  readData: () => MarkdownTableData,
+  onDeleteTable?: () => void,
+  layoutHost?: { view: EditorView; widget: HTMLElement; readLayout: () => LayoutAttrs },
+): { element: HTMLElement; syncState: () => void } {
   const toolbar = document.createElement("div");
   toolbar.className = "cm-table-toolbar";
+  toolbar.setAttribute("role", "toolbar");
+  toolbar.setAttribute("aria-label", "Table controls");
   toolbar.addEventListener("mousedown", stopEvent);
+
+  const sep = (): HTMLSpanElement => {
+    const el = document.createElement("span");
+    el.className = "cm-table-toolbar-sep";
+    el.setAttribute("aria-hidden", "true");
+    return el;
+  };
+
+  const deleteRowBtn = tableToolButton("-R", "Delete current body row", () => apply((next) => {
+    const row = active().row;
+    if (next.rows.length <= 2 || row < 1 || row >= next.rows.length) return;
+    next.rows.splice(row, 1);
+  }, (next) => ({ row: Math.max(1, Math.min(active().row, next.rows.length - 1)), col: active().col })));
+
+  const deleteColBtn = tableToolButton("-C", "Delete current column", () => apply((next) => {
+    if ((next.rows[0]?.length ?? 0) <= 1) return;
+    const col = Math.max(0, Math.min(active().col, (next.rows[0]?.length ?? 1) - 1));
+    next.rows.forEach((row) => row.splice(col, 1));
+    next.aligns.splice(col, 1);
+  }, (next) => ({ row: active().row, col: Math.max(0, Math.min(active().col, (next.rows[0]?.length ?? 1) - 1)) })));
+
+  const toggleAlign = (align: "left" | "center" | "right") => () => apply((next) => {
+    const col = active().col;
+    next.aligns[col] = next.aligns[col] === align ? "" : align;
+  }, { row: active().row, col: active().col });
+
+  const alignLeftBtn = tableToolButton("L", "Align column left", toggleAlign("left"));
+  const alignCenterBtn = tableToolButton("C", "Align column center", toggleAlign("center"));
+  const alignRightBtn = tableToolButton("R", "Align column right", toggleAlign("right"));
+
+  const syncState = (): void => {
+    const data = readData();
+    const pos = active();
+    const align = data.aligns[pos.col] ?? "";
+    alignLeftBtn.classList.toggle("is-active", align === "left");
+    alignCenterBtn.classList.toggle("is-active", align === "center");
+    alignRightBtn.classList.toggle("is-active", align === "right");
+    deleteRowBtn.disabled = data.rows.length <= 2 || pos.row < 1;
+    deleteColBtn.disabled = (data.rows[0]?.length ?? 0) <= 1;
+  };
+
   toolbar.append(
-    tableToolButton("+ Row", "Insert row below", () => {
+    tableToolButton("+↑", "Insert row above", () => {
+      let insertAt = Math.max(1, active().row);
+      apply((next) => {
+        const width = next.rows[0]?.length ?? 1;
+        insertAt = Math.max(1, Math.min(insertAt, next.rows.length));
+        next.rows.splice(insertAt, 0, Array(width).fill(""));
+      }, () => ({ row: insertAt, col: active().col, edit: true, select: true }));
+    }),
+    tableToolButton("+↓", "Insert row below", () => {
       let insertAt = Math.max(1, active().row + 1);
       apply((next) => {
         const width = next.rows[0]?.length ?? 1;
@@ -1420,12 +1391,17 @@ function createTableToolbar(
         next.rows.splice(insertAt, 0, Array(width).fill(""));
       }, () => ({ row: insertAt, col: active().col, edit: true, select: true }));
     }),
-    tableToolButton("- Row", "Delete current body row", () => apply((next) => {
-      if (next.rows.length <= 2) return;
-      const row = Math.max(1, active().row);
-      next.rows.splice(row, 1);
-    }, (next) => ({ row: Math.max(1, Math.min(active().row, next.rows.length - 1)), col: active().col }))),
-    tableToolButton("+ Col", "Insert column right", () => {
+    deleteRowBtn,
+    sep(),
+    tableToolButton("+←", "Insert column left", () => {
+      let col = Math.max(0, active().col);
+      apply((next) => {
+        col = Math.max(0, Math.min(col, next.rows[0]?.length ?? 1));
+        next.rows.forEach((row) => row.splice(col, 0, ""));
+        next.aligns.splice(col, 0, "");
+      }, () => ({ row: active().row, col, edit: true, select: true }));
+    }),
+    tableToolButton("+→", "Insert column right", () => {
       let col = Math.max(0, active().col + 1);
       apply((next) => {
         col = Math.min(col, next.rows[0]?.length ?? 1);
@@ -1433,15 +1409,12 @@ function createTableToolbar(
         next.aligns.splice(col, 0, "");
       }, () => ({ row: active().row, col, edit: true, select: true }));
     }),
-    tableToolButton("- Col", "Delete current column", () => apply((next) => {
-      if ((next.rows[0]?.length ?? 0) <= 1) return;
-      const col = Math.max(0, Math.min(active().col, (next.rows[0]?.length ?? 1) - 1));
-      next.rows.forEach((row) => row.splice(col, 1));
-      next.aligns.splice(col, 1);
-    }, (next) => ({ row: active().row, col: Math.max(0, Math.min(active().col, (next.rows[0]?.length ?? 1) - 1)) }))),
-    tableToolButton("L", "Align column left", () => apply((next) => { next.aligns[active().col] = "left"; }, { row: active().row, col: active().col })),
-    tableToolButton("C", "Align column center", () => apply((next) => { next.aligns[active().col] = "center"; }, { row: active().row, col: active().col })),
-    tableToolButton("R", "Align column right", () => apply((next) => { next.aligns[active().col] = "right"; }, { row: active().row, col: active().col })),
+    deleteColBtn,
+    sep(),
+    alignLeftBtn,
+    alignCenterBtn,
+    alignRightBtn,
+    sep(),
     tableToolButton("↑", "Sort body rows ascending by active column", () => apply((next) => {
       if (next.rows.length > 100) return;
       next.rows = sortTableBodyRows(next.rows, active().col, 1, (row) => row);
@@ -1451,23 +1424,89 @@ function createTableToolbar(
       next.rows = sortTableBodyRows(next.rows, active().col, -1, (row) => row);
     }, { row: Math.max(1, active().row), col: active().col })),
     tableToolButton("CSV", "Copy table as CSV", () => {
-      const rows = readRows();
+      const rows = readData().rows;
       if (rows.length <= 100) void writeSystemClipboard(tableRowsToCSV(rows));
     }),
-    tableSizePickerButton((rows, columns) => apply((next) => {
-      const targetRows = Math.max(2, Math.min(8, rows));
-      const targetColumns = Math.max(1, Math.min(8, columns));
-      while (next.rows.length < targetRows) next.rows.push(Array(next.rows[0]?.length ?? 1).fill(""));
-      next.rows.length = targetRows;
-      next.rows.forEach((row) => {
-        while (row.length < targetColumns) row.push("");
-        row.length = targetColumns;
-      });
-      while (next.aligns.length < targetColumns) next.aligns.push("");
-      next.aligns.length = targetColumns;
-    }, { row: 1, col: 0, edit: true, select: true })),
+    tableSizePickerButton(
+      () => {
+        const data = readData();
+        return { rows: data.rows.length, cols: data.rows[0]?.length ?? 1 };
+      },
+      (rows, columns) => apply((next) => {
+        const targetRows = Math.max(2, Math.min(8, rows));
+        const targetColumns = Math.max(1, Math.min(8, columns));
+        while (next.rows.length < targetRows) next.rows.push(Array(next.rows[0]?.length ?? 1).fill(""));
+        next.rows.length = targetRows;
+        next.rows.forEach((row) => {
+          while (row.length < targetColumns) row.push("");
+          row.length = targetColumns;
+        });
+        while (next.aligns.length < targetColumns) next.aligns.push("");
+        next.aligns.length = targetColumns;
+      }, { row: 1, col: 0, edit: true, select: true }),
+    ),
   );
-  return toolbar;
+  if (layoutHost) {
+    toolbar.append(
+      tableLayoutPopoverButton(layoutHost.view, layoutHost.widget, layoutHost.readLayout),
+      figureMoveGrip(layoutHost.view, layoutHost.widget),
+    );
+  }
+  if (onDeleteTable) {
+    const deleteBtn = tableToolButton("×", "Delete table", onDeleteTable);
+    deleteBtn.className = "cm-table-toolbar-danger";
+    toolbar.append(sep(), deleteBtn);
+  }
+  syncState();
+  return { element: toolbar, syncState };
+}
+
+/** Compact `◫` button inside the table toolbar opening the unified figure layout controls. */
+function tableLayoutPopoverButton(
+  view: EditorView,
+  widget: HTMLElement,
+  readLayout: () => LayoutAttrs,
+): HTMLElement {
+  const host = document.createElement("span");
+  host.className = "cm-table-layout-popover-host";
+  let closePopover: (() => void) | null = null;
+  const button = tableToolButton("◫", "Table layout (align, wrap, width)", () => {
+    if (closePopover) {
+      closePopover();
+      return;
+    }
+    const cleanup = (): void => {
+      document.removeEventListener("pointerdown", onOutside, true);
+      document.removeEventListener("keydown", onKey, true);
+      popover.remove();
+      button.classList.remove("is-active");
+      closePopover = null;
+    };
+    const onOutside = (event: Event): void => {
+      if (!(event.target instanceof Node) || !host.contains(event.target)) cleanup();
+    };
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        cleanup();
+      }
+    };
+    const popover = figureLayoutToolbar(view, widget, readLayout(), {
+      extraClass: "cm-table-layout-popover",
+      preservesAspect: false,
+      includeMoveGrip: false,
+      onApplied: cleanup,
+    });
+    closePopover = cleanup;
+    button.classList.add("is-active");
+    document.addEventListener("pointerdown", onOutside, true);
+    document.addEventListener("keydown", onKey, true);
+    host.append(popover);
+  });
+  button.setAttribute("aria-label", "Table layout");
+  host.append(button);
+  return host;
 }
 
 class TableWidget extends MeasuredWidget {
@@ -1499,7 +1538,7 @@ class TableWidget extends MeasuredWidget {
 
   protected estimatedHeightFallback(): number {
     const rows = parseMarkdownTable(this.source).rows.length;
-    return Math.max(96, 64 + rows * 34);
+    return Math.max(96, 36 + rows * 34);
   }
 
   eq(other: TableWidget): boolean {
@@ -1527,14 +1566,12 @@ class TableWidget extends MeasuredWidget {
     const rows = Array.from(table.rows);
     if (rows.length !== data.rows.length || rows.some((row, index) => row.cells.length !== data.rows[index]!.length)) return false;
 
-    // Keep cells and their interaction handlers when only text/alignment or
-    // source offsets changed. Keep the shared data current for the existing
-    // handlers; write actions resolve their source range from the live DOM.
     context.widget = this;
     context.data.rows = data.rows;
     context.data.aligns = data.aligns;
     this.domContext = context;
     this.disposeCellEditor = previous.disposeCellEditor;
+    syncPreviewTableColgroup(table, computeTableColumnPercentages(data.rows));
     rows.forEach((row, rowIndex) => {
       Array.from(row.cells).forEach((cell, col) => {
         const source = data.rows[rowIndex]![col]!;
@@ -1569,8 +1606,6 @@ class TableWidget extends MeasuredWidget {
     applyLayoutAttrs(wrap, "table", this.layout);
     if (this.layout.height) wrap.classList.add("cm-table-explicit-height");
     const currentTable = (): MarkdownTable | null => {
-      // Decorations can map through an edit before the table without replacing
-      // the widget. Resolve the live position when an action writes source.
       const pos = view.posAtDOM(wrap);
       const tables = markdownTablesFromState(view.state);
       const found = tables[firstTableEndingAtOrAfter(tables, pos)];
@@ -1586,13 +1621,26 @@ class TableWidget extends MeasuredWidget {
 
     let activeRow = 0;
     let activeCol = 0;
+    let syncToolbar: () => void = () => {};
+    const removeTable = (): void => {
+      const current = currentTable();
+      if (!current) return;
+      const doc = view.state.doc;
+      const to = current.to < doc.length && doc.sliceString(current.to, current.to + 1) === "\n" ? current.to + 1 : current.to;
+      dispatchConstructEdit(view, {
+        changes: { from: current.from, to },
+        selection: { anchor: current.from },
+        scrollIntoView: true,
+      }, "delete");
+      view.focus();
+    };
     /** Write the cells' sources back as the table's Markdown. */
     const commit = (focusTarget?: TableFocusTarget | null): void => {
       const rows = tableRowsFromDOM(table);
       if (rows.length === 0) return;
       const current = currentTable();
       if (!current) return;
-      const nextSource = buildMarkdownTableSource({ rows, aligns: data.aligns.slice(0, rows[0]!.length) });
+      const nextSource = buildMarkdownTableSource({ rows, aligns: context.data.aligns.slice(0, rows[0]!.length) });
       if (nextSource !== current.source) {
         dispatchConstructEdit(view, {
           changes: { from: current.from, to: current.sourceTo, insert: nextSource },
@@ -1610,7 +1658,7 @@ class TableWidget extends MeasuredWidget {
       const current = currentTable();
       if (!current) return;
       const rows = tableRowsFromDOM(table);
-      const next = { rows, aligns: data.aligns.slice(0, rows[0]?.length ?? 1) };
+      const next = { rows, aligns: context.data.aligns.slice(0, rows[0]?.length ?? 1) };
       mutate(next);
       const nextSource = buildMarkdownTableSource(next);
       const target = typeof focusTarget === "function" ? focusTarget(next) : focusTarget;
@@ -1621,37 +1669,33 @@ class TableWidget extends MeasuredWidget {
       view.requestMeasure();
     };
 
-    const toolbar = createTableToolbar(apply, () => ({ row: activeRow, col: activeCol }), () => tableRowsFromDOM(table));
-
     const rendered = renderEditableTable(data, (row, col) => {
       activeRow = row;
       activeCol = col;
+      syncToolbar();
     }, commit, view, () => currentTable()?.from ?? context.widget.from,
-    (row, col, select = false, formulaIndex = -1, formulaClickRatio = 0) => {
+    (row, col, cellEl, event) => {
       const current = currentTable();
       if (!current) return;
-      if (formulaIndex >= 0 && focusDocumentTableFormula(view, current, row, col, formulaIndex, formulaClickRatio)) return;
-      focusDocumentTableCell(view, current, { row, col, edit: true, select });
+      openTableCellFromPointer(view, current, cellEl, row, col, event);
     }, editable, {
-      aligns: () => [...data.aligns],
+      aligns: () => [...context.data.aligns],
       replace: (rows, aligns, focus) => apply((next) => {
         next.rows = rows;
         next.aligns = aligns;
       }, focus ?? undefined),
-      remove: () => {
-        const current = currentTable();
-        if (!current) return;
-        const doc = view.state.doc;
-        const to = current.to < doc.length && doc.sliceString(current.to, current.to + 1) === "\n" ? current.to + 1 : current.to;
-        dispatchConstructEdit(view, {
-          changes: { from: current.from, to },
-          selection: { anchor: current.from },
-          scrollIntoView: true,
-        }, "delete");
-        view.focus();
-      },
+      remove: removeTable,
     });
     const table = rendered.table;
+    const toolbar = createTableToolbar(
+      apply,
+      () => ({ row: activeRow, col: activeCol }),
+      () => ({ rows: tableRowsFromDOM(table), aligns: [...context.data.aligns] }),
+      removeTable,
+      { view, widget: wrap, readLayout: () => currentTable()?.layout ?? context.widget.layout },
+    );
+    syncToolbar = toolbar.syncState;
+    syncPreviewTableColgroup(table, computeTableColumnPercentages(data.rows));
     table.style.setProperty("--noema-table-row-count", String(data.rows.length));
     if (this.layout.height) table.classList.add("cm-table-explicit-height");
     this.disposeCellEditor = rendered.dispose;
@@ -1668,7 +1712,7 @@ class TableWidget extends MeasuredWidget {
         });
       }, true);
     }
-    if (editable) installTableDragHandles(table, {
+    if (editable) installTableDragHandles(table, view, {
       moveRow: (from, to) => apply((next) => {
         if (from < 1 || to < 1 || from >= next.rows.length || to >= next.rows.length || from === to) return;
         const [row] = next.rows.splice(from, 1);
@@ -1694,7 +1738,7 @@ class TableWidget extends MeasuredWidget {
       next.aligns.push("");
     }, (next) => ({ row: activeRow, col: (next.rows[0]?.length ?? 1) - 1, edit: true, select: true })));
     addColumnEdge.className = "cm-table-edge-add cm-table-edge-add-column";
-    if (editable) wrap.append(toolbar, table, addRowEdge, addColumnEdge, figureLayoutToolbar(view, wrap, this.layout), figureResizeHandle(view, wrap, "table"), figureHeightHandle(view, wrap, "table"));
+    if (editable) wrap.append(toolbar.element, table, addRowEdge, addColumnEdge, figureResizeHandle(view, wrap, "table"));
     else wrap.append(table);
     return this.registerMeasured(wrap, view);
   }
@@ -1725,18 +1769,64 @@ function tableToolButton(label: string, title: string, run: () => void): HTMLBut
   return button;
 }
 
-function tableSizePickerButton(apply: (rows: number, columns: number) => void): HTMLElement {
+function tableSizePickerButton(
+  readDimensions: () => { rows: number; cols: number },
+  apply: (rows: number, columns: number) => void,
+): HTMLElement {
   const host = document.createElement("span");
   host.className = "cm-table-size-picker-host";
-  const button = tableToolButton("Size", "Resize table with grid", () => {
-    let picker = host.querySelector<HTMLElement>(".cm-table-size-picker");
-    if (picker) {
-      picker.remove();
+  let closePicker: (() => void) | null = null;
+  const button = tableToolButton("⊞", "Resize table with grid", () => {
+    if (closePicker) {
+      closePicker();
       return;
     }
-    picker = document.createElement("span");
+    const current = readDimensions();
+    const picker = document.createElement("span");
     picker.className = "cm-table-size-picker";
     picker.setAttribute("role", "grid");
+    const grid = document.createElement("span");
+    grid.className = "cm-table-size-grid";
+    const label = document.createElement("span");
+    label.className = "cm-table-size-label";
+    label.textContent = `${current.rows} × ${current.cols}`;
+    const cells: Array<{ el: HTMLButtonElement; row: number; col: number }> = [];
+
+    const highlight = (targetRow: number, targetCol: number): void => {
+      picker.dataset.rows = String(targetRow);
+      picker.dataset.columns = String(targetCol);
+      const shrinks = targetRow < current.rows || targetCol < current.cols;
+      label.textContent = shrinks ? `${targetRow} × ${targetCol} (trim)` : `${targetRow} × ${targetCol}`;
+      label.classList.toggle("is-shrink", shrinks);
+      for (const item of cells) {
+        const inRange = item.row <= targetRow && item.col <= targetCol;
+        const isCurrent = item.row <= current.rows && item.col <= current.cols;
+        item.el.classList.toggle("is-in-range", inRange);
+        item.el.classList.toggle("is-current", isCurrent && !inRange);
+        item.el.classList.toggle("is-shrink", shrinks && isCurrent && !inRange);
+      }
+    };
+
+    const cleanup = (): void => {
+      document.removeEventListener("pointerdown", onOutside, true);
+      document.removeEventListener("keydown", onKey, true);
+      picker.remove();
+      closePicker = null;
+    };
+    const onOutside = (event: Event): void => {
+      if (!(event.target instanceof Node) || !host.contains(event.target)) cleanup();
+    };
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        cleanup();
+      }
+    };
+    closePicker = cleanup;
+    document.addEventListener("pointerdown", onOutside, true);
+    document.addEventListener("keydown", onKey, true);
+
     for (let row = 2; row <= 8; row++) {
       for (let col = 1; col <= 8; col++) {
         const cell = document.createElement("button");
@@ -1746,19 +1836,20 @@ function tableSizePickerButton(apply: (rows: number, columns: number) => void): 
         cell.setAttribute("aria-label", cell.title);
         cell.style.setProperty("--table-picker-row", String(row - 1));
         cell.style.setProperty("--table-picker-col", String(col));
-        cell.addEventListener("mouseenter", () => {
-          picker!.dataset.rows = String(row);
-          picker!.dataset.columns = String(col);
-        });
+        cell.addEventListener("mouseenter", () => highlight(row, col));
+        cell.addEventListener("focus", () => highlight(row, col));
         cell.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          picker?.remove();
+          cleanup();
           apply(row, col);
         });
-        picker.append(cell);
+        cells.push({ el: cell, row, col });
+        grid.append(cell);
       }
     }
+    highlight(Math.min(8, Math.max(2, current.rows)), Math.min(8, Math.max(1, current.cols)));
+    picker.append(grid, label);
     host.append(picker);
   });
   host.append(button);
@@ -1767,6 +1858,7 @@ function tableSizePickerButton(apply: (rows: number, columns: number) => void): 
 
 function installTableDragHandles(
   table: HTMLTableElement,
+  view: EditorView,
   callbacks: { moveRow: (from: number, to: number) => void; moveColumn: (from: number, to: number) => void },
 ): void {
   const maxInteractiveRows = 500;
@@ -1775,8 +1867,36 @@ function installTableDragHandles(
   let activeDrag = "";
   const dragPayload = (event: DragEvent): string => activeDrag || event.dataTransfer?.getData("text/plain") || "";
   const interactiveRows = Array.from(table.rows).slice(0, maxInteractiveRows + 1);
-  const highlightColumn = (column: number, enabled: boolean): void => {
-    interactiveRows.forEach((row) => row.cells[column]?.classList.toggle("is-column-hover", enabled));
+  const clearDropClasses = (): void => {
+    for (const row of interactiveRows) {
+      row.classList.remove("is-row-hover", "is-row-drop-before", "is-row-drop-after");
+      for (const cell of Array.from(row.cells)) {
+        cell.classList.remove("is-column-hover", "is-col-drop-before", "is-col-drop-after");
+      }
+    }
+  };
+  const highlightColumn = (column: number, enabled: boolean, dropClass?: "is-col-drop-before" | "is-col-drop-after"): void => {
+    interactiveRows.forEach((row) => {
+      const cell = row.cells[column];
+      if (!cell) return;
+      cell.classList.toggle("is-column-hover", enabled);
+      cell.classList.toggle("is-col-drop-before", enabled && dropClass === "is-col-drop-before");
+      cell.classList.toggle("is-col-drop-after", enabled && dropClass === "is-col-drop-after");
+    });
+  };
+  const openHandleMenu = (event: MouseEvent, cell: HTMLTableCellElement): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    view.dom.dispatchEvent(new CustomEvent("noema:table-context-menu", {
+      bubbles: true,
+      cancelable: true,
+      detail: {
+        cell,
+        x: rect.left || event.clientX,
+        y: rect.bottom ? rect.bottom + 4 : event.clientY,
+      },
+    }));
   };
 
   interactiveRows.forEach((row, rowIndex) => {
@@ -1786,10 +1906,10 @@ function installTableDragHandles(
     const handle = document.createElement("span");
     handle.className = "cm-table-drag-handle cm-table-row-drag-handle";
     handle.textContent = "⋮";
-    handle.title = `Drag row ${rowIndex}`;
+    handle.title = `Drag to move row ${rowIndex}; click for row menu`;
     handle.draggable = true;
     handle.addEventListener("mousedown", stop);
-    handle.addEventListener("click", stop);
+    handle.addEventListener("click", (event) => openHandleMenu(event, firstCell));
     handle.addEventListener("dragstart", (event) => {
       event.stopPropagation();
       activeDrag = `row:${rowIndex}`;
@@ -1799,17 +1919,24 @@ function installTableDragHandles(
     handle.addEventListener("dragend", () => {
       activeDrag = "";
       row.classList.remove("is-row-dragging");
+      clearDropClasses();
     });
     row.addEventListener("dragover", (event) => {
-      if (!dragPayload(event).startsWith("row:")) return;
+      const payload = dragPayload(event);
+      if (!payload.startsWith("row:")) return;
       event.preventDefault();
       event.stopPropagation();
+      const from = Number(payload.slice(4));
       row.classList.add("is-row-hover");
+      row.classList.toggle("is-row-drop-before", from > rowIndex);
+      row.classList.toggle("is-row-drop-after", from < rowIndex);
     });
-    row.addEventListener("dragleave", () => row.classList.remove("is-row-hover"));
+    row.addEventListener("dragleave", () => {
+      row.classList.remove("is-row-hover", "is-row-drop-before", "is-row-drop-after");
+    });
     row.addEventListener("drop", (event) => {
       const payload = dragPayload(event);
-      row.classList.remove("is-row-hover");
+      clearDropClasses();
       if (!payload.startsWith("row:")) return;
       event.preventDefault();
       event.stopPropagation();
@@ -1823,11 +1950,11 @@ function installTableDragHandles(
   Array.from(header.cells).slice(0, maxInteractiveColumns).forEach((cell, columnIndex) => {
     const handle = document.createElement("span");
     handle.className = "cm-table-drag-handle cm-table-column-drag-handle";
-    handle.textContent = "⋮";
-    handle.title = `Drag column ${columnIndex + 1}`;
+    handle.textContent = "⋯";
+    handle.title = `Drag to move column ${columnIndex + 1}; click for column menu`;
     handle.draggable = true;
     handle.addEventListener("mousedown", stop);
-    handle.addEventListener("click", stop);
+    handle.addEventListener("click", (event) => openHandleMenu(event, cell));
     handle.addEventListener("mouseenter", () => highlightColumn(columnIndex, true));
     handle.addEventListener("mouseleave", () => highlightColumn(columnIndex, false));
     handle.addEventListener("dragstart", (event) => {
@@ -1838,18 +1965,20 @@ function installTableDragHandles(
     });
     handle.addEventListener("dragend", () => {
       activeDrag = "";
-      highlightColumn(columnIndex, false);
+      clearDropClasses();
     });
     cell.addEventListener("dragover", (event) => {
-      if (!dragPayload(event).startsWith("column:")) return;
+      const payload = dragPayload(event);
+      if (!payload.startsWith("column:")) return;
       event.preventDefault();
       event.stopPropagation();
-      highlightColumn(columnIndex, true);
+      const from = Number(payload.slice(7));
+      highlightColumn(columnIndex, true, from > columnIndex ? "is-col-drop-before" : from < columnIndex ? "is-col-drop-after" : undefined);
     });
     cell.addEventListener("dragleave", () => highlightColumn(columnIndex, false));
     cell.addEventListener("drop", (event) => {
       const payload = dragPayload(event);
-      highlightColumn(columnIndex, false);
+      clearDropClasses();
       if (!payload.startsWith("column:")) return;
       event.preventDefault();
       event.stopPropagation();
@@ -1857,6 +1986,40 @@ function installTableDragHandles(
     });
     cell.prepend(handle);
   });
+}
+
+/** Shared pointer click entry for both TableWidget preview cells and TableSourceCellWidget. */
+function openTableCellFromPointer(
+  view: EditorView,
+  current: MarkdownTable,
+  cellEl: Element,
+  row: number,
+  col: number,
+  event: MouseEvent,
+): boolean {
+  const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null;
+  if (link && cellEl.contains(link) && isMarkdownLinkOpenEvent(event)) {
+    const href = link.getAttribute("href") ?? "";
+    if (href) {
+      event.preventDefault();
+      event.stopPropagation();
+      view.dom.dispatchEvent(new CustomEvent("noema:open-url", {
+        bubbles: true,
+        cancelable: true,
+        detail: { href, newWindow: markdownLinkOpensNewWindow(href, event), sourcePos: current.from },
+      }));
+      return true;
+    }
+  }
+  const formula = event.target instanceof Element
+    ? event.target.closest<HTMLElement>(".noema-math-inline") : null;
+  const formulaIndex = formula && cellEl.contains(formula)
+    ? Array.from(cellEl.querySelectorAll(".noema-math-inline")).indexOf(formula) : -1;
+  if (formulaIndex >= 0 && focusDocumentTableFormula(view, current, row, col, formulaIndex, renderedFormulaClickRatio(formula!, event))) {
+    return true;
+  }
+  const caretHit = renderedTextOffsetAtPoint(cellEl, event.clientX, event.clientY, ".cm-table-drag-handle");
+  return focusDocumentTableCell(view, current, { row, col, edit: true, caretHit });
 }
 
 /** Focus a selected preview cell; text editing uses focusDocumentTableCell. */
@@ -1876,10 +2039,16 @@ function focusDocumentTableCell(view: EditorView, table: MarkdownTable, target: 
   if (lineNumber > view.state.doc.lines) return false;
   const line = view.state.doc.line(lineNumber);
   if (line.from >= table.sourceTo) return false;
-  const range = cellTarget(line.text, target.col);
+  const range = tableCellTarget(line.text, target.col);
   const from = line.from + range.anchor;
   const to = line.from + range.head;
-  const anchor = target.caret === "start" ? from : to;
+  let anchor: number;
+  if (target.caretHit) {
+    const cellSource = line.text.slice(range.anchor, range.head);
+    anchor = from + mapRenderedOffsetToSource(cellSource, target.caretHit.offset, target.caretHit.total);
+  } else {
+    anchor = target.caret === "start" ? from : to;
+  }
   preserveEditorViewport(view, () => {
     view.dispatch({ selection: target.select ? { anchor: from, head: to } : { anchor } });
     view.focus();
@@ -1901,7 +2070,7 @@ function focusDocumentTableFormula(
   if (lineNumber > view.state.doc.lines) return false;
   const line = view.state.doc.line(lineNumber);
   if (line.from >= table.sourceTo) return false;
-  const cell = cellTarget(line.text, col);
+  const cell = tableCellTarget(line.text, col);
   const formula = tableCellMathRanges(line.text.slice(cell.anchor, cell.head))[formulaIndex];
   if (!formula) return false;
   const from = line.from + cell.anchor + formula.from;
@@ -1937,7 +2106,7 @@ function renderEditableTable(
   commit: (focusTarget?: TableFocusTarget | null) => void,
   view: EditorView,
   tableFrom: () => number,
-  openSource: (row: number, col: number, select?: boolean, formulaIndex?: number, formulaClickRatio?: number) => void,
+  openFromPointer: (row: number, col: number, cellEl: HTMLTableCellElement, event: MouseEvent) => void,
   editable = true,
   structure: TableStructureActions | null = null,
 ): { table: HTMLTableElement; dispose: () => void } {
@@ -2147,12 +2316,8 @@ function renderEditableTable(
     cell.addEventListener("click", (event) => {
       event.stopPropagation();
       setActiveCell(row, col);
-      if (rectAnchor || (event.target instanceof Element && event.target.closest("button"))) return;
-      const formula = event.target instanceof Element
-        ? event.target.closest<HTMLElement>(".noema-math-inline") : null;
-      const formulaIndex = formula && cell.contains(formula)
-        ? Array.from(cell.querySelectorAll(".noema-math-inline")).indexOf(formula) : -1;
-      openSource(row, col, false, formulaIndex, formula ? renderedFormulaClickRatio(formula, event) : 0);
+      if (rectAnchor || (event.target instanceof Element && event.target.closest("button, .cm-table-drag-handle"))) return;
+      openFromPointer(row, col, cell, event);
     });
     cell.addEventListener("keydown", (event) => {
       event.stopPropagation();
@@ -2243,6 +2408,28 @@ const markdownTablesField = StateField.define<readonly MarkdownTable[]>({
   },
 });
 
+/** Sync the active table row's minimum height to its tallest positioned inactive cell's natural content. */
+function syncActiveTableRowMinHeight(cell: HTMLElement, view: EditorView): void {
+  const rowEl = cell.closest<HTMLElement>(".cm-table-source-has-active");
+  if (!rowEl || !rowEl.isConnected) return;
+  let tallest = 0;
+  for (const sibling of rowEl.querySelectorAll<HTMLElement>(".cm-table-source-positioned-cell")) {
+    const inner = sibling.querySelector<HTMLElement>(".cm-table-source-cell-content");
+    const h = inner ? inner.offsetHeight : sibling.offsetHeight;
+    if (h > tallest) tallest = h;
+  }
+  const style = rowEl.ownerDocument.defaultView?.getComputedStyle(rowEl);
+  const borderY = (Number.parseFloat(style?.borderTopWidth || "0") || 0)
+    + (Number.parseFloat(style?.borderBottomWidth || "0") || 0);
+  const next = tallest > 0 ? `${Math.ceil(tallest + borderY)}px` : "";
+  if (rowEl.style.getPropertyValue("--noema-table-active-row-min-h") !== next) {
+    const beforeHeight = rowEl.offsetHeight;
+    if (next) rowEl.style.setProperty("--noema-table-active-row-min-h", next);
+    else rowEl.style.removeProperty("--noema-table-active-row-min-h");
+    if (rowEl.offsetHeight !== beforeHeight) view.requestMeasure();
+  }
+}
+
 /** Render an inactive cell while its neighbour remains editable in the main CM6 view. */
 class TableSourceCellWidget extends WidgetType {
   readonly source: string;
@@ -2250,6 +2437,10 @@ class TableSourceCellWidget extends WidgetType {
   readonly col: number;
   readonly align: string;
   readonly last: boolean;
+  readonly onActiveRow: boolean;
+  readonly colLeft: number;
+  readonly colWidth: number;
+  private resizeObserver: ResizeObserver | null = null;
 
   constructor(
     source: string,
@@ -2257,6 +2448,9 @@ class TableSourceCellWidget extends WidgetType {
     col: number,
     align: string,
     last: boolean,
+    onActiveRow = false,
+    colLeft = 0,
+    colWidth = 0,
   ) {
     super();
     this.source = source;
@@ -2264,61 +2458,126 @@ class TableSourceCellWidget extends WidgetType {
     this.col = col;
     this.align = align;
     this.last = last;
+    this.onActiveRow = onActiveRow;
+    this.colLeft = colLeft;
+    this.colWidth = colWidth;
   }
 
   eq(other: TableSourceCellWidget): boolean {
     return this.source === other.source && this.row === other.row
-      && this.col === other.col && this.align === other.align && this.last === other.last;
+      && this.col === other.col && this.align === other.align && this.last === other.last
+      && this.onActiveRow === other.onActiveRow
+      && this.colLeft === other.colLeft && this.colWidth === other.colWidth;
   }
 
   toDOM(view: EditorView): HTMLElement {
     const cell = document.createElement("span");
     cell.className = "cm-table-source-cell cm-table-source-rendered-cell";
     if (this.last) cell.classList.add("cm-table-source-last-cell");
+    let measureTarget: HTMLElement = cell;
+    if (this.onActiveRow) {
+      cell.classList.add("cm-table-source-positioned-cell");
+      cell.style.left = `${this.colLeft}%`;
+      cell.style.width = `${this.colWidth}%`;
+      const content = document.createElement("span");
+      content.className = "cm-table-source-cell-content";
+      content.innerHTML = renderInlineMarkdownHTML(this.source) || "&nbsp;";
+      cell.append(content);
+      measureTarget = content;
+    } else {
+      // Pin inactive cells explicitly to their grid track so CM6's inline
+      // `<img class="cm-widgetBuffer">` nodes can never displace columns.
+      cell.style.gridColumn = String(this.col + 1);
+      cell.style.gridRow = "1";
+      cell.innerHTML = renderInlineMarkdownHTML(this.source) || "&nbsp;";
+    }
     cell.setAttribute("role", "cell");
     cell.dataset.row = String(this.row);
     cell.dataset.col = String(this.col);
     if (this.align) cell.style.textAlign = this.align;
-    cell.innerHTML = renderInlineMarkdownHTML(this.source) || "&nbsp;";
     cell.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
+      // Allow Cmd/Ctrl-click to open links directly without switching cell edit focus.
+      const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null;
+      if (link && cell.contains(link) && isMarkdownLinkOpenEvent(event)) {
+        const href = link.getAttribute("href") ?? "";
+        if (href) {
+          event.preventDefault();
+          event.stopPropagation();
+          let sourcePos = 0;
+          try { sourcePos = view.posAtDOM(cell); } catch { /* ignore */ }
+          view.dom.dispatchEvent(new CustomEvent("noema:open-url", {
+            bubbles: true,
+            cancelable: true,
+            detail: { href, newWindow: markdownLinkOpensNewWindow(href, event), sourcePos },
+          }));
+          return;
+        }
+      }
       event.preventDefault();
       event.stopPropagation();
+      const hit = renderedTextOffsetAtPoint(cell, event.clientX, event.clientY, ".cm-table-drag-handle");
       const formula = event.target instanceof Element
         ? event.target.closest<HTMLElement>(".noema-math-inline") : null;
       const formulaIndex = formula && cell.contains(formula)
         ? Array.from(cell.querySelectorAll(".noema-math-inline")).indexOf(formula) : -1;
       const formulaClickRatio = formula ? renderedFormulaClickRatio(formula, event) : 0;
-      // A widget press can arrive while CM6 is reconciling decorations.
-      // Enter the neighbouring cell after that DOM update has finished.
-      window.setTimeout(() => {
+      // Run on microtask (same frame, after any synchronous CM6 DOM reconcile).
+      queueMicrotask(() => {
         if (!cell.isConnected || !view.dom.isConnected) return;
         const table = tableAt(view.state, view.posAtDOM(cell));
         if (!table) return;
         if (formulaIndex >= 0 && focusDocumentTableFormula(view, table, this.row, this.col, formulaIndex, formulaClickRatio)) return;
-        focusDocumentTableCell(view, table, { row: this.row, col: this.col, edit: true });
-      }, 0);
+        focusDocumentTableCell(view, table, { row: this.row, col: this.col, edit: true, caretHit: hit });
+      });
     });
+    if (this.onActiveRow && typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => syncActiveTableRowMinHeight(cell, view));
+      ro.observe(measureTarget);
+      this.resizeObserver = ro;
+    }
     return cell;
+  }
+
+  destroy(): void {
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
   }
 
   ignoreEvent(): boolean { return true; }
 }
 
 /** Keep the table's structural controls present while a cell uses CM6 text. */
-class TableSourceToolbarWidget extends WidgetType {
+class TableSourceToolbarWidget extends MeasuredWidget {
   readonly from: number;
   readonly layout: LayoutAttrs;
+  readonly activeRow: number;
+  readonly activeCol: number;
+  readonly alignKey: string;
 
-  constructor(from: number, layout: LayoutAttrs) {
+  protected get floatedBlock(): boolean { return false; }
+
+  constructor(from: number, layout: LayoutAttrs, activeRow: number, activeCol: number, alignKey: string) {
     super();
     this.from = from;
     this.layout = layout;
+    this.activeRow = activeRow;
+    this.activeCol = activeCol;
+    this.alignKey = alignKey;
   }
 
+  protected measureKey(): string { return "tbl-bar:" + this.from; }
+
+  protected estimatedHeightFallback(): number { return 6; }
+
   eq(other: TableSourceToolbarWidget): boolean {
-    return this.from === other.from && this.layout.align === other.layout.align
-      && this.layout.wrap === other.layout.wrap && this.layout.width === other.layout.width
+    return this.from === other.from
+      && this.activeRow === other.activeRow
+      && this.activeCol === other.activeCol
+      && this.alignKey === other.alignKey
+      && this.layout.align === other.layout.align
+      && this.layout.wrap === other.layout.wrap
+      && this.layout.width === other.layout.width
       && this.layout.height === other.layout.height;
   }
 
@@ -2342,7 +2601,7 @@ class TableSourceToolbarWidget extends WidgetType {
     wrap.addEventListener("pointerdown", refreshSourceRange, true);
     const active = (): { row: number; col: number } => {
       const table = currentTable();
-      if (!table) return { row: 1, col: 0 };
+      if (!table) return { row: Math.max(0, this.activeRow), col: Math.max(0, this.activeCol) };
       const firstLine = view.state.doc.lineAt(table.from).number;
       const line = view.state.doc.lineAt(view.state.selection.main.head);
       return {
@@ -2367,11 +2626,136 @@ class TableSourceToolbarWidget extends WidgetType {
       focusTableCellAfterRender(view, table.from, target);
       view.requestMeasure();
     };
-    wrap.append(createTableToolbar(apply, active, () => {
+    const removeTable = (): void => {
       const table = currentTable();
-      return table ? parseMarkdownTable(table.source).rows : [];
-    }), figureLayoutToolbar(view, wrap, this.layout), figureResizeHandle(view, wrap, "table"), figureHeightHandle(view, wrap, "table"));
-    return wrap;
+      if (!table) return;
+      const doc = view.state.doc;
+      const to = table.to < doc.length && doc.sliceString(table.to, table.to + 1) === "\n" ? table.to + 1 : table.to;
+      dispatchConstructEdit(view, {
+        changes: { from: table.from, to },
+        selection: { anchor: table.from },
+        scrollIntoView: true,
+      }, "delete");
+      view.focus();
+    };
+    const toolbar = createTableToolbar(
+      apply,
+      active,
+      () => {
+        const table = currentTable() ?? tableAt(view.state, this.from);
+        return table ? parseMarkdownTable(table.source) : { rows: [[]], aligns: [] };
+      },
+      removeTable,
+      { view, widget: wrap, readLayout: () => currentTable()?.layout ?? this.layout },
+    );
+    wrap.append(toolbar.element);
+    return this.registerMeasured(wrap, view);
+  }
+
+  ignoreEvent(): boolean { return true; }
+}
+
+/** Bottom edge `+` strip and live width resize handle kept present while editing a table in CM6. */
+class TableSourceEdgeWidget extends MeasuredWidget {
+  readonly from: number;
+  readonly layout: LayoutAttrs;
+
+  protected get floatedBlock(): boolean { return false; }
+
+  constructor(from: number, layout: LayoutAttrs) {
+    super();
+    this.from = from;
+    this.layout = layout;
+  }
+
+  protected measureKey(): string { return "tbl-edge:" + this.from; }
+
+  protected estimatedHeightFallback(): number { return 14; }
+
+  eq(other: TableSourceEdgeWidget): boolean {
+    return this.from === other.from
+      && this.layout.align === other.layout.align
+      && this.layout.wrap === other.layout.wrap
+      && this.layout.width === other.layout.width
+      && this.layout.height === other.layout.height;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "cm-table-source-edge cm-table-editable-block";
+    applyLayoutAttrs(wrap, "table", this.layout);
+    const currentTable = (): MarkdownTable | null => {
+      if (!wrap.isConnected) return null;
+      const pos = Math.max(0, view.posAtDOM(wrap) - 1);
+      return tableAt(view.state, pos) ?? tableAt(view.state, this.from);
+    };
+    const refreshSourceRange = (): void => {
+      const table = currentTable() ?? tableAt(view.state, this.from);
+      if (!table) return;
+      wrap.dataset.cmSourceFrom = String(table.from);
+      wrap.dataset.cmSourceTo = String(table.to);
+      wrap.dataset.cmSourceBaseTo = String(table.sourceTo);
+    };
+    refreshSourceRange();
+    wrap.addEventListener("pointerdown", refreshSourceRange, true);
+    wrap.addEventListener("keydown", refreshSourceRange, true);
+
+    /** Mirror live `%` drag width across every sibling row and top toolbar of this editing table. */
+    const savedWidths = new Map<HTMLElement, string>();
+    const previewTableWidth = (widthCss: string | null): void => {
+      if (widthCss === null) {
+        for (const [el, prev] of savedWidths) {
+          if (prev) el.style.setProperty("--noema-table-width", prev);
+          else el.style.removeProperty("--noema-table-width");
+        }
+        savedWidths.clear();
+        return;
+      }
+      let cursor = wrap.previousElementSibling as HTMLElement | null;
+      while (cursor) {
+        if (cursor.classList.contains("cm-table-source-row")
+          || cursor.classList.contains("cm-table-source-rule")
+          || cursor.classList.contains("cm-table-source-toolbar")) {
+          if (!savedWidths.has(cursor)) savedWidths.set(cursor, cursor.style.getPropertyValue("--noema-table-width"));
+          cursor.style.setProperty("--noema-table-width", widthCss);
+          if (cursor.classList.contains("cm-table-source-toolbar")) break;
+          cursor = cursor.previousElementSibling as HTMLElement | null;
+        } else {
+          break;
+        }
+      }
+    };
+
+    const addRow = tableToolButton("+", "Add row at table edge", () => {
+      const table = currentTable();
+      if (!table) return;
+      const next = parseMarkdownTable(table.source);
+      const width = next.rows[0]?.length ?? 1;
+      next.rows.push(Array(width).fill(""));
+      const source = buildMarkdownTableSource(next);
+      dispatchConstructEdit(view, {
+        changes: { from: table.from, to: table.sourceTo, insert: source },
+      });
+      focusTableCellAfterRender(view, table.from, { row: next.rows.length - 1, col: 0, edit: true, select: true });
+      view.requestMeasure();
+    });
+    addRow.className = "cm-table-edge-add cm-table-edge-add-row";
+    const addCol = tableToolButton("+", "Add column at table edge", () => {
+      const table = currentTable();
+      if (!table) return;
+      const next = parseMarkdownTable(table.source);
+      next.rows.forEach((row) => row.push(""));
+      next.aligns.push("");
+      const source = buildMarkdownTableSource(next);
+      dispatchConstructEdit(view, {
+        changes: { from: table.from, to: table.sourceTo, insert: source },
+      });
+      focusTableCellAfterRender(view, table.from, { row: 0, col: (next.rows[0]?.length ?? 1) - 1, edit: true, select: true });
+      view.requestMeasure();
+    });
+    addCol.className = "cm-table-edge-add cm-table-edge-add-column cm-table-source-edge-add-column";
+    wrap.append(addRow, addCol, figureResizeHandle(view, wrap, "table", wrap, { onPreviewWidth: previewTableWidth }));
+    return this.registerMeasured(wrap, view);
   }
 
   ignoreEvent(): boolean { return true; }
@@ -2389,12 +2773,24 @@ function buildTableDecoRanges(
        index < tables.length && tables[index]!.from <= to; index++) {
     const table = tables[index]!;
     if (tableOpened(state, table)) {
+      const data = parseMarkdownTable(table.source);
+      const doc = state.doc;
+      const first = doc.lineAt(table.from).number;
+      const headLine = doc.lineAt(visualSelection(state).main.head);
+      const onTable = headLine.from >= table.from && headLine.to <= table.sourceTo;
+      const activeRow = onTable ? (headLine.number === first ? 0 : Math.max(0, headLine.number - first - 1)) : 0;
+      const activeCol = onTable ? Math.max(0, tableSourceActiveColumn(state, headLine)) : 0;
       if (!state.readOnly) decos.push(Decoration.widget({
-        widget: new TableSourceToolbarWidget(table.from, table.layout),
+        widget: new TableSourceToolbarWidget(table.from, table.layout, activeRow, activeCol, data.aligns.join(",")),
         block: true,
         side: -1,
       }).range(table.from));
-      decos.push(...tableSourceGridDecos(state, table));
+      decos.push(...tableSourceGridDecos(state, table, data));
+      if (!state.readOnly) decos.push(Decoration.widget({
+        widget: new TableSourceEdgeWidget(table.from, table.layout),
+        block: true,
+        side: 1,
+      }).range(table.sourceTo));
       continue;
     }
     decos.push(
@@ -2411,37 +2807,76 @@ function buildTableDecoRanges(
 function tableSourceActiveColumn(state: EditorState, line: ReturnType<Text["line"]>): number {
   const selection = visualSelection(state).main;
   if (state.doc.lineAt(selection.head).number !== line.number) return -1;
-  const offset = selection.head - line.from;
-  return Math.max(0, tableSourceRowParts(line.text).cells.findIndex(({ from, to }) => offset >= from && offset <= to));
+  return tableCellColumnAtOffset(line.text, selection.head - line.from);
 }
 
-/** Keep the active cell as CM6 text and render every other cell in place. */
-function tableSourceGridDecos(state: EditorState, table: MarkdownTable): Range<Decoration>[] {
+/** Keep the active cell as native CM6 block flow and render every other cell in place. */
+function tableSourceGridDecos(
+  state: EditorState,
+  table: MarkdownTable,
+  parsed?: MarkdownTableData,
+): Range<Decoration>[] {
   const ranges: Range<Decoration>[] = [];
   const doc = state.doc;
   const first = doc.lineAt(table.from).number;
   const last = doc.lineAt(table.sourceTo).number;
-  const data = parseMarkdownTable(table.source);
+  const data = parsed ?? parseMarkdownTable(table.source);
   const aligns = data.aligns;
   const columns = aligns.length;
+  const colWidths = computeTableColumnPercentages(data.rows);
+  const colLefts: number[] = [];
+  let accum = 0;
+  for (let c = 0; c < colWidths.length; c++) {
+    colLefts.push(Number(accum.toFixed(2)));
+    accum += colWidths[c]!;
+  }
+  const colTemplate = colWidths.map((w) => `${w}%`).join(" ");
   const layoutClass = layoutClasses("table", table.layout);
   const layoutCss = layoutStyle("table", table.layout);
   const caretLine = doc.lineAt(visualSelection(state).main.head).number;
   for (let number = first; number <= last; number++) {
     const line = doc.line(number);
     const separator = number === first + 1;
+    if (separator) {
+      ranges.push(Decoration.line({
+        attributes: {
+          class: `cm-table-source-rule${caretLine === number ? " cm-table-source-rule-active" : ""}`,
+          style: layoutCss,
+        },
+      }).range(line.from));
+      continue;
+    }
+
+    const { pipes, cells, hasLeadingPipe, hasTrailingPipe } = tableSourceRowParts(line.text);
+    const activeCol = number === caretLine ? Math.min(cells.length - 1, Math.max(0, tableSourceActiveColumn(state, line))) : -1;
+    const isActiveRow = activeCol >= 0;
+    const totalCols = Math.max(cells.length, columns);
+    const activeIsLast = isActiveRow && activeCol === totalCols - 1;
+    const row = number === first ? 0 : number - first - 1;
+    const activeLeft = isActiveRow ? (colLefts[activeCol] ?? 0) : 0;
+    const activeWidth = isActiveRow ? (colWidths[activeCol] ?? (100 / Math.max(1, columns))) : 100;
+    const activeRight = isActiveRow ? Math.max(0, Number((100 - activeLeft - activeWidth).toFixed(2))) : 0;
+    const activeLeftRatio = isActiveRow ? Number((activeLeft / 100).toFixed(4)) : 0;
+    const activeRightRatio = isActiveRow ? Number((activeRight / 100).toFixed(4)) : 0;
+    const activeAlign = isActiveRow ? (aligns[activeCol] || (row === 0 ? "center" : "left")) : "left";
+
     ranges.push(Decoration.line({
       attributes: {
-        class: separator
-          ? `cm-table-source-rule${caretLine === number ? " cm-table-source-rule-active" : ""}`
-          : `cm-table-source-row ${layoutClass}${table.layout.height ? " cm-table-source-explicit-height" : ""}${number === first ? " cm-table-source-header" : ""}${number === last ? " cm-table-source-last-row" : ""}${number > first + 1 && (number - first - 1) % 2 === 0 ? " cm-table-source-alt-row" : ""}`,
-        style: `--noema-table-cols:${columns};--noema-table-row-count:${data.rows.length};${layoutCss}`,
+        class: `cm-table-source-row ${layoutClass}${isActiveRow ? " cm-table-source-has-active" : ""}${activeIsLast ? " cm-table-source-active-is-last" : ""}${table.layout.height ? " cm-table-source-explicit-height" : ""}${number === first ? " cm-table-source-header" : ""}${number === last ? " cm-table-source-last-row" : ""}${number > first + 1 && (number - first - 1) % 2 === 0 ? " cm-table-source-alt-row" : ""}`,
+        style: `--noema-table-cols:${columns};--noema-table-row-count:${data.rows.length};--noema-table-col-template:${colTemplate};${isActiveRow ? `--noema-table-active-left:${activeLeft}%;--noema-table-active-width:${activeWidth}%;--noema-table-active-right:${activeRight}%;--noema-table-active-left-ratio:${activeLeftRatio};--noema-table-active-right-ratio:${activeRightRatio};--noema-table-active-align:${activeAlign};` : ""}${layoutCss}`,
       },
     }).range(line.from));
-    if (separator) continue;
-    const { pipes, cells } = tableSourceRowParts(line.text);
-    const activeCol = number === caretLine ? tableSourceActiveColumn(state, line) : -1;
-    const row = number === first ? 0 : number - first - 1;
+
+    // Keep leading/trailing spaces outside outer pipes out of CSS Grid / text flow.
+    const firstUsed = hasLeadingPipe ? pipes[0]! : (cells[0]?.from ?? 0);
+    if (firstUsed > 0) {
+      ranges.push(Decoration.mark({ class: "cm-table-source-pipe" }).range(line.from, line.from + firstUsed));
+    }
+    const lastUsed = hasTrailingPipe ? pipes[pipes.length - 1]! + 1 : (cells[cells.length - 1]?.to ?? line.text.length);
+    if (lastUsed < line.text.length) {
+      ranges.push(Decoration.mark({ class: "cm-table-source-pipe" }).range(line.from + lastUsed, line.to));
+    }
+
     for (const offset of pipes) {
       ranges.push(Decoration.mark({ class: "cm-table-source-pipe" }).range(line.from + offset, line.from + offset + 1));
     }
@@ -2449,13 +2884,19 @@ function tableSourceGridDecos(state: EditorState, table: MarkdownTable): Range<D
       const { from, to } = cells[col]!;
       const sourceFrom = line.from + from;
       const sourceTo = line.from + to;
-      // The closing pipe must be inside the editable cell's DOM span. If it
-      // remains a separate flex child, WebKit places a boundary caret (and
-      // the native IME candidate window) at the far edge of the column;
-      // composition text can then land inside the hidden pipe span.
       const closingPipeTo = pipes.includes(to) ? sourceTo + 1 : sourceTo;
+      const isLastCol = col === totalCols - 1;
       if (col !== activeCol) {
-        const widget = new TableSourceCellWidget(data.rows[row]?.[col] ?? "", row, col, aligns[col] ?? "", col === cells.length - 1);
+        const widget = new TableSourceCellWidget(
+          data.rows[row]?.[col] ?? "",
+          row,
+          col,
+          aligns[col] ?? "",
+          isLastCol,
+          isActiveRow,
+          colLefts[col] ?? 0,
+          colWidths[col] ?? (100 / Math.max(1, columns)),
+        );
         ranges.push(to > from
           ? Decoration.replace({ widget }).range(sourceFrom, sourceTo)
           : Decoration.widget({ widget }).range(sourceFrom));
@@ -2463,18 +2904,28 @@ function tableSourceGridDecos(state: EditorState, table: MarkdownTable): Range<D
         ranges.push(Decoration.mark({
           // During the shared typing burst the grid is mapped instead of
           // rebuilt. Include edits at either cell edge in the active mark so
-          // WebKit/CM6 keep one editable DOM child inside the flex row.
+          // WebKit/CM6 keep one editable DOM span around the closing pipe.
           inclusive: true,
           attributes: {
-            class: `cm-table-source-cell cm-table-source-active-cell${col === cells.length - 1 ? " cm-table-source-last-cell" : ""}`,
+            class: `cm-table-source-cell cm-table-source-active-cell${isLastCol ? " cm-table-source-last-cell" : ""}`,
             style: aligns[col] ? `text-align:${aligns[col]}` : "",
           },
         }).range(sourceFrom, closingPipeTo));
-      } else {
-        ranges.push(Decoration.widget({
-          widget: new TableSourceCellWidget("", row, col, aligns[col] ?? "", col === cells.length - 1),
-        }).range(sourceFrom));
       }
+    }
+    // Pad short ragged body rows with clickable rendered placeholders so the grid stays aligned.
+    for (let col = cells.length; col < columns; col++) {
+      const widget = new TableSourceCellWidget(
+        "",
+        row,
+        col,
+        aligns[col] ?? "",
+        col === columns - 1,
+        isActiveRow,
+        colLefts[col] ?? 0,
+        colWidths[col] ?? (100 / Math.max(1, columns)),
+      );
+      ranges.push(Decoration.widget({ widget, side: 1 }).range(line.to));
     }
   }
   if (table.to > table.sourceTo) {
@@ -2500,12 +2951,7 @@ function buildTableDecos(state: EditorState): DecorationSet {
  * grid; a range crossing the whole table leaves it rendered.
  */
 function tableOpened(state: EditorState, table: MarkdownTable): boolean {
-  // A note opens with the caret at offset 0; a table starting there stays
-  // rendered until the caret actually moves into it (front matter does the same).
   const from = table.from === 0 ? 1 : table.from;
-  // A text selection inside a cell must keep the same editable grid visible.
-  // The shared `edge` policy still leaves a range spanning the whole table
-  // rendered, since neither endpoint lies inside the table.
   return selectionOpensSource(state, from, table.to, "edge", "structure");
 }
 
@@ -2517,11 +2963,18 @@ function tableAt(state: EditorState, pos: number): MarkdownTable | null {
 
 function activeTableAttrsKey(state: EditorState): string {
   const selection = visualSelection(state).main;
-  const table = tableAt(state, selection.from);
-  if (!table || !tableOpened(state, table)) return "";
-  const line = state.doc.lineAt(selection.head);
-  const col = tableSourceActiveColumn(state, line);
-  return `${line.number}.${col}:${table.from}:${table.to}`;
+  const candidates = [tableAt(state, selection.from), tableAt(state, selection.to)];
+  const seen = new Set<number>();
+  const parts: string[] = [];
+  const headLine = state.doc.lineAt(selection.head);
+  for (const table of candidates) {
+    if (!table || seen.has(table.from) || !tableOpened(state, table)) continue;
+    seen.add(table.from);
+    const onTable = headLine.from >= table.from && headLine.to <= table.to;
+    const col = onTable ? tableSourceActiveColumn(state, headLine) : -1;
+    parts.push(`${onTable ? headLine.number : 0}.${col}:${table.from}:${table.to}`);
+  }
+  return parts.join("|");
 }
 
 /** Tables as rendered constructs: one block of structure while rendered. */

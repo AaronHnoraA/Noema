@@ -22,12 +22,14 @@ export function applyLayoutAttrs(el: HTMLElement, kind: string, layout: LayoutAt
   el.dataset.noemaLayoutAlign = layout.align;
   el.dataset.noemaLayoutWrap = layout.wrap ? "true" : "false";
   if (layout.width) {
+    el.dataset.noemaLayoutWidth = layout.width;
     el.style.setProperty("--noema-block-layout-width", layout.width);
     el.style.setProperty(`--noema-${kind}-width`, layout.width);
     el.style.setProperty(`--noema-${kind}-max-width`, "none");
     el.style.setProperty(`--noema-${kind}-max-height`, "none");
   }
   if (layout.height) {
+    el.dataset.noemaLayoutHeight = layout.height;
     el.style.setProperty("--noema-block-layout-height", layout.height);
     el.style.setProperty(`--noema-${kind}-height`, layout.height);
     el.style.setProperty(`--noema-${kind}-max-height`, "none");

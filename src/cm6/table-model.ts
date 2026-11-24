@@ -1,11 +1,20 @@
 /**
- * GFM markdown table model: parsing, formatting, and display-width utilities.
+ * GFM markdown table model: parsing, serialization, formatting, column width
+ * weights, sorting, CSV export, and multi-cell grid paste.
  *
- * All operations are bounded to the current table via findTableInfo.
- * Auto-formatting is skipped for tables exceeding the size threshold.
+ * Shared as the single table model by live preview, editing commands, context
+ * menus, and clipboard paste.
  */
 
+import { isTableSeparatorLine, splitTableRow, tableSourceRowParts } from "./table-source-cells.ts";
+
 export type TableAlign = "left" | "center" | "right" | "none";
+export type TableCellAlign = "left" | "center" | "right" | "";
+
+export type MarkdownTableData = {
+  rows: string[][];
+  aligns: TableCellAlign[];
+};
 
 export type TableModel = {
   lines: string[];
@@ -55,32 +64,10 @@ export function displayWidth(text: string): number {
   return w;
 }
 
-/** Split a table row on unescaped | characters; strip leading/trailing | */
+/** Split a table row on unescaped | characters, keeping `\|` escaped for source operations. */
 export function splitTableCells(line: string): string[] {
-  const cells: string[] = [];
-  let current = "";
-  let i = 0;
-  // Strip leading |
-  if (line.trimStart().startsWith("|")) {
-    i = line.indexOf("|") + 1;
-  }
-  while (i < line.length) {
-    if (line[i] === "\\" && i + 1 < line.length) {
-      current += line[i]! + line[i + 1]!;
-      i += 2;
-    } else if (line[i] === "|") {
-      cells.push(current.trim());
-      current = "";
-      i++;
-    } else {
-      current += line[i]!;
-      i++;
-    }
-  }
-  // Strip trailing | (the last "cell" after it would be empty)
-  const last = current.trim();
-  if (last !== "") cells.push(last);
-  return cells;
+  const { cells } = tableSourceRowParts(line);
+  return cells.map(({ from, to }) => line.slice(from, to).trim());
 }
 
 /** Sort body rows only. A click creates one collator; no sorting work runs
@@ -117,15 +104,162 @@ export function tableRowsToCSV(rows: readonly (readonly string[])[]): string {
   return rows.map((row) => row.map(cell).join(",")).join("\r\n");
 }
 
-function parseSeparatorAlign(cell: string): TableAlign {
-  const c = cell.trim();
-  if (!c) return "none";
-  const left = c.startsWith(":");
-  const right = c.endsWith(":");
+export function cellAlignFromSeparator(separatorCell: string): TableCellAlign {
+  const compact = separatorCell.replace(/\s+/g, "");
+  const left = compact.startsWith(":");
+  const right = compact.endsWith(":");
   if (left && right) return "center";
-  if (left) return "left";
   if (right) return "right";
-  return "none";
+  if (left) return "left";
+  return "";
+}
+
+function parseSeparatorAlign(cell: string): TableAlign {
+  return cellAlignFromSeparator(cell) || "none";
+}
+
+export function separatorForAlign(align: TableCellAlign): string {
+  if (align === "left") return ":---";
+  if (align === "center") return ":---:";
+  if (align === "right") return "---:";
+  return "---";
+}
+
+export function escapeTableCell(cell: string): string {
+  return cell.replace(/\r?\n/g, "<br>").replace(/\|/g, "\\|");
+}
+
+export function parseMarkdownTable(source: string): MarkdownTableData {
+  const lines = source.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const headerCells = splitTableRow(lines[0] ?? "");
+  const separatorCells = splitTableRow(lines[1] ?? "");
+  const bodyRows = lines.slice(2).map(splitTableRow);
+  const colCount = Math.max(1, headerCells.length, ...bodyRows.map((row) => row.length));
+  const normalize = (row: string[]): string[] => Array.from({ length: colCount }, (_, index) => row[index] ?? "");
+  return {
+    rows: [normalize(headerCells), ...bodyRows.map(normalize)],
+    aligns: Array.from({ length: colCount }, (_, index) => cellAlignFromSeparator(separatorCells[index] ?? "")),
+  };
+}
+
+export function buildMarkdownTableSource(data: MarkdownTableData): string {
+  const header = data.rows[0] ?? [""];
+  const body = data.rows.slice(1);
+  const aligns = Array.from({ length: header.length }, (_, index) => data.aligns[index] ?? "");
+  const rowSource = (row: string[]): string => `| ${row.map(escapeTableCell).join(" | ")} |`;
+  return [
+    rowSource(header),
+    rowSource(aligns.map(separatorForAlign)),
+    ...body.map(rowSource),
+  ].join("\n");
+}
+
+/** Rough visible text width of a Markdown cell for content-aware column proportions. */
+function visibleCellWidth(source: string): number {
+  const plain = source
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/?[a-z][^>]*>/gi, "")
+    .replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, "$1")
+    .replace(/\[\[([^\]\n|]+)(?:\|([^\]\n]*))?\]\]/g, (_, target, label) => label ?? target)
+    .replace(/\\([\\|`*_~])/g, "$1")
+    .replace(/(\*\*|__|~~|==|`)/g, "");
+  let maxLine = 0;
+  for (const part of plain.split("\n")) {
+    maxLine = Math.max(maxLine, displayWidth(part.trim()));
+  }
+  return maxLine;
+}
+
+/**
+ * Compute content-aware column percentage widths summing strictly to 100.
+ * Shared identically by preview `<colgroup>` and editing CSS grid / active-row
+ * geometry so switching between preview and editing never shifts column widths.
+ */
+export function computeTableColumnPercentages(rows: readonly (readonly string[])[]): number[] {
+  const colCount = Math.max(1, rows[0]?.length ?? 1);
+  if (colCount === 1) return [100];
+
+  const sampleLimit = Math.min(rows.length, 60);
+  const rawScores = new Array<number>(colCount).fill(4);
+  for (let col = 0; col < colCount; col++) {
+    const headerW = visibleCellWidth(rows[0]?.[col] ?? "");
+    let maxBody = 0;
+    let sumBody = 0;
+    let bodyCount = 0;
+    for (let r = 1; r < sampleLimit; r++) {
+      const w = visibleCellWidth(rows[r]?.[col] ?? "");
+      if (w > maxBody) maxBody = w;
+      sumBody += w;
+      bodyCount++;
+    }
+    const avgBody = bodyCount > 0 ? sumBody / bodyCount : 0;
+    const effective = Math.max(4, Math.min(64, Math.max(headerW * 1.08, avgBody * 0.65 + maxBody * 0.45)));
+    rawScores[col] = Math.pow(effective, 0.65);
+  }
+
+  const minPct = Math.min(14, Math.max(5, 55 / colCount));
+  const totalScore = rawScores.reduce((acc, s) => acc + s, 0) || colCount;
+  const pcts = rawScores.map((s) => Math.max(minPct, (s / totalScore) * 100));
+  const pctSum = pcts.reduce((acc, p) => acc + p, 0);
+  const normalized = pcts.map((p) => Number(((p / pctSum) * 100).toFixed(2)));
+  const headSum = normalized.slice(0, -1).reduce((acc, p) => acc + p, 0);
+  normalized[normalized.length - 1] = Number(Math.max(1, 100 - headSum).toFixed(2));
+  return normalized;
+}
+
+/**
+ * Parse a pasted GFM Markdown table or multi-cell TSV block into a 2D cell
+ * grid (excluding any GFM separator row), or null for plain single-cell text.
+ */
+export function parseTablePasteGrid(text: string): string[][] | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const rawLines = trimmed.split(/\r?\n/);
+
+  if (rawLines.length >= 2 && isTableSeparatorLine(rawLines[1]!) && rawLines[0]!.includes("|")) {
+    const rows = rawLines
+      .filter((line, idx) => idx !== 1 && line.trim().length > 0)
+      .map(splitTableRow);
+    if (rows.length > 0 && rows.some((r) => r.length > 0)) return rows;
+  }
+
+  if (rawLines.some((line) => line.includes("\t"))) {
+    const rows = rawLines.map((line) => line.split("\t").map((cell) => cell.trim()));
+    if (rows.length > 1 || (rows[0]?.length ?? 0) > 1) return rows;
+  }
+
+  return null;
+}
+
+/**
+ * Overlay a pasted 2D cell grid onto DATA starting at (startRow, startCol),
+ * expanding rows and columns automatically when the pasted block is larger.
+ */
+export function applyTableGridPaste(
+  data: MarkdownTableData,
+  startRow: number,
+  startCol: number,
+  grid: readonly (readonly string[])[],
+): MarkdownTableData {
+  const rows = data.rows.map((r) => [...r]);
+  const aligns = [...data.aligns];
+  const pasteCols = Math.max(0, ...grid.map((r) => r.length));
+  const targetRows = Math.max(rows.length, startRow + grid.length);
+  const targetCols = Math.max(rows[0]?.length ?? 1, startCol + pasteCols);
+
+  while (rows.length < targetRows) rows.push(Array(targetCols).fill(""));
+  for (const row of rows) {
+    while (row.length < targetCols) row.push("");
+  }
+  while (aligns.length < targetCols) aligns.push("");
+
+  for (let r = 0; r < grid.length; r++) {
+    const srcRow = grid[r]!;
+    for (let c = 0; c < srcRow.length; c++) {
+      rows[startRow + r]![startCol + c] = srcRow[c] ?? "";
+    }
+  }
+  return { rows, aligns };
 }
 
 function buildSeparatorCell(width: number, align: TableAlign): string {
@@ -164,28 +298,17 @@ export function parseTableModel(
     ? rows[sepIdx]!.map(parseSeparatorAlign)
     : Array(colCount).fill("none");
 
-  // Find cursor cell
   const cursorRow = Math.min(cursorLineIdx, rows.length - 1);
   const line = lines[cursorRow] ?? "";
+  const { cells } = tableSourceRowParts(line);
   let col = 0;
-  let charCount = 0;
-  let inCell = false;
-  let cellStart = 0;
-  if (line.trimStart().startsWith("|")) {
-    cellStart = line.indexOf("|") + 1;
-    charCount = cellStart;
-  }
-  for (let i = cellStart; i <= line.length; i++) {
-    if (i === line.length || (line[i] === "|" && (i === 0 || line[i - 1] !== "\\"))) {
-      if (charCount <= cursorColOffset && cursorColOffset <= i) {
-        inCell = true;
-        break;
-      }
-      col++;
-      charCount = i + 1;
+  for (let i = 0; i < cells.length; i++) {
+    if (cursorColOffset >= cells[i]!.from && cursorColOffset <= cells[i]!.to) {
+      col = i;
+      break;
     }
+    if (cursorColOffset > cells[i]!.to) col = i + 1;
   }
-  if (!inCell) col = Math.max(0, col - 1);
 
   return {
     lines,
@@ -233,23 +356,7 @@ export function cellOffset(formattedLines: string[], rowIdx: number, colIdx: num
     offset += (formattedLines[i]?.length ?? 0) + 1; // +1 for newline
   }
   const line = formattedLines[rowIdx] ?? "";
-  // Find the colIdx-th cell content start
-  let col = 0;
-  let i = 0;
-  if (line.startsWith("|")) i = 1;
-  while (i < line.length) {
-    // skip whitespace before cell
-    const spaceStart = i;
-    while (i < line.length && line[i] === " ") i++;
-    if (col === colIdx) return offset + i;
-    // skip cell content (respecting \|)
-    while (i < line.length) {
-      if (line[i] === "\\" && i + 1 < line.length) { i += 2; continue; }
-      if (line[i] === "|") { i++; break; }
-      i++;
-    }
-    col++;
-    void spaceStart;
-  }
-  return offset + line.length;
+  const { cells } = tableSourceRowParts(line);
+  const cell = cells[Math.max(0, Math.min(colIdx, cells.length - 1))];
+  return offset + (cell ? cell.textFrom : line.length);
 }

@@ -352,7 +352,8 @@ class MermaidWidget extends MeasuredWidget {
   }
 
   protected get measuredBlock(): boolean { return !this.layout.wrap; }
-  get estimatedHeight(): number { return this.layout.wrap ? 0 : super.estimatedHeight; }
+  protected get floatedBlock(): boolean { return this.layout.wrap; }
+  protected get observeSize(): boolean { return true; }
   protected measureKey(): string { return diagramMeasureKey("mermaid:", this.source, this.lang, this.layout); }
 
   protected measureGroupKey(): string {
@@ -385,7 +386,8 @@ class MermaidWidget extends MeasuredWidget {
   updateDOM(dom: HTMLElement, _view: EditorView, previous: MermaidWidget): boolean {
     if (!this.sameDiagram(previous)) return false;
     this.disposeRender = previous.disposeRender;
-    setSourceRange(dom, this.from, this.to, this.sourceFrom, true);
+    const figure = this.layout.wrap ? dom.firstElementChild as HTMLElement : dom;
+    setSourceRange(figure, this.from, this.to, this.sourceFrom, true);
     return true;
   }
 
@@ -397,16 +399,20 @@ class MermaidWidget extends MeasuredWidget {
   toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement("figure");
     wrap.className = "cm-mermaid-widget";
-    if (this.layout.wrap) {
-      wrap.classList.add("noema-block-layout-wrap", `noema-block-layout-align-${this.layout.align}`, "noema-diagram-wrap", `noema-diagram-align-${this.layout.align}`);
-    }
+    applyLayoutAttrs(wrap, "diagram", this.layout);
     setSourceRange(wrap, this.from, this.to, this.sourceFrom, true);
 
     const div = document.createElement("div");
     div.className = "cm-mermaid-block";
     applyLayoutAttrs(div, "diagram", this.layout);
     wrap.append(div);
-    if (!view.state.readOnly) wrap.append(figureLayoutToolbar(view, wrap, this.layout), figureResizeHandle(view, wrap, "diagram", div), figureHeightHandle(view, wrap, "diagram", div));
+    if (!view.state.readOnly) {
+      wrap.append(
+        figureLayoutToolbar(view, wrap, this.layout, { preservesAspect: false }),
+        figureResizeHandle(view, wrap, "diagram", wrap, { preservesAspect: false }),
+        figureHeightHandle(view, wrap, "diagram", div),
+      );
+    }
     this.disposeRender = renderMermaidWidget(this.source, this.lang, div, wrap, this.estimatedHeight, view);
     return this.registerMeasured(wrap, view);
   }
@@ -427,7 +433,8 @@ class MermaidPreviewWidget extends MeasuredWidget {
   }
 
   protected get measuredBlock(): boolean { return !this.layout.wrap; }
-  get estimatedHeight(): number { return this.layout.wrap ? 0 : super.estimatedHeight; }
+  protected get floatedBlock(): boolean { return this.layout.wrap; }
+  protected get observeSize(): boolean { return true; }
   protected measureKey(): string { return diagramMeasureKey("mermp:", this.source, this.lang, this.layout); }
 
   protected measureGroupKey(): string {
@@ -455,9 +462,7 @@ class MermaidPreviewWidget extends MeasuredWidget {
   toDOM(view: EditorView): HTMLElement {
     const wrap = document.createElement("figure");
     wrap.className = "cm-mermaid-widget cm-mermaid-widget-preview";
-    if (this.layout.wrap) {
-      wrap.classList.add("noema-block-layout-wrap", `noema-block-layout-align-${this.layout.align}`, "noema-diagram-wrap", `noema-diagram-align-${this.layout.align}`);
-    }
+    applyLayoutAttrs(wrap, "diagram", this.layout);
 
     const div = document.createElement("div");
     div.className = "cm-mermaid-block-preview";

@@ -858,11 +858,11 @@ describe("xwidget key guard", () => {
       Object.defineProperty(event, "target", { value: document.body });
       expect(handleXwidgetSpecialKeydown(event, { editor, editorHost: host, vim })).toBe(true);
       expect(event.defaultPrevented).toBe(true);
-      const row = editor.view.state.doc.lineAt(editor.getMarkdownSelection().from);
-      expect(editor.getMarkdown().split("\n")).toHaveLength(3);
+      const sel = editor.getMarkdownSelection();
+      const row = editor.view.state.doc.lineAt(sel.from);
+      expect(editor.getMarkdown()).toBe(markdown);
       expect(row.number).toBe(3);
-      expect(row.text).toContain("x");
-      expect(editor.getMarkdown()).toContain("| x   | y   |");
+      expect(markdown.slice(sel.from, sel.to)).toBe("x");
     } finally {
       editor.destroy();
       host.remove();

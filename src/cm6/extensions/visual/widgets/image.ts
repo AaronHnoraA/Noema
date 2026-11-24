@@ -37,10 +37,15 @@ import {
   applyImageLayout,
   imageLayoutFromAttrs,
   readImageTrailingAttrs,
-  type ImageAlign,
   type ImageLayoutAttrs,
 } from "../../../../image-attrs.ts";
-import { applyFigureLayout, arrangeWithNextFigure, figureHeightHandle, figureLayoutTarget, figureMoveGrip } from "../../../figure-layout-menu.ts";
+import {
+  arrangeWithNextFigure,
+  figureCapabilities,
+  figureHeightHandle,
+  figureLayoutToolbar,
+  figureResizeHandle,
+} from "../../../figure-layout-menu.ts";
 import { imageRowGrip, imageRowAt, imageRowSplitHandle, imageRowHeightHandle, joinNextImage, sizeImageRowItem } from "../../../image-row-layout.ts";
 import { openImageViewer } from "../../../image-viewer.ts";
 import { mountHtmlEmbed, type HtmlEmbedHandle } from "../../../../html-embed.ts";
@@ -304,35 +309,62 @@ class ImageWidget extends MeasuredWidget {
       wrap.append(caption);
     }
 
-    // Hover toolbar: align / wrap / width. Each control rewrites the trailing
-    // `{...}` layout attrs on the image source, preserving the base markdown
-    // (including any title) so the change round-trips byte-for-byte.
-    const applyLayout = (next: ImageLayoutAttrs): void => {
-      if (view.state.readOnly) return;
-      const target = figureLayoutTarget(view, wrap);
-      if (target) applyFigureLayout(view, target, next);
-    };
     const embed = htmlEmbeds.get(wrap);
+    const kind = this.src ? visualAttachmentKind(this.src) : null;
+    const isAudio = Boolean(this.src && mediaPlayerKind(this.src) === "audio");
+    const isFixedViewport = Boolean(embed || (kind && wrap.querySelector("iframe.cm-visual-embed")));
+    const isBroken = wrap.classList.contains("cm-image-broken");
+    const caps = figureCapabilities("image", { fixedViewport: isFixedViewport });
+
+    const fullscreenButton = (): HTMLButtonElement => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "cm-image-tool-button";
+      btn.textContent = "⤢";
+      btn.title = "Full screen (Esc exits)";
+      btn.setAttribute("aria-label", btn.title);
+      btn.addEventListener("mousedown", (event) => { event.preventDefault(); event.stopPropagation(); });
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        embed?.toggleFullscreen(true);
+      });
+      return btn;
+    };
+
     if (!view.state.readOnly) {
-      const toolbar = buildImageToolbar(this.layout, applyLayout, () => {
-        if (!joinNextImage(view, Number(wrap.dataset.cmSourceFrom))) arrangeWithNextFigure(view, wrap);
-      }, this.joinable ? "Place with next image" : "Place with next figure");
-      if (!this.inRow) toolbar.append(figureMoveGrip(view, wrap));
-      if (embed) toolbar.append(imageToolSeparator(), imageToolButton("⤢", "Full screen (Esc exits)", false, () => embed.toggleFullscreen(true)));
+      const toolbar = figureLayoutToolbar(view, wrap, this.layout, {
+        extraClass: "cm-image-toolbar",
+        preservesAspect: caps.preservesAspect,
+        includeMoveGrip: !this.inRow,
+        arrangeTitle: this.joinable ? "Place with next image" : "Place with next figure",
+        onArrangeNext: () => {
+          if (!joinNextImage(view, Number(wrap.dataset.cmSourceFrom))) arrangeWithNextFigure(view, wrap);
+        },
+        extraButtons: embed ? [fullscreenButton()] : undefined,
+      });
       wrap.append(toolbar);
     } else if (embed) {
       // A reader keeps the one control that is not an edit: full screen.
       const toolbar = document.createElement("div");
-      toolbar.className = "cm-image-toolbar";
-      toolbar.append(imageToolButton("⤢", "Full screen (Esc exits)", false, () => embed.toggleFullscreen(true)));
+      toolbar.className = "cm-figure-layout-toolbar cm-image-toolbar";
+      toolbar.append(fullscreenButton());
       wrap.append(toolbar);
     }
     syncImageRow(wrap, view, this.from, this.layout, resizableImage);
-    // Layout controls write the source; a read-only page has none of them.
-    if (resizableImage && !view.state.readOnly) {
-      wrap.append(buildImageResizeHandle(wrap, resizableImage, this.layout, applyLayout, view));
+    // Unified responsive `%` width resize for all non-broken, non-audio media
+    // (images, videos, HTML embeds, draw.io, attachment cards). Height handle
+    // is scoped strictly to fixed-viewport embeds so aspect-ratio artwork never distorts.
+    if (!view.state.readOnly && !isBroken && !isAudio) {
+      wrap.append(figureResizeHandle(view, wrap, "image", wrap, {
+        extraClass: "cm-image-resize-handle",
+        isRowItem: this.inRow,
+        preservesAspect: caps.preservesAspect,
+      }));
     }
-    if (!this.inRow && !view.state.readOnly) wrap.append(figureHeightHandle(view, wrap, "image"));
+    if (!this.inRow && !view.state.readOnly && caps.hasHeightHandle) {
+      wrap.append(figureHeightHandle(view, wrap, "image", wrap));
+    }
 
     return this.registerMeasured(wrap, view);
   }
@@ -345,7 +377,7 @@ class ImageWidget extends MeasuredWidget {
 
   ignoreEvent(event: Event): boolean {
     const target = event.target as HTMLElement | null;
-    return Boolean(target?.closest(".cm-image-toolbar, .cm-image-resize-handle, .cm-figure-height-handle, .cm-image-row-grip, .cm-image-row-split, .cm-image-row-height, .cm-media-player"));
+    return Boolean(target?.closest(".cm-figure-layout-toolbar, .cm-image-toolbar, .cm-figure-resize-handle, .cm-image-resize-handle, .cm-figure-height-handle, .cm-image-row-grip, .cm-image-row-split, .cm-image-row-height, .cm-media-player"));
   }
 }
 
@@ -382,149 +414,6 @@ function syncImageRow(
       if (handle) figure.append(handle);
     }
   } else splitter?.remove();
-}
-
-function buildImageResizeHandle(
-  wrap: HTMLElement,
-  image: HTMLImageElement,
-  layout: ImageLayoutAttrs,
-  apply: (next: ImageLayoutAttrs) => void,
-  view: EditorView,
-): HTMLButtonElement {
-  const handle = document.createElement("button");
-  handle.type = "button";
-  handle.className = "cm-image-resize-handle";
-  handle.title = "Drag to resize image";
-  handle.setAttribute("aria-label", handle.title);
-
-  handle.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || view.state.readOnly) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const startX = event.clientX;
-    const originalWidth = wrap.style.getPropertyValue("--noema-image-width");
-    const originalMaxWidth = wrap.style.getPropertyValue("--noema-image-max-width");
-    const rowItem = wrap.classList.contains("cm-image-row-item");
-    const originalRowWeight = wrap.style.getPropertyValue("--cm-image-row-weight");
-    const fallbackWidth = Number.parseFloat(layout.width) || 320;
-    const startWidth = image.getBoundingClientRect().width || fallbackWidth;
-    const contentWidth = Math.max(160, view.contentDOM.clientWidth || wrap.parentElement?.clientWidth || 960);
-    const maxWidth = Math.max(96, Math.floor(contentWidth));
-    let pendingWidth = Math.round(startWidth);
-    let frame = 0;
-    let finished = false;
-    handle.classList.add("is-resizing");
-    wrap.classList.add("is-resizing");
-    handle.setPointerCapture?.(event.pointerId);
-
-    const detach = (): void => {
-      handle.removeEventListener("pointermove", move);
-      handle.removeEventListener("pointerup", finish);
-      handle.removeEventListener("pointercancel", cancel);
-      handle.classList.remove("is-resizing");
-      wrap.classList.remove("is-resizing");
-    };
-    const paint = (): void => {
-      frame = 0;
-      if (!wrap.isConnected || finished) return;
-      wrap.style.setProperty("--noema-image-width", `${pendingWidth}px`);
-      wrap.style.setProperty("--noema-image-max-width", "none");
-      if (rowItem) wrap.style.setProperty("--cm-image-row-weight", String(Math.max(0.25, Math.min(4, pendingWidth / 220))));
-      view.requestMeasure();
-    };
-    const move = (moveEvent: PointerEvent): void => {
-      moveEvent.preventDefault();
-      pendingWidth = Math.max(96, Math.min(maxWidth, Math.round(startWidth + moveEvent.clientX - startX)));
-      if (!frame) frame = window.requestAnimationFrame(paint);
-    };
-    const finish = (finishEvent: PointerEvent): void => {
-      finishEvent.preventDefault();
-      finishEvent.stopPropagation();
-      finished = true;
-      if (frame) window.cancelAnimationFrame(frame);
-      handle.releasePointerCapture?.(finishEvent.pointerId);
-      detach();
-      apply({ ...layout, width: `${pendingWidth}px`, height: "" });
-    };
-    const cancel = (cancelEvent: PointerEvent): void => {
-      finished = true;
-      if (frame) window.cancelAnimationFrame(frame);
-      handle.releasePointerCapture?.(cancelEvent.pointerId);
-      detach();
-      if (originalWidth) wrap.style.setProperty("--noema-image-width", originalWidth);
-      else wrap.style.removeProperty("--noema-image-width");
-      if (originalMaxWidth) wrap.style.setProperty("--noema-image-max-width", originalMaxWidth);
-      else wrap.style.removeProperty("--noema-image-max-width");
-      if (rowItem) {
-        if (originalRowWeight) wrap.style.setProperty("--cm-image-row-weight", originalRowWeight);
-        else wrap.style.removeProperty("--cm-image-row-weight");
-      }
-      view.requestMeasure();
-    };
-
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", finish);
-    handle.addEventListener("pointercancel", cancel);
-  });
-  return handle;
-}
-
-function stopImageEvent(event: Event): void {
-  event.preventDefault();
-  event.stopPropagation();
-}
-
-function imageToolButton(label: string, title: string, active: boolean, run: () => void): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "cm-image-tool-button" + (active ? " is-active" : "");
-  button.textContent = label;
-  button.title = title;
-  button.setAttribute("aria-label", title);
-  button.addEventListener("mousedown", stopImageEvent);
-  button.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    run();
-  });
-  return button;
-}
-
-function imageToolSeparator(): HTMLElement {
-  const sep = document.createElement("span");
-  sep.className = "cm-image-tool-sep";
-  sep.setAttribute("aria-hidden", "true");
-  return sep;
-}
-
-function buildImageToolbar(
-  layout: ImageLayoutAttrs,
-  apply: (next: ImageLayoutAttrs) => void,
-  arrangeNext?: () => void,
-  arrangeTitle = "Place with next figure",
-): HTMLElement {
-  const bar = document.createElement("div");
-  bar.className = "cm-image-toolbar";
-  bar.addEventListener("mousedown", stopImageEvent);
-  const set = (patch: Partial<ImageLayoutAttrs>): ImageLayoutAttrs => ({ ...layout, ...patch });
-  const isBlock = (align: ImageAlign): boolean => layout.align === align && !layout.wrap;
-  const isWrap = (align: ImageAlign): boolean => layout.align === align && layout.wrap;
-  bar.append(
-    imageToolButton("L", "Align left", isBlock("left"), () => apply(set({ align: "left", wrap: false }))),
-    imageToolButton("C", "Align center", isBlock("center"), () => apply(set({ align: "center", wrap: false }))),
-    imageToolButton("R", "Align right", isBlock("right"), () => apply(set({ align: "right", wrap: false }))),
-    imageToolSeparator(),
-    imageToolButton("◧", "Wrap text, float left", isWrap("left"), () => apply(set({ align: "left", wrap: true }))),
-    imageToolButton("◨", "Wrap text, float right", isWrap("right"), () => apply(set({ align: "right", wrap: true }))),
-    imageToolSeparator(),
-    imageToolButton("25%", "Width 25%", layout.width === "25%", () => apply(set({ width: "25%" }))),
-    imageToolButton("50%", "Width 50%", layout.width === "50%", () => apply(set({ width: "50%" }))),
-    imageToolButton("75%", "Width 75%", layout.width === "75%", () => apply(set({ width: "75%" }))),
-    imageToolButton("100%", "Width 100%", layout.width === "100%", () => apply(set({ width: "100%" }))),
-    imageToolButton("Auto", "Reset width", !layout.width, () => apply(set({ width: "" }))),
-  );
-  if (arrangeNext) bar.append(imageToolSeparator(), imageToolButton("↔", arrangeTitle, false, arrangeNext));
-  return bar;
 }
 
 // ---------------------------------------------------------------------------

@@ -70,7 +70,7 @@ describe("Enter reaches the canonical chain in src/cm6/input-commands.ts", () =>
 
   it("still adds a table row from inside a table", async () => {
     const { doc } = await press("| a | b |\n| - | - |\n| 1 | 2 |", 22, "Enter");
-    expect(doc).toBe("| a   | b   |\n| --- | --- |\n| 1   | 2   |\n|     |     |");
+    expect(doc).toBe("| a | b |\n| - | - |\n| 1 | 2 |\n|  |  |");
   });
 });
 

@@ -916,7 +916,7 @@ maybeDescribe("cm6 kernel: getMarkdown / setMarkdown", () => {
       bubbles: true, cancelable: true, button: 0, clientX: 90,
     }));
     await nextTick();
-    expect(editor.getMarkdown()).toContain("{width=400px}");
+    expect(editor.getMarkdown()).toMatch(/\{width=\d+%\}/);
     cleanup();
   });
 

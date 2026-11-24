@@ -7,6 +7,11 @@ import {
   layoutLatexFigure,
   readLayoutTrailingAttrs,
 } from "../../shared/layout-attrs.mjs";
+import {
+  columnsLatexBlocks,
+  parseColumnsHeader,
+  splitColumnPanes,
+} from "../../shared/columns-layout.mjs";
 import { tikzPictureSource } from "../../shared/tikz-source.mjs";
 import { citeLatex, convertInline, escapeLatexTitle, isDisplayCommentCommand, latexEnvironmentTitle, revisionLatex } from "./latex-export.mjs";
 import { revisionKind } from "../../shared/revision-kinds.mjs";
@@ -119,6 +124,36 @@ function tikzLatexBlock(source, title, lineNumber) {
   if (!picture) throw new Error(`TikZ block on line ${lineNumber} does not contain a tikzpicture`);
   const placed = layoutLatexFigure(tikzLayoutFromTitle(title), picture.split("\n"));
   return ["", "```{=latex}", ...placed.lines, "```", ""];
+}
+
+function columnsLatexExport(title, body, conversionOptions) {
+  const spec = parseColumnsHeader(title);
+  const subOptions = {
+    ...conversionOptions,
+    disableAnnotations: conversionOptions.exportAnnotations === false,
+  };
+  if (spec.mode === "flow") {
+    const inner = preprocessNoemaForPandoc(body, subOptions);
+    if (Array.isArray(conversionOptions.unresolvedCitations)) {
+      for (const warning of inner.warnings) {
+        const key = warning.replace(/^Unresolved Noema citation kept visibly:\s*/, "");
+        if (key) conversionOptions.unresolvedCitations.push(key);
+      }
+    }
+    return columnsLatexBlocks(spec, [{ body: inner.markdown, align: "inherit" }]);
+  }
+  const panes = splitColumnPanes(body);
+  const transformed = panes.map((pane) => {
+    const inner = preprocessNoemaForPandoc(pane.body, subOptions);
+    if (Array.isArray(conversionOptions.unresolvedCitations)) {
+      for (const warning of inner.warnings) {
+        const key = warning.replace(/^Unresolved Noema citation kept visibly:\s*/, "");
+        if (key) conversionOptions.unresolvedCitations.push(key);
+      }
+    }
+    return { body: inner.markdown, align: pane.align };
+  });
+  return columnsLatexBlocks(spec, transformed);
 }
 
 function environmentFor(kind, rules) {
@@ -542,6 +577,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
   let fence = null;
   let displayMath = null;
   let rawTikz = null;
+  let rawColumns = null;
   let privatePlanning = null;
   let htmlComment = false;
   let inFootnote = false;
@@ -590,6 +626,39 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
         output.push(...tikzLatexBlock(rawTikz.lines.join("\n"), rawTikz.title, rawTikz.line));
         rawTikz = null;
       } else rawTikz.lines.push(line);
+      continue;
+    }
+    if (rawColumns) {
+      if (rawColumns.fence) {
+        const closeFence = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+        if (closeFence && closeFence[1][0] === rawColumns.fence.char && closeFence[1].length >= rawColumns.fence.length) {
+          rawColumns.fence = null;
+        }
+        rawColumns.lines.push(line);
+        continue;
+      }
+      const openFence = line.match(/^ {0,3}(`{3,}|~{3,})/);
+      if (openFence) {
+        rawColumns.fence = { char: openFence[1][0], length: openFence[1].length };
+        rawColumns.lines.push(line);
+        continue;
+      }
+      if (orgOpen(line)?.kind === "columns") {
+        rawColumns.depth += 1;
+        rawColumns.lines.push(line);
+        continue;
+      }
+      if (orgClose(line) === "columns") {
+        rawColumns.depth -= 1;
+        if (rawColumns.depth === 0) {
+          output.push(...columnsLatexExport(rawColumns.title, rawColumns.lines.join("\n"), conversionOptions));
+          rawColumns = null;
+        } else {
+          rawColumns.lines.push(line);
+        }
+        continue;
+      }
+      rawColumns.lines.push(line);
       continue;
     }
     if (fence && container.quoteDepth !== fence.quoteDepth) {
@@ -708,6 +777,10 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
         rawTikz = { title: begin.title, line: lineNumber, lines: [] };
         continue;
       }
+      if (begin.kind === "columns") {
+        rawColumns = { title: begin.title, line: lineNumber, lines: [], depth: 1, fence: null };
+        continue;
+      }
       const opened = environmentOpen(begin.kind, begin.title, conversionOptions);
       stack.push({ kind: begin.kind, env: opened.env, line: lineNumber });
       output.push(rawLatexBlock(opened.latex));
@@ -741,6 +814,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
   if (privatePlanning) throw new Error("Unclosed Noema planning block");
   if (htmlComment) throw new Error("Unclosed HTML comment");
   if (rawTikz) throw new Error("Unclosed Noema block: tikz");
+  if (rawColumns) throw new Error("Unclosed Noema block: columns");
   if (stack.length) throw new Error(`Unclosed Noema block: ${stack.at(-1).kind}`);
   return {
     meta,

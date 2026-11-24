@@ -6824,6 +6824,7 @@ export async function exportLatex(body = {}) {
     usesSideComment: converted.features.usesSideComment || summary?.features.usesSideComment,
     usesTikz: converted.features.usesTikz || summary?.features.usesTikz,
     usesWrapfig: /\\begin\{wrapfigure\}/.test(converted.body) || /\\begin\{wrapfigure\}/.test(summary?.body || ""),
+    usesMulticol: /\\begin\{multicols\}/.test(converted.body) || /\\begin\{multicols\}/.test(summary?.body || ""),
   };
   const hasNoemaMacros = /\\(?:usepackage|RequirePackage)(?:\[[^\]]*\])?\{noema-macros\}/.test(template.text);
   const marginTemplate = macroFeatures.usesSideComment

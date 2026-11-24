@@ -71,7 +71,13 @@ export function createVisualMarkdownEditingExtensions(): Extension {
   ];
 }
 
-export { orgEnvBlocksExtension, orgEnvExitTarget } from "./widgets/block-extras.ts";
+export {
+  columnsMoveHorizontal,
+  columnsMoveVertical,
+  columnsProtectBoundaryDelete,
+  orgEnvBlocksExtension,
+  orgEnvExitTarget,
+} from "./widgets/block-extras.ts";
 export {
   activateBlockMath,
   activateInlineMath,

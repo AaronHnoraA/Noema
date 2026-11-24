@@ -1,11 +1,31 @@
+/**
+ * Unified responsive figure layout, positioning, wrap, and sizing engine.
+ *
+ * Single source of truth for all visual figures (`image`, `tikz`, `table`,
+ * `diagram`) in CM6: target discovery, stale-doc transactional source writes,
+ * context menu items, floating toolbar, responsive `%` width resize handle,
+ * fixed-viewport height handle, adjacent pairing, and drag-to-reorder grip.
+ */
+
 import type { EditorView } from "@codemirror/view";
-import { dispatchConstructEdit } from "./extensions/visual/constructs/index.ts";
 import type { Text } from "@codemirror/state";
+import { dispatchConstructEdit } from "./extensions/visual/constructs/index.ts";
 import { imageLayoutFromAttrs, imageLayoutToAttrMap, type ImageLayoutAttrs } from "../image-attrs.ts";
 import { LAYOUT_ATTR_KEYS, readLayoutAttrSuffix, readLayoutAttrsLine, readLayoutTrailingAttrs } from "../layout-attrs.ts";
 import type { NoemaMenuItem } from "../menu-system.ts";
+import { findTableAtPos } from "./table-source-cells.ts";
+import { getBlockMathRanges } from "./math-ranges.ts";
+import { getFencedCodeRanges } from "./code-ranges.ts";
 
-type FigureKind = "image" | "tikz" | "table" | "diagram";
+export type FigureKind = "image" | "tikz" | "table" | "diagram";
+
+export type FigureCapabilities = {
+  readonly minWidthPct: number;
+  /** Whether width changes clear stale height so aspect-ratio artwork never distorts. */
+  readonly preservesAspect: boolean;
+  /** Whether a bottom-edge height drag handle makes sense (fixed-viewport figures only). */
+  readonly hasHeightHandle: boolean;
+};
 
 export type FigureLayoutTarget = {
   kind: FigureKind;
@@ -16,8 +36,104 @@ export type FigureLayoutTarget = {
   document: Text;
 };
 
+export type FigureToolbarOptions = {
+  /** Extra CSS classes added alongside `cm-figure-layout-toolbar`. */
+  extraClass?: string;
+  /** Whether to clear height when selecting a width preset (defaults to figure capability). */
+  preservesAspect?: boolean;
+  /** Whether to include the whole-figure drag/Alt+Up/Down move grip (default true). */
+  includeMoveGrip?: boolean;
+  /** Override the `↔` pair action (e.g. native image-row join before float pairing). */
+  onArrangeNext?: () => void;
+  /** Tooltip / aria-label for the `↔` pair button. */
+  arrangeTitle?: string;
+  /** Additional buttons appended at the end (e.g. HTML embed fullscreen button). */
+  extraButtons?: readonly HTMLElement[];
+  /** Called after an action commits (e.g. to close a popover). */
+  onApplied?: () => void;
+};
+
+export type FigureResizeOptions = {
+  /** Extra CSS class added alongside `cm-figure-resize-handle`. */
+  extraClass?: string;
+  /** Whether the figure sits inside a horizontal Flex image row. */
+  isRowItem?: boolean;
+  /** Whether width changes clear stale height (defaults to figure capability). */
+  preservesAspect?: boolean;
+  /** Optional hook to mirror live `%` width onto sibling DOM (e.g. editing table rows). */
+  onPreviewWidth?: (widthCss: string | null) => void;
+};
+
 const FIGURE_SELECTOR = ".cm-image-widget, .cm-table-editable-block, .cm-mermaid-widget:not(.cm-mermaid-widget-preview)";
 const LAYOUT_KEYS = new Set(LAYOUT_ATTR_KEYS);
+const SNAP_WIDTH_PCTS = [25, 33, 50, 67, 75, 100] as const;
+const WIDTH_PRESETS = ["25%", "50%", "75%", "100%"] as const;
+const MENU_WIDTH_PRESETS = ["25%", "33%", "50%", "67%", "75%", "100%"] as const;
+
+export function figureCapabilities(kind: FigureKind, options: { fixedViewport?: boolean } = {}): FigureCapabilities {
+  if (kind === "table") return { minWidthPct: 30, preservesAspect: false, hasHeightHandle: false };
+  if (kind === "diagram") return { minWidthPct: 25, preservesAspect: false, hasHeightHandle: true };
+  if (kind === "tikz") return { minWidthPct: 15, preservesAspect: true, hasHeightHandle: false };
+  if (options.fixedViewport) return { minWidthPct: 25, preservesAspect: false, hasHeightHandle: true };
+  return { minWidthPct: 15, preservesAspect: true, hasHeightHandle: false };
+}
+
+/** Measure the effective inner prose measure width (excluding `.cm-content` horizontal padding). */
+export function measureFigureContainerWidth(view: EditorView, surface: HTMLElement): number {
+  const content = view.contentDOM;
+  const contentWidth = content.clientWidth;
+  if (contentWidth > 0) {
+    const style = typeof getComputedStyle === "function" ? getComputedStyle(content) : null;
+    const padL = style ? Number.parseFloat(style.paddingLeft) || 0 : 0;
+    const padR = style ? Number.parseFloat(style.paddingRight) || 0 : 0;
+    const inner = contentWidth - padL - padR;
+    if (inner >= 120) return inner;
+    return contentWidth;
+  }
+  const parentWidth = surface.parentElement?.clientWidth ?? 0;
+  if (parentWidth >= 120) return parentWidth;
+  return 720;
+}
+
+/** Convert a pixel width against CONTAINER_PX into a clamped responsive integer percentage. */
+export function pxToResponsivePercent(
+  targetPx: number,
+  containerPx: number,
+  minPct: number,
+  snap = false,
+): number {
+  const denom = Math.max(120, containerPx);
+  const raw = Math.max(minPct, Math.min(100, (targetPx / denom) * 100));
+  if (snap) {
+    for (const preset of SNAP_WIDTH_PCTS) {
+      if (preset >= minPct && Math.abs(raw - preset) <= 1.5) return preset;
+    }
+  }
+  return Math.max(minPct, Math.min(100, Math.round(raw)));
+}
+
+/** Step a figure's width by `deltaPct` (e.g. ±5%) for keyboard accessibility. */
+export function stepResponsivePercent(
+  currentWidthAttr: string,
+  measuredPx: number,
+  containerPx: number,
+  deltaPct: number,
+  minPct: number,
+): number {
+  let base: number;
+  if (currentWidthAttr.endsWith("%")) {
+    const parsed = Number.parseFloat(currentWidthAttr);
+    base = Number.isFinite(parsed) ? parsed : 100;
+  } else if (measuredPx > 0) {
+    base = (measuredPx / Math.max(120, containerPx)) * 100;
+  } else if (currentWidthAttr) {
+    const parsedPx = Number.parseFloat(currentWidthAttr);
+    base = Number.isFinite(parsedPx) ? (parsedPx / Math.max(120, containerPx)) * 100 : 50;
+  } else {
+    base = 100;
+  }
+  return Math.max(minPct, Math.min(100, Math.round(base + deltaPct)));
+}
 
 export function layoutSuffix(layout: ImageLayoutAttrs, previous: Record<string, string>): string {
   const attrs: Record<string, string> = {};
@@ -32,11 +148,37 @@ export function layoutSuffix(layout: ImageLayoutAttrs, previous: Record<string, 
   return entries.length ? `{${entries.map(([key, value]) => `${key}=${/\s/.test(value) ? JSON.stringify(value) : value}`).join(" ")}}` : "";
 }
 
+/** Resolve a table's layout target from a live-editing `.cm-table-source-row` line. */
+function tableSourceRowLayoutTarget(view: EditorView, rowEl: HTMLElement): FigureLayoutTarget | null {
+  let pos: number;
+  try { pos = view.posAtDOM(rowEl); } catch { return null; }
+  const doc = view.state.doc;
+  const excluded = [...getBlockMathRanges(view.state), ...getFencedCodeRanges(view.state)];
+  const found = findTableAtPos(doc, pos, excluded);
+  if (!found) return null;
+  const baseTo = found.sourceTo;
+  const nextLine = baseTo < doc.length ? doc.line(doc.lineAt(baseTo).number + 1) : null;
+  const parsed = nextLine ? readLayoutAttrsLine(nextLine.text) : null;
+  const to = parsed && nextLine ? nextLine.to : baseTo;
+  return {
+    kind: "table",
+    from: found.from,
+    to,
+    baseTo,
+    layout: imageLayoutFromAttrs(parsed?.attrs ?? {}),
+    document: doc,
+  };
+}
+
 /** Read only the widget's own source span, never the whole document. */
 export function figureLayoutTarget(view: EditorView, node: EventTarget | null): FigureLayoutTarget | null {
   const element = node instanceof Element ? node : node instanceof Node ? node.parentElement : null;
-  const widget = element?.closest<HTMLElement>(FIGURE_SELECTOR);
-  if (!widget || !view.dom.contains(widget)) return null;
+  if (!element || !view.dom.contains(element)) return null;
+  const widget = element.closest<HTMLElement>(FIGURE_SELECTOR);
+  if (!widget || !view.dom.contains(widget)) {
+    const sourceRow = element.closest<HTMLElement>(".cm-table-source-row");
+    return sourceRow && view.dom.contains(sourceRow) ? tableSourceRowLayoutTarget(view, sourceRow) : null;
+  }
   const from = Number(widget.dataset.cmSourceFrom);
   const to = Number(widget.dataset.cmSourceTo);
   if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to <= from || to > view.state.doc.length) return null;
@@ -235,6 +377,7 @@ export function figureMoveGrip(view: EditorView, widget: HTMLElement): HTMLButto
 }
 
 export function figureLayoutMenuItems(view: EditorView, target: FigureLayoutTarget, disabled = false): NoemaMenuItem[] {
+  const caps = figureCapabilities(target.kind);
   const apply = (patch: Partial<ImageLayoutAttrs>) => () => { if (!disabled) applyFigureLayout(view, target, patch); };
   const align = target.layout.align;
   const wrap = target.layout.wrap;
@@ -247,20 +390,37 @@ export function figureLayoutMenuItems(view: EditorView, target: FigureLayoutTarg
     { label: "Wrap Text Right", checked: align === "right" && wrap, disabled, run: apply({ align: "right", wrap: true }) },
     { separator: true, label: "" },
     { label: "Width", detail: target.layout.width || "Auto", disabled, submenu: [
-      ...["25%", "50%", "75%", "100%"].map((width) => ({ label: width, checked: target.layout.width === width, run: apply({ width, height: "" }) })),
+      ...MENU_WIDTH_PRESETS.map((width) => ({
+        label: width,
+        checked: target.layout.width === width,
+        run: apply(caps.preservesAspect ? { width, height: "" } : { width }),
+      })),
       { label: "Auto", checked: !target.layout.width, run: apply({ width: "", height: "" }) },
     ] },
     { label: "Reset Layout", disabled, run: apply({ align: "center", wrap: false, width: "", height: "" }) },
   ];
 }
 
-/** The same source-backed layout controls for every block figure. */
-export function figureLayoutToolbar(view: EditorView, widget: HTMLElement, current: ImageLayoutAttrs): HTMLElement {
+/** Shared source-backed layout controls for every figure (image, TikZ, diagram, and table popover). */
+export function figureLayoutToolbar(
+  view: EditorView,
+  widget: HTMLElement,
+  current: ImageLayoutAttrs,
+  options: FigureToolbarOptions = {},
+): HTMLElement {
   const bar = document.createElement("div");
-  bar.className = "cm-figure-layout-toolbar";
+  bar.className = options.extraClass
+    ? `cm-figure-layout-toolbar ${options.extraClass}`
+    : "cm-figure-layout-toolbar";
   bar.setAttribute("role", "toolbar");
   bar.setAttribute("aria-label", "Figure layout");
-  bar.addEventListener("mousedown", (event) => event.stopPropagation());
+  bar.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+
+  const clearHeightOnWidth = options.preservesAspect ?? true;
+
   const button = (label: string, title: string, selected: boolean, patch: Partial<ImageLayoutAttrs>) => {
     const el = document.createElement("button");
     el.type = "button";
@@ -271,18 +431,24 @@ export function figureLayoutToolbar(view: EditorView, widget: HTMLElement, curre
     el.setAttribute("aria-pressed", String(selected));
     if (selected) el.classList.add("is-active");
     el.addEventListener("click", (event) => {
+      event.preventDefault();
       event.stopPropagation();
       const target = figureLayoutTarget(view, widget);
-      if (target) applyFigureLayout(view, target, patch);
+      if (target) {
+        applyFigureLayout(view, target, patch);
+        options.onApplied?.();
+      }
     });
     return el;
   };
+
   const sep = () => {
     const el = document.createElement("span");
     el.className = "cm-image-tool-sep";
     el.setAttribute("aria-hidden", "true");
     return el;
   };
+
   bar.append(
     button("L", "Align left", current?.align === "left" && !current.wrap, { align: "left", wrap: false }),
     button("C", "Align center", current?.align === "center" && !current.wrap, { align: "center", wrap: false }),
@@ -291,110 +457,216 @@ export function figureLayoutToolbar(view: EditorView, widget: HTMLElement, curre
     button("◧", "Wrap text left", current?.align === "left" && !!current.wrap, { align: "left", wrap: true }),
     button("◨", "Wrap text right", current?.align === "right" && !!current.wrap, { align: "right", wrap: true }),
     sep(),
-    ...["25%", "50%", "75%", "100%"].map((width) => button(width, `Width ${width}`, current?.width === width, { width, height: "" })),
+    ...WIDTH_PRESETS.map((width) => button(
+      width,
+      `Width ${width}`,
+      current?.width === width,
+      clearHeightOnWidth ? { width, height: "" } : { width },
+    )),
     button("Auto", "Reset width", !current?.width, { width: "", height: "" }),
     sep(),
   );
+
   const pair = document.createElement("button");
   pair.type = "button";
   pair.className = "cm-image-tool-button";
   pair.textContent = "↔";
-  pair.title = "Place beside next figure";
+  pair.title = options.arrangeTitle ?? "Place beside next figure";
   pair.setAttribute("aria-label", pair.title);
-  pair.addEventListener("click", (event) => { event.stopPropagation(); arrangeWithNextFigure(view, widget); });
-  bar.append(pair, figureMoveGrip(view, widget));
+  pair.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (options.onArrangeNext) options.onArrangeNext();
+    else arrangeWithNextFigure(view, widget);
+    options.onApplied?.();
+  });
+  bar.append(pair);
+
+  if (options.includeMoveGrip !== false) {
+    bar.append(figureMoveGrip(view, widget));
+  }
+  if (options.extraButtons?.length) {
+    bar.append(sep(), ...options.extraButtons);
+  }
   return bar;
 }
 
-/** One width gesture for tables, TikZ and diagrams, using their existing attrs. */
-export function figureResizeHandle(view: EditorView, widget: HTMLElement, kind: "table" | "tikz" | "diagram", surface: HTMLElement = widget): HTMLButtonElement {
+/** Create or update the live numeric feedback pill on a resize handle during active drag. */
+function setResizeBadge(handle: HTMLElement, text: string | null): void {
+  let badge = handle.querySelector<HTMLElement>(".cm-figure-resize-badge");
+  if (text === null) {
+    badge?.remove();
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement("span");
+    badge.className = "cm-figure-resize-badge";
+    badge.setAttribute("aria-hidden", "true");
+    handle.append(badge);
+  }
+  badge.textContent = text;
+}
+
+/**
+ * One unified responsive `%` width resize gesture for ALL figures
+ * (`image`, `tikz`, `table`, `diagram`).
+ *
+ * Writes relative percentage widths (`{width=62%}`) so notes adapt cleanly
+ * across desktop, split Emacs xwidget panes, mobile readers, and LaTeX export.
+ */
+export function figureResizeHandle(
+  view: EditorView,
+  widget: HTMLElement,
+  kind: FigureKind,
+  surface: HTMLElement = widget,
+  options: FigureResizeOptions = {},
+): HTMLButtonElement {
   const handle = document.createElement("button");
   handle.type = "button";
-  handle.className = "cm-figure-resize-handle";
-  handle.title = `Drag to resize ${kind}; arrow keys adjust width`;
+  handle.className = options.extraClass
+    ? `cm-figure-resize-handle ${options.extraClass}`
+    : "cm-figure-resize-handle";
+  handle.title = `Drag to resize ${kind} width (%); arrow keys adjust by 5%`;
   handle.setAttribute("aria-label", handle.title);
+
+  const caps = figureCapabilities(kind);
   const cssKind = kind === "tikz" ? "image" : kind;
   const widthVar = `--noema-${cssKind}-width`;
+  const blockWidthVar = "--noema-block-layout-width";
   const maxVar = `--noema-${cssKind}-max-width`;
-  const resize = (delta: number, target: FigureLayoutTarget, startWidth: number, oldWidth: string, oldMax: string): boolean => {
-    const maxWidth = Math.max(96, view.contentDOM.clientWidth || surface.parentElement?.clientWidth || 960);
-    const direction = target.layout.align === "right" ? -1 : target.layout.align === "center" && !target.layout.wrap ? 2 : 1;
-    const next = Math.max(96, Math.min(maxWidth, Math.round(startWidth + delta * direction)));
-    const changed = applyFigureLayout(view, target, { width: `${next}px`, height: "" });
-    if (!changed) {
-      if (oldWidth) surface.style.setProperty(widthVar, oldWidth); else surface.style.removeProperty(widthVar);
-      if (oldMax) surface.style.setProperty(maxVar, oldMax); else surface.style.removeProperty(maxVar);
-    }
-    return changed;
+  const clearHeight = options.preservesAspect ?? caps.preservesAspect;
+
+  const commitPercent = (target: FigureLayoutTarget, pct: number): boolean => {
+    const patch: Partial<ImageLayoutAttrs> = clearHeight
+      ? { width: `${pct}%`, height: "" }
+      : { width: `${pct}%` };
+    return applyFigureLayout(view, target, patch);
   };
+
   handle.addEventListener("keydown", (event) => {
     if (!["ArrowLeft", "ArrowRight"].includes(event.key) || view.state.readOnly) return;
     const target = figureLayoutTarget(view, widget);
     if (!target) return;
     event.preventDefault();
-    const startWidth = surface.getBoundingClientRect().width || Number.parseFloat(target.layout.width) || 320;
-    resize(event.key === "ArrowRight" ? 16 : -16, target, startWidth,
-      surface.style.getPropertyValue(widthVar), surface.style.getPropertyValue(maxVar));
+    event.stopPropagation();
+    const containerPx = measureFigureContainerWidth(view, surface);
+    const measuredPx = surface.getBoundingClientRect().width;
+    const step = event.key === "ArrowRight" ? 5 : -5;
+    const nextPct = stepResponsivePercent(target.layout.width, measuredPx, containerPx, step, caps.minWidthPct);
+    commitPercent(target, nextPct);
   });
+
   handle.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || view.state.readOnly) return;
     const target = figureLayoutTarget(view, widget);
     if (!target) return;
     event.preventDefault();
     event.stopPropagation();
+
     const startX = event.clientX;
-    const startWidth = surface.getBoundingClientRect().width || Number.parseFloat(target.layout.width) || 320;
+    const containerPx = measureFigureContainerWidth(view, surface);
+    const measuredPx = surface.getBoundingClientRect().width;
+    const fallbackPx = target.layout.width.endsWith("%")
+      ? (Number.parseFloat(target.layout.width) / 100) * containerPx
+      : Number.parseFloat(target.layout.width) || (target.layout.wrap ? containerPx * 0.45 : containerPx * 0.5);
+    const startWidth = measuredPx > 0 ? measuredPx : fallbackPx;
+
     const oldWidth = surface.style.getPropertyValue(widthVar);
+    const oldBlockWidth = surface.style.getPropertyValue(blockWidthVar);
     const oldMax = surface.style.getPropertyValue(maxVar);
+    const hadWidthClass = surface.classList.contains("noema-layout-has-width");
+    const rowItem = options.isRowItem ?? surface.classList.contains("cm-image-row-item");
+    const oldRowWeight = surface.style.getPropertyValue("--cm-image-row-weight");
+
     const direction = target.layout.align === "right" ? -1 : target.layout.align === "center" && !target.layout.wrap ? 2 : 1;
-    const maxWidth = Math.max(96, view.contentDOM.clientWidth || surface.parentElement?.clientWidth || 960);
-    let pendingWidth = Math.round(startWidth);
+    let pendingPct = pxToResponsivePercent(startWidth, containerPx, caps.minWidthPct, false);
+    let moved = false;
     let frame = 0;
+
     handle.classList.add("is-resizing");
     widget.classList.add("is-resizing");
     handle.setPointerCapture?.(event.pointerId);
+
     const cleanup = () => {
       if (frame) window.cancelAnimationFrame(frame);
+      frame = 0;
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", finish);
       handle.removeEventListener("pointercancel", cancel);
       window.removeEventListener("keydown", escape, true);
       handle.classList.remove("is-resizing");
       widget.classList.remove("is-resizing");
+      setResizeBadge(handle, null);
     };
+
     const restore = () => {
       if (oldWidth) surface.style.setProperty(widthVar, oldWidth); else surface.style.removeProperty(widthVar);
+      if (oldBlockWidth) surface.style.setProperty(blockWidthVar, oldBlockWidth); else surface.style.removeProperty(blockWidthVar);
       if (oldMax) surface.style.setProperty(maxVar, oldMax); else surface.style.removeProperty(maxVar);
+      if (!hadWidthClass) surface.classList.remove("noema-layout-has-width");
+      if (rowItem) {
+        if (oldRowWeight) surface.style.setProperty("--cm-image-row-weight", oldRowWeight);
+        else surface.style.removeProperty("--cm-image-row-weight");
+      }
+      options.onPreviewWidth?.(null);
       view.requestMeasure();
     };
+
     const move = (pointer: PointerEvent) => {
       pointer.preventDefault();
-      pendingWidth = Math.max(96, Math.min(maxWidth, Math.round(startWidth + (pointer.clientX - startX) * direction)));
+      moved = true;
+      const targetPx = startWidth + (pointer.clientX - startX) * direction;
+      pendingPct = pxToResponsivePercent(targetPx, containerPx, caps.minWidthPct, true);
       if (!frame) frame = window.requestAnimationFrame(() => {
         frame = 0;
         if (!widget.isConnected) return;
-        surface.style.setProperty(widthVar, `${pendingWidth}px`);
+        const pctCss = `${pendingPct}%`;
+        surface.style.setProperty(widthVar, pctCss);
+        surface.style.setProperty(blockWidthVar, pctCss);
         surface.style.setProperty(maxVar, "none");
+        surface.classList.add("noema-layout-has-width");
+        if (rowItem) {
+          surface.style.setProperty("--cm-image-row-weight", String(Math.max(0.25, Math.min(4, (pendingPct / 100) * 2))));
+        }
+        options.onPreviewWidth?.(pctCss);
+        setResizeBadge(handle, pctCss);
         view.requestMeasure();
       });
     };
+
     const finish = (pointer: PointerEvent) => {
       pointer.preventDefault();
       pointer.stopPropagation();
       cleanup();
-      if (!applyFigureLayout(view, target, { width: `${pendingWidth}px`, height: "" })) restore();
+      if (!moved || !commitPercent(target, pendingPct)) restore();
     };
-    const cancel = () => { cleanup(); restore(); };
-    const escape = (key: KeyboardEvent) => { if (key.key === "Escape") { key.preventDefault(); cancel(); } };
+
+    const cancel = () => {
+      cleanup();
+      restore();
+    };
+
+    const escape = (key: KeyboardEvent) => {
+      if (key.key === "Escape") {
+        key.preventDefault();
+        cancel();
+      }
+    };
+
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", finish);
     handle.addEventListener("pointercancel", cancel);
     window.addEventListener("keydown", escape, true);
   });
+
   return handle;
 }
 
-/** Bottom-edge height control. It writes the same attrs for every figure kind. */
+/**
+ * Bottom-edge height control for fixed-viewport figures (`diagram` and HTML/PDF
+ * `iframe` embeds). Aspect-ratio artwork and text-flow tables omit it so users
+ * never distort ratios or collide with table edge strips.
+ */
 export function figureHeightHandle(
   view: EditorView,
   widget: HTMLElement,
@@ -406,69 +678,95 @@ export function figureHeightHandle(
   handle.className = "cm-figure-height-handle";
   handle.title = `Drag to change ${kind} height; arrow keys adjust height`;
   handle.setAttribute("aria-label", handle.title);
+
   const cssKind = kind === "tikz" ? "image" : kind;
   const heightVar = `--noema-${cssKind}-height`;
+  const blockHeightVar = "--noema-block-layout-height";
+
   const change = (target: FigureLayoutTarget, delta: number, initial: number): boolean =>
     applyFigureLayout(view, target, { height: `${Math.max(80, Math.min(1200, Math.round(initial + delta)))}px` });
+
   const heightOf = (target: FigureLayoutTarget): number =>
     Number.parseFloat(target.layout.height) ||
-    surface.querySelector<HTMLElement>("img, video, svg, table, .cm-mermaid-block")?.getBoundingClientRect().height ||
-    surface.getBoundingClientRect().height || 220;
+    surface.querySelector<HTMLElement>("iframe, .cm-mermaid-block, svg, img, video")?.getBoundingClientRect().height ||
+    surface.getBoundingClientRect().height || 240;
+
   handle.addEventListener("keydown", (event) => {
     if (!["ArrowUp", "ArrowDown"].includes(event.key) || view.state.readOnly) return;
     const target = figureLayoutTarget(view, widget);
     if (!target) return;
     event.preventDefault();
+    event.stopPropagation();
     change(target, event.key === "ArrowDown" ? 16 : -16, heightOf(target));
   });
+
   handle.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || view.state.readOnly) return;
     const target = figureLayoutTarget(view, widget);
     if (!target) return;
     event.preventDefault();
     event.stopPropagation();
+
     const startY = event.clientY;
     const initial = heightOf(target);
     const previous = surface.style.getPropertyValue(heightVar);
+    const previousBlock = surface.style.getPropertyValue(blockHeightVar);
     let pending = Math.round(initial);
+    let moved = false;
     let frame = 0;
+
     handle.classList.add("is-resizing");
     handle.setPointerCapture?.(event.pointerId);
+
     const restore = () => {
       if (previous) surface.style.setProperty(heightVar, previous);
       else surface.style.removeProperty(heightVar);
+      if (previousBlock) surface.style.setProperty(blockHeightVar, previousBlock);
+      else surface.style.removeProperty(blockHeightVar);
       view.requestMeasure();
     };
+
     const cleanup = () => {
       if (frame) window.cancelAnimationFrame(frame);
+      frame = 0;
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", finish);
       handle.removeEventListener("pointercancel", cancel);
       window.removeEventListener("keydown", escape, true);
       handle.classList.remove("is-resizing");
+      setResizeBadge(handle, null);
     };
+
     const move = (pointer: PointerEvent) => {
       pointer.preventDefault();
+      moved = true;
       pending = Math.max(80, Math.min(1200, Math.round(initial + pointer.clientY - startY)));
       if (!frame) frame = window.requestAnimationFrame(() => {
         frame = 0;
         if (!widget.isConnected) return;
-        surface.style.setProperty(heightVar, `${pending}px`);
+        const pxCss = `${pending}px`;
+        surface.style.setProperty(heightVar, pxCss);
+        surface.style.setProperty(blockHeightVar, pxCss);
+        setResizeBadge(handle, pxCss);
         view.requestMeasure();
       });
     };
+
     const finish = (pointer: PointerEvent) => {
       pointer.preventDefault();
       pointer.stopPropagation();
       cleanup();
-      if (!change(target, pending - initial, initial)) restore();
+      if (!moved || !change(target, pending - initial, initial)) restore();
     };
+
     const cancel = () => { cleanup(); restore(); };
     const escape = (key: KeyboardEvent) => { if (key.key === "Escape") { key.preventDefault(); cancel(); } };
+
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", finish);
     handle.addEventListener("pointercancel", cancel);
     window.addEventListener("keydown", escape, true);
   });
+
   return handle;
 }

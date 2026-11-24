@@ -47,6 +47,60 @@ function nativeCaretPositionFromPoint(doc: Document, x: number, y: number): Nati
   return range ? { node: range.startContainer, offset: range.startOffset } : null;
 }
 
+/**
+ * Map a pointer (X, Y) inside a rendered DOM container (such as a rendered
+ * table cell) to its visible character offset and total visible text length.
+ * Lives in pointer-position.ts so all native hit-testing stays under one owner.
+ */
+export function renderedTextOffsetAtPoint(
+  container: Element,
+  x: number,
+  y: number,
+  skipSelector?: string,
+): { offset: number; total: number } | null {
+  if (!Number.isFinite(x) || !Number.isFinite(y) || (x === 0 && y === 0)) return null;
+  const doc = container.ownerDocument;
+  const hit = nativeCaretPositionFromPoint(doc, x, y);
+  if (!hit || !container.contains(hit.node)) return null;
+  const hitElement = hit.node instanceof Element ? hit.node : hit.node.parentElement;
+  if (skipSelector && hitElement?.closest(skipSelector)) return null;
+
+  const skipped = (node: Node): boolean => {
+    if (!skipSelector) return false;
+    const el = node instanceof Element ? node : node.parentElement;
+    return Boolean(el?.closest(skipSelector));
+  };
+
+  let targetNode: Node | null = hit.node;
+  let targetOffset = hit.offset;
+  if (targetNode.nodeType === Node.ELEMENT_NODE) {
+    const children = targetNode.childNodes;
+    if (targetOffset < children.length) {
+      targetNode = children[targetOffset]!;
+      targetOffset = 0;
+    } else {
+      targetNode = null;
+    }
+  }
+
+  let total = 0;
+  let foundOffset: number | null = null;
+  const walker = doc.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let textNode: Node | null;
+  while ((textNode = walker.nextNode())) {
+    if (skipped(textNode)) continue;
+    const len = textNode.textContent?.length ?? 0;
+    if (foundOffset === null && targetNode && (textNode === targetNode || targetNode.contains(textNode))) {
+      foundOffset = total + Math.max(0, Math.min(len, textNode === targetNode ? targetOffset : 0));
+    }
+    total += len;
+  }
+
+  if (foundOffset !== null) return { offset: foundOffset, total };
+  if (targetNode === null) return { offset: total, total };
+  return null;
+}
+
 function rectsContainY(element: Element, y: number): boolean {
   const rects = Array.from(element.getClientRects()).filter((rect) => rect.width > 0 || rect.height > 0);
   if (rects.length === 0) return true;

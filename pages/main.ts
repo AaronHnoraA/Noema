@@ -103,6 +103,7 @@ import type { HeadingNumberFormat } from "../src/heading-number.ts";
 import { NOEMA_EDITOR_SETTINGS, noemaEditorDefaults } from "../shared/editor-settings.mjs";
 import { createMenuController, type NoemaMenuItem } from "../src/menu-system.ts";
 import { figureLayoutMenuItems, figureLayoutTarget } from "../src/cm6/figure-layout-menu.ts";
+import { tableContextMenuItems, tableMenuTargetFromEvent } from "../src/cm6/table-context-menu.ts";
 import { createTransientSurfaceRegistry } from "../src/transient-surfaces.ts";
 import { completionPlacement, previewPlacement, type CompletionSide } from "./preview-placement.ts";
 import { mergeExternalText } from "./merge-external.ts";
@@ -1861,7 +1862,7 @@ const editorCommands = new Set<EditorCommand>([
   "insert-math-block",
   "insert-toc",
   "insert-org-env",
-  "insert-layout",
+  "insert-columns",
   "image-edit",
   "table-insert-row",
   "table-insert-column",
@@ -3428,6 +3429,20 @@ document.addEventListener("noema:attachment-context-menu", (event) => {
     cell: null,
     x: Number(custom.detail?.x) || 12,
     y: Number(custom.detail?.y) || 12,
+  });
+}, { capture: true });
+document.addEventListener("noema:table-context-menu", (event) => {
+  const custom = event as CustomEvent<{ cell?: HTMLElement; x?: number; y?: number }>;
+  const tableCell = custom.detail?.cell ?? null;
+  if (!tableCell || serverReaderMode) return;
+  const tableTarget = tableMenuTargetFromEvent(editor.view, tableCell);
+  if (!tableTarget) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const items = tableContextMenuItems(editor.view, tableTarget, currentReadOnly);
+  contextMenuController.open(items, {
+    left: Number(custom.detail?.x) || 12,
+    top: Number(custom.detail?.y) || 12,
   });
 }, { capture: true });
 document.addEventListener("pointerdown", (event) => {
@@ -5912,6 +5927,7 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
   const cell = target.cell !== undefined ? target.cell : jupyterCellFromPointer(event, false);
   const mathTarget = mathTargetFromPointer(event);
   const layoutTarget = figureLayoutTarget(editor.view, event.target);
+  const tableTarget = !serverReaderMode ? tableMenuTargetFromEvent(editor.view, event.target) : null;
   const contextVimMode = vim.mode();
   contextMenu.classList.toggle("is-math", Boolean(mathTarget));
   const href = cleanHref(target.href || markdownHrefFromPointer(event));
@@ -5919,18 +5935,21 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
     ? isLeanJupyterCell(cell) ? `${cell.language} / ${cell.session}` : `${cell.language} / ${cell.kernel} / ${cell.session}`
     : "";
   const items: AaronContextMenuItem[] = [];
+  if (tableTarget && !serverReaderMode) {
+    items.push(...tableContextMenuItems(editor.view, tableTarget, currentReadOnly), { separator: true, label: "" });
+  }
   if (layoutTarget && !serverReaderMode) {
     items.push({
       label: "Layout",
       detail: layoutTarget.kind,
       submenu: figureLayoutMenuItems(editor.view, layoutTarget, currentReadOnly),
     }, {
-      label: "Put in layout grid",
+      label: "Put in 2 columns",
       detail: "add text or figures beside it",
       disabled: currentReadOnly,
       run: () => {
         editor.setMarkdownSelection(layoutTarget.from, layoutTarget.to);
-        runContextEditorCommand("insert-layout", "grid");
+        runContextEditorCommand("insert-columns", "columns");
       },
     }, { separator: true, label: "" });
   }
@@ -6075,9 +6094,10 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
         updateSelectionTool();
         runSelectionCommand("revision-form");
       } },
-      { label: "Arrange selection", detail: "grid / text columns", disabled: currentReadOnly, submenu: [
-        { label: "Grid", detail: "Markdown blocks", run: () => runContextEditorCommand("insert-layout", "grid") },
-        { label: "Flowing text", detail: "2 columns", run: () => runContextEditorCommand("insert-layout", "flow") },
+      { label: "Arrange in columns", detail: "side-by-side / flowing", disabled: currentReadOnly, submenu: [
+        { label: "2 columns", detail: "multi-block panes", run: () => runContextEditorCommand("insert-columns", "columns") },
+        { label: "3 columns", detail: "multi-block panes", run: () => runContextEditorCommand("insert-columns", "columns:3") },
+        { label: "Flowing text", detail: "2 columns", run: () => runContextEditorCommand("insert-columns", "flow") },
       ] },
     );
   } else {
@@ -6094,9 +6114,10 @@ function showContextMenu(event: MouseEvent, target: Partial<AaronContextMenuTarg
       ] : []),
       { label: "Document Properties", detail: "org-env(meta)", disabled: currentReadOnly, run: () => runContextEditorCommand("edit-properties") },
       { label: "Find related notes", detail: "Emacs Agent", run: () => void sendSelectionToEmacs("related", "any") },
-      { label: "Insert layout", detail: "grid / text columns", disabled: currentReadOnly, submenu: [
-        { label: "Grid", detail: "Markdown blocks", run: () => runContextEditorCommand("insert-layout", "grid") },
-        { label: "Flowing text", detail: "2 columns", run: () => runContextEditorCommand("insert-layout", "flow") },
+      { label: "Insert columns", detail: "side-by-side / flowing", disabled: currentReadOnly, submenu: [
+        { label: "2 columns", detail: "multi-block panes", run: () => runContextEditorCommand("insert-columns", "columns") },
+        { label: "3 columns", detail: "multi-block panes", run: () => runContextEditorCommand("insert-columns", "columns:3") },
+        { label: "Flowing text", detail: "2 columns", run: () => runContextEditorCommand("insert-columns", "flow") },
       ] },
       { label: "Paste", detail: primaryShortcut("V"), disabled: currentReadOnly, run: () => pasteIntoEditorFromContextMenu() },
       { label: "Find in Note", detail: primaryShortcut("F"), run: () => openFindPanel() },

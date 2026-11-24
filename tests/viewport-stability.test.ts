@@ -657,5 +657,237 @@ describe("CM6 viewport position mapping", () => {
         env.dispose();
       }
     });
+
+    test("pressing a rendered widget anchors on the start of its line/block DOM top, not on widget.to or shifting chip coords", () => {
+      vi.useFakeTimers();
+      const scrollHost = document.createElement("div");
+      const dom = document.createElement("div");
+      const contentDOM = document.createElement("div");
+      const lineEl = document.createElement("div");
+      lineEl.className = "cm-line";
+      const chip = document.createElement("span");
+      chip.setAttribute("contenteditable", "false");
+      chip.dataset.cmSourceFrom = "20";
+      const popup = document.createElement("span");
+      chip.append(popup);
+      lineEl.append(chip);
+      contentDOM.append(lineEl);
+      dom.append(contentDOM);
+      scrollHost.append(dom);
+      document.body.append(scrollHost);
+      scrollHost.scrollTop = 300;
+
+      // Real DOM line top sits at document-space y=500 (viewport y=200 at scrollTop=300)
+      // while `coordsAtPos` on the chip shifts by +28px when the chip expands to raw text,
+      // and `posAtCoords` wrongly hits line 3 because of a floating popup.
+      let lineDocTop = 500;
+      let chipCoordsTop = 212;
+      vi.spyOn(scrollHost, "getBoundingClientRect").mockReturnValue({ top: 0, bottom: 800, left: 0, right: 800, width: 800, height: 800, x: 0, y: 0, toJSON: () => ({}) });
+      vi.spyOn(lineEl, "getBoundingClientRect").mockImplementation(() => {
+        const top = lineDocTop - scrollHost.scrollTop;
+        return { top, bottom: top + 28, left: 0, right: 800, width: 800, height: 28, x: 0, y: top, toJSON: () => ({}) };
+      });
+
+      const state = EditorState.create({ doc: "First line.\nSecond @@comment [note] line.\nThird line." });
+      const secondLineFrom = state.doc.line(2).from;
+      const chipPos = state.doc.toString().indexOf("@@comment");
+      const thirdLinePos = state.doc.line(3).from + 2;
+
+      const fakeView = {
+        dom,
+        contentDOM,
+        state,
+        viewport: { from: 0, to: state.doc.length },
+        get documentTop() { return -scrollHost.scrollTop; },
+        scaleY: 1,
+        // Simulate posAtCoords landing on line 3 (floating popup) and coordsAtPos shifting!
+        posAtCoords: () => thirdLinePos,
+        posAtDOM: (node: Node) => (node === chip ? chipPos : secondLineFrom),
+        domAtPos: (pos: number) => ({ node: pos === secondLineFrom ? lineEl : contentDOM, offset: 0 }),
+        coordsAtPos: () => ({ top: chipCoordsTop }),
+        lineBlockAtHeight: () => ({ from: 0, top: 0 }),
+        lineBlockAt: (pos: number) => ({ from: pos, top: 500 }),
+        requestMeasure: (request: { read: () => unknown; write: (value: unknown) => void }) => {
+          request.write(request.read());
+        },
+      } as unknown as EditorView;
+      const stabilizer = new EditorViewportStabilizer(fakeView, scrollHost);
+      const tx = {
+        docChanged: false,
+        selection: { main: { anchor: chipPos } },
+        effects: [],
+        reconfigured: false,
+        scrollIntoView: false,
+        changes: { mapPos: (p: number) => p },
+        state,
+      } as never;
+
+      try {
+        popup.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: 50, clientY: 230 }));
+        // Chip collapses to raw text: chip coords shift wildly, but line top did not move.
+        chipCoordsTop = 240;
+        stabilizer.afterUpdate([tx]);
+        expect(scrollHost.scrollTop).toBe(300);
+
+        // If a block ABOVE actually refolds and pulls lineEl up by 60px, stabilizer follows it cleanly!
+        lineDocTop = 440;
+        stabilizer.afterUpdate([tx]);
+        expect(scrollHost.scrollTop).toBe(240);
+      } finally {
+        stabilizer.destroy();
+        scrollHost.remove();
+      }
+    });
+
+    test("opening a preview table into side:-1 toolbar + source header keeps 0px scroll jump", () => {
+      vi.useFakeTimers();
+      const scrollHost = document.createElement("div");
+      const dom = document.createElement("div");
+      const contentDOM = document.createElement("div");
+      const prevHeading = document.createElement("div");
+      prevHeading.className = "cm-org-env-heading-widget";
+      const previewTable = document.createElement("div");
+      previewTable.className = "cm-table-block";
+      previewTable.setAttribute("contenteditable", "false");
+      contentDOM.append(prevHeading, previewTable);
+      dom.append(contentDOM);
+      scrollHost.append(dom);
+      document.body.append(scrollHost);
+      scrollHost.scrollTop = 400;
+
+      const state = EditorState.create({
+        doc: "#+begin observation 三个复杂度模型\n| 模型 | 假设 | 问题 |\n| --- | --- | --- |\n| A | B | C |\n#+end observation",
+      });
+      const tableFrom = state.doc.line(2).from;
+      let opened = false;
+      const toolbarEl = document.createElement("div");
+      toolbarEl.className = "cm-table-source-toolbar";
+      const headerLineEl = document.createElement("div");
+      headerLineEl.className = "cm-line cm-table-source-row cm-table-source-header";
+      const tableDocTop = 520;
+
+      vi.spyOn(scrollHost, "getBoundingClientRect").mockReturnValue({ top: 0, bottom: 800, left: 0, right: 800, width: 800, height: 800, x: 0, y: 0, toJSON: () => ({}) });
+      vi.spyOn(prevHeading, "getBoundingClientRect").mockImplementation(() => {
+        const top = 480 - scrollHost.scrollTop;
+        return { top, bottom: top + 40, left: 0, right: 800, width: 800, height: 40, x: 0, y: top, toJSON: () => ({}) };
+      });
+      vi.spyOn(previewTable, "getBoundingClientRect").mockImplementation(() => {
+        const top = tableDocTop - scrollHost.scrollTop;
+        return { top, bottom: top + 180, left: 0, right: 800, width: 800, height: 180, x: 0, y: top, toJSON: () => ({}) };
+      });
+      vi.spyOn(toolbarEl, "getBoundingClientRect").mockImplementation(() => {
+        const top = tableDocTop - scrollHost.scrollTop;
+        return { top, bottom: top + 6, left: 0, right: 800, width: 800, height: 6, x: 0, y: top, toJSON: () => ({}) };
+      });
+      vi.spyOn(headerLineEl, "getBoundingClientRect").mockImplementation(() => {
+        // Sits 6px below toolbarEl (matching .cm-table-block padding-top: 6px).
+        const top = tableDocTop + 6 - scrollHost.scrollTop;
+        return { top, bottom: top + 54, left: 0, right: 800, width: 800, height: 54, x: 0, y: top, toJSON: () => ({}) };
+      });
+
+      const fakeView = {
+        dom,
+        contentDOM,
+        state,
+        hasFocus: true,
+        viewport: { from: 0, to: state.doc.length },
+        get documentTop() { return -scrollHost.scrollTop; },
+        scaleY: 1,
+        posAtDOM: (node: Node) => {
+          if (node === prevHeading) return 0;
+          if (node === previewTable || node === toolbarEl || node === headerLineEl) return tableFrom;
+          return 0;
+        },
+        domAtPos: (pos: number) => {
+          if (pos === tableFrom) {
+            return opened
+              ? { node: headerLineEl, offset: 0 }
+              : { node: contentDOM, offset: 1 };
+          }
+          return { node: contentDOM, offset: 0 };
+        },
+        lineBlockAtHeight: () => ({ from: 0, top: 0 }),
+        lineBlockAt: (pos: number) => ({ from: pos, top: tableDocTop + (opened ? 6 : 0) }),
+        requestMeasure: (request: { read: () => unknown; write: (value: unknown) => void }) => {
+          request.write(request.read());
+        },
+      } as unknown as EditorView;
+      const stabilizer = new EditorViewportStabilizer(fakeView, scrollHost);
+
+      try {
+        stabilizer.preserve(() => {
+          opened = true;
+          contentDOM.replaceChildren(prevHeading, toolbarEl, headerLineEl);
+        }, undefined, tableFrom);
+        // Must not jump by +6px when .cm-table-block swaps to .cm-table-source-toolbar + .cm-line.
+        expect(scrollHost.scrollTop).toBe(400);
+      } finally {
+        stabilizer.destroy();
+        scrollHost.remove();
+      }
+    });
+
+    test("preserve clears any prior focus guard and keeps leasedSnapshot synced with corrected scrollTop", () => {
+      vi.useFakeTimers();
+      const scrollHost = document.createElement("div");
+      const dom = document.createElement("div");
+      const contentDOM = document.createElement("div");
+      const blockEl = document.createElement("div");
+      blockEl.className = "cm-line";
+      contentDOM.append(blockEl);
+      dom.append(contentDOM);
+      scrollHost.append(dom);
+      document.body.append(scrollHost);
+      scrollHost.scrollTop = 400;
+
+      let blockDocTop = 500;
+      vi.spyOn(scrollHost, "getBoundingClientRect").mockReturnValue({ top: 0, bottom: 800, left: 0, right: 800, width: 800, height: 800, x: 0, y: 0, toJSON: () => ({}) });
+      vi.spyOn(blockEl, "getBoundingClientRect").mockImplementation(() => {
+        const top = blockDocTop - scrollHost.scrollTop;
+        return { top, bottom: top + 30, left: 0, right: 800, width: 800, height: 30, x: 0, y: top, toJSON: () => ({}) };
+      });
+      const state = EditorState.create({ doc: "above\ntarget line\nbelow" });
+      const targetFrom = state.doc.line(2).from;
+      const fakeView = {
+        dom,
+        contentDOM,
+        state,
+        hasFocus: false,
+        viewport: { from: 0, to: state.doc.length },
+        get documentTop() { return -scrollHost.scrollTop; },
+        scaleY: 1,
+        posAtDOM: () => targetFrom,
+        domAtPos: () => ({ node: blockEl, offset: 0 }),
+        lineBlockAtHeight: () => ({ from: 0, top: 0 }),
+        lineBlockAt: (pos: number) => ({ from: pos, top: blockDocTop }),
+        requestMeasure: (request: { read: () => unknown; write: (value: unknown) => void }) => {
+          request.write(request.read());
+        },
+      } as unknown as EditorView;
+      const stabilizer = new EditorViewportStabilizer(fakeView, scrollHost);
+
+      try {
+        // Focus guard armed at scrollTop=400 (as activateEditorFromPointer does before click fires).
+        stabilizer.focusContent(() => {});
+        // Clicking a widget opens it while an earlier block refolds by -60px.
+        stabilizer.preserve(() => {
+          blockDocTop = 440;
+        }, undefined, targetFrom);
+        expect(scrollHost.scrollTop).toBe(340);
+
+        // Neither a WebKit scroll event nor focusContent's rAF may yank scrollTop back to 400.
+        scrollHost.dispatchEvent(new Event("scroll"));
+        expect(scrollHost.scrollTop).toBe(340);
+
+        // If WebKit later throws a rogue focus-reveal jump to 50 during the active lease,
+        // it snaps synchronously back to the corrected 340 (never stale 400).
+        scrollHost.scrollTop = 50;
+        scrollHost.dispatchEvent(new Event("scroll"));
+        expect(scrollHost.scrollTop).toBe(340);
+      } finally {
+        stabilizer.destroy();
+        scrollHost.remove();
+      }
+    });
   });
 });

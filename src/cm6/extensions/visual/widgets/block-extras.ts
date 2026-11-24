@@ -37,6 +37,7 @@ import {
 import {
   renderMarkdownInlineHTML,
   renderMarkdownHTML,
+  type RenderMarkdownHTMLOptions,
 } from "../../../../render-html.ts";
 import {
   ORG_META_PREAMBLE_LINE_LIMIT,
@@ -50,11 +51,32 @@ import {
   type MetaSummary,
 } from "../../../../org-meta.ts";
 import { applyImageLayout, imageLayoutFromAttrs, type ImageLayoutAttrs } from "../../../../image-attrs.ts";
-import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
+import { figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
 import { readLayoutAttrSuffix } from "../../../../layout-attrs.ts";
-import { layoutGroupClasses, layoutGroupFromTitle, layoutGroupStyle, layoutGroupTracks, type LayoutGroup } from "../../../../layout-group.ts";
+import {
+  COLUMNS_MAX_COUNT,
+  COLUMNS_MIN_WIDTH_PCT,
+  areEqualColumnWidths,
+  columnDividerLeftCss,
+  columnLeftCss,
+  columnRightCss,
+  columnWidthCss,
+  columnsClasses,
+  columnsGridTracks,
+  columnsStyle,
+  normalizeColumnWidths,
+  parseColumnsHeader,
+  resolvedColumnWidths,
+  serializeColumnsAttrs,
+  splitColumnPanes,
+  type ColumnPane,
+  type ColumnsAlign,
+  type ColumnsSpec,
+  type ColumnsValign,
+} from "../../../../columns-layout.ts";
+import { renderedTextOffsetAtPoint } from "../../../pointer-position.ts";
+import { mapRenderedOffsetToSource } from "../../../table-source-cells.ts";
 import { balanceTextColumns, suggestTextColumns } from "../../../../text-layout-measure.ts";
-import { parseAttrArgs } from "../../../../attrs-syntax.ts";
 import { supportedDiagramLang } from "../../../../diagram-langs.ts";
 import { api } from "../../../../../pages/api-client.ts";
 import { writeSystemClipboard } from "../../../../system-clipboard.ts";
@@ -1417,8 +1439,11 @@ class SemanticHeadingWidget extends MeasuredWidget {
     div.addEventListener("mousedown", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      view.dispatch({ selection: { anchor: this.from }, scrollIntoView: true });
-      view.focus();
+      const anchor = Math.max(0, Math.min(this.from, view.state.doc.length));
+      preserveEditorViewport(view, () => {
+        view.dispatch({ selection: { anchor } });
+        view.focus();
+      }, view.state.doc.lineAt(anchor).from);
     });
     window.requestAnimationFrame(() => {
       if (div.isConnected && view.dom.isConnected) view.requestMeasure();
@@ -1718,8 +1743,11 @@ class OrgEnvOpenWidget extends MeasuredWidget {
     div.addEventListener("mousedown", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      view.dispatch({ selection: { anchor: this.anchor }, scrollIntoView: true });
-      view.focus();
+      const anchor = Math.max(0, Math.min(this.anchor, view.state.doc.length));
+      preserveEditorViewport(view, () => {
+        view.dispatch({ selection: { anchor } });
+        view.focus();
+      }, view.state.doc.lineAt(anchor).from);
     });
     return this.registerMeasured(div, view);
   }
@@ -3067,72 +3095,855 @@ class FoldWidget extends MeasuredWidget {
   ignoreEvent(): boolean { return false; }
 }
 
-function setLayoutGroup(view: EditorView, from: number, to: number, source: string, patch: Partial<LayoutGroup>): boolean {
+const setColumnsRawSourceEffect = StateEffect.define<{ from: number; raw: boolean } | null>();
+
+const columnsRawSourceField = StateField.define<number | null>({
+  create: () => null,
+  update(value, tr) {
+    let next = value;
+    if (next !== null && tr.docChanged) {
+      next = tr.changes.mapPos(next, 1);
+    }
+    for (const effect of tr.effects) {
+      if (effect.is(setColumnsRawSourceEffect)) {
+        next = effect.value?.raw ? effect.value.from : null;
+      }
+    }
+    if (next !== null && (tr.selection != null || tr.docChanged)) {
+      const blocks = tr.state.field(orgEnvBlocksField, false) ?? orgEnvBlocksFromState(tr.state);
+      const block = blocks.find((b) => b.kind === "columns" && b.from === next);
+      if (!block || !opensSource(tr.state, block.from, block.to)) {
+        next = null;
+      }
+    }
+    return next;
+  },
+});
+
+interface ColumnsPaneBounds {
+  index: number;
+  pane: ColumnPane;
+  boundStart: number;
+  boundEnd: number;
+  trimmedStart: number;
+  trimmedEnd: number;
+  hasContent: boolean;
+  valid: boolean;
+}
+
+interface ActiveColumnsStage {
+  block: OrgEnvBlock;
+  spec: ColumnsSpec;
+  panes: readonly ColumnPane[];
+  bounds: readonly ColumnsPaneBounds[];
+  paneCount: number;
+  widths: readonly number[];
+  activeIndex: number;
+  editFrom: number;
+  editTo: number;
+  boundStart: number;
+  boundEnd: number;
+}
+
+function columnsPaneBounds(doc: Text, block: OrgEnvBlock, panes: readonly ColumnPane[]): ColumnsPaneBounds[] {
+  return panes.map((pane, index) => {
+    const boundStart = index === 0
+      ? block.openTo + 1
+      : block.bodyFrom + pane.markerTo + 1;
+    const boundEnd = index === panes.length - 1
+      ? block.closeFrom - 1
+      : block.bodyFrom + panes[index + 1]!.markerFrom - 1;
+    const valid = boundStart <= boundEnd && boundStart > block.openTo && boundEnd < block.closeFrom;
+    if (!valid) {
+      return {
+        index,
+        pane,
+        boundStart,
+        boundEnd,
+        trimmedStart: boundStart,
+        trimmedEnd: boundEnd,
+        hasContent: false,
+        valid: false,
+      };
+    }
+    const firstLineNum = doc.lineAt(boundStart).number;
+    const lastLineNum = doc.lineAt(boundEnd).number;
+    let firstNonBlank = -1;
+    let lastNonBlank = -1;
+    for (let ln = firstLineNum; ln <= lastLineNum; ln++) {
+      if (doc.line(ln).text.trim().length > 0) {
+        if (firstNonBlank < 0) firstNonBlank = ln;
+        lastNonBlank = ln;
+      }
+    }
+    const hasContent = firstNonBlank >= 0;
+    return {
+      index,
+      pane,
+      boundStart,
+      boundEnd,
+      trimmedStart: hasContent ? doc.line(firstNonBlank).from : boundStart,
+      trimmedEnd: hasContent ? doc.line(lastNonBlank).to : boundEnd,
+      hasContent,
+      valid: true,
+    };
+  });
+}
+
+function isNestedInsideColumns(state: EditorState, block: OrgEnvBlock): boolean {
+  if (block.depth <= 0) return false;
+  return orgEnvBlocksFromState(state).some(
+    (other) => other.kind === "columns" && other !== block && other.from < block.from && block.to < other.to,
+  );
+}
+
+/**
+ * Determine whether an open `columns` block should render in seamless WYSIWYG
+ * in-place editing mode (returning its active pane stage) or fall back to raw
+ * source / banner mode (when manually expanded via `Source` or when selection
+ * sits on a `#+begin` / `#+col` / `#+end` directive line).
+ */
+function activeColumnsStage(state: EditorState, block: OrgEnvBlock): ActiveColumnsStage | null {
+  if (block.kind !== "columns") return null;
+  if (!opensSource(state, block.from, block.to)) return null;
+  if (state.field(columnsRawSourceField, false) === block.from) return null;
+  if (isNestedInsideColumns(state, block)) return null;
+
+  const sel = visualSelection(state).main;
+  const spec = parseColumnsHeader(block.title);
+  const doc = state.doc;
+
+  if (spec.mode === "flow") {
+    const boundStart = block.openTo + 1;
+    const boundEnd = block.closeFrom - 1;
+    if (boundStart > boundEnd || sel.from < boundStart || sel.to > boundEnd) return null;
+    const cols = Math.max(2, Math.min(4, spec.cols || 2));
+    const widths = resolvedColumnWidths(spec, cols);
+    return {
+      block,
+      spec,
+      panes: [],
+      bounds: [],
+      paneCount: cols,
+      widths,
+      activeIndex: 0,
+      editFrom: boundStart,
+      editTo: boundEnd,
+      boundStart,
+      boundEnd,
+    };
+  }
+
+  const panes = splitColumnPanes(block.body);
+  const bounds = columnsPaneBounds(doc, block, panes);
+  const hit = bounds.find((b) => b.valid && sel.from >= b.boundStart && sel.to <= b.boundEnd);
+  if (!hit) return null;
+
+  // Absorb cosmetic blank lines around `#+col` into top/bottom stage widgets
+  // while the caret is inside non-blank content so active & sibling panes align
+  // on the exact same top baseline.
+  const useTrimmed = hit.hasContent && sel.from >= hit.trimmedStart && sel.to <= hit.trimmedEnd;
+  const editFrom = useTrimmed ? hit.trimmedStart : hit.boundStart;
+  const editTo = useTrimmed ? hit.trimmedEnd : hit.boundEnd;
+  const paneCount = Math.max(1, panes.length);
+  const widths = resolvedColumnWidths(spec, paneCount);
+
+  return {
+    block,
+    spec,
+    panes,
+    bounds,
+    paneCount,
+    widths,
+    activeIndex: hit.index,
+    editFrom,
+    editTo,
+    boundStart: hit.boundStart,
+    boundEnd: hit.boundEnd,
+  };
+}
+
+function columnsRenderOptions(): RenderMarkdownHTMLOptions {
+  const resolver = typeof window !== "undefined" ? window.NoemaResolveAssetUrl : undefined;
+  const noteFile = currentNoteFile();
+  return {
+    ...(resolver ? { assetResolver: (src: string) => resolver(src) } : {}),
+    ...(noteFile ? { noteFile } : {}),
+  };
+}
+
+function liveColumnsBlockForElement(view: EditorView, el: HTMLElement): OrgEnvBlock | null {
+  try {
+    const pos = view.posAtDOM(el);
+    const blocks = orgEnvBlocksFromState(view.state);
+    return blocks.find((b) => b.kind === "columns" && b.from <= pos && pos <= b.to) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveColumnsBlock(
+  view: EditorView,
+  anchorEl: HTMLElement,
+  fallbackFrom: number,
+  fallbackTo: number,
+  fallbackSource?: string,
+): OrgEnvBlock | null {
+  const live = liveColumnsBlockForElement(view, anchorEl);
+  if (live) return live;
+  if (fallbackSource != null && view.state.doc.sliceString(fallbackFrom, fallbackTo) !== fallbackSource) {
+    return null;
+  }
+  return orgEnvBlocksFromState(view.state).find(
+    (b) => b.kind === "columns" && b.from === fallbackFrom && b.to === fallbackTo,
+  ) ?? null;
+}
+
+function buildColumnsOpenLine(lineText: string, nextSpec: ColumnsSpec, paneCount: number): string | null {
+  if (!/^\s*#\+\s*begin\s+columns\b/i.test(lineText)) return null;
+  const anchor = new RegExp(`\\s+${BLOCK_ANCHOR_SOURCE}\\s*$`).exec(lineText);
+  const beforeAnchor = anchor ? lineText.slice(0, anchor.index) : lineText;
+  const suffix = /\s+\{[^{}]*\}\s*$/.exec(beforeAnchor);
+  const head = suffix ? beforeAnchor.slice(0, suffix.index).trimEnd() : beforeAnchor.trimEnd();
+  const attrSource = serializeColumnsAttrs(nextSpec, paneCount);
+  return `${head}${attrSource ? ` ${attrSource}` : ""}${anchor ? ` ${anchor[0].trim()}` : ""}`;
+}
+
+function updateColumnsHeaderLive(
+  view: EditorView,
+  block: OrgEnvBlock,
+  patch: Partial<ColumnsSpec>,
+  paneCount: number,
+): boolean {
   const doc = view.state.doc;
-  if (view.state.readOnly || doc.sliceString(from, to) !== source) return false;
-  const line = doc.lineAt(from);
-  if (line.from !== from || !/^\s*#\+\s*begin\s+layout\b/i.test(line.text)) return false;
+  if (view.state.readOnly) return false;
+  const line = doc.lineAt(block.openFrom);
+  if (line.from !== block.openFrom) return false;
   const anchor = new RegExp(`\\s+${BLOCK_ANCHOR_SOURCE}\\s*$`).exec(line.text);
   const beforeAnchor = anchor ? line.text.slice(0, anchor.index) : line.text;
-  const suffix = /\s+\{([^{}]*)\}\s*$/.exec(beforeAnchor);
-  const attrs = suffix ? parseAttrArgs(suffix[0]) : {};
-  const current = layoutGroupFromTitle(suffix?.[0] ?? "");
-  const next = { ...current, ...patch };
-  attrs.cols = String(next.columns);
-  attrs.mode = next.mode;
-  if (patch.align) {
-    if (next.align === "inherit") delete attrs.align;
-    else attrs.align = next.align;
-  }
-  if (patch.columns && patch.columns !== current.columns && !patch.widths) delete attrs.widths;
-  else if (patch.widths) attrs.widths = patch.widths.map((width) => String(Math.round(width * 1000) / 1000)).join("-");
-  const head = suffix ? beforeAnchor.slice(0, suffix.index).trimEnd() : beforeAnchor.trimEnd();
-  const attrSource = Object.entries(attrs).map(([key, value]) => `${key}=${/\s/.test(value) ? JSON.stringify(value) : value}`).join(" ");
-  const replacement = `${head} {${attrSource}}${anchor ? ` ${anchor[0].trim()}` : ""}`;
-  if (replacement === line.text) return false;
+  const current = parseColumnsHeader(beforeAnchor.replace(/^\s*#\+\s*begin\s+columns\b/i, "").trim());
+  const next: ColumnsSpec = { ...current, ...patch };
+  if (patch.widths === null) next.widths = null;
+  const replacement = buildColumnsOpenLine(line.text, next, paneCount);
+  if (replacement === null || replacement === line.text) return false;
   dispatchConstructEdit(view, {
     changes: { from: line.from, to: line.to, insert: replacement },
     scrollIntoView: false,
-  }, "layout");
+  }, "columns");
   return true;
 }
 
-function swapLayoutCells(
-  view: EditorView, groupFrom: number, groupTo: number, source: string,
-  spans: readonly { from: number; to: number }[], first: number, second: number,
+function columnsBodySliceEnd(doc: Text, bodyFrom: number, bodyTo: number): number {
+  return bodyTo > bodyFrom && doc.sliceString(bodyTo - 1, bodyTo) === "\n" ? bodyTo - 1 : bodyTo;
+}
+
+function serializeColumnPanesBody(panes: readonly { body: string; align: ColumnsAlign }[]): string {
+  return panes.map((pane, index) => {
+    const body = pane.body.replace(/^\n+|\n+$/g, "");
+    if (index === 0) return body;
+    const marker = pane.align !== "inherit" ? `#+col {align=${pane.align}}` : "#+col";
+    return body ? `\n\n${marker}\n\n${body}` : `\n\n${marker}\n`;
+  }).join("");
+}
+
+function swapColumnPanesLive(
+  view: EditorView,
+  block: OrgEnvBlock,
+  first: number,
+  second: number,
 ): boolean {
-  if (view.state.readOnly || first === second || first < 0 || second < 0 ||
-      first >= spans.length || second >= spans.length ||
-      view.state.doc.sliceString(groupFrom, groupTo) !== source) return false;
-  const doc = view.state.doc;
-  const [left, right] = first < second ? [spans[first]!, spans[second]!] : [spans[second]!, spans[first]!];
-  if (left.to > right.from || doc.sliceString(left.to, right.from).trim()) return false;
-  const gap = doc.sliceString(left.to, right.from);
-  dispatchConstructEdit(view, {
-    changes: {
-      from: left.from,
-      to: right.to,
-      insert: doc.sliceString(right.from, right.to) + gap + doc.sliceString(left.from, left.to),
-    },
-    scrollIntoView: false,
-  }, "move");
+  const spec = parseColumnsHeader(block.title);
+  const panes = splitColumnPanes(block.body);
+  if (view.state.readOnly || first === second || first < 0 || second < 0
+      || first >= panes.length || second >= panes.length) return false;
+  const reordered = panes.map((pane) => ({ body: pane.body, align: pane.align }));
+  const tmp = reordered[first]!;
+  reordered[first] = reordered[second]!;
+  reordered[second] = tmp;
+  const nextBody = serializeColumnPanesBody(reordered);
+  const bodySliceTo = columnsBodySliceEnd(view.state.doc, block.bodyFrom, block.bodyTo);
+
+  const changes: Array<{ from: number; to: number; insert: string }> = [];
+  if (spec.widths && spec.widths.length === panes.length) {
+    const nextWidths = [...spec.widths];
+    const wTmp = nextWidths[first]!;
+    nextWidths[first] = nextWidths[second]!;
+    nextWidths[second] = wTmp;
+    const openLine = view.state.doc.lineAt(block.openFrom);
+    const nextOpen = buildColumnsOpenLine(openLine.text, { ...spec, widths: nextWidths }, panes.length);
+    if (nextOpen !== null && nextOpen !== openLine.text) {
+      changes.push({ from: openLine.from, to: openLine.to, insert: nextOpen });
+    }
+  }
+  changes.push({ from: block.bodyFrom, to: bodySliceTo, insert: nextBody });
+  dispatchConstructEdit(view, { changes, scrollIntoView: false }, "move");
   return true;
 }
 
-/** A layout group reuses the Org environment scanner and keeps its cells as
- * ordinary Markdown. Source opens on demand, so idle groups are one widget. */
-class LayoutGroupWidget extends MeasuredWidget {
+function addColumnPaneLive(
+  view: EditorView,
+  block: OrgEnvBlock,
+  focusNewPane: boolean,
+): boolean {
+  const spec = parseColumnsHeader(block.title);
+  const panes = splitColumnPanes(block.body);
+  if (view.state.readOnly || panes.length >= COLUMNS_MAX_COUNT) return false;
+  const nextPanes = [...panes.map((p) => ({ body: p.body, align: p.align })), { body: "", align: "inherit" as ColumnsAlign }];
+  const nextBody = serializeColumnPanesBody(nextPanes);
+  const bodySliceTo = columnsBodySliceEnd(view.state.doc, block.bodyFrom, block.bodyTo);
+  const openLine = view.state.doc.lineAt(block.openFrom);
+  const nextOpen = buildColumnsOpenLine(openLine.text, { ...spec, mode: "columns", widths: null }, nextPanes.length);
+  const changes: Array<{ from: number; to: number; insert: string }> = [];
+  let delta = 0;
+  if (nextOpen !== null && nextOpen !== openLine.text) {
+    changes.push({ from: openLine.from, to: openLine.to, insert: nextOpen });
+    delta = nextOpen.length - (openLine.to - openLine.from);
+  }
+  changes.push({ from: block.bodyFrom, to: bodySliceTo, insert: nextBody });
+  const caretPos = block.bodyFrom + delta + nextBody.length;
+  dispatchConstructEdit(view, {
+    changes,
+    ...(focusNewPane ? { selection: { anchor: caretPos } } : {}),
+    scrollIntoView: false,
+  }, "columns");
+  if (focusNewPane) view.focus();
+  return true;
+}
+
+function removeColumnPaneLive(
+  view: EditorView,
+  block: OrgEnvBlock,
+  keepCaretInside: boolean,
+  index?: number,
+): boolean {
+  const spec = parseColumnsHeader(block.title);
+  const panes = splitColumnPanes(block.body);
+  const target = index ?? (panes.length - 1);
+  if (view.state.readOnly || panes.length <= 1 || target < 0 || target >= panes.length) return false;
+  const nextPanes = panes.map((p) => ({ body: p.body, align: p.align }));
+  const removed = nextPanes.splice(target, 1)[0]!;
+  // Never drop non-empty author content when reducing columns: merge it into
+  // the adjacent pane so deleting a column is always lossless and undoable.
+  if (removed.body.trim()) {
+    const targetIdx = Math.max(0, target - 1);
+    const targetBody = nextPanes[targetIdx]!.body.trim();
+    const removedBody = removed.body.trim();
+    nextPanes[targetIdx]!.body = targetBody ? `${targetBody}\n\n${removedBody}` : removedBody;
+  }
+  const nextBody = serializeColumnPanesBody(nextPanes);
+  const bodySliceTo = columnsBodySliceEnd(view.state.doc, block.bodyFrom, block.bodyTo);
+  const openLine = view.state.doc.lineAt(block.openFrom);
+  const nextOpen = buildColumnsOpenLine(openLine.text, { ...spec, mode: "columns", widths: null }, nextPanes.length);
+  const changes: Array<{ from: number; to: number; insert: string }> = [];
+  let delta = 0;
+  if (nextOpen !== null && nextOpen !== openLine.text) {
+    changes.push({ from: openLine.from, to: openLine.to, insert: nextOpen });
+    delta = nextOpen.length - (openLine.to - openLine.from);
+  }
+  changes.push({ from: block.bodyFrom, to: bodySliceTo, insert: nextBody });
+  const safeCaret = block.bodyFrom + delta + nextBody.length;
+  dispatchConstructEdit(view, {
+    changes,
+    ...(keepCaretInside ? { selection: { anchor: safeCaret } } : {}),
+    scrollIntoView: false,
+  }, "columns");
+  return true;
+}
+
+function switchColumnsModeLive(
+  view: EditorView,
+  block: OrgEnvBlock,
+  targetMode: "columns" | "flow",
+  keepCaretInside: boolean,
+): boolean {
+  const spec = parseColumnsHeader(block.title);
+  if (view.state.readOnly || spec.mode === targetMode) return false;
+  const panes = splitColumnPanes(block.body);
+  const openLine = view.state.doc.lineAt(block.openFrom);
+  const bodySliceTo = columnsBodySliceEnd(view.state.doc, block.bodyFrom, block.bodyTo);
+  const rawBody = view.state.doc.sliceString(block.bodyFrom, bodySliceTo);
+  const changes: Array<{ from: number; to: number; insert: string }> = [];
+  let delta = 0;
+  if (targetMode === "flow") {
+    const cols = Math.max(2, Math.min(4, panes.length || 2));
+    const nextOpen = buildColumnsOpenLine(openLine.text, { ...spec, mode: "flow", cols, widths: null }, cols);
+    if (nextOpen !== null && nextOpen !== openLine.text) {
+      changes.push({ from: openLine.from, to: openLine.to, insert: nextOpen });
+      delta = nextOpen.length - (openLine.to - openLine.from);
+    }
+    const mergedBody = panes.map((p) => p.body.trim()).filter(Boolean).join("\n\n");
+    if (mergedBody !== rawBody) {
+      changes.push({ from: block.bodyFrom, to: bodySliceTo, insert: mergedBody });
+    }
+  } else {
+    const existingPanes = splitColumnPanes(rawBody);
+    let nextBody = rawBody;
+    let paneCount = existingPanes.length;
+    if (existingPanes.length < 2) {
+      const trimmed = rawBody.trim();
+      const blankBreaks: number[] = [];
+      for (const m of trimmed.matchAll(/\n[ \t]*\n/g)) {
+        if (m.index !== undefined) blankBreaks.push(m.index);
+      }
+      if (blankBreaks.length > 0) {
+        const mid = trimmed.length / 2;
+        const best = blankBreaks.reduce((acc, pos) => Math.abs(pos - mid) < Math.abs(acc - mid) ? pos : acc, blankBreaks[0]!);
+        const left = trimmed.slice(0, best).trim();
+        const right = trimmed.slice(best).trim();
+        nextBody = `${left}\n\n#+col\n\n${right}`;
+      } else {
+        nextBody = trimmed ? `${trimmed}\n\n#+col\n` : "\n#+col\n";
+      }
+      paneCount = 2;
+    }
+    const nextOpen = buildColumnsOpenLine(openLine.text, { ...spec, mode: "columns", cols: 0, widths: null }, paneCount);
+    if (nextOpen !== null && nextOpen !== openLine.text) {
+      changes.push({ from: openLine.from, to: openLine.to, insert: nextOpen });
+      delta = nextOpen.length - (openLine.to - openLine.from);
+    }
+    if (nextBody !== rawBody) {
+      changes.push({ from: block.bodyFrom, to: bodySliceTo, insert: nextBody });
+    }
+  }
+  if (changes.length === 0) return false;
+  dispatchConstructEdit(view, {
+    changes,
+    ...(keepCaretInside ? { selection: { anchor: block.bodyFrom + delta } } : {}),
+    scrollIntoView: false,
+  }, "columns");
+  return true;
+}
+
+function snapColumnRatio(value: number, min: number, max: number, equalVal: number, altKey: boolean): number {
+  const clamped = Math.max(min, Math.min(max, value));
+  if (altKey) return Math.round(clamped);
+  if (Math.abs(clamped - equalVal) <= 1.5) return Math.round(equalVal);
+  const nearest5 = Math.round(clamped / 5) * 5;
+  if (Math.abs(clamped - nearest5) <= 1.5 && nearest5 >= min && nearest5 <= max) return nearest5;
+  return Math.round(clamped);
+}
+
+/** Shared click-to-focus handler for rendered panes in both preview and active WYSIWYG stage. */
+function focusRenderedColumnPane(
+  view: EditorView,
+  anchorEl: HTMLElement,
+  paneIndex: number,
+  bodyEl: HTMLElement,
+  parsedBlocks: readonly { from: number; to: number }[],
+  event: MouseEvent,
+  fallbackFrom: number,
+  fallbackTo: number,
+  fallbackSource?: string,
+): void {
+  if (event.button !== 0) return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest(".cm-column-pane-grip, .cm-columns-toolbar, .cm-columns-divider")) return;
+
+  // Cmd/Ctrl-click on a link opens the link directly instead of switching edit focus.
+  const link = target?.closest<HTMLAnchorElement>("a[href]") ?? null;
+  if (link && bodyEl.contains(link) && isMarkdownLinkOpenEvent(event)) {
+    const href = link.getAttribute("href") ?? "";
+    if (href) {
+      event.preventDefault();
+      event.stopPropagation();
+      const live = resolveColumnsBlock(view, anchorEl, fallbackFrom, fallbackTo, fallbackSource);
+      view.dom.dispatchEvent(new CustomEvent("noema:open-url", {
+        bubbles: true,
+        cancelable: true,
+        detail: { href, newWindow: markdownLinkOpensNewWindow(href, event), sourcePos: live?.bodyFrom ?? fallbackFrom },
+      }));
+      return;
+    }
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  const live = resolveColumnsBlock(view, anchorEl, fallbackFrom, fallbackTo, fallbackSource);
+  if (!live) return;
+  const panes = splitColumnPanes(live.body);
+  const bounds = columnsPaneBounds(view.state.doc, live, panes);
+  const targetBound = bounds[paneIndex];
+  if (!targetBound) return;
+
+  // Degenerate zero-line pane (`#+begin columns\n#+col\n#+end columns`):
+  // insert an empty line inside that pane so WYSIWYG editing opens cleanly.
+  if (!targetBound.valid) {
+    if (!view.state.readOnly) {
+      const insertAt = targetBound.boundStart;
+      dispatchConstructEdit(view, {
+        changes: { from: insertAt, insert: "\n" },
+        selection: { anchor: insertAt },
+        scrollIntoView: false,
+      }, "columns");
+      view.focus();
+    }
+    return;
+  }
+
+  let anchor = targetBound.hasContent ? targetBound.trimmedStart : targetBound.boundStart;
+  const pane = targetBound.pane;
+  const children = [...bodyEl.children];
+  if (target && children.length === parsedBlocks.length && parsedBlocks.length > 0) {
+    const blockIdx = children.findIndex((child) => child === target || child.contains(target));
+    if (blockIdx >= 0) {
+      const span = parsedBlocks[blockIdx]!;
+      const blockAbsFrom = live.bodyFrom + pane.from + span.from;
+      const blockAbsTo = live.bodyFrom + pane.from + span.to;
+      const hit = renderedTextOffsetAtPoint(children[blockIdx]!, event.clientX, event.clientY);
+      if (hit) {
+        const blockSource = view.state.doc.sliceString(blockAbsFrom, blockAbsTo);
+        anchor = blockAbsFrom + mapRenderedOffsetToSource(blockSource, hit.offset, hit.total);
+      } else {
+        anchor = blockAbsFrom;
+      }
+    }
+  }
+
+  anchor = Math.max(targetBound.boundStart, Math.min(targetBound.boundEnd, anchor));
+  preserveEditorViewport(view, () => {
+    view.dispatch({
+      selection: { anchor },
+      effects: setColumnsRawSourceEffect.of(null),
+      scrollIntoView: false,
+    });
+    view.focus();
+  }, live.openFrom);
+}
+
+/** Shared toolbar builder used by both preview (`ColumnsWidget`) and WYSIWYG stage (`ColumnsActiveTopWidget`). */
+function buildColumnsToolbar(
+  view: EditorView,
+  anchorEl: HTMLElement,
+  spec: ColumnsSpec,
+  paneCount: number,
+  widths: readonly number[],
+  inWysiwygEdit: boolean,
+  getBalanceTexts: () => string[],
+  fallbackFrom: number,
+  fallbackTo: number,
+  fallbackSource?: string,
+): HTMLElement {
+  const toolbar = document.createElement("div");
+  toolbar.className = "cm-columns-toolbar";
+  toolbar.setAttribute("role", "toolbar");
+  toolbar.setAttribute("aria-label", "Columns layout");
+
+  const withLiveBlock = (run: (live: OrgEnvBlock) => void) => {
+    const live = resolveColumnsBlock(view, anchorEl, fallbackFrom, fallbackTo, fallbackSource);
+    if (live) run(live);
+  };
+
+  const addBtn = (
+    label: string,
+    title: string,
+    run: () => void,
+    opts?: { active?: boolean; disabled?: boolean },
+  ) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cm-columns-tool-btn";
+    if (opts?.active) {
+      btn.classList.add("is-active");
+      btn.setAttribute("aria-pressed", "true");
+    }
+    if (opts?.disabled) btn.disabled = true;
+    btn.textContent = label;
+    btn.title = title;
+    btn.setAttribute("aria-label", title);
+    btn.addEventListener("mousedown", stopEditorPropagation);
+    btn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!btn.disabled) run();
+    });
+    toolbar.append(btn);
+  };
+
+  const addSep = () => {
+    const sep = document.createElement("span");
+    sep.className = "cm-columns-tool-sep";
+    sep.setAttribute("aria-hidden", "true");
+    toolbar.append(sep);
+  };
+
+  if (spec.mode === "columns") {
+    addBtn("+ Col", "Add column", () => {
+      withLiveBlock((live) => addColumnPaneLive(view, live, inWysiwygEdit));
+    }, { disabled: paneCount >= COLUMNS_MAX_COUNT });
+    addBtn("− Col", "Remove last column", () => {
+      withLiveBlock((live) => removeColumnPaneLive(view, live, inWysiwygEdit));
+    }, { disabled: paneCount <= 1 });
+    addSep();
+    for (const [label, align] of [["L", "left"], ["C", "center"], ["R", "right"], ["J", "justify"]] as const) {
+      const active = spec.align === align;
+      addBtn(label, `Align ${align}`, () => {
+        withLiveBlock((live) => updateColumnsHeaderLive(view, live, { align: active ? "inherit" : align }, paneCount));
+      }, { active });
+    }
+    addSep();
+    for (const [label, valign, tip] of [
+      ["⊤", "top", "Vertical align top"],
+      ["┼", "center", "Vertical align center"],
+      ["⊥", "bottom", "Vertical align bottom"],
+    ] as const) {
+      addBtn(label, tip, () => {
+        withLiveBlock((live) => updateColumnsHeaderLive(view, live, { valign: valign as ColumnsValign }, paneCount));
+      }, { active: spec.valign === valign });
+    }
+    if (paneCount > 1) {
+      addBtn("│", spec.rule === "on" ? "Hide column dividers" : "Show column dividers", () => {
+        withLiveBlock((live) => updateColumnsHeaderLive(view, live, { rule: spec.rule === "on" ? "off" : "on" }, paneCount));
+      }, { active: spec.rule === "on" });
+    }
+    addSep();
+    if (paneCount >= 2) {
+      addBtn("Balance", "Balance column widths from text", () => {
+        const style = getComputedStyle(view.contentDOM);
+        const font = style.font || `${style.fontSize || "16px"} ${style.fontFamily || "sans-serif"}`;
+        const width = anchorEl.getBoundingClientRect().width || view.contentDOM.clientWidth;
+        const height = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.5 || 24;
+        const texts = getBalanceTexts();
+        if (texts.length < 2 || texts.some((value) => !value)) return;
+        void balanceTextColumns(texts, font, width, height).then((measured) => {
+          if (measured) {
+            withLiveBlock((live) => updateColumnsHeaderLive(view, live, { widths: normalizeColumnWidths(measured, paneCount) }, paneCount));
+          }
+        });
+      });
+      if (!areEqualColumnWidths(widths, paneCount)) {
+        addBtn("=", "Reset equal column widths", () => {
+          withLiveBlock((live) => updateColumnsHeaderLive(view, live, { widths: null }, paneCount));
+        });
+      }
+    }
+    addBtn("Flow", "Switch to flowing text columns", () => {
+      withLiveBlock((live) => switchColumnsModeLive(view, live, "flow", inWysiwygEdit));
+    });
+  } else {
+    for (const cols of [2, 3, 4] as const) {
+      addBtn(String(cols), `${cols} flowing columns`, () => {
+        withLiveBlock((live) => updateColumnsHeaderLive(view, live, { mode: "flow", cols }, cols));
+      }, { active: paneCount === cols });
+    }
+    addBtn("Auto", "Suggest column count for text", () => {
+      const style = getComputedStyle(view.contentDOM);
+      const font = style.font || `${style.fontSize || "16px"} ${style.fontFamily || "sans-serif"}`;
+      const width = anchorEl.getBoundingClientRect().width || view.contentDOM.clientWidth;
+      const height = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.5 || 24;
+      const text = getBalanceTexts().join("\n\n");
+      void suggestTextColumns(text, font, width, height).then((suggested) => {
+        const cols = Math.max(2, Math.min(4, suggested));
+        withLiveBlock((live) => updateColumnsHeaderLive(view, live, { mode: "flow", cols }, cols));
+      }, () => {
+        withLiveBlock((live) => updateColumnsHeaderLive(view, live, { mode: "flow", cols: 2 }, 2));
+      });
+    });
+    addSep();
+    for (const [label, align] of [["L", "left"], ["C", "center"], ["R", "right"], ["J", "justify"]] as const) {
+      const active = spec.align === align;
+      addBtn(label, `Align ${align}`, () => {
+        withLiveBlock((live) => updateColumnsHeaderLive(view, live, { align: active ? "inherit" : align }, paneCount));
+      }, { active });
+    }
+    addBtn("│", spec.rule === "on" ? "Hide column dividers" : "Show column dividers", () => {
+      withLiveBlock((live) => updateColumnsHeaderLive(view, live, { rule: spec.rule === "on" ? "off" : "on" }, paneCount));
+    }, { active: spec.rule === "on" });
+    addSep();
+    addBtn("Columns", "Switch to explicit multi-block columns", () => {
+      withLiveBlock((live) => switchColumnsModeLive(view, live, "columns", inWysiwygEdit));
+    });
+  }
+
+  addBtn("Source", "Edit columns source", () => {
+    withLiveBlock((live) => {
+      const curSel = view.state.selection.main;
+      const anchor = curSel.from >= live.from && curSel.to <= live.to ? curSel.head : live.bodyFrom;
+      preserveEditorViewport(view, () => {
+        view.dispatch({
+          selection: { anchor },
+          effects: setColumnsRawSourceEffect.of({ from: live.from, raw: true }),
+          scrollIntoView: false,
+        });
+        view.focus();
+      }, live.openFrom);
+    });
+  });
+
+  return toolbar;
+}
+
+/** Shared draggable column divider handles for both preview and active WYSIWYG stage. */
+function appendColumnsDividers(
+  view: EditorView,
+  anchorEl: HTMLElement,
+  hostEl: HTMLElement,
+  measureEl: HTMLElement,
+  paneCount: number,
+  widths: readonly number[],
+  fallbackFrom: number,
+  fallbackTo: number,
+  fallbackSource?: string,
+  onPreviewWidths?: (pending: number[]) => void,
+): void {
+  if (paneCount < 2 || view.state.readOnly) return;
+  const dividers: HTMLButtonElement[] = [];
+  const minPct = Math.min(COLUMNS_MIN_WIDTH_PCT, Math.floor(100 / paneCount));
+
+  for (let index = 0; index < paneCount - 1; index++) {
+    const divider = document.createElement("button");
+    divider.type = "button";
+    divider.className = "cm-columns-divider";
+    divider.title = `Drag to resize columns ${index + 1} & ${index + 2}; double-click to equalize; arrow keys adjust`;
+    divider.setAttribute("aria-label", divider.title);
+    divider.style.left = columnDividerLeftCss(widths, index);
+
+    divider.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const live = resolveColumnsBlock(view, anchorEl, fallbackFrom, fallbackTo, fallbackSource);
+      if (live) updateColumnsHeaderLive(view, live, { widths: null }, paneCount);
+    });
+
+    divider.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const live = resolveColumnsBlock(view, anchorEl, fallbackFrom, fallbackTo, fallbackSource);
+      if (!live) return;
+      const nextWidths = [...widths];
+      const step = (event.shiftKey ? 5 : 2) * (event.key === "ArrowRight" ? 1 : -1);
+      const pair = nextWidths[index]! + nextWidths[index + 1]!;
+      nextWidths[index] = Math.max(minPct, Math.min(pair - minPct, nextWidths[index]! + step));
+      nextWidths[index + 1] = pair - nextWidths[index]!;
+      const normalized = normalizeColumnWidths(nextWidths, paneCount);
+      updateColumnsHeaderLive(view, live, {
+        widths: areEqualColumnWidths(normalized, paneCount) ? null : normalized,
+      }, paneCount);
+    });
+
+    divider.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = measureEl.getBoundingClientRect();
+      if (!rect.width) return;
+      const startX = event.clientX;
+      const initial = [...widths];
+      const pair = initial[index]! + initial[index + 1]!;
+      const equalPairVal = pair / 2;
+      let pending = [...initial];
+      let moved = false;
+      let frame = 0;
+
+      const badge = document.createElement("span");
+      badge.className = "cm-figure-resize-badge cm-columns-resize-badge";
+      badge.textContent = `${pending[index]}% / ${pending[index + 1]}%`;
+      badge.style.left = divider.style.left;
+      hostEl.append(badge);
+      divider.classList.add("is-dragging");
+      divider.setPointerCapture?.(event.pointerId);
+
+      const syncDom = (current: number[]) => {
+        anchorEl.style.setProperty("--noema-columns-tracks", columnsGridTracks(current));
+        dividers.forEach((d, dIdx) => {
+          d.style.left = columnDividerLeftCss(current, dIdx);
+        });
+        badge.style.left = columnDividerLeftCss(current, index);
+        badge.textContent = `${current[index]}% / ${current[index + 1]}%`;
+        onPreviewWidths?.(current);
+      };
+
+      const cleanup = () => {
+        if (frame) window.cancelAnimationFrame(frame);
+        divider.classList.remove("is-dragging");
+        badge.remove();
+        divider.removeEventListener("pointermove", move);
+        divider.removeEventListener("pointerup", finish);
+        divider.removeEventListener("pointercancel", cancel);
+        window.removeEventListener("keydown", escape, true);
+      };
+
+      const move = (pointer: PointerEvent) => {
+        pointer.preventDefault();
+        if (Math.abs(pointer.clientX - startX) >= 2) moved = true;
+        const deltaPct = ((pointer.clientX - startX) / rect.width) * 100;
+        const leftVal = snapColumnRatio(initial[index]! + deltaPct, minPct, pair - minPct, equalPairVal, pointer.altKey);
+        const nextWidths = [...initial];
+        nextWidths[index] = leftVal;
+        nextWidths[index + 1] = pair - leftVal;
+        pending = normalizeColumnWidths(nextWidths, paneCount);
+        if (!frame) {
+          frame = window.requestAnimationFrame(() => {
+            frame = 0;
+            if (!anchorEl.isConnected) return;
+            syncDom(pending);
+            view.requestMeasure();
+          });
+        }
+      };
+
+      const restore = () => {
+        syncDom([...widths]);
+        view.requestMeasure();
+      };
+
+      const finish = (pointer: PointerEvent) => {
+        pointer.preventDefault();
+        pointer.stopPropagation();
+        cleanup();
+        if (!moved) {
+          restore();
+          return;
+        }
+        const live = resolveColumnsBlock(view, anchorEl, fallbackFrom, fallbackTo, fallbackSource);
+        const nextPatch = areEqualColumnWidths(pending, paneCount) ? null : pending;
+        if (!live || !updateColumnsHeaderLive(view, live, { widths: nextPatch }, paneCount)) {
+          restore();
+        }
+      };
+
+      const cancel = () => { cleanup(); restore(); };
+      const escape = (key: KeyboardEvent) => {
+        if (key.key === "Escape") {
+          key.preventDefault();
+          cancel();
+        }
+      };
+
+      divider.addEventListener("pointermove", move);
+      divider.addEventListener("pointerup", finish);
+      divider.addEventListener("pointercancel", cancel);
+      window.addEventListener("keydown", escape, true);
+    });
+
+    dividers.push(divider);
+    hostEl.append(divider);
+  }
+}
+
+/**
+ * Multi-column layout widget (`#+begin columns ... #+col ... #+end columns`).
+ * Each pane holds arbitrary multi-block Markdown rendered through the one
+ * shared renderer with asset resolution. Clicking any pane enters seamless
+ * side-by-side WYSIWYG editing inside the single CM6 editor without revealing
+ * raw `#+begin`/`#+col`/`#+end` syntax unless the user clicks `Source`.
+ */
+class ColumnsWidget extends MeasuredWidget {
   readonly title: string;
   readonly body: string;
   readonly from: number;
   readonly to: number;
   readonly bodyFrom: number;
+  readonly bodyTo: number;
+
   constructor(
     title: string,
     body: string,
     from: number,
     to: number,
     bodyFrom: number,
+    bodyTo: number,
   ) {
     super();
     this.title = title;
@@ -3140,209 +3951,961 @@ class LayoutGroupWidget extends MeasuredWidget {
     this.from = from;
     this.to = to;
     this.bodyFrom = bodyFrom;
+    this.bodyTo = bodyTo;
   }
 
-  protected measureKey(): string { return `layout:${shortHash(this.title + "\n" + this.body)}`; }
-  protected estimatedHeightFallback(): number { return 240; }
-  eq(other: LayoutGroupWidget): boolean {
-    return this.title === other.title && this.body === other.body && this.from === other.from && this.to === other.to;
+  protected measureKey(): string { return `columns:${shortHash(this.title + "\n" + this.body)}`; }
+  protected estimatedHeightFallback(): number {
+    const panes = splitColumnPanes(this.body);
+    const maxLines = Math.max(1, ...panes.map((p) => p.body.trim().split("\n").length));
+    return Math.min(360, 54 + maxLines * 28);
+  }
+  eq(other: ColumnsWidget): boolean {
+    return this.title === other.title
+      && this.body === other.body
+      && this.from === other.from
+      && this.to === other.to;
   }
 
   toDOM(view: EditorView): HTMLElement {
-    const group = layoutGroupFromTitle(this.title);
+    const spec = parseColumnsHeader(this.title);
     const source = view.state.doc.sliceString(this.from, this.to);
+    const panes = spec.mode === "columns" ? splitColumnPanes(this.body) : [];
+    const paneCount = spec.mode === "flow"
+      ? Math.max(2, Math.min(4, spec.cols || 2))
+      : Math.max(1, panes.length);
+    const widths = resolvedColumnWidths(spec, paneCount);
+    const renderOpts = columnsRenderOptions();
+
     const block = document.createElement("div");
-    block.className = `cm-layout-group-widget ${layoutGroupClasses(group)}`;
-    block.style.cssText = layoutGroupStyle(group);
-    block.dataset.cols = String(group.columns);
-    block.dataset.cmOpenSource = "true";
+    block.className = `cm-columns-widget ${columnsClasses(spec, paneCount)}`;
+    block.style.cssText = columnsStyle(spec, paneCount);
+    block.dataset.cols = String(paneCount);
+    block.dataset.cmOpenSource = spec.mode === "columns" ? "false" : "true";
     setSourceRange(block, this.from, this.to);
-    const tools = document.createElement("div");
-    tools.className = "cm-layout-group-tools";
-    tools.setAttribute("role", "toolbar");
-    tools.setAttribute("aria-label", "Layout group");
+    if (spec.mode === "flow") block.dataset.cmSourceAnchor = String(this.bodyFrom);
+
     const content = document.createElement("div");
-    content.className = "cm-layout-group-content";
-    const parsedBlocks: Array<{ from: number; to: number }> = [];
-    content.innerHTML = renderMarkdownHTML(this.body, undefined, parsedBlocks);
-    enhanceRenderedMarkdown(content);
-    const children = [...content.children];
-    if (children.length === parsedBlocks.length && !view.state.readOnly) {
-      const spans = parsedBlocks.map((span) => ({ from: this.bodyFrom + span.from, to: this.bodyFrom + span.to }));
+    content.className = "cm-columns-content";
+
+    const paneEls: HTMLElement[] = [];
+    if (spec.mode === "columns") {
       let dragging = -1;
-      children.forEach((child, index) => {
-        const cell = document.createElement("div");
-        cell.className = "cm-layout-cell";
-        // Clicking a preview cell opens its own Markdown source, instead of
-        // guessing a position from the full group's horizontal pixel ratio.
-        setSourceRange(cell, spans[index]!.from, spans[index]!.to);
-        cell.dataset.cmSourceAnchor = String(spans[index]!.from);
-        cell.dataset.cmOpenSource = "true";
-        const grip = document.createElement("button");
-        grip.type = "button";
-        grip.className = "cm-layout-cell-grip";
-        grip.textContent = "⠿";
-        grip.draggable = true;
-        grip.title = "Drag to reorder; Alt+arrows move this cell";
-        grip.setAttribute("aria-label", grip.title);
-        grip.addEventListener("keydown", (event) => {
-          if (!event.altKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-          const step = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1
-            : event.key === "ArrowUp" ? -group.columns : group.columns;
-          if (swapLayoutCells(view, this.from, this.to, source, spans, index, index + step)) {
+      panes.forEach((pane, index) => {
+        const paneEl = document.createElement("div");
+        paneEl.className = pane.align !== "inherit"
+          ? `cm-column-pane noema-columns-align-${pane.align}`
+          : "cm-column-pane";
+        paneEl.dataset.colIndex = String(index);
+        const absFrom = this.bodyFrom + pane.from;
+        const absTo = Math.max(absFrom, this.bodyFrom + pane.to);
+        const leadingWs = pane.body.match(/^\s*/)?.[0].length ?? 0;
+        const absAnchor = pane.body.trim()
+          ? Math.min(absTo, absFrom + leadingWs)
+          : absFrom;
+        setSourceRange(paneEl, absFrom, absTo);
+        paneEl.dataset.cmSourceAnchor = String(absAnchor);
+        paneEl.dataset.cmOpenSource = "false";
+
+        if (!view.state.readOnly && panes.length > 1) {
+          const grip = document.createElement("button");
+          grip.type = "button";
+          grip.className = "cm-column-pane-grip";
+          grip.textContent = "⠿";
+          grip.draggable = true;
+          grip.title = `Column ${index + 1} · Drag to reorder or Alt+←/→`;
+          grip.setAttribute("aria-label", grip.title);
+          grip.addEventListener("mousedown", (event) => { event.stopPropagation(); });
+          grip.addEventListener("keydown", (event) => {
+            if (!event.altKey || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+            const step = event.key === "ArrowLeft" ? -1 : 1;
+            const live = resolveColumnsBlock(view, block, this.from, this.to, source);
+            if (live && swapColumnPanesLive(view, live, index, index + step)) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          });
+          grip.addEventListener("dragstart", (event) => {
+            if (view.state.doc.sliceString(this.from, this.to) !== source) { event.preventDefault(); return; }
+            dragging = index;
+            paneEl.classList.add("is-dragging");
+            event.dataTransfer?.setData("text/x-noema-column-pane", String(index));
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+          });
+          grip.addEventListener("dragend", () => {
+            dragging = -1;
+            paneEls.forEach((el) => el.classList.remove("is-dragging", "is-drag-over"));
+          });
+          paneEl.addEventListener("dragover", (event) => {
+            if (dragging < 0 || dragging === index) return;
+            event.preventDefault();
+            paneEl.classList.add("is-drag-over");
+            if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          });
+          paneEl.addEventListener("dragleave", () => {
+            paneEl.classList.remove("is-drag-over");
+          });
+          paneEl.addEventListener("drop", (event) => {
+            paneEl.classList.remove("is-drag-over");
+            if (dragging < 0 || dragging === index) return;
             event.preventDefault();
             event.stopPropagation();
-          }
+            const live = resolveColumnsBlock(view, block, this.from, this.to, source);
+            if (live) swapColumnPanesLive(view, live, dragging, index);
+            dragging = -1;
+          });
+          paneEl.append(grip);
+        }
+
+        const bodyEl = document.createElement("div");
+        bodyEl.className = "cm-column-pane-body";
+        const parsedBlocks: Array<{ from: number; to: number }> = [];
+        if (pane.body.trim()) {
+          bodyEl.innerHTML = renderMarkdownHTML(pane.body, renderOpts, parsedBlocks);
+          enhanceRenderedMarkdown(bodyEl);
+        } else {
+          const empty = document.createElement("p");
+          empty.className = "cm-column-pane-empty";
+          empty.textContent = `Column ${index + 1}`;
+          bodyEl.append(empty);
+        }
+        paneEl.append(bodyEl);
+        paneEl.addEventListener("mousedown", (event) => {
+          focusRenderedColumnPane(view, block, index, bodyEl, parsedBlocks, event, this.from, this.to, source);
         });
-        grip.addEventListener("dragstart", (event) => {
-          if (view.state.doc.sliceString(this.from, this.to) !== source) { event.preventDefault(); return; }
-          dragging = index;
-          event.dataTransfer?.setData("text/x-noema-layout-cell", String(index));
-          if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-        });
-        grip.addEventListener("dragend", () => { dragging = -1; });
-        cell.addEventListener("dragover", (event) => {
-          if (dragging < 0) return;
-          event.preventDefault();
-          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-        });
-        cell.addEventListener("drop", (event) => {
-          if (dragging < 0) return;
-          event.preventDefault();
-          event.stopPropagation();
-          swapLayoutCells(view, this.from, this.to, source, spans, dragging, index);
-          dragging = -1;
-        });
-        child.replaceWith(cell);
-        cell.append(grip, child);
+        paneEls.push(paneEl);
+        content.append(paneEl);
       });
+    } else {
+      content.innerHTML = renderMarkdownHTML(this.body, renderOpts);
+      enhanceRenderedMarkdown(content);
     }
-    const action = (label: string, title: string, run: () => void) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = label;
-      button.title = title;
-      button.setAttribute("aria-label", title);
-      button.addEventListener("mousedown", stopEditorPropagation);
-      button.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); run(); });
-      tools.append(button);
-    };
-    for (const columns of [1, 2, 3, 4] as const) {
-      action(String(columns), `${columns} columns`, () => setLayoutGroup(view, this.from, this.to, source, { columns }));
+
+    const toolbar = buildColumnsToolbar(
+      view,
+      block,
+      spec,
+      paneCount,
+      widths,
+      false,
+      () => spec.mode === "columns"
+        ? paneEls.map((el) => el.querySelector(".cm-column-pane-body")?.textContent?.trim() ?? "")
+        : [content.textContent?.trim() ?? ""],
+      this.from,
+      this.to,
+      source,
+    );
+
+    block.append(toolbar, content);
+
+    if (spec.mode === "columns") {
+      appendColumnsDividers(view, block, block, content, paneCount, widths, this.from, this.to, source);
     }
-    for (const [label, align] of [["L", "left"], ["C", "center"], ["R", "right"], ["J", "justify"]] as const) {
-      action(label, `Align ${align}`, () => setLayoutGroup(view, this.from, this.to, source, { align }));
-    }
-    action("Flow", "Flow text between columns", () => setLayoutGroup(view, this.from, this.to, source, { mode: "flow" }));
-    action("Grid", "Arrange Markdown blocks in grid", () => setLayoutGroup(view, this.from, this.to, source, { mode: "grid" }));
-    action("Auto", "Suggest columns for this text", () => {
-      const style = getComputedStyle(content);
-      const font = style.font || `${style.fontSize || "16px"} ${style.fontFamily || "sans-serif"}`;
-      const width = content.getBoundingClientRect().width || view.contentDOM.clientWidth;
-      const height = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.5 || 24;
-      void suggestTextColumns(content.textContent ?? "", font, width, height).then((columns) => {
-        setLayoutGroup(view, this.from, this.to, source, { columns });
-      }, () => { setLayoutGroup(view, this.from, this.to, source, { columns: 2 }); });
-    });
-    action("Balance", "Balance text column widths", () => {
-      const style = getComputedStyle(content);
-      const font = style.font || `${style.fontSize || "16px"} ${style.fontFamily || "sans-serif"}`;
-      const width = content.getBoundingClientRect().width || view.contentDOM.clientWidth;
-      const height = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.5 || 24;
-      const texts = Array.from({ length: group.columns }, (_, column) =>
-        children.filter((_, index) => index % group.columns === column).map((child) => child.textContent?.trim() ?? "").join("\n\n"));
-      if (texts.some((value) => !value)) return;
-      void balanceTextColumns(texts, font, width, height).then((widths) => {
-        if (widths) setLayoutGroup(view, this.from, this.to, source, { widths });
-      });
-    });
-    action("Source", "Edit layout source", () => {
-      if (view.state.doc.sliceString(this.from, this.to) !== source) return;
-      view.dispatch({ selection: { anchor: this.bodyFrom }, scrollIntoView: true });
-      view.focus();
-    });
-    block.append(tools, content);
-    if (group.mode === "grid" && !view.state.readOnly) {
-      for (let index = 0; index < group.columns - 1; index++) {
-        const divider = document.createElement("button");
-        divider.type = "button";
-        divider.className = "cm-layout-column-divider";
-        divider.title = `Resize columns ${index + 1} and ${index + 2}; arrow keys adjust`;
-        divider.setAttribute("aria-label", divider.title);
-        const preceding = group.widths.slice(0, index + 1).reduce((sum, width) => sum + width, 0);
-        const total = group.widths.reduce((sum, width) => sum + width, 0);
-        divider.style.left = `${preceding / total * 100}%`;
-        divider.addEventListener("keydown", (event) => {
-          if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
-          event.preventDefault();
-          event.stopPropagation();
-          const widths = [...group.widths];
-          const step = (event.shiftKey ? 5 : 2) * (event.key === "ArrowRight" ? 1 : -1);
-          const pair = widths[index]! + widths[index + 1]!;
-          widths[index] = Math.max(10, Math.min(pair - 10, widths[index]! + step));
-          widths[index + 1] = pair - widths[index]!;
-          setLayoutGroup(view, this.from, this.to, source, { widths });
-        });
-        divider.addEventListener("pointerdown", (event) => {
-          if (event.button !== 0) return;
-          event.preventDefault();
-          event.stopPropagation();
-          const rect = content.getBoundingClientRect();
-          if (!rect.width) return;
-          const startX = event.clientX;
-          const initial = [...group.widths];
-          const pair = initial[index]! + initial[index + 1]!;
-          let pending = initial;
-          let frame = 0;
-          divider.setPointerCapture?.(event.pointerId);
-          const cleanup = () => {
-            if (frame) window.cancelAnimationFrame(frame);
-            divider.removeEventListener("pointermove", move);
-            divider.removeEventListener("pointerup", finish);
-            divider.removeEventListener("pointercancel", cancel);
-            window.removeEventListener("keydown", escape, true);
-          };
-          const move = (pointer: PointerEvent) => {
-            pointer.preventDefault();
-            const delta = (pointer.clientX - startX) / rect.width * total;
-            const widths = [...initial];
-            widths[index] = Math.max(10, Math.min(pair - 10, initial[index]! + delta));
-            widths[index + 1] = pair - widths[index]!;
-            pending = widths;
-            if (!frame) frame = window.requestAnimationFrame(() => {
-              frame = 0;
-              if (!block.isConnected) return;
-              block.style.setProperty("--noema-layout-tracks", layoutGroupTracks({ ...group, widths: pending }));
-              divider.style.left = `${pending.slice(0, index + 1).reduce((sum, width) => sum + width, 0) / total * 100}%`;
-              view.requestMeasure();
-            });
-          };
-          const restore = () => {
-            block.style.setProperty("--noema-layout-tracks", layoutGroupTracks(group));
-            divider.style.left = `${preceding / total * 100}%`;
-            view.requestMeasure();
-          };
-          const finish = (pointer: PointerEvent) => {
-            pointer.preventDefault();
-            pointer.stopPropagation();
-            cleanup();
-            if (!setLayoutGroup(view, this.from, this.to, source, { widths: pending })) restore();
-          };
-          const cancel = () => { cleanup(); restore(); };
-          const escape = (key: KeyboardEvent) => { if (key.key === "Escape") { key.preventDefault(); cancel(); } };
-          divider.addEventListener("pointermove", move);
-          divider.addEventListener("pointerup", finish);
-          divider.addEventListener("pointercancel", cancel);
-          window.addEventListener("keydown", escape, true);
-        });
-        block.append(divider);
-      }
-    }
+
     stopInteractiveWidgetEvents(block);
     return this.registerMeasured(block, view);
   }
 
   ignoreEvent(): boolean { return false; }
+}
+
+/**
+ * Top border + toolbar + side-by-side sibling pane stage for active WYSIWYG
+ * column editing. Replaces `[block.openFrom, editFrom - 1]` while the active
+ * column edits natively as ordinary CM6 lines right underneath.
+ */
+class ColumnsActiveTopWidget extends MeasuredWidget {
+  readonly title: string;
+  readonly spec: ColumnsSpec;
+  readonly activeIndex: number;
+  readonly paneCount: number;
+  readonly widths: readonly number[];
+  readonly blockFrom: number;
+  readonly siblings: readonly { index: number; body: string; align: ColumnsAlign }[];
+  readonly siblingsHash: string;
+
+  constructor(stage: ActiveColumnsStage) {
+    super();
+    this.title = stage.block.title;
+    this.spec = stage.spec;
+    this.activeIndex = stage.activeIndex;
+    this.paneCount = stage.paneCount;
+    this.widths = stage.widths;
+    this.blockFrom = stage.block.from;
+    this.siblings = stage.spec.mode === "columns"
+      ? stage.panes
+          .map((pane, index) => ({ index, body: pane.body, align: pane.align }))
+          .filter((entry) => entry.index !== stage.activeIndex)
+      : [];
+    this.siblingsHash = shortHash(
+      this.siblings.map((s) => `${s.index}:${s.align}:${s.body}`).join("\u0000"),
+    );
+  }
+
+  protected measureKey(): string {
+    return `col-stage-top:${this.spec.mode}:${this.paneCount}:${this.activeIndex}:${shortHash(this.title)}`;
+  }
+  protected estimatedHeightFallback(): number { return 27; }
+
+  // Deliberately independent of the active pane's text so typing/Enter inside
+  // the active column never recreates or flickers sibling columns or images.
+  eq(other: ColumnsActiveTopWidget): boolean {
+    return this.title === other.title
+      && this.activeIndex === other.activeIndex
+      && this.paneCount === other.paneCount
+      && this.blockFrom === other.blockFrom
+      && this.siblingsHash === other.siblingsHash;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const top = document.createElement("div");
+    top.className = `cm-columns-active-top ${columnsClasses(this.spec, this.paneCount)}`;
+    top.style.cssText = columnsStyle(this.spec, this.paneCount);
+    top.dataset.cols = String(this.paneCount);
+    top.dataset.activeCol = String(this.activeIndex);
+    top.dataset.cmOpenSource = "false";
+
+    if (this.spec.mode === "columns") {
+      top.style.setProperty("--cm-col-left", columnLeftCss(this.widths, this.activeIndex));
+      top.style.setProperty("--cm-col-right", columnRightCss(this.widths, this.activeIndex));
+      top.style.setProperty("--cm-col-width", columnWidthCss(this.widths, this.activeIndex));
+    } else {
+      top.style.setProperty("--cm-col-left", "0px");
+      top.style.setProperty("--cm-col-right", "0px");
+      top.style.setProperty("--cm-col-width", "100%");
+    }
+
+    const toolbar = buildColumnsToolbar(
+      view,
+      top,
+      this.spec,
+      this.paneCount,
+      this.widths,
+      true,
+      () => {
+        const live = liveColumnsBlockForElement(view, top);
+        if (!live) return [];
+        if (this.spec.mode === "flow") return [live.body.trim()];
+        return splitColumnPanes(live.body).map((p) => p.body.trim());
+      },
+      this.blockFrom,
+      this.blockFrom,
+    );
+    top.append(toolbar);
+
+    const ruleTop = document.createElement("div");
+    ruleTop.className = "cm-columns-active-top-border";
+    top.append(ruleTop);
+
+    if (this.spec.mode === "columns") {
+      const stage = document.createElement("div");
+      stage.className = "cm-columns-sibling-stage";
+      stage.dataset.valign = this.spec.valign;
+
+      const activeBackdrop = document.createElement("div");
+      activeBackdrop.className = "cm-columns-active-backdrop";
+      activeBackdrop.style.left = columnLeftCss(this.widths, this.activeIndex);
+      activeBackdrop.style.width = columnWidthCss(this.widths, this.activeIndex);
+      stage.append(activeBackdrop);
+
+      const renderOpts = columnsRenderOptions();
+      const siblingEls = new Map<number, HTMLElement>();
+      for (const sibling of this.siblings) {
+        const paneEl = document.createElement("div");
+        paneEl.className = sibling.align !== "inherit"
+          ? `cm-columns-sibling-pane noema-columns-align-${sibling.align}`
+          : "cm-columns-sibling-pane";
+        paneEl.dataset.colIndex = String(sibling.index);
+        paneEl.dataset.cmOpenSource = "false";
+        paneEl.style.left = columnLeftCss(this.widths, sibling.index);
+        paneEl.style.width = columnWidthCss(this.widths, sibling.index);
+
+        if (!view.state.readOnly && this.paneCount > 1) {
+          const grip = document.createElement("button");
+          grip.type = "button";
+          grip.className = "cm-column-pane-grip";
+          grip.textContent = "⠿";
+          grip.title = `Column ${sibling.index + 1} · Alt+←/→ to reorder`;
+          grip.setAttribute("aria-label", grip.title);
+          grip.addEventListener("mousedown", (event) => { event.stopPropagation(); });
+          grip.addEventListener("keydown", (event) => {
+            if (!event.altKey || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+            const step = event.key === "ArrowLeft" ? -1 : 1;
+            const live = liveColumnsBlockForElement(view, top);
+            if (live && swapColumnPanesLive(view, live, sibling.index, sibling.index + step)) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          });
+          paneEl.append(grip);
+        }
+
+        const bodyEl = document.createElement("div");
+        bodyEl.className = "cm-column-pane-body";
+        const parsedBlocks: Array<{ from: number; to: number }> = [];
+        if (sibling.body.trim()) {
+          bodyEl.innerHTML = renderMarkdownHTML(sibling.body, renderOpts, parsedBlocks);
+          enhanceRenderedMarkdown(bodyEl);
+        } else {
+          const empty = document.createElement("p");
+          empty.className = "cm-column-pane-empty";
+          empty.textContent = `Column ${sibling.index + 1}`;
+          bodyEl.append(empty);
+        }
+        paneEl.append(bodyEl);
+        paneEl.addEventListener("mousedown", (event) => {
+          focusRenderedColumnPane(view, top, sibling.index, bodyEl, parsedBlocks, event, this.blockFrom, this.blockFrom);
+        });
+        siblingEls.set(sibling.index, paneEl);
+        stage.append(paneEl);
+      }
+
+      const stageRules: HTMLElement[] = [];
+      if (this.spec.rule === "on" && this.paneCount > 1) {
+        for (let dIdx = 0; dIdx < this.paneCount - 1; dIdx++) {
+          const ruleEl = document.createElement("div");
+          ruleEl.className = "cm-columns-stage-rule";
+          ruleEl.style.left = columnDividerLeftCss(this.widths, dIdx);
+          stageRules.push(ruleEl);
+          stage.append(ruleEl);
+        }
+      }
+
+      appendColumnsDividers(
+        view,
+        top,
+        stage,
+        top,
+        this.paneCount,
+        this.widths,
+        this.blockFrom,
+        this.blockFrom,
+        undefined,
+        (pending) => {
+          activeBackdrop.style.left = columnLeftCss(pending, this.activeIndex);
+          activeBackdrop.style.width = columnWidthCss(pending, this.activeIndex);
+          for (const [idx, el] of siblingEls) {
+            el.style.left = columnLeftCss(pending, idx);
+            el.style.width = columnWidthCss(pending, idx);
+          }
+          stageRules.forEach((ruleEl, dIdx) => {
+            ruleEl.style.left = columnDividerLeftCss(pending, dIdx);
+          });
+          view.contentDOM.style.setProperty("--cm-active-col-left", columnLeftCss(pending, this.activeIndex));
+          view.contentDOM.style.setProperty("--cm-active-col-right", columnRightCss(pending, this.activeIndex));
+          view.contentDOM.querySelectorAll<HTMLElement>(".cm-columns-active-line").forEach((lineEl) => {
+            lineEl.style.setProperty("--cm-col-left", columnLeftCss(pending, this.activeIndex));
+            lineEl.style.setProperty("--cm-col-right", columnRightCss(pending, this.activeIndex));
+          });
+        },
+      );
+
+      top.append(stage);
+    }
+
+    stopInteractiveWidgetEvents(top);
+    return this.registerMeasured(top, view);
+  }
+
+  ignoreEvent(): boolean { return false; }
+}
+
+/** Bottom spacer + closing hairline for active WYSIWYG column editing. */
+class ColumnsActiveBottomWidget extends MeasuredWidget {
+  readonly mode: "columns" | "flow";
+  readonly paneCount: number;
+
+  constructor(mode: "columns" | "flow", paneCount: number) {
+    super();
+    this.mode = mode;
+    this.paneCount = paneCount;
+  }
+
+  protected measureKey(): string { return `col-stage-bottom:${this.mode}:${this.paneCount}`; }
+  protected estimatedHeightFallback(): number { return 27; }
+
+  eq(other: ColumnsActiveBottomWidget): boolean {
+    return this.mode === other.mode && this.paneCount === other.paneCount;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const bottom = document.createElement("div");
+    bottom.className = "cm-columns-active-bottom";
+    bottom.dataset.cols = String(this.paneCount);
+    bottom.dataset.cmOpenSource = "false";
+    const line = document.createElement("div");
+    line.className = "cm-columns-active-bottom-border";
+    bottom.append(line);
+    return this.registerMeasured(bottom, view);
+  }
+
+  ignoreEvent(): boolean { return false; }
+}
+
+/**
+ * Pure measurement ViewPlugin keeping active WYSIWYG column stage height,
+ * vertical alignment, bottom spacer, and active-column CSS vars in sync
+ * whenever lines wrap, images load in sibling panes, or viewport resizes.
+ */
+class ColumnsStageSyncPlugin {
+  private readonly view: EditorView;
+  private observer: ResizeObserver | null = null;
+  private observedStage: HTMLElement | null = null;
+  private lastSpacer = -1;
+
+  constructor(view: EditorView) {
+    this.view = view;
+    this.schedule();
+  }
+
+  update(update: ViewUpdate): void {
+    if (update.docChanged || update.selectionSet || update.viewportChanged || update.geometryChanged
+        || hasViewportDecorationRefresh(update)) {
+      this.schedule();
+    }
+  }
+
+  destroy(): void {
+    this.observer?.disconnect();
+    this.observer = null;
+    this.observedStage = null;
+    this.view.contentDOM.style.removeProperty("--cm-active-col-left");
+    this.view.contentDOM.style.removeProperty("--cm-active-col-right");
+  }
+
+  private ensureObserver(stage: HTMLElement | null): void {
+    if (typeof ResizeObserver === "undefined") return;
+    if (stage === this.observedStage) return;
+    this.observer?.disconnect();
+    this.observedStage = stage;
+    if (!stage) return;
+    this.observer = new ResizeObserver(() => this.schedule());
+    stage.querySelectorAll<HTMLElement>(".cm-columns-sibling-pane > .cm-column-pane-body").forEach((body) => {
+      this.observer?.observe(body);
+    });
+  }
+
+  private schedule(): void {
+    this.view.requestMeasure({
+      read: () => {
+        const top = this.view.contentDOM.querySelector<HTMLElement>(".cm-columns-active-top");
+        const bottom = this.view.contentDOM.querySelector<HTMLElement>(".cm-columns-active-bottom");
+        if (!top || !bottom) return null;
+        const stage = top.querySelector<HTMLElement>(".cm-columns-sibling-stage");
+        const colLeft = top.style.getPropertyValue("--cm-col-left") || "0px";
+        const colRight = top.style.getPropertyValue("--cm-col-right") || "0px";
+        if (!stage) return { top, bottom, stage: null, colLeft, colRight, stageHeight: 0, extraSpacer: 0 };
+        const stageTop = stage.getBoundingClientRect().top;
+        const bottomTop = bottom.getBoundingClientRect().top;
+        const activeHeight = Math.max(0, bottomTop - stageTop);
+        let maxSibling = 0;
+        stage.querySelectorAll<HTMLElement>(".cm-columns-sibling-pane > .cm-column-pane-body").forEach((body) => {
+          const h = Math.max(body.offsetHeight, body.scrollHeight, body.getBoundingClientRect().height);
+          if (h > maxSibling) maxSibling = h;
+        });
+        const pureActiveHeight = Math.max(24, activeHeight);
+        const stageHeight = Math.ceil(Math.max(pureActiveHeight, maxSibling, 24));
+        const extraSpacer = Math.max(0, Math.ceil(maxSibling - pureActiveHeight));
+        return {
+          top,
+          bottom,
+          stage,
+          colLeft,
+          colRight,
+          stageHeight,
+          extraSpacer,
+        };
+      },
+      write: (measure) => {
+        if (!measure) {
+          this.ensureObserver(null);
+          this.lastSpacer = -1;
+          this.view.contentDOM.style.removeProperty("--cm-active-col-left");
+          this.view.contentDOM.style.removeProperty("--cm-active-col-right");
+          return;
+        }
+        this.view.contentDOM.style.setProperty("--cm-active-col-left", measure.colLeft);
+        this.view.contentDOM.style.setProperty("--cm-active-col-right", measure.colRight);
+        this.ensureObserver(measure.stage);
+        if (measure.stage) {
+          measure.stage.style.setProperty("--cm-columns-stage-height", `${measure.stageHeight}px`);
+          measure.bottom.style.setProperty("--cm-columns-bottom-spacer", `${measure.extraSpacer}px`);
+          if (Math.abs(measure.extraSpacer - this.lastSpacer) >= 1) {
+            this.lastSpacer = measure.extraSpacer;
+            this.view.requestMeasure();
+          }
+        }
+      },
+    });
+  }
+}
+
+const columnsStageSyncExtension = ViewPlugin.fromClass(ColumnsStageSyncPlugin);
+
+function addColumnsWysiwygDecos(
+  decos: CMRange<Decoration>[],
+  occupied: Array<[number, number]> | null,
+  state: EditorState,
+  stage: ActiveColumnsStage,
+): void {
+  const { block, spec, paneCount, widths, activeIndex, editFrom, editTo } = stage;
+  const doc = state.doc;
+  const topTo = editFrom - 1;
+  const bottomFrom = editTo + 1;
+
+  if (topTo >= block.openFrom) {
+    decos.push(
+      Decoration.replace({
+        widget: new ColumnsActiveTopWidget(stage),
+        block: true,
+      }).range(block.openFrom, topTo),
+    );
+    occupied?.push([block.openFrom, topTo]);
+  }
+
+  const firstLine = doc.lineAt(editFrom).number;
+  const lastLine = doc.lineAt(editTo).number;
+  const activePane = stage.panes[activeIndex];
+  const effAlign = activePane && activePane.align !== "inherit" ? activePane.align : spec.align;
+  const alignClass = effAlign !== "inherit" ? ` noema-columns-align-${effAlign}` : "";
+  const gapVar = spec.gap === "sm"
+    ? "1rem"
+    : spec.gap === "lg"
+      ? "clamp(2.25rem, 4.5vw, 3.25rem)"
+      : "clamp(1.5rem, 3vw, 2.25rem)";
+  const colLeft = spec.mode === "columns" ? columnLeftCss(widths, activeIndex) : "0px";
+  const colRight = spec.mode === "columns" ? columnRightCss(widths, activeIndex) : "0px";
+  const lineStyle = `--noema-columns-gap:${gapVar};--cm-col-left:${colLeft};--cm-col-right:${colRight};`;
+
+  for (let ln = firstLine; ln <= lastLine; ln++) {
+    const line = doc.line(ln);
+    const edgeClasses = `${ln === firstLine ? " cm-columns-active-first" : ""}${ln === lastLine ? " cm-columns-active-last" : ""}`;
+    decos.push(
+      Decoration.line({
+        attributes: {
+          class: `${spec.mode === "flow" ? "cm-columns-flow-editing-line" : "cm-columns-active-line"}${edgeClasses}${alignClass}`,
+          style: lineStyle,
+        },
+      }).range(line.from),
+    );
+  }
+
+  if (bottomFrom <= block.closeTo) {
+    decos.push(
+      Decoration.replace({
+        widget: new ColumnsActiveBottomWidget(spec.mode, paneCount),
+        block: true,
+      }).range(bottomFrom, block.closeTo),
+    );
+    occupied?.push([bottomFrom, block.closeTo]);
+  }
+}
+
+/**
+ * Horizontal arrow movement across WYSIWYG column boundaries:
+ * - ArrowRight at end of pane K jumps straight into pane K+1 (never flashing `#+col`),
+ *   and at end of the last pane exits cleanly after `#+end columns`.
+ * - ArrowLeft at start of pane K jumps straight to end of pane K-1,
+ *   and at start of pane 0 exits cleanly before `#+begin columns`.
+ */
+export function columnsMoveHorizontal(view: EditorView, direction: -1 | 1): boolean {
+  const state = view.state;
+  const sel = state.selection.main;
+  if (!sel.empty || state.selection.ranges.length > 1) return false;
+  const blocks = orgEnvBlocksFromState(state);
+  for (const block of blocks) {
+    if (block.kind !== "columns" || sel.head < block.from || sel.head > block.to) continue;
+    const stage = activeColumnsStage(state, block);
+    if (!stage || stage.spec.mode !== "columns") continue;
+    if (direction === -1 && sel.head === stage.editFrom) {
+      if (stage.activeIndex > 0) {
+        const prev = stage.bounds[stage.activeIndex - 1];
+        if (prev?.valid) {
+          const target = prev.hasContent ? prev.trimmedEnd : prev.boundEnd;
+          view.dispatch({ selection: { anchor: target }, scrollIntoView: true });
+          return true;
+        }
+      } else if (block.from > 0) {
+        view.dispatch({ selection: { anchor: block.from - 1 }, scrollIntoView: true });
+        return true;
+      }
+    }
+    if (direction === 1 && sel.head === stage.editTo) {
+      if (stage.activeIndex < stage.bounds.length - 1) {
+        const next = stage.bounds[stage.activeIndex + 1];
+        if (next?.valid) {
+          const target = next.hasContent ? next.trimmedStart : next.boundStart;
+          view.dispatch({ selection: { anchor: target }, scrollIntoView: true });
+          return true;
+        }
+      } else if (block.to < state.doc.length) {
+        view.dispatch({ selection: { anchor: block.to + 1 }, scrollIntoView: true });
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Vertical arrow exit from the first/last line of a WYSIWYG column pane:
+ * jumps cleanly above `#+begin columns` or below `#+end columns` instead of
+ * landing inside hidden sibling panes or raw directives.
+ */
+export function columnsMoveVertical(view: EditorView, direction: -1 | 1): boolean {
+  const state = view.state;
+  const sel = state.selection.main;
+  if (!sel.empty || state.selection.ranges.length > 1) return false;
+  const doc = state.doc;
+  const curLine = doc.lineAt(sel.head);
+  const blocks = orgEnvBlocksFromState(state);
+  for (const block of blocks) {
+    if (block.kind !== "columns" || sel.head < block.from || sel.head > block.to) continue;
+    const stage = activeColumnsStage(state, block);
+    if (!stage) continue;
+    const firstLineNum = doc.lineAt(stage.editFrom).number;
+    const lastLineNum = doc.lineAt(stage.editTo).number;
+    if (direction === -1 && curLine.number === firstLineNum) {
+      // If the first line is soft-wrapped and caret is not on its top visual row,
+      // let normal visual-row motion walk up inside the line first.
+      const headCoords = view.coordsAtPos(sel.head);
+      const startCoords = view.coordsAtPos(curLine.from);
+      if (headCoords && startCoords && headCoords.top - startCoords.top > 4) return false;
+      if (block.from > 0) {
+        view.dispatch({ selection: { anchor: block.from - 1 }, scrollIntoView: true });
+        return true;
+      }
+      return false;
+    }
+    if (direction === 1 && curLine.number === lastLineNum) {
+      const headCoords = view.coordsAtPos(sel.head);
+      const endCoords = view.coordsAtPos(curLine.to);
+      if (headCoords && endCoords && endCoords.bottom - headCoords.bottom > 4) return false;
+      if (block.to < doc.length) {
+        view.dispatch({ selection: { anchor: block.to + 1 }, scrollIntoView: true });
+        return true;
+      }
+      if (!state.readOnly) {
+        dispatchConstructEdit(view, {
+          changes: { from: block.to, insert: "\n" },
+          selection: { anchor: block.to + 1 },
+          scrollIntoView: true,
+        }, "columns");
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Protect column boundaries during WYSIWYG editing so Backspace at the top of
+ * a column never deletes `#+begin columns` / `#+col`, and Delete at the bottom
+ * of a column never deletes `#+col` / `#+end columns`.
+ */
+export function columnsProtectBoundaryDelete(view: EditorView, direction: "backward" | "forward"): boolean {
+  const state = view.state;
+  const sel = state.selection.main;
+  if (!sel.empty || state.selection.ranges.length > 1) return false;
+  const blocks = orgEnvBlocksFromState(state);
+  for (const block of blocks) {
+    if (block.kind !== "columns" || sel.head < block.from || sel.head > block.to) continue;
+    const stage = activeColumnsStage(state, block);
+    if (!stage) continue;
+    if (direction === "backward" && (sel.head === stage.editFrom || sel.head === stage.boundStart)) {
+      return true;
+    }
+    if (direction === "forward" && (sel.head === stage.editTo || sel.head === stage.boundEnd)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Raw-source editing banner replacing `#+begin columns` when explicitly viewing source. */
+class ColumnsOpenBannerWidget extends MeasuredWidget {
+  readonly spec: ColumnsSpec;
+  readonly paneCount: number;
+  readonly widths: readonly number[];
+  readonly blockFrom: number;
+  readonly blockTo: number;
+  readonly openFrom: number;
+  readonly openTo: number;
+  readonly bodyFrom: number;
+  readonly bodyTo: number;
+  readonly title: string;
+
+  constructor(block: OrgEnvBlock, spec: ColumnsSpec, paneCount: number, widths: readonly number[]) {
+    super();
+    this.spec = spec;
+    this.paneCount = paneCount;
+    this.widths = widths;
+    this.blockFrom = block.from;
+    this.blockTo = block.to;
+    this.openFrom = block.openFrom;
+    this.openTo = block.openTo;
+    this.bodyFrom = block.bodyFrom;
+    this.bodyTo = block.bodyTo;
+    this.title = block.title;
+  }
+
+  protected measureKey(): string { return `col-open:${this.title}:${this.paneCount}`; }
+  protected estimatedHeightFallback(): number { return 30; }
+  eq(other: ColumnsOpenBannerWidget): boolean {
+    return this.title === other.title
+      && this.paneCount === other.paneCount
+      && this.blockFrom === other.blockFrom
+      && this.blockTo === other.blockTo;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const bar = document.createElement("div");
+    bar.className = "cm-columns-open-banner";
+    bar.dataset.cmOpenSource = "true";
+    setSourceRange(bar, this.openFrom, this.openTo);
+    bar.dataset.cmSourceAnchor = String(this.openTo);
+
+    const badge = document.createElement("span");
+    badge.className = "cm-columns-banner-badge";
+    badge.textContent = this.spec.mode === "flow" ? "FLOW SOURCE" : "COLUMNS SOURCE";
+
+    const meta = document.createElement("span");
+    meta.className = "cm-columns-banner-meta";
+    if (this.spec.mode === "flow") {
+      meta.textContent = `${this.paneCount} cols · flowing`;
+    } else if (this.paneCount === 1) {
+      meta.textContent = "1 col";
+    } else if (areEqualColumnWidths(this.widths, this.paneCount)) {
+      meta.textContent = `${this.paneCount} cols · equal`;
+    } else {
+      meta.textContent = `${this.paneCount} cols · ${this.widths.map((w) => `${w}%`).join(" / ")}`;
+    }
+
+    const actions = document.createElement("span");
+    actions.className = "cm-columns-banner-actions";
+
+    if (this.spec.mode === "columns" && !view.state.readOnly && this.paneCount < COLUMNS_MAX_COUNT) {
+      const addColBtn = document.createElement("button");
+      addColBtn.type = "button";
+      addColBtn.className = "cm-columns-banner-btn";
+      addColBtn.textContent = "+ Col";
+      addColBtn.title = "Add column";
+      addColBtn.setAttribute("aria-label", "Add column");
+      addColBtn.addEventListener("mousedown", stopEditorPropagation);
+      addColBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const live = liveColumnsBlockForElement(view, bar);
+        if (live) addColumnPaneLive(view, live, true);
+      });
+      actions.append(addColBtn);
+    }
+
+    const visualBtn = document.createElement("button");
+    visualBtn.type = "button";
+    visualBtn.className = "cm-columns-banner-btn";
+    visualBtn.textContent = "Visual";
+    visualBtn.title = "Return to side-by-side WYSIWYG editing";
+    visualBtn.setAttribute("aria-label", "Return to side-by-side editing");
+    visualBtn.addEventListener("mousedown", stopEditorPropagation);
+    visualBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const live = liveColumnsBlockForElement(view, bar);
+      if (!live) return;
+      const panes = splitColumnPanes(live.body);
+      const bounds = columnsPaneBounds(view.state.doc, live, panes);
+      const cur = view.state.selection.main.head;
+      const hit = bounds.find((b) => b.valid && cur >= b.boundStart && cur <= b.boundEnd)
+        ?? bounds.find((b) => b.valid);
+      const anchor = hit ? (hit.hasContent ? hit.trimmedStart : hit.boundStart) : live.bodyFrom;
+      preserveEditorViewport(view, () => {
+        view.dispatch({
+          selection: { anchor },
+          effects: setColumnsRawSourceEffect.of(null),
+          scrollIntoView: false,
+        });
+        view.focus();
+      }, live.openFrom);
+    });
+    actions.append(visualBtn);
+
+    const doneBtn = document.createElement("button");
+    doneBtn.type = "button";
+    doneBtn.className = "cm-columns-banner-btn cm-columns-banner-done";
+    doneBtn.textContent = "Done";
+    doneBtn.title = "Finish editing columns and return to preview";
+    doneBtn.setAttribute("aria-label", "Finish editing columns");
+    doneBtn.addEventListener("mousedown", stopEditorPropagation);
+    doneBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const live = liveColumnsBlockForElement(view, bar);
+      const blockFrom = live?.openFrom ?? this.openFrom;
+      const blockTo = live?.to ?? this.blockTo;
+      const docLen = view.state.doc.length;
+      if (blockTo < docLen) {
+        preserveEditorViewport(view, () => {
+          view.dispatch({
+            selection: { anchor: Math.min(docLen, blockTo + 1) },
+            effects: setColumnsRawSourceEffect.of(null),
+            scrollIntoView: false,
+          });
+          view.focus();
+        }, blockFrom);
+      } else if (!view.state.readOnly) {
+        preserveEditorViewport(view, () => {
+          dispatchConstructEdit(view, {
+            changes: { from: blockTo, insert: "\n" },
+            selection: { anchor: blockTo + 1 },
+            effects: setColumnsRawSourceEffect.of(null),
+            scrollIntoView: false,
+          }, "columns");
+          view.focus();
+        }, blockFrom);
+      }
+    });
+    actions.append(doneBtn);
+
+    bar.append(badge, meta, actions);
+    stopInteractiveWidgetEvents(bar);
+    return this.registerMeasured(bar, view);
+  }
+
+  ignoreEvent(): boolean { return false; }
+}
+
+/** Editing-state column separator banner replacing each top-level `#+col` line. */
+class ColumnsMarkerBannerWidget extends MeasuredWidget {
+  readonly colNumber: number;
+  readonly widthPct: number;
+  readonly align: ColumnsAlign;
+  readonly from: number;
+  readonly to: number;
+
+  constructor(colNumber: number, widthPct: number, align: ColumnsAlign, from: number, to: number) {
+    super();
+    this.colNumber = colNumber;
+    this.widthPct = widthPct;
+    this.align = align;
+    this.from = from;
+    this.to = to;
+  }
+
+  protected measureKey(): string { return `col-mark:${this.colNumber}:${this.widthPct}:${this.align}`; }
+  protected estimatedHeightFallback(): number { return 24; }
+  eq(other: ColumnsMarkerBannerWidget): boolean {
+    return this.colNumber === other.colNumber
+      && this.widthPct === other.widthPct
+      && this.align === other.align
+      && this.from === other.from
+      && this.to === other.to;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "cm-columns-col-banner";
+    row.dataset.cmOpenSource = "true";
+    setSourceRange(row, this.from, this.to);
+    row.dataset.cmSourceAnchor = String(this.to);
+    const pill = document.createElement("span");
+    pill.className = "cm-columns-col-pill";
+    const parts = [`Column ${this.colNumber}`, `${this.widthPct}%`];
+    if (this.align !== "inherit") parts.push(this.align);
+    pill.textContent = parts.join(" · ");
+    row.append(pill);
+    return this.registerMeasured(row, view);
+  }
+
+  ignoreEvent(): boolean { return false; }
+}
+
+/** Editing-state footer banner replacing `#+end columns`. */
+class ColumnsCloseBannerWidget extends MeasuredWidget {
+  readonly from: number;
+  readonly to: number;
+
+  constructor(from: number, to: number) {
+    super();
+    this.from = from;
+    this.to = to;
+  }
+
+  protected measureKey(): string { return "col-close"; }
+  protected estimatedHeightFallback(): number { return 22; }
+  eq(other: ColumnsCloseBannerWidget): boolean {
+    return this.from === other.from && this.to === other.to;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "cm-columns-close-banner";
+    row.dataset.cmOpenSource = "true";
+    setSourceRange(row, this.from, this.to);
+    row.dataset.cmSourceAnchor = String(this.to);
+    const pill = document.createElement("span");
+    pill.className = "cm-columns-close-pill";
+    pill.textContent = "End Columns";
+    row.append(pill);
+    return this.registerMeasured(row, view);
+  }
+
+  ignoreEvent(): boolean { return false; }
+}
+
+function addColumnsEditingDecos(
+  decos: CMRange<Decoration>[],
+  state: EditorState,
+  block: OrgEnvBlock,
+): void {
+  const spec = parseColumnsHeader(block.title);
+  const panes = spec.mode === "columns" ? splitColumnPanes(block.body) : [];
+  const paneCount = spec.mode === "flow"
+    ? Math.max(2, Math.min(4, spec.cols || 2))
+    : Math.max(1, panes.length);
+  const widths = resolvedColumnWidths(spec, paneCount);
+
+  if (!opensSource(state, block.openFrom, block.openTo)) {
+    decos.push(
+      Decoration.replace({
+        widget: new ColumnsOpenBannerWidget(block, spec, paneCount, widths),
+        block: true,
+      }).range(block.openFrom, block.openTo),
+    );
+  } else {
+    decos.push(Decoration.mark({ class: "syntax-hint cm-columns-source-directive" }).range(block.openFrom, block.openTo));
+  }
+
+  if (spec.mode === "columns") {
+    for (let i = 1; i < panes.length; i++) {
+      const pane = panes[i]!;
+      if (pane.markerFrom < 0 || pane.markerTo < pane.markerFrom) continue;
+      const absFrom = block.bodyFrom + pane.markerFrom;
+      const absTo = block.bodyFrom + pane.markerTo;
+      if (absTo > block.closeFrom) continue;
+      if (!opensSource(state, absFrom, absTo)) {
+        decos.push(
+          Decoration.replace({
+            widget: new ColumnsMarkerBannerWidget(i + 1, widths[i] ?? 0, pane.align, absFrom, absTo),
+            block: true,
+          }).range(absFrom, absTo),
+        );
+      } else {
+        decos.push(Decoration.mark({ class: "syntax-hint cm-columns-source-directive" }).range(absFrom, absTo));
+      }
+    }
+  }
+
+  if (!orgEnvCloseBoundaryActive(state, block)) {
+    decos.push(
+      Decoration.replace({
+        widget: new ColumnsCloseBannerWidget(block.closeFrom, block.closeTo),
+        block: true,
+      }).range(block.closeFrom, block.closeTo),
+    );
+  } else {
+    decos.push(Decoration.mark({ class: "syntax-hint cm-columns-source-directive" }).range(block.closeFrom, block.closeTo));
+  }
 }
 
 class HtmlWidget extends MeasuredWidget {
@@ -3441,13 +5004,12 @@ class TikzWidget extends MeasuredWidget {
       : titled;
     applyImageLayout(figure, meta.layout);
     const resizeHandle = view.state.readOnly ? null : figureResizeHandle(view, figure, "tikz");
-    const heightHandle = view.state.readOnly ? null : figureHeightHandle(view, figure, "tikz");
     const layoutToolbar = view.state.readOnly ? null : figureLayoutToolbar(view, figure, meta.layout);
     const file = currentNoteFile();
 
     if (meta.changed) {
       figure.append(tikzPlaceholder("Preparing TikZ…"));
-      if (resizeHandle && heightHandle && layoutToolbar) figure.append(layoutToolbar, resizeHandle, heightHandle);
+      if (resizeHandle && layoutToolbar) figure.append(layoutToolbar, resizeHandle);
       scheduleTikzIdAssignment(view, this.from, meta.id);
       stopInteractiveWidgetEvents(figure);
       return this.registerMeasured(figure, view);
@@ -3457,7 +5019,7 @@ class TikzWidget extends MeasuredWidget {
       figure.append(settled.ok && settled.svg
         ? tikzSvgElement(settled, view, figure)
         : tikzPlaceholder(settled.message || "TikZ render failed", true));
-      if (resizeHandle && heightHandle && layoutToolbar) figure.append(layoutToolbar, resizeHandle, heightHandle);
+      if (resizeHandle && layoutToolbar) figure.append(layoutToolbar, resizeHandle);
       stopInteractiveWidgetEvents(figure);
       return this.registerMeasured(figure, view);
     }
@@ -3484,12 +5046,12 @@ class TikzWidget extends MeasuredWidget {
         figure.replaceChildren(result.ok && result.svg
           ? tikzSvgElement(result, view, figure)
           : tikzPlaceholder(result.message || "TikZ render failed", true));
-        if (resizeHandle && heightHandle && layoutToolbar) figure.append(layoutToolbar, resizeHandle, heightHandle);
+        if (resizeHandle && layoutToolbar) figure.append(layoutToolbar, resizeHandle);
         view.requestMeasure();
       });
     }
 
-    if (resizeHandle && heightHandle && layoutToolbar) figure.append(layoutToolbar, resizeHandle, heightHandle);
+    if (resizeHandle && layoutToolbar) figure.append(layoutToolbar, resizeHandle);
     stopInteractiveWidgetEvents(figure);
     return this.registerMeasured(figure, view);
   }
@@ -4174,7 +5736,7 @@ export function getOrgEnvHeadingRanges(state: EditorState): readonly OrgEnvHeadi
   const cached = orgEnvHeadingRangeCache.get(blocks);
   if (cached) return cached;
   const ranges = blocks
-    .filter((block) => !["meta", "html", "tikz", "comment", "fold"].includes(block.kind))
+    .filter((block) => !["meta", "html", "tikz", "comment", "fold", "columns"].includes(block.kind))
     .map((block) => ({
       from: block.openFrom,
       to: block.openTo,
@@ -4381,7 +5943,7 @@ function buildOrgEnvBodyLineDecoRanges(
   const windowTo = doc.line(lastLine).to;
 
   for (const block of orgEnvBlocksFromState(state)) {
-    if (block.kind === "meta") continue;
+    if (block.kind === "meta" || block.kind === "columns") continue;
     if (block.kind === "fold" && !opensSource(state, block.from, block.to)) continue;
     if (block.bodyTo < windowFrom || block.bodyFrom > windowTo) continue;
     const fromLine = doc.lineAt(Math.max(block.bodyFrom, windowFrom));
@@ -4486,13 +6048,30 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
   const visibleTop = docTop + viewportBlocks[0]!.top;
   const visibleBottom = docTop + viewportBlocks[viewportBlocks.length - 1]!.bottom;
 
-  return orgEnvBlocksFromState(view.state)
+  const allBlocks = orgEnvBlocksFromState(view.state);
+  const hiddenColumnsRanges: Array<readonly [number, number]> = [];
+  for (const b of allBlocks) {
+    if (b.kind !== "columns") continue;
+    if (!opensSource(view.state, b.from, b.to)) {
+      hiddenColumnsRanges.push([b.from, b.to]);
+      continue;
+    }
+    const stage = activeColumnsStage(view.state, b);
+    if (stage) {
+      if (stage.editFrom - 1 >= b.openFrom) hiddenColumnsRanges.push([b.openFrom, stage.editFrom - 1]);
+      if (stage.editTo + 1 <= b.closeTo) hiddenColumnsRanges.push([stage.editTo + 1, b.closeTo]);
+    }
+  }
+
+  return allBlocks
     .filter((block) => (
       block.kind !== "meta"
       && block.kind !== "comment"
       && block.kind !== "fold"
       && block.kind !== "html"
       && block.kind !== "tikz"
+      && block.kind !== "columns"
+      && !hiddenColumnsRanges.some(([from, to]) => block.from >= from && block.to <= to)
       && block.openFrom <= visibleTo
       && block.closeTo >= visibleFrom
     ))
@@ -4523,6 +6102,7 @@ function addOrgEnvBlockExtraDecos(
   state: EditorState,
   block: OrgEnvBlock,
 ): void {
+  if (occupied?.some(([from, to]) => block.from >= from && block.to <= to)) return;
   if (block.kind === "ediff") {
     if (!opensSource(state, block.from, block.to, "caret-interior")) {
       decos.push(Decoration.replace({
@@ -4563,14 +6143,20 @@ function addOrgEnvBlockExtraDecos(
     occupied?.push([block.from, block.to]);
     return;
   }
-  if (block.kind === "layout" && !opensSource(state, block.from, block.to)) {
-    decos.push(
-      Decoration.replace({
-        widget: new LayoutGroupWidget(block.title, block.body, block.from, block.to, block.bodyFrom),
-        block: true,
-      }).range(block.from, block.to),
-    );
-    occupied?.push([block.from, block.to]);
+  if (block.kind === "columns") {
+    if (!opensSource(state, block.from, block.to)) {
+      decos.push(
+        Decoration.replace({
+          widget: new ColumnsWidget(block.title, block.body, block.from, block.to, block.bodyFrom, block.bodyTo),
+          block: true,
+        }).range(block.from, block.to),
+      );
+      occupied?.push([block.from, block.to]);
+    } else {
+      const stage = activeColumnsStage(state, block);
+      if (stage) addColumnsWysiwygDecos(decos, occupied, state, stage);
+      else addColumnsEditingDecos(decos, state, block);
+    }
     return;
   }
   if (block.kind === "av" && !opensSource(state, block.from, block.to)) {
@@ -4628,10 +6214,21 @@ function buildBlockExtraDecoRanges(
   const ranges = state.field(blockExtraRangesField, false) ?? scanBlockExtraRanges(state.doc, excludedRanges);
   const foldState = state.field(tocFoldField, false) ?? new Map<string, boolean>();
 
+  // ── org-env #+begin … #+end ────────────────────────────────────────────
+  // Place whole-block org environments first so `occupied` prevents overlapping
+  // block replacements from inner constructs (e.g. `---`, `[toc]`, or nested
+  // org environments inside a closed `columns` block).
+  const orgEnvBlocks = orgEnvBlocksFromState(state);
+  for (const block of orgEnvBlocks) {
+    if (block.to < windowFrom || block.from > windowTo) continue;
+    addOrgEnvBlockExtraDecos(decos, occupied, state, block);
+  }
+
   // ── [toc] ──────────────────────────────────────────────────────────────
   for (const range of ranges.toc) {
     if (range.to < windowFrom || range.from > windowTo) continue;
     if (rangeOverlapsAny(range.from, range.to, excludedRanges)) continue;
+    if (occupied.some(([from, to]) => range.from < to && range.to > from)) continue;
     if (!opensSource(state, range.from, range.to)) {
       decos.push(
         Decoration.replace({ widget: new TocWidget(headings, foldState), block: true }).range(range.from, range.to),
@@ -4664,15 +6261,6 @@ function buildBlockExtraDecoRanges(
       Decoration.replace({ widget: new CeilCommandWidget(range), block: true }).range(range.from, range.to),
     );
     occupied.push([range.from, range.to]);
-  }
-
-  // ── org-env #+begin … #+end ────────────────────────────────────────────
-  // Most org-env bodies remain normal CM6 markdown. Specialized blocks such as
-  // meta/html/tikz replace the whole source region with purpose-built UI.
-  const orgEnvBlocks = orgEnvBlocksFromState(state);
-  for (const block of orgEnvBlocks) {
-    if (block.to < windowFrom || block.from > windowTo) continue;
-    addOrgEnvBlockExtraDecos(decos, occupied, state, block);
   }
 
   // ── YAML front matter (only at offset 0) ───────────────────────────────
@@ -4790,7 +6378,35 @@ function activeBlockExtraKey(state: EditorState): string {
     if (opensSource(state, range.from, range.to)) parts.push(`hr:${range.from}:${range.to}`);
   }
   for (const block of blocks) {
-    if (((block.kind === "comment" || block.kind === "fold" || block.kind === "av" || block.kind === "embed" || block.kind === "layout") && opensSource(state, block.from, block.to))
+    if (block.kind === "columns") {
+      if (opensSource(state, block.from, block.to)) {
+        const stage = activeColumnsStage(state, block);
+        if (stage) {
+          parts.push(`col-stage:${stage.activeIndex}:${stage.editFrom}:${stage.editTo}:${block.from}:${block.to}`);
+        } else {
+          parts.push(`col-raw:${block.from}:${block.to}`);
+          if (opensSource(state, block.openFrom, block.openTo)) {
+            parts.push(`col-open:${block.openFrom}:${block.openTo}:${block.from}:${block.to}`);
+          }
+          const spec = parseColumnsHeader(block.title);
+          if (spec.mode === "columns") {
+            for (const pane of splitColumnPanes(block.body)) {
+              if (pane.markerFrom < 0 || pane.markerTo < pane.markerFrom) continue;
+              const absFrom = block.bodyFrom + pane.markerFrom;
+              const absTo = block.bodyFrom + pane.markerTo;
+              if (absTo <= block.closeFrom && opensSource(state, absFrom, absTo)) {
+                parts.push(`col-mark:${absFrom}:${absTo}:${block.from}:${block.to}`);
+              }
+            }
+          }
+          if (orgEnvCloseBoundaryActive(state, block)) {
+            parts.push(`col-close:${block.closeFrom}:${block.closeTo}:${block.from}:${block.to}`);
+          }
+        }
+      }
+      continue;
+    }
+    if (((block.kind === "comment" || block.kind === "fold" || block.kind === "av" || block.kind === "embed") && opensSource(state, block.from, block.to))
         || (block.kind === "ediff" && opensSource(state, block.from, block.to, "caret-interior"))
         || (block.kind === "tikz" && tikzSourceActive(state, block))) {
       parts.push(`${block.kind}:${block.from}:${block.to}`);
@@ -4809,6 +6425,29 @@ function activeBlockExtraKey(state: EditorState): string {
 
 
 
+function changesTouchColumnsStructure(state: EditorState, changes: ChangeSet, block: OrgEnvBlock): boolean {
+  if (!changesTouchRange(changes, block.from, block.to)) return false;
+  if (!opensSource(state, block.from, block.to)) return true;
+  const doc = state.doc;
+  let touches = false;
+  changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+    if (touches) return;
+    const removed = doc.sliceString(fromA, toA);
+    const added = inserted.toString();
+    if (
+      fromA <= block.openTo || toA >= block.closeFrom
+      || removed.includes("\n") || added.includes("\n")
+      || removed.includes("#+") || added.includes("#+")
+    ) {
+      touches = true;
+      return;
+    }
+    const lineText = doc.lineAt(Math.min(fromA, doc.length)).text;
+    if (/^[ \t]*#\+col\b/i.test(lineText)) touches = true;
+  });
+  return touches;
+}
+
 function canMapBlockExtraDecos(state: EditorState, changes: ChangeSet): boolean {
   const ranges = state.field(blockExtraRangesField, false) ?? scanBlockExtraRanges(state.doc, blockExtraExcludedRanges(state));
   const blocks = state.field(orgEnvBlocksField, false) ?? orgEnvBlocksFromState(state);
@@ -4822,8 +6461,10 @@ function canMapBlockExtraDecos(state: EditorState, changes: ChangeSet): boolean 
   if (ranges.hrs.some((range) => changesTouchRange(changes, range.from, range.to))) return false;
   if (ranges.frontMatter && changesTouchRange(changes, ranges.frontMatter.from, ranges.frontMatter.to)) return false;
   if (blocks.some((block) => (
-    (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz" || block.kind === "av" || block.kind === "embed" || block.kind === "ediff")
-    && changesTouchRange(changes, block.from, block.to)
+    block.kind === "columns"
+      ? changesTouchColumnsStructure(state, changes, block)
+      : (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz" || block.kind === "av" || block.kind === "embed" || block.kind === "ediff")
+        && changesTouchRange(changes, block.from, block.to)
   ))) {
     return false;
   }
@@ -4841,8 +6482,10 @@ function canPatchBlockExtraDecosNearChanges(state: EditorState, changes: ChangeS
   // Whole-block widgets own their body source. Rebuild them only when touched;
   // ordinary prose and line-owned commands can stay on the bounded path.
   return !blocks.some((block) => (
-    (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz" || block.kind === "av" || block.kind === "embed" || block.kind === "ediff")
-    && changesTouchRange(changes, block.from, block.to)
+    block.kind === "columns"
+      ? changesTouchColumnsStructure(state, changes, block)
+      : (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz" || block.kind === "av" || block.kind === "embed" || block.kind === "ediff")
+        && changesTouchRange(changes, block.from, block.to)
   ));
 }
 
@@ -4890,11 +6533,12 @@ function patchBlockExtraDecosForOrgEnvTitleChange(
 
   const fullBlockWidgetActive = block.kind === "meta"
     || block.kind === "html"
+    || block.kind === "columns"
     || (block.kind === "ediff" && !opensSource(state, block.from, block.to, "caret-interior"))
     || (block.kind === "tikz" && !tikzSourceActive(state, block))
     || (block.kind === "av" && !opensSource(state, block.from, block.to))
     || (block.kind === "embed" && !opensSource(state, block.from, block.to))
-    || ((block.kind === "comment" || block.kind === "fold" || block.kind === "layout") && !opensSource(state, block.from, block.to));
+    || ((block.kind === "comment" || block.kind === "fold") && !opensSource(state, block.from, block.to));
   const ranges = fullBlockWidgetActive
     ? [{ from: block.from, to: block.to }]
     : [{ from: block.openFrom, to: block.openTo }, { from: block.closeFrom, to: block.closeTo }];
@@ -4961,6 +6605,11 @@ const blockExtrasDecorations = StateField.define<DecorationSet>({
       // creates a new MetaWidget bibliography epoch while eq() preserves all
       // unrelated block widgets.
       return buildBlockExtraDecos(tr.state);
+    }
+    if (tr.effects.some((effect) => effect.is(setColumnsRawSourceEffect))) {
+      const oldKey = activeBlockExtraKey(tr.startState);
+      const newKey = activeBlockExtraKey(tr.state);
+      return rebuildForRevealChange(value, oldKey, newKey, (from, to) => buildBlockExtraDecoRanges(tr.state, from, to));
     }
     if (transactionChangesPinning(tr)) {
       const oldKey = activeBlockExtraKey(tr.startState);
@@ -5048,11 +6697,13 @@ export const blockExtrasExtension: Extension = [
   fencedCodeRangesExtension,
   persistentVisualStateField(blockExtraRangesField, createBlockExtraRanges),
   persistentVisualStateField(tocFoldField, createTocFoldState),
+  columnsRawSourceField,
   deferredBlockExtraRefresh,
   persistentVisualStateField(blockExtrasDecorations, buildBlockExtraDecos),
   // Org environments, TOC, rules, front matter, cells: whatever the field draws.
   constructSources.of(drawnConstructSource("block-extra", "structure", (state) => state.field(blockExtrasDecorations, false))),
   persistentVisualStateField(orgEnvBodyLineDecorations, buildOrgEnvBodyLineDecos),
   orgEnvRailExtension,
+  columnsStageSyncExtension,
   ceilCellReloadExtension,
 ];

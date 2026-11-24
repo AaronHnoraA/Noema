@@ -198,6 +198,8 @@ export function layoutClasses(kind, layout) {
     "noema-layout",
     `noema-block-layout-align-${layout.align}`,
     layout.wrap ? "noema-block-layout-wrap" : "",
+    layout.width ? "noema-layout-has-width" : "",
+    layout.height ? "noema-layout-has-height" : "",
     `noema-${kind}`,
     `noema-${kind}-align-${layout.align}`,
     layout.wrap ? `noema-${kind}-wrap` : "",

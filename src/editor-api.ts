@@ -81,13 +81,19 @@ export type EditorCommand =
   | "insert-toc"
   | "insert-horizontal-rule"
   | "insert-org-env"
-  | "insert-layout"
+  | "insert-columns"
   | "jupyter-cell"
   | "image-edit"
   | "table-insert-row"
+  | "table-insert-row-above"
   | "table-insert-column"
+  | "table-insert-column-left"
   | "table-delete-row"
   | "table-delete-column"
+  | "table-duplicate-row"
+  | "table-duplicate-column"
+  | "table-clear-cell"
+  | "table-delete-table"
   | "table-align-left"
   | "table-align-center"
   | "table-align-right"
@@ -202,7 +208,7 @@ export function blockCommands(type: string): EditorCommand[] {
     "insert-toc",
     "insert-horizontal-rule",
     "insert-org-env",
-    "insert-layout",
+    "insert-columns",
     "jupyter-cell",
   ];
 }
@@ -522,20 +528,20 @@ const builtInQuickInsertItems: QuickInsertItem[] = [
     keywords: ["org", "env"],
   },
   {
-    id: "layout-grid",
-    label: "Layout grid",
-    detail: "2–4 columns of Markdown blocks",
-    command: "insert-layout",
-    value: "grid",
-    keywords: ["layout", "columns", "image", "figure", "排版", "网格", "图文"],
+    id: "columns",
+    label: "Columns (side-by-side)",
+    detail: "#+begin columns · #+col",
+    command: "insert-columns",
+    value: "columns",
+    keywords: ["columns", "layout", "grid", "side", "image", "figure", "排版", "分栏", "多栏", "图文", "并排"],
   },
   {
-    id: "layout-flow",
+    id: "columns-flow",
     label: "Flowing text columns",
-    detail: "2–4 columns of flowing text",
-    command: "insert-layout",
+    detail: "2–4 columns of flowing prose",
+    command: "insert-columns",
     value: "flow",
-    keywords: ["layout", "columns", "text", "排版", "分栏", "多栏"],
+    keywords: ["columns", "layout", "flow", "newspaper", "text", "排版", "分栏", "流式", "多栏"],
   },
   {
     id: "image",
