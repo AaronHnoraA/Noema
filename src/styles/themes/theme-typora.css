@@ -84,7 +84,7 @@
 }
 .cm-editor h2 {
   margin-top: 1.55em;
-  font-size: 1.16em;
+  font-size: 1.35em;
   font-variant-caps: small-caps;
   letter-spacing: 0.035em;
   padding-bottom: 0;
@@ -100,12 +100,12 @@
   background: color-mix(in srgb, currentColor, transparent 50%);
 }
 .cm-editor h3 {
-  font-size: 1.06em;
+  font-size: 1.15em;
   font-style: italic;
   color: var(--aaron-heading-3, #d2a8ff);
 }
 .cm-editor h4 {
-  font-size: 1.02em;
+  font-size: 1.05em;
   color: var(--aaron-heading-4, #8effa8);
 }
 .cm-editor h5 {
@@ -333,10 +333,11 @@
 /* ─── blockquote ─────────────────────────────────────────────────── */
 .cm-editor blockquote {
   margin: 0 0 0.72em;
-  padding: 0.26em 0 0.26em 0.82em;
+  padding: 0.26em 0 0.26em 1em;
   color: var(--aaron-muted, #4e554f);
   background: transparent;
-  border-left: 3px solid var(--aaron-paper-line, #b7ad9e);
+  /* A hairline reads as a quotation without competing with the text. */
+  border-left: 2px solid var(--aaron-paper-line, #b7ad9e);
   border-radius: 0;
   font-size: 0.97em;
 }
@@ -1055,7 +1056,7 @@
 }
 .cm-editor .cm-md-h2 {
   font-family: var(--aaron-font-heading);
-  font-size: 1.16em;
+  font-size: 1.35em;
   font-variant-caps: small-caps;
   letter-spacing: 0.035em;
   padding-bottom: 0;
@@ -1072,13 +1073,13 @@
 }
 .cm-editor .cm-md-h3 {
   font-family: var(--aaron-font-heading);
-  font-size: 1.06em;
+  font-size: 1.15em;
   font-style: italic;
   color: var(--aaron-heading-3, #d2a8ff);
 }
 .cm-editor .cm-md-h4 {
   font-family: var(--aaron-font-heading);
-  font-size: 1.02em;
+  font-size: 1.05em;
   color: var(--aaron-heading-4, #8effa8);
 }
 .cm-editor .cm-md-h5 {
@@ -1118,8 +1119,10 @@
   border-bottom-color: currentColor;
 }
 
-/* Blockquote line refinements */
+/* Blockquote line refinements: the same hairline as exported quotes. */
 .cm-editor .cm-md-blockquote {
+  border-left-width: 2px;
+  padding-left: 1em;
   border-left-color: var(--aaron-paper-line, #b7ad9e);
   color: var(--aaron-muted, #4e554f);
 }
