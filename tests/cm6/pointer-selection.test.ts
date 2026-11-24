@@ -40,7 +40,7 @@ describe("visual pointer selection state", () => {
       parent: host,
     });
     Object.defineProperty(view, "posAndSideAtCoords", { configurable: true, value: () => ({ pos: 11, assoc: 1 }) });
-    const observer = (view as unknown as { observer: { readSelectionRange: () => boolean } }).observer;
+    const observer = (view as unknown as { observer: { readSelectionRange: () => boolean; forceFlush: () => void } }).observer;
     const nativeRead = observer.readSelectionRange;
     try {
       view.contentDOM.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
@@ -49,7 +49,7 @@ describe("visual pointer selection state", () => {
       // WebKit, under user-select: none, parks the native selection here.
       getSelection()?.collapse(view.contentDOM, 0);
       expect(observer.readSelectionRange()).toBe(false);
-      view.observer.forceFlush();
+      observer.forceFlush();
       expect(view.state.selection.main.head).toBe(11);
 
       document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
