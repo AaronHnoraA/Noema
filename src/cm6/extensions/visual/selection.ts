@@ -125,8 +125,22 @@ function suspendPointerDomSelectionSync(view: EditorView): void {
     if (!isPointerSelecting(view.state)) original.apply(docView, args);
   };
   docView.updateSelection = suspended;
+  // The read side is held too.  With `user-select: none` during the gesture
+  // WebKit parks the native selection at the start of the content element;
+  // CM6's observer read that as a user selection change on its next flush
+  // (a measure during the click) and put the cursor back to the old caret's
+  // position, so a click in prose did not move the caret.
+  const observer = (view as unknown as {
+    observer?: { readSelectionRange?: (...args: unknown[]) => boolean };
+  }).observer;
+  const originalRead = observer?.readSelectionRange;
+  const suspendedRead = function (this: unknown, ...args: unknown[]): boolean {
+    return isPointerSelecting(view.state) ? false : originalRead!.apply(this, args);
+  };
+  if (observer && originalRead) observer.readSelectionRange = suspendedRead;
   pointerDomSelectionCleanup.set(view, () => {
     if (docView.updateSelection === suspended) docView.updateSelection = original;
+    if (observer && observer.readSelectionRange === suspendedRead) observer.readSelectionRange = originalRead;
   });
 }
 

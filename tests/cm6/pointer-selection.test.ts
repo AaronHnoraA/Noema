@@ -32,6 +32,37 @@ describe("visual pointer selection state", () => {
     expect(getMousedownSelection(state)).toBeUndefined();
   });
 
+  test("a native selection parked at the content start during a click is not read back", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const view = new EditorView({
+      state: EditorState.create({ doc: "alpha beta gamma", selection: { anchor: 0 }, extensions: [pointerSelectionExtension] }),
+      parent: host,
+    });
+    Object.defineProperty(view, "posAndSideAtCoords", { configurable: true, value: () => ({ pos: 11, assoc: 1 }) });
+    const observer = (view as unknown as { observer: { readSelectionRange: () => boolean } }).observer;
+    const nativeRead = observer.readSelectionRange;
+    try {
+      view.contentDOM.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+      expect(isPointerSelecting(view.state)).toBe(true);
+      view.dispatch({ selection: { anchor: 11 } });
+      // WebKit, under user-select: none, parks the native selection here.
+      getSelection()?.collapse(view.contentDOM, 0);
+      expect(observer.readSelectionRange()).toBe(false);
+      view.observer.forceFlush();
+      expect(view.state.selection.main.head).toBe(11);
+
+      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(isPointerSelecting(view.state)).toBe(false);
+      expect(observer.readSelectionRange).toBe(nativeRead);
+      expect(view.state.selection.main.head).toBe(11);
+    } finally {
+      view.destroy();
+      host.remove();
+    }
+  });
+
   test("finishes a drag when mouseup occurs outside the editor", async () => {
     const host = document.createElement("div");
     const outside = document.createElement("button");
