@@ -16,7 +16,8 @@ import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
 import { layoutClasses, layoutFromAttrs, layoutStyle, readLayoutAttrSuffix, readLayoutAttrsLine, type LayoutAttrs } from "./layout-attrs.ts";
 import { layoutGroupClasses, layoutGroupFromTitle, layoutGroupStyle } from "./layout-group.ts";
-import { katexStylesheetHref, renderMathHTML } from "./math-render.ts";
+import { katexStylesheetHref, mathRenderCacheGeneration, renderMathHTML } from "./math-render.ts";
+import { getKatexMacrosVersion } from "./katex-macros.ts";
 import { markdownLinkDestination } from "./markdown-link.ts";
 import { safeHref } from "./url-safety.ts";
 import { scanInlineCommands } from "./command-syntax.ts";
@@ -1749,7 +1750,51 @@ export function renderInlineMarkdownHTML(markdown: string): string {
   return match ? match[1]! : html;
 }
 
+// Widgets re-render the Markdown around an edit on every rebuild: table
+// cells, environment bodies, folds, comments.  Without options the output
+// depends only on the source, the macro set and the math cache, so it is
+// kept in a bounded LRU keyed on all three (NocoDB's grid caches parsed cell
+// Markdown the same way).  Whole-note renders are too big and one-off to keep.
+const RENDER_CACHE_MAX_SOURCE = 20_000;
+const RENDER_CACHE_BUDGET = 8 * 1024 * 1024;
+const renderCache = new Map<string, string>();
+let renderCacheBytes = 0;
+
+function cachedRender(kind: string, markdown: string, render: () => string): string {
+  if (markdown.length > RENDER_CACHE_MAX_SOURCE) return render();
+  const key = `${kind}\u0000${mathRenderCacheGeneration()}\u0000${getKatexMacrosVersion()}\u0000${markdown}`;
+  const hit = renderCache.get(key);
+  if (hit !== undefined) {
+    renderCache.delete(key);
+    renderCache.set(key, hit);
+    return hit;
+  }
+  const html = render();
+  renderCache.set(key, html);
+  renderCacheBytes += key.length + html.length;
+  while (renderCacheBytes > RENDER_CACHE_BUDGET && renderCache.size > 1) {
+    const [oldKey, oldHtml] = renderCache.entries().next().value as [string, string];
+    renderCache.delete(oldKey);
+    renderCacheBytes -= oldKey.length + oldHtml.length;
+  }
+  return html;
+}
+
+/** Entries in the Markdown render cache (for tests and diagnostics). */
+export function markdownRenderCacheSize(): number {
+  return renderCache.size;
+}
+
 export function renderMarkdownHTML(
+  markdown: string,
+  options?: RenderMarkdownHTMLOptions,
+  topLevelBlocks?: Array<{ from: number; to: number }>,
+): string {
+  if (!options && !topLevelBlocks) return cachedRender("block", markdown, () => renderMarkdownHTMLUncached(markdown));
+  return renderMarkdownHTMLUncached(markdown, options, topLevelBlocks);
+}
+
+function renderMarkdownHTMLUncached(
   markdown: string,
   options?: RenderMarkdownHTMLOptions,
   topLevelBlocks?: Array<{ from: number; to: number }>,
@@ -1792,6 +1837,14 @@ export function renderMarkdownHTML(
 }
 
 export function renderMarkdownInlineHTML(
+  markdown: string,
+  options?: RenderMarkdownHTMLOptions,
+): string {
+  if (!options) return cachedRender("inline", markdown, () => renderMarkdownInlineHTMLUncached(markdown));
+  return renderMarkdownInlineHTMLUncached(markdown, options);
+}
+
+function renderMarkdownInlineHTMLUncached(
   markdown: string,
   options?: RenderMarkdownHTMLOptions,
 ): string {

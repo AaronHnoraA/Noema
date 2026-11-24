@@ -60,9 +60,20 @@ function rememberMathHtml(key: string, value: { html: string; error?: string }):
   }
 }
 
+let mathCacheGeneration = 0;
+
 export function clearMathRenderCache(): void {
   mathHtmlCache.clear();
   mathHtmlCacheBytes = 0;
+  mathCacheGeneration++;
+}
+
+/**
+ * Counts clears of the math cache, so a cache holding rendered math (the
+ * Markdown render cache) can key on it and drop what a refresh replaced.
+ */
+export function mathRenderCacheGeneration(): number {
+  return mathCacheGeneration;
 }
 
 export function mathRenderCacheSize(): number {
