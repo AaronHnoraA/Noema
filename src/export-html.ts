@@ -112,18 +112,30 @@ function prepareStaticExportHTML(root: HTMLElement): void {
   renderOrgEnvBlocks(root);
 }
 
+const MATHML_POLICY = { USE_PROFILES: { mathMl: true }, ADD_ATTR: ["xmlns", "display"] };
+
+// A private-use character separates the formulas sanitized in one call;
+// KaTeX output and DOMPurify never produce it.
+const MATHML_SPLIT = "";
+
 function protectMathML(html: string): { html: string; math: string[] } {
-  const math: string[] = [];
+  const pieces: string[] = [];
+  const replaced = html.replace(/<math\b[\s\S]*?<\/math>/gi, (match) => {
+    const index = pieces.push(match) - 1;
+    return `\\uE000NOEMA_MATHML_${index}\\uE000`;
+  });
+  if (pieces.length === 0) return { html: replaced, math: [] };
+  // One DOMPurify document for every formula instead of one each.  Each piece
+  // keeps its own <div> wrapper exactly as a separate call returned it, and the
+  // sanitizer works node by node, so pieces cannot affect each other.
+  const math = String(DOMPurify.sanitize(
+    pieces.map((piece) => `<div>${piece}</div>`).join(MATHML_SPLIT), MATHML_POLICY,
+  )).split(MATHML_SPLIT);
+  if (math.length === pieces.length) return { html: replaced, math };
+  // Not expected; sanitize one by one rather than misplace a formula.
   return {
-    html: html.replace(/<math\b[\s\S]*?<\/math>/gi, (match) => {
-      const index = math.length;
-      math.push(DOMPurify.sanitize(`<div>${match}</div>`, {
-        USE_PROFILES: { mathMl: true },
-        ADD_ATTR: ["xmlns", "display"],
-      }));
-      return `\\uE000NOEMA_MATHML_${index}\\uE000`;
-    }),
-    math,
+    html: replaced,
+    math: pieces.map((piece) => String(DOMPurify.sanitize(`<div>${piece}</div>`, MATHML_POLICY))),
   };
 }
 
@@ -202,29 +214,66 @@ function stripAttrs(el: Element): void {
   }
 }
 
-export function cleanEditorHTML(root: HTMLElement): string {
-  const clone = root.cloneNode(true) as HTMLElement;
-  prepareStaticExportHTML(clone);
-  clone.querySelectorAll(
-    [
-      ".cb-chrome",
-      ".emoji-completion",
-      ".file-input",
-      ".play-caret",
-      ".syntax-hidden",
-      ".syntax-hint",
-      ".syntax-hint-italic",
-      ".math-source-hidden",
-      "math-block.math-block-rendered > .math-block-fence",
-      "math-block.math-block-rendered > .math-block-source",
-    ].join(","),
-  ).forEach((node) => node.remove());
+const EDITOR_ONLY_CLASSES = [
+  "cb-chrome",
+  "emoji-completion",
+  "file-input",
+  "play-caret",
+  "syntax-hidden",
+  "syntax-hint",
+  "syntax-hint-italic",
+  "math-source-hidden",
+];
 
-  clone.querySelectorAll("pre.cb-diagram-rendered:not(.cb-diagram-error) > code")
-    .forEach((node) => node.remove());
-  clone.querySelectorAll("[hidden]").forEach((node) => node.remove());
-  clone.querySelectorAll("*").forEach(stripAttrs);
-  stripAttrs(clone);
+/** Whether EL is editor-only chrome that exported HTML drops. */
+function isEditorOnly(el: Element): boolean {
+  if (el.hasAttribute("hidden")) return true;
+  const classes = el.classList;
+  for (const name of EDITOR_ONLY_CLASSES) if (classes.contains(name)) return true;
+  const parent = el.parentElement;
+  if (!parent) return false;
+  // math-block.math-block-rendered > .math-block-fence, > .math-block-source
+  if (parent.tagName === "MATH-BLOCK" && parent.classList.contains("math-block-rendered")
+      && (classes.contains("math-block-fence") || classes.contains("math-block-source"))) return true;
+  // pre.cb-diagram-rendered:not(.cb-diagram-error) > code
+  return el.tagName === "CODE" && parent.tagName === "PRE"
+    && parent.classList.contains("cb-diagram-rendered") && !parent.classList.contains("cb-diagram-error");
+}
+
+/**
+ * Drop editor-only elements and strip editor attributes in one walk, where
+ * there were four querySelectorAll passes over the whole tree.  A dropped
+ * element takes its subtree with it, as before.
+ */
+function removeEditorOnlyAndStripAttrs(root: HTMLElement): void {
+  const dropped: Element[] = [];
+  let el: Element | null = root.firstElementChild;
+  while (el) {
+    if (isEditorOnly(el)) {
+      dropped.push(el);
+    } else {
+      stripAttrs(el);
+      if (el.firstElementChild) {
+        el = el.firstElementChild;
+        continue;
+      }
+    }
+    // The next element in document order, never entering a dropped subtree.
+    while (el && el !== root && !el.nextElementSibling) el = el.parentElement;
+    el = el && el !== root ? el.nextElementSibling : null;
+  }
+  for (const node of dropped) node.remove();
+  stripAttrs(root);
+}
+
+/**
+ * Serialize ROOT as exported HTML.  ROOT is cloned first unless IN_PLACE,
+ * which a caller passes for a throwaway root it built for this call.
+ */
+export function cleanEditorHTML(root: HTMLElement, inPlace = false): string {
+  const clone = inPlace ? root : root.cloneNode(true) as HTMLElement;
+  prepareStaticExportHTML(clone);
+  removeEditorOnlyAndStripAttrs(clone);
   const protectedSrcdocs = protectVisualSrcdocAttrs(clone);
   const protectedHtml = protectMathML(clone.innerHTML);
   const protectedFrameAttrs = protectVisualIframeAttrs(protectedHtml.html);

@@ -1788,7 +1788,7 @@ export function renderMarkdownHTML(
     });
   });
   applyTaskCheckboxes(root);
-  return restoreIframeNavigationAttrsFromDom(cleanEditorHTML(root), protectedHtml.attrs);
+  return restoreIframeNavigationAttrsFromDom(cleanEditorHTML(root, true), protectedHtml.attrs);
 }
 
 export function renderMarkdownInlineHTML(
@@ -1798,7 +1798,7 @@ export function renderMarkdownInlineHTML(
   const md = markdownItForRender(options);
   const root = document.createElement("span");
   root.innerHTML = md.renderInline(markdown);
-  return cleanEditorHTML(root);
+  return cleanEditorHTML(root, true);
 }
 
 export function renderPublishedNoteHTML(
