@@ -114,6 +114,7 @@ CREATE INDEX wiki_aliases_alias_idx ON aliases(alias);
 CREATE INDEX wiki_tags_tag_idx ON tags(tag);
 CREATE INDEX wiki_blocks_id_idx ON blocks(block_id);
 CREATE INDEX wiki_blocks_label_idx ON blocks(label);
+CREATE INDEX wiki_links_source_idx ON links(source_key);
 CREATE INDEX wiki_links_target_idx ON links(target_id);
 CREATE INDEX wiki_links_block_target_idx ON links(target_id, target_block_id);
 CREATE INDEX wiki_links_raw_target_idx ON links(raw_target);
