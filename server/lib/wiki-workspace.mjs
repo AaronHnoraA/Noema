@@ -1050,7 +1050,6 @@ function createWikiSchema(db) {
     CREATE VIRTUAL TABLE pages_fts USING fts5(page_key UNINDEXED, title, aliases, tags, path, body, tokenize='unicode61 remove_diacritics 2');
     CREATE VIRTUAL TABLE pages_fts_trigram USING fts5(page_key UNINDEXED, title, aliases, tags, path, body, tokenize='trigram case_sensitive 0');
     CREATE TABLE page_bigrams (bigram text not null, page_key text not null, primary key(bigram, page_key)) WITHOUT ROWID;
-    CREATE INDEX wiki_page_bigrams_page_idx ON page_bigrams(page_key);
     CREATE INDEX wiki_pages_id_idx ON pages(page_id);
     CREATE INDEX wiki_pages_title_idx ON pages(title);
     CREATE INDEX wiki_pages_namespace_idx ON pages(qualified_namespace, title);
