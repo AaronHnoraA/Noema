@@ -127,10 +127,11 @@
 .cm-editor .cm-md-h5 { font-size: 0.95em; font-weight: 600; }
 .cm-editor .cm-md-h6 { font-size: 0.9em; font-weight: 600; color: var(--aaron-muted, #666); }
 
-/* Blockquote lines — left border + indent */
+/* Blockquote lines — a hairline and an indent; themes load before this
+ * bundle, so the default itself must be the light rule. */
 .cm-editor .cm-md-blockquote {
-  border-left: 3px solid var(--aaron-paper-line, #d0c8be);
-  padding-left: 0.8em;
+  border-left: 2px solid var(--aaron-paper-line, #d0c8be);
+  padding-left: 1em;
   color: var(--aaron-muted, #666);
 }
 
