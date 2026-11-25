@@ -139,6 +139,7 @@ import type {
 
 import { renderedConstructAt } from "./extensions/visual/constructs/registry.ts";
 import { documentViewState } from "./extensions/visual/widgets/document-view-state.ts";
+import { documentDiffSourceAt } from "./extensions/visual/widgets/document-diff.ts";
 
 function sourceRangeElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof Element) {
@@ -523,11 +524,12 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     ) {
       return;
     }
+    const diff = documentDiffSourceAt(view, event.target);
     const source = sourceRangeElement(event.target);
-    if (!source) return;
-    const openSource = source.dataset.cmOpenSource === "true";
-    const mathBlock = source.dataset.cmMathBlock === "true";
-    const inlineMath = source.dataset.cmInlineMath === "static";
+    if (!source && !diff) return;
+    const openSource = diff || source?.dataset.cmOpenSource === "true";
+    const mathBlock = source?.dataset.cmMathBlock === "true";
+    const inlineMath = source?.dataset.cmInlineMath === "static";
     if (!openSource && !mathBlock) return;
     if (view.state.readOnly || options.passiveReader) {
       // CM6 otherwise maps the pointer into the hidden source range, which
@@ -540,6 +542,18 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
       return;
     }
     if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (diff) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      preserveEditorViewport(view, () => {
+        view.dispatch({ selection: { anchor: diff.anchor } });
+        view.contentDOM.focus({ preventScroll: true });
+      }, diff.from);
+      flashCaret();
+      return;
+    }
+    if (!source) return;
     // The widget's own dataset is only a hint: it is written once at toDOM()
     // time and goes stale as soon as an edit elsewhere shifts the document, so
     // the live decoration position is the authority.

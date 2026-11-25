@@ -48,6 +48,7 @@ const constructs = [
   "#+begin image-card Cover\n![A landscape](/noema-scroll-cover.svg){width:220px}\n\nThe figure shows the cover preview.\n#+end image-card",
   "#+begin tabs Guide\n### Overview\nA tab holds this ordinary paragraph.\n### Details\nDetails with **emphasis**.\n#+end tabs",
   "#+begin accordion Review {open=1}\n### Source\nThe first disclosure has a longer explanation and an ordinary list.\n### Limits\nMore detail.\n#+end accordion",
+  "#+begin diff Layout review\n~~~text\nDraft source marker\nrows=2\nwidth=small\n~~~\n\n~~~text\nDraft source marker\nrows=3\nwidth=auto\n~~~\n#+end diff",
   "#+begin columns\nLeft column prose.\n\n#+col\n\nRight column prose.\n#+end columns",
   "A sentence with @@comment [inline note] attached.",
   "```python\nprint('hello')\nfor i in range(3):\n    print(i)\n```",
@@ -135,6 +136,7 @@ try {
         ["home-box", "The guide introduces"], ["image-card", "![A landscape]"],
         ["tabs", "### Overview"],
         ["accordion", "### Source"],
+        ["diff", "~~~text\nDraft source marker"],
         ["footnote", "[^1] too", "navigates"],
       ].filter(([family]) => !process.env.ONLY || process.env.ONLY.split(",").includes(family)).map(([family, needle, click = "opens"]) => {
         const at = markdown.indexOf(needle);

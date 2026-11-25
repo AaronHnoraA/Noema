@@ -591,6 +591,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
   });
   const output = [];
   const stack = [];
+  const quotedDiffDepths = [];
   let hidden = null;
   let hiddenDepth = 0;
   let fence = null;
@@ -680,6 +681,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
       rawColumns.lines.push(line);
       continue;
     }
+    while (quotedDiffDepths.length && quotedDiffDepths.at(-1) > container.quoteDepth) quotedDiffDepths.pop();
     if (fence && container.quoteDepth !== fence.quoteDepth) {
       output.push(`${fence.prefix}${fence.char.repeat(fence.length)}`);
       fence = null;
@@ -693,7 +695,11 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
     const fenceMatch = container.content.match(/^ {0,3}(`{3,}|~{3,})/);
     if (fenceMatch) {
       fence = { char: fenceMatch[1][0], length: fenceMatch[1].length, quoteDepth: container.quoteDepth, prefix: container.prefix };
-      output.push(line);
+      const literalDiff = quotedDiffDepths.length || stack.some(({ kind }) => kind === "diff");
+      if (literalDiff && container.quoteDepth && markdownContainerLine(lines[index - 1]).content.trim()) {
+        output.push(container.prefix.trimEnd());
+      }
+      output.push(literalDiff ? `${container.prefix}${fenceMatch[0]}text` : line);
       continue;
     }
     if (displayMath && container.quoteDepth !== displayMath.quoteDepth) {
@@ -789,6 +795,11 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
       }
     }
 
+    if (container.quoteDepth) {
+      const marker = container.content.trimStart();
+      if (orgOpen(marker)?.kind === "diff") quotedDiffDepths.push(container.quoteDepth);
+      else if (orgClose(marker) === "diff" && quotedDiffDepths.at(-1) === container.quoteDepth) quotedDiffDepths.pop();
+    }
     const begin = orgOpen(line);
     if (begin) {
       if (hiddenKinds.has(begin.kind)) { hidden = begin.kind; hiddenDepth = 1; continue; }

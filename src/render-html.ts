@@ -21,6 +21,7 @@ import { documentReadingKinds, renderDocumentReading } from "./document-reading.
 import { documentQrFence, documentQrHasText, renderDocumentQrcode } from "./document-qrcode.ts";
 import { documentTabKinds, renderDocumentTabs } from "./document-tabs.ts";
 import { documentDisclosureKinds, renderDocumentDisclosure } from "./document-disclosures.ts";
+import { documentDiffSides, renderDocumentDiff } from "./document-diff.ts";
 import { forEachDocumentViewTree } from "./document-view.ts";
 import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
@@ -95,6 +96,8 @@ export type RenderMarkdownHTMLOptions = {
   documentViewSource?: string;
   /** Keep closed sections inert in the editor. */
   documentDisclosureActions?: boolean;
+  /** Include layout and copy controls for a read-only comparison in the editor. */
+  documentDiffActions?: boolean;
   /** Expose every disclosure in a print document. */
   expandDisclosures?: boolean;
   /**
@@ -1398,6 +1401,7 @@ function renderOrgEnv(
     : kindName === "qrcode" ? renderDocumentQrcode(md, meta.body, attrs)
     : documentTabKinds.has(kindName) ? renderDocumentTabs(md, kindName, title, meta.body, attrs, options.documentTabActions === true, options.documentViewSource)
     : documentDisclosureKinds.has(kindName) ? renderDocumentDisclosure(md, kindName, title, meta.body, attrs, options.documentDisclosureActions === true, blockId, options.documentViewSource)
+    : kindName === "diff" ? renderDocumentDiff(md, title, meta.body, attrs, options.documentDiffActions === true)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kindName === "details" && renderedBody !== null) return renderedBody;
@@ -1432,24 +1436,27 @@ function applyTaskCheckboxes(root: ParentNode): void {
   });
 }
 
-const qrEnvironmentLine = /#\+[ \t]*begin[ \t]+qrcode\b/i;
+const literalFenceEnvironment = /#\+[ \t]*begin[ \t]+(?:qrcode|diff)\b/i;
 
-function collectQrLiteralLines(md: MarkdownIt, markdown: string, start: number, result: Set<number>): void {
-  if (!qrEnvironmentLine.test(markdown)) return;
+function collectLiteralFenceLines(md: MarkdownIt, markdown: string, start: number, result: Set<number>): void {
+  if (!literalFenceEnvironment.test(markdown)) return;
   const tokens: Token[] = [];
   md.block.parse(markdown, md, {}, tokens);
   for (const token of tokens) {
     if (token.type !== "org_env_block" || !token.map) continue;
     const bodyStart = start + token.map[0] + 1;
     const { kind, title, body } = token.meta as OrgEnvTokenMeta;
-    if (kind.toLowerCase() === "qrcode" && !documentQrHasText("qrcode", title)) {
-      const fence = documentQrFence(md, body);
-      if (fence?.map) {
+    const mode = kind.toLowerCase();
+    const fences = mode === "qrcode" && !documentQrHasText("qrcode", title) ? [documentQrFence(md, body)]
+      : mode === "diff" ? documentDiffSides(md, body)?.map(({ fence }) => fence) : undefined;
+    if (fences?.some((fence) => fence?.map)) {
+      for (const fence of fences) {
+        if (!fence?.map) continue;
         for (let line = fence.map[0] + 1; line < fence.map[1] - 1; line++) result.add(bodyStart + line);
-        continue;
       }
+      continue;
     }
-    collectQrLiteralLines(md, body, bodyStart, result);
+    collectLiteralFenceLines(md, body, bodyStart, result);
   }
 }
 
@@ -1926,7 +1933,7 @@ export function renderMarkdownHTML(
 export function renderEditorWidgetHTML(markdown: string, documentViewSource?: string): string {
   const cacheKind = documentViewSource === undefined ? "editor-widget" : "editor-widget-sections";
   return cachedRender(cacheKind, markdown, () => renderMarkdownHTMLUncached(markdown, {
-    documentTableActions: true, documentTabActions: true, documentViewSource, documentDisclosureActions: true,
+    documentTableActions: true, documentTabActions: true, documentViewSource, documentDisclosureActions: true, documentDiffActions: true,
   }));
 }
 
@@ -1938,10 +1945,10 @@ function renderMarkdownHTMLUncached(
   markdown = approvedEdiffMarkdown(markdown.replace(/\r\n?/g, "\n"));
   const md = markdownItForRender(options);
   const literalLines = new Set<number>();
-  // A QR fence encodes the authored bytes, including text that resembles
-  // Noema annotations or table layout attributes.
+  // QR and diff fences consume their literal bytes, including text that
+  // resembles Noema annotations or table layout attributes.
   if (markdown.includes("{==") || /\n[ \t]*\{/.test(markdown)) {
-    collectQrLiteralLines(md, markdown, 0, literalLines);
+    collectLiteralFenceLines(md, markdown, 0, literalLines);
   }
   markdown = literalLines.size
     ? markdown.split("\n").map((line, index) => literalLines.has(index) ? line : stripCommentAnchors(line)).join("\n")

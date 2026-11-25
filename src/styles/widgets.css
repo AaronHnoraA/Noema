@@ -1947,6 +1947,107 @@ ul.noema-document-log > li.noema-log-plain { display: block; }
   .noema-disclosure-edit { display: none; }
 }
 
+.noema-document-diff {
+  --diff-line: var(--aaron-paper-line, var(--border, currentColor));
+  --diff-muted: var(--aaron-muted, currentColor);
+  --diff-remove: var(--aaron-callout-danger, currentColor);
+  --diff-add: var(--aaron-green, currentColor);
+  --diff-number-width: calc(var(--diff-digits, 1) * 0.62em + 0.48em);
+  container-type: inline-size;
+  border: 1px solid var(--diff-line);
+  min-inline-size: 0;
+  white-space: normal;
+}
+.noema-diff-toolbar, .noema-diff-modes, .noema-diff-labels > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15em 0.42em;
+}
+.noema-diff-toolbar { padding: 0.28em 0.45em; border-block-end: 1px solid var(--diff-line); }
+.noema-document-diff button {
+  font: inherit;
+  padding: 0.1em 0.34em;
+  border: 1px solid transparent;
+  color: var(--diff-muted);
+  background: transparent;
+  cursor: pointer;
+}
+.noema-document-diff button[aria-pressed="true"] {
+  color: var(--aaron-ink, currentColor);
+  border-color: var(--diff-line);
+  background: var(--aaron-panel, transparent);
+}
+.noema-document-diff button:is(:hover, :focus-visible) { color: var(--aaron-link, currentColor); }
+.noema-diff-status { margin-inline-start: auto; color: var(--diff-muted); }
+.noema-diff-labels, .noema-diff-row {
+  display: grid;
+  grid-template-columns: var(--diff-columns, repeat(2, minmax(0, 1fr)));
+}
+.noema-diff-labels { border-block-end: 1px solid var(--diff-line); background: var(--aaron-panel, transparent); }
+.noema-diff-labels > div { justify-content: space-between; padding: 0.2em 0.45em; min-inline-size: 0; overflow-wrap: anywhere; }
+.noema-diff-labels > :first-child { border-inline-end: 1px solid var(--diff-line); }
+.noema-diff-cell {
+  display: grid;
+  grid-template-columns: var(--diff-cell-columns, var(--diff-number-width) 0.9em minmax(0, 1fr));
+  align-items: baseline;
+  min-inline-size: 0;
+  padding-inline: 0.24em 0.42em;
+  border-block-end: 1px solid color-mix(in srgb, var(--diff-line) 42%, transparent);
+}
+.noema-diff-cell[data-diff-side="before"] { border-inline-end: var(--diff-divider, 1px solid var(--diff-line)); }
+.noema-diff-cell[data-diff-state="removed"] { --diff-tone: var(--diff-remove); }
+.noema-diff-cell[data-diff-state="added"] { --diff-tone: var(--diff-add); }
+.noema-diff-cell:is([data-diff-state="removed"], [data-diff-state="added"]) {
+  background: color-mix(in srgb, var(--diff-tone) 10%, transparent);
+}
+.noema-diff-cell[data-diff-state="empty"] { display: var(--diff-empty, grid); }
+.noema-diff-cell[data-diff-side="after"][data-diff-state="same"] { display: var(--diff-repeat, grid); }
+.noema-diff-number, .noema-diff-other-number { color: var(--diff-muted); text-align: end; padding-inline-end: 0.45em; }
+.noema-diff-other-number { display: var(--diff-counterpart, none); grid-column: 2; }
+.noema-diff-cell[data-diff-side="after"] .noema-diff-number { grid-column: var(--diff-after-number, 1); }
+.noema-diff-marker { grid-column: var(--diff-sign-column, 2); color: var(--diff-tone, var(--diff-muted)); }
+.noema-document-diff .noema-diff-cell > code {
+  grid-column: var(--diff-text-column, 3);
+  min-inline-size: 0;
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.noema-diff-cell :is(ins, del) {
+  background: color-mix(in srgb, var(--diff-tone) 29%, transparent);
+  text-decoration: none;
+}
+.noema-document-diff[data-diff-mode="unified"] .noema-diff-row {
+  --diff-columns: minmax(0, 1fr);
+  --diff-cell-columns: var(--diff-number-width) var(--diff-number-width) 0.9em minmax(0, 1fr);
+  --diff-divider: 0;
+  --diff-empty: none;
+  --diff-repeat: none;
+  --diff-counterpart: inline;
+  --diff-after-number: 2;
+  --diff-sign-column: 3;
+  --diff-text-column: 4;
+}
+@container (max-width: 33rem) {
+  .noema-document-diff[data-diff-mode="auto"] .noema-diff-row {
+    --diff-columns: minmax(0, 1fr);
+    --diff-cell-columns: var(--diff-number-width) var(--diff-number-width) 0.9em minmax(0, 1fr);
+    --diff-divider: 0;
+    --diff-empty: none;
+    --diff-repeat: none;
+    --diff-counterpart: inline;
+    --diff-after-number: 2;
+    --diff-sign-column: 3;
+    --diff-text-column: 4;
+  }
+}
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);

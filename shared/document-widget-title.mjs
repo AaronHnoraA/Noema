@@ -22,6 +22,7 @@ const attributesByKind = new Map([
   ["swiper", ["selected", "accent"]],
   ["details", ["open"]],
   ["accordion", ["open", "multiple", "expand"]],
+  ["diff", ["before", "after", "view"]],
 ]);
 
 export function hasDocumentWidgetOptions(kind) { return attributesByKind.has(kind); }

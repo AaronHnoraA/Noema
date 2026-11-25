@@ -98,6 +98,7 @@ var documentWidgetOptions = map[string][]string{
 	"swiper":     {"selected", "accent"},
 	"details":    {"open"},
 	"accordion":  {"open", "multiple", "expand"},
+	"diff":       {"before", "after", "view"},
 }
 
 var defaultEnvironment = map[string]string{
@@ -1816,6 +1817,7 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 	hidden := ""
 	hiddenDepth := 0
 	var fence *fenceState
+	var quotedDiffDepths []int
 	displayMathDepth := -1
 	displayMathPrefix := ""
 	var rawTikz *tikzBlock
@@ -1911,6 +1913,9 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 			rawColumns.Lines = append(rawColumns.Lines, line)
 			continue
 		}
+		for len(quotedDiffDepths) > 0 && quotedDiffDepths[len(quotedDiffDepths)-1] > container.QuoteDepth {
+			quotedDiffDepths = quotedDiffDepths[:len(quotedDiffDepths)-1]
+		}
 		if fence != nil && container.QuoteDepth != fence.QuoteDepth {
 			output = append(output, fence.Prefix+strings.Repeat(string(fence.Char), fence.Length))
 			fence = nil
@@ -1924,6 +1929,20 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 		}
 		if ch, length, ok := fenceRun(container.Content, false); ok {
 			fence = &fenceState{Char: ch, Length: length, QuoteDepth: container.QuoteDepth, Prefix: container.Prefix}
+			literalDiff := len(quotedDiffDepths) > 0
+			for _, opened := range stack {
+				if opened.Kind == "diff" {
+					literalDiff = true
+					break
+				}
+			}
+			if literalDiff {
+				indent := len(container.Content) - len(strings.TrimLeft(container.Content, " "))
+				line = container.Prefix + container.Content[:indent+length] + "text"
+				if container.QuoteDepth > 0 && index > 0 && strings.TrimSpace(markdownContainerLine(lines[index-1]).Content) != "" {
+					output = append(output, strings.TrimRight(container.Prefix, " \t"))
+				}
+			}
 			output = append(output, line)
 			continue
 		}
@@ -2027,6 +2046,14 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 				output = output[:len(output)-1]
 				output = append(output, rawLatexBlock(subparagraphLatex(lines[index-1], options)))
 				continue
+			}
+		}
+		if container.QuoteDepth > 0 {
+			marker := strings.TrimLeft(container.Content, " \t")
+			if begin := orgOpen(marker); begin != nil && begin.Kind == "diff" {
+				quotedDiffDepths = append(quotedDiffDepths, container.QuoteDepth)
+			} else if orgClose(marker) == "diff" && len(quotedDiffDepths) > 0 && quotedDiffDepths[len(quotedDiffDepths)-1] == container.QuoteDepth {
+				quotedDiffDepths = quotedDiffDepths[:len(quotedDiffDepths)-1]
 			}
 		}
 		if begin := orgOpen(line); begin != nil {

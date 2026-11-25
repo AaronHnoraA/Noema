@@ -63,6 +63,7 @@ import { documentTabKinds } from "../../../../document-tabs.ts";
 import { documentViewSourceKey, numberDocumentViews } from "../../../../document-view.ts";
 import { connectDocumentTabViews } from "./document-tabs.ts";
 import { connectDocumentDisclosures } from "./document-disclosures.ts";
+import { connectDocumentDiffs } from "./document-diff.ts";
 import {
   COLUMNS_MAX_COUNT,
   COLUMNS_MIN_WIDTH_PCT,
@@ -674,6 +675,7 @@ function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, scope?: Do
     if (!hasDocumentViews) return;
     connectDocumentTabViews(content, view, hydrate, locate);
     connectDocumentDisclosures(content, view, hydrate, locate);
+    connectDocumentDiffs(content, view, locate);
   };
   hydrate(root);
 }
@@ -3403,6 +3405,7 @@ function columnsRenderOptions(): RenderMarkdownHTMLOptions {
     documentTableActions: true,
     documentTabActions: true,
     documentDisclosureActions: true,
+    documentDiffActions: true,
     ...(resolver ? { assetResolver: (src: string) => resolver(src) } : {}),
     ...(noteFile ? { noteFile } : {}),
   };
@@ -3674,7 +3677,7 @@ function focusRenderedColumnPane(
   if (event.button !== 0) return;
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(".cm-column-pane-grip, .cm-columns-toolbar, .cm-columns-divider")) return;
-  if (target?.closest(documentNavigationSelector) || target?.closest(".noema-document-table-view button, .noema-tab-navigation button, summary")) return;
+  if (target?.closest(documentNavigationSelector) || target?.closest(".noema-document-table-view button, .noema-tab-navigation button, .noema-document-diff button, summary")) return;
 
   // Cmd/Ctrl-click on a link opens the link directly instead of switching edit focus.
   const link = target?.closest<HTMLAnchorElement>("a[href]") ?? null;
@@ -6308,7 +6311,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 
 const documentDataEnvironments = new Set([
   "progress", "stats", "chart", "timeline", "steps", "table", ...documentFrameKinds, ...documentReadingKinds,
-  "qrcode", ...documentTabKinds, "accordion",
+  "qrcode", ...documentTabKinds, "accordion", "diff",
 ]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "details", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
