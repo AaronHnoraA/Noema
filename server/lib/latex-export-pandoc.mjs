@@ -179,6 +179,15 @@ function environmentOpen(kind, title, options) {
     const entries = ["card", "home-box", "link-card", "image-card"].includes(kind)
       ? [attrs.description, attrs.href && `${attrs.action || "Open link"}: ${attrs.href}`, attrs.src, attrs.alt]
       : kind === "panel" ? [attrs.status] : kind === "statusbar" ? [attrs.mode, attrs.keys, attrs.note] : [];
+    if (kind === "field" && attrs.name?.trim()) {
+      entries.push(attrs.name);
+      if (/^(?:true|yes|1|required)$/i.test(attrs.required || "")) entries.push("Required");
+      for (const [key, label] of [["type", "Type"], ["type-link", "Type link"], ["default", "Default"],
+        ["since", "Since"], ["deprecated", "Deprecated"], ["experimental", "Experimental"], ["enum", "Options"],
+        ["unit", "Unit"], ["format", "Format"], ["constraint", "Constraint"]]) {
+        if (Object.hasOwn(attrs, key)) entries.push(`${label}: ${attrs[key] || '""'}`);
+      }
+    }
     details = entries.filter(Boolean).map((entry) => `\n${escapeLatexTitle(entry, options)}\\par`).join("");
     if (kind === "qrcode" && attrs.text?.trim()) details = `\n${escapeLatexText(attrs.text)}\\par`;
   }

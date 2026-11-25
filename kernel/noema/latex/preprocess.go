@@ -101,6 +101,8 @@ var documentWidgetOptions = map[string][]string{
 	"diff":       {"before", "after", "view"},
 	"file-tree":  {"lines", "collapsible", "clickable", "icon", "open-depth"},
 	"code-tree":  {"lines", "icon", "height", "open-depth"},
+	"field":      {"name", "type", "type-link", "default", "required", "deprecated", "experimental", "enum", "unit", "format", "constraint", "since", "label-width", "separator", "width"},
+	"form":       {"separator", "width"},
 }
 
 var defaultEnvironment = map[string]string{
@@ -1849,6 +1851,24 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 		entries = append(entries, attributes["status"])
 	case "statusbar":
 		entries = append(entries, attributes["mode"], attributes["keys"], attributes["note"])
+	case "field":
+		if strings.TrimSpace(attributes["name"]) != "" {
+			entries = append(entries, attributes["name"])
+			switch strings.ToLower(attributes["required"]) {
+			case "true", "yes", "1", "required":
+				entries = append(entries, "Required")
+			}
+			for _, item := range [][2]string{{"type", "Type"}, {"type-link", "Type link"}, {"default", "Default"},
+				{"since", "Since"}, {"deprecated", "Deprecated"}, {"experimental", "Experimental"}, {"enum", "Options"},
+				{"unit", "Unit"}, {"format", "Format"}, {"constraint", "Constraint"}} {
+				if value, ok := attributes[item[0]]; ok {
+					if value == "" {
+						value = `""`
+					}
+					entries = append(entries, item[1]+": "+value)
+				}
+			}
+		}
 	}
 	details := ""
 	for _, entry := range entries {

@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "document-fields-retain-card-metadata-and-list-values",
+      "markdown": "#+begin field Width {name=width type=number type-link=types.md default=46 required=true since=0.3 enum=\"24 | 32 | 46\" unit=columns constraint=\"24 to 120\"}\nWidth of the article.\n#+end field\n\n#+begin form Client {width=42ch}\n- Engine: **WebKit**\n- Target: Mac\n#+end form",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{field: Width}\\par\nwidth\\par\nRequired\\par\nType: number\\par\nType link: types.md\\par\nDefault: 46\\par\nSince: 0.3\\par\nOptions: 24 | 32 | 46\\par\nUnit: columns\\par\nConstraint: 24 to 120\\par\n```\n\n\nWidth of the article.\n\n\n```{=latex}\n\\end{quote}\n```\n\n\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{form: Client}\\par\n```\n\n\n- Engine: **WebKit**\n- Target: Mac\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "tab-continued-code-tree-keeps-fences-literal",
       "markdown": "1.  Text before\n\n\t#+begin code-tree Samples\n\t### a.tex\n\t~~~{=latex}\n\t\\textbf{literal sample}\n\t~~~\n\n\t### b.html\n\t~~~{=html}\n\t<b>literal sample</b>\n\t~~~\n\t#+end code-tree\n\n~~~{=latex}\n\\par outside\n~~~",
       "options": {},

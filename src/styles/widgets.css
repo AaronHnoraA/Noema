@@ -2131,6 +2131,66 @@ ul.noema-tree-list { margin: 0; padding: 0; list-style: none; }
   .noema-document-tree details[data-tree-directory]::details-content { content-visibility: visible; }
 }
 
+.noema-parameter-field, .noema-document-fields {
+  --document-field-line: var(--aaron-paper-line, var(--border, currentColor));
+  --document-field-muted: var(--aaron-muted, currentColor);
+  inline-size: var(--document-fields-width, 100%);
+  max-inline-size: 100%;
+  min-inline-size: 0;
+  margin: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.noema-parameter-field {
+  padding: 0.5em 0.6em;
+  border: 1px solid var(--document-field-line);
+}
+.noema-parameter-field dl, .noema-parameter-field dd, .noema-document-fields dd { margin: 0; }
+.noema-field-header, .noema-field-signature, .noema-field-values {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35em 0.9em;
+}
+.noema-field-header > [data-field-state] {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.18em 0.35em;
+  min-inline-size: 0;
+  color: var(--document-field-muted);
+}
+.noema-field-state-label {
+  border: 1px solid var(--document-field-line);
+  border-radius: 0.18em;
+  padding-inline: 0.3em;
+}
+.noema-field-state-description { color: var(--document-field-muted); }
+.noema-field-header > [data-field-state="required"] { color: var(--aaron-link, currentColor); }
+.noema-field-header > [data-field-state="deprecated"] { color: var(--aaron-callout-danger, currentColor); }
+.noema-field-header > [data-field-state="experimental"] { color: var(--aaron-callout-info, currentColor); }
+.noema-parameter-field > :not(:first-child) { margin-block-start: 0.48em; }
+.noema-parameter-field dl > div {
+  display: inline-flex;
+  flex-wrap: wrap;
+  column-gap: 0.35em;
+  min-inline-size: 0;
+}
+.noema-parameter-field dt, .noema-document-fields dt { color: var(--document-field-muted); }
+.noema-field-body > :first-child { margin-block-start: 0; }
+.noema-field-body > :last-child { margin-block-end: 0; }
+.noema-parameter-field .noema-field-values { border-block-start: 1px solid var(--document-field-line); padding-block-start: 0.35em; }
+.noema-document-fields > div {
+  padding-block: 0.36em;
+  border-block-end: 1px solid var(--document-field-line);
+}
+.noema-document-fields[data-field-layout="field"] > div {
+  display: grid;
+  grid-template-columns: minmax(0, min(var(--document-fields-label, 16ch), 42%)) minmax(0, 1fr);
+  gap: 0.75em;
+}
+.noema-document-fields[data-field-layout="form"] dd { padding-block-start: 0.18em; }
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);

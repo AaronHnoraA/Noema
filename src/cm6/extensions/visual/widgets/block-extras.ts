@@ -65,6 +65,7 @@ import { connectDocumentTabViews } from "./document-tabs.ts";
 import { connectDocumentDisclosures } from "./document-disclosures.ts";
 import { connectDocumentDiffs } from "./document-diff.ts";
 import { documentTreeKinds } from "../../../../document-trees.ts";
+import { documentFieldHasDetails, documentFieldKinds } from "../../../../document-fields.ts";
 import { CODE_TREE_TEXT_SELECTOR, connectDocumentTrees } from "./document-trees.ts";
 import {
   COLUMNS_MAX_COUNT,
@@ -611,6 +612,8 @@ const documentNavigationSelector = [
   ".noema-document-tabs a[href]",
   ".noema-document-disclosure a[href]",
   ".noema-document-tree a[href]",
+  ".noema-parameter-field a[href]",
+  ".noema-document-fields a[href]",
 ].join(", ");
 
 interface DocumentViewScope {
@@ -6310,7 +6313,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 
 const documentDataEnvironments = new Set([
   "progress", "stats", "chart", "timeline", "steps", "table", ...documentFrameKinds, ...documentReadingKinds,
-  "qrcode", ...documentTabKinds, "accordion", "diff", ...documentTreeKinds,
+  "qrcode", ...documentTabKinds, "accordion", "diff", ...documentTreeKinds, ...documentFieldKinds,
 ]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "details", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
@@ -6426,7 +6429,8 @@ function addOrgEnvBlockExtraDecos(
   addOrgEnvBoundaryDecos(decos, state, block);
   if (documentDataEnvironments.has(block.kind)
       && (block.body.trim() || documentFrameHasDetails(block.kind, block.title)
-        || documentStatusHasDetails(block.kind, block.title) || documentQrHasText(block.kind, block.title))
+        || documentStatusHasDetails(block.kind, block.title) || documentQrHasText(block.kind, block.title)
+        || documentFieldHasDetails(block.kind, block.title))
       && !opensSource(state, block.from, block.to)) {
     const widget = new DocumentDataWidget(block);
     if (widget.from < widget.to) {

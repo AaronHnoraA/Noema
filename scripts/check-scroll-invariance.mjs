@@ -51,6 +51,8 @@ const constructs = [
   "#+begin diff Layout review\n~~~text\nDraft source marker\nrows=2\nwidth=small\n~~~\n\n~~~text\nDraft source marker\nrows=3\nwidth=auto\n~~~\n#+end diff",
   "#+begin file-tree Paths {collapsible=true clickable=true}\n- source\n  - overview.md\n  - options.md\n#+end file-tree",
   "#+begin code-tree Samples\n### layout/render.js\n~~~javascript\nconst render = true;\n~~~\n\n### layout/panel.js\n~~~javascript\nconst panel = true;\n~~~\n#+end code-tree",
+  "#+begin field Cache {name=storage type=path default=local required=true}\nDirectory where the renderer saves preview assets.\n#+end field",
+  "#+begin form Build\n- Preview engine: WebKit\n- Device: Mac\n#+end form",
   "#+begin columns\nLeft column prose.\n\n#+col\n\nRight column prose.\n#+end columns",
   "A sentence with @@comment [inline note] attached.",
   "```python\nprint('hello')\nfor i in range(3):\n    print(i)\n```",
@@ -141,6 +143,8 @@ try {
         ["diff", "~~~text\nDraft source marker"],
         ["file-tree", "- source\n  - overview.md"],
         ["code-tree", "### layout/render.js"],
+        ["field", "Directory where the renderer saves"],
+        ["form", "- Preview engine: WebKit"],
         ["footnote", "[^1] too", "navigates"],
       ].filter(([family]) => !process.env.ONLY || process.env.ONLY.split(",").includes(family)).map(([family, needle, click = "opens"]) => {
         const at = markdown.indexOf(needle);

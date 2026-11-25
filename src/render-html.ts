@@ -23,6 +23,7 @@ import { documentTabKinds, renderDocumentTabs } from "./document-tabs.ts";
 import { documentDisclosureKinds, renderDocumentDisclosure } from "./document-disclosures.ts";
 import { documentDiffSides, renderDocumentDiff } from "./document-diff.ts";
 import { documentCodeTree, documentTreeKinds, renderDocumentTree } from "./document-trees.ts";
+import { documentFieldDelimiter, documentFieldKinds, renderDocumentFields } from "./document-fields.ts";
 import { forEachDocumentViewTree } from "./document-view.ts";
 import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
@@ -1406,6 +1407,7 @@ function renderOrgEnv(
     : documentDisclosureKinds.has(kindName) ? renderDocumentDisclosure(md, kindName, title, meta.body, attrs, options.documentDisclosureActions === true, blockId, options.documentViewSource)
     : kindName === "diff" ? renderDocumentDiff(md, title, meta.body, attrs, options.documentDiffActions === true)
     : documentTreeKinds.has(kindName) ? renderDocumentTree(md, kindName, title, meta.body, attrs, options.documentTreeActions === true)
+    : documentFieldKinds.has(kindName) ? renderDocumentFields(md, kindName, meta.body, attrs)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kindName === "details" && renderedBody !== null) return renderedBody;
@@ -1702,6 +1704,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions): MarkdownIt {
   md.block.ruler.before("paragraph", "private_command_line", privateCommandLineRule, { alt: ["paragraph"] });
   md.block.ruler.before("reference", "footnote_definition", footnoteDefinitionRule, { alt: ["paragraph", "reference", "blockquote"] });
   md.core.ruler.push("noema_callouts", noemaCalloutsRule);
+  md.core.ruler.before("text_join", "noema_field_delimiter", documentFieldDelimiter);
   md.core.ruler.push("noema_block_identity", blockIdentityRule);
   md.inline.ruler.before("link", "empty_html_link_embed", emptyHtmlLinkEmbedRule);
   md.inline.ruler.before("link", "spaced_fragment_link", spacedFragmentLinkRule);
