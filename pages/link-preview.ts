@@ -35,11 +35,13 @@ type LinkPreviewOptions = {
 
 export type LinkPreviewController = {
   element: HTMLElement;
-  show: (href: string, x: number, y: number, options?: { persistent?: boolean }) => void;
+  show: (href: string, x: number, y: number, options?: ShowPreviewOptions) => void;
   hide: () => void;
   dismissTransient: () => void;
   isOpen: () => boolean;
 };
+
+type ShowPreviewOptions = { persistent?: boolean; keyboard?: boolean };
 
 export function createLinkPreviewController(options: LinkPreviewOptions): LinkPreviewController {
   const element = document.createElement("div");
@@ -51,6 +53,7 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
   let moved = false;
   let persistent = false;
   let transientSince = 0;
+  let returnFocus: HTMLElement | null = null;
 
   function setPersistent(value: boolean): void {
     persistent = value;
@@ -59,9 +62,12 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
   }
 
   function hide(): void {
+    showEpoch.cancel();
     element.hidden = true;
     moved = false;
     setPersistent(false);
+    if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+    returnFocus = null;
   }
 
   function dismissTransient(): void {
@@ -72,9 +78,17 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
 
   function place(x: number, y: number): void {
     const margin = 10;
-    const width = Math.min(760, Math.max(420, window.innerWidth * 0.54), window.innerWidth - margin * 2);
+    const keyboard = element.dataset.previewOrigin === "keyboard";
+    const goal = element.dataset.previewCompact === "true" ? 385 : Math.max(420, window.innerWidth * 0.54);
+    const width = Math.min(760, goal, window.innerWidth - margin * 2);
     element.style.width = `${width}px`;
     const rect = element.getBoundingClientRect();
+    if (keyboard) {
+      element.style.left = `${Math.max(margin, window.innerWidth - rect.width - margin)}px`;
+      const opposite = y < window.innerHeight / 2 ? window.innerHeight - rect.height - margin : margin;
+      element.style.top = `${Math.max(margin, opposite)}px`;
+      return;
+    }
     let left = x + 12;
     let top = y + 12;
     if (left + width > window.innerWidth - margin) left = Math.max(margin, x - width - 12);
@@ -112,14 +126,18 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
   }
 
   function renderChrome(title: string, subtitle: string, body: string, onOpen: () => void, renderOptions: { html?: boolean; openLabel?: string } = {}): void {
+    const focused = element.contains(document.activeElement);
     element.replaceChildren();
     const head = document.createElement("header");
     head.className = "noema-link-preview-head";
     const titleEl = document.createElement("strong");
     titleEl.textContent = title;
-    const subtitleEl = document.createElement("span");
-    subtitleEl.textContent = subtitle;
-    head.append(titleEl, subtitleEl);
+    head.append(titleEl);
+    if (subtitle) {
+      const subtitleEl = document.createElement("span");
+      subtitleEl.textContent = subtitle;
+      head.append(subtitleEl);
+    }
     makeDraggable(head);
 
     const content = document.createElement("div");
@@ -147,19 +165,23 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
     closeButton.addEventListener("click", hide);
     actions.append(openButton, closeButton);
     element.append(head, content, actions);
+    if (focused) openButton.focus({ preventScroll: true });
   }
 
-  function show(href: string, x: number, y: number, showOptions: { persistent?: boolean } = {}): void {
+  function show(href: string, x: number, y: number, showOptions: ShowPreviewOptions = {}): void {
     const target = options.resolveTarget(href);
     const roamLink = /^roam:\/\//i.test(href);
     element.dataset.linkKind = roamLink ? "roam" : "standard";
+    element.dataset.previewOrigin = showOptions.keyboard ? "keyboard" : "pointer";
+    element.dataset.previewCompact = String(Boolean(showOptions.keyboard && !target.note?.file && !roamLink));
+    if (showOptions.keyboard && document.activeElement instanceof HTMLElement && !element.contains(document.activeElement)) {
+      returnFocus = document.activeElement;
+    } else if (!showOptions.keyboard) returnFocus = null;
     const run = showEpoch.begin();
     moved = false;
     setPersistent(showOptions.persistent === true);
     options.beforeShow?.();
     element.hidden = false;
-    renderChrome("Loading", href, "Loading preview...", () => options.openExternalUrl(href, { newWindow: false }));
-    place(x, y);
 
     if (!target.note?.file) {
       const internal = roamLink;
@@ -168,15 +190,19 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
       let linkTitle = rawTitle;
       try { linkTitle = decodeURIComponent(rawTitle); } catch {}
       setPersistent(showOptions.persistent === true);
-      renderChrome(internal ? linkTitle || "Wiki page" : safe ? "External link" : "Blocked link", internal ? "Wiki link · target needs resolution" : href, internal ? "Open this link to find or create its page." : safe ? href : "Unsafe URL", () => {
+      renderChrome(internal ? linkTitle || "Wiki page" : safe ? "External link" : "Blocked link", internal ? "Wiki link · target needs resolution" : "", internal ? "Open this link to find or create its page." : safe ? href : "Unsafe URL", () => {
         if (internal) options.openExternalUrl(href, { newWindow: false });
         else if (safe) options.openExternalUrl(href, { newWindow: true });
         else options.setStatus?.("Blocked unsafe link");
       }, { openLabel: internal ? "Open or create" : "Open" });
       place(x, y);
+      if (showOptions.keyboard) element.querySelector("button")?.focus({ preventScroll: true });
       return;
     }
 
+    renderChrome("Loading", href, "Loading preview...", () => options.openExternalUrl(href, { newWindow: false }));
+    place(x, y);
+    if (showOptions.keyboard) element.querySelector("button")?.focus({ preventScroll: true });
     const note = target.note;
     const title = options.noteTitle(note);
     const subtitle = note.path || note.file || href;
@@ -217,6 +243,12 @@ export function createLinkPreviewController(options: LinkPreviewOptions): LinkPr
   }
 
   element.addEventListener("mousedown", (event) => event.stopPropagation());
+  element.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    hide();
+  });
   element.addEventListener("pointerenter", () => {
     if (!element.hidden) setPersistent(true);
   });

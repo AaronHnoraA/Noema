@@ -120,6 +120,12 @@ test("the editor jumps from a rendered card and updates its reference after a de
     editor.setMarkdownSelection(source.length);
     expect(host.querySelector(".cm-footnote-reference button")?.textContent).toBe("1");
     expect(markdownHrefAt(editor.view.state, source.indexOf("the card"))).toBe("https://example.test/inside");
+    let preview: string | undefined;
+    host.addEventListener("noema:preview-url", (event) => { preview = (event as CustomEvent<{ href: string }>).detail.href; });
+    editor.setMarkdownSelection(source.indexOf("the card"));
+    expect(editor.runCommand("preview-link")).toBe(true);
+    expect(preview).toBe("https://example.test/inside");
+    editor.setMarkdownSelection(source.length);
     expect(host.querySelector(".cm-line .syntax-hidden:last-child")?.closest(".cm-content")).not.toBeNull();
     const card = host.querySelector(".noema-document-frame")!;
     const related = Array.from(card.querySelectorAll<HTMLAnchorElement>(".noema-footnote-reference a"));

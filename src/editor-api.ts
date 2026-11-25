@@ -74,6 +74,8 @@ export type EditorCommand =
   | "ordered-list"
   | "task-list"
   | "toggle-task"
+  | "preview-link"
+  | "toggle-spoilers"
   | "code-block"
   | "paragraph-menu"
   | "insert-table"

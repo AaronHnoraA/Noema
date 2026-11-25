@@ -6016,6 +6016,31 @@ html.noema-paused *::after {
   color: #fff;
 }
 
+.noema-link-preview[data-preview-origin="keyboard"] {
+  --aaron-ui-surface: var(--aaron-paper, Canvas);
+  --aaron-ui-bg: var(--aaron-paper-soft, Canvas);
+  --aaron-ui-text: var(--aaron-ink, CanvasText);
+  --aaron-ui-border: var(--aaron-paper-line, GrayText);
+  --aaron-ui-link: var(--aaron-link, LinkText);
+  --aaron-ui-muted: var(--aaron-muted, GrayText);
+  background: var(--aaron-ui-surface);
+  backdrop-filter: none;
+}
+.noema-link-preview[data-preview-origin="keyboard"] .noema-link-preview-actions button:first-child {
+  color: var(--aaron-ui-surface);
+}
+.noema-link-preview[data-preview-origin="keyboard"] .noema-link-preview-actions button:focus-visible {
+  outline: 1px solid var(--aaron-ui-link);
+  outline-offset: 2px;
+}
+.noema-link-preview[data-preview-compact="true"] .noema-link-preview-head,
+.noema-link-preview[data-preview-compact="true"] .noema-link-preview-body {
+  padding: 0.62rem 0.85rem;
+}
+.noema-link-preview[data-preview-compact="true"] .noema-link-preview-body {
+  overflow-wrap: anywhere;
+}
+
 .noema-link-preview[data-link-kind="roam"] {
   border-color: color-mix(in srgb, var(--aaron-link, #7ee7ff), transparent 60%);
   border-radius: 12px 12px 12px 4px;

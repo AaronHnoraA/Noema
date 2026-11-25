@@ -1855,6 +1855,8 @@ const editorCommands = new Set<EditorCommand>([
   "bullet-list",
   "ordered-list",
   "task-list",
+  "preview-link",
+  "toggle-spoilers",
   "toggle-task",
   "code-block",
   "paragraph-menu",
@@ -14874,12 +14876,13 @@ document.addEventListener("noema:open-url", (event) => {
   openExternalUrl(href, { newWindow: custom.detail?.newWindow === true, sourcePos: custom.detail?.sourcePos });
 });
 document.addEventListener("noema:preview-url", (event) => {
-  const custom = event as CustomEvent<{ href?: string; x?: number; y?: number; persistent?: boolean }>;
+  const custom = event as CustomEvent<{ href?: string; x?: number; y?: number; persistent?: boolean; keyboard?: boolean }>;
   const href = custom.detail?.href;
   if (!href) return;
   event.preventDefault();
   linkPreview.show(href, Number(custom.detail?.x || 0), Number(custom.detail?.y || 0), {
     persistent: custom.detail?.persistent === true,
+    keyboard: custom.detail?.keyboard === true,
   });
 });
 document.addEventListener("noema:open-attachment", (event) => {

@@ -17,6 +17,7 @@ import { vimJumpExtension } from "../vim-jump.ts";
 import { createMarkdownLanguageExtension } from "../languages/markdown/index.ts";
 import { effectListenersExtension } from "./effect-listeners.ts";
 import { parserWatcher } from "./parser-watcher.ts";
+import { editorSpoilers } from "./spoilers.ts";
 import {
   createVisualMarkdownEditingExtensions,
   createVisualMarkdownExtensions,
@@ -35,6 +36,7 @@ export function createMarkdownFeatureExtensions(
     createMarkdownLanguageExtension(),
     parserWatcher,
     effectListenersExtension,
+    editorSpoilers,
     tocIndexExtension,
     orderedListRenumber,
     headingFoldExtension,

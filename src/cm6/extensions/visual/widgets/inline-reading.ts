@@ -5,7 +5,7 @@ import { readInlineReading, renderInlineReading } from "../../../../document-inl
 import { renderMarkdownInlineHTML } from "../../../../render-html.ts";
 import { dispatchConstructEdit, inlineConstruct } from "../constructs/index.ts";
 import { enhanceRenderedMarkdown } from "./block-extras.ts";
-import { documentViewState, rememberDocumentView } from "./document-view-state.ts";
+import { editorSpoilerOpen, rememberEditorSpoiler } from "../../spoilers.ts";
 import { MeasuredWidget } from "./measured-widget.ts";
 
 type Reading = NonNullable<ReturnType<typeof readInlineReading>>;
@@ -38,11 +38,10 @@ class InlineReadingWidget extends MeasuredWidget {
     if (toggle) {
       queueMicrotask(() => {
         if (!view.dom.contains(root)) return;
-        const choice = view.state.field(documentViewState, false)?.get(view.posAtDOM(root, -1));
-        toggle.checked = choice === 1;
+        toggle.checked = editorSpoilerOpen(view, view.posAtDOM(root, -1));
       });
       toggle.addEventListener("change", () => {
-        rememberDocumentView(view, view.posAtDOM(root, -1), toggle.checked ? 1 : 0);
+        rememberEditorSpoiler(view, view.posAtDOM(root, -1), toggle.checked);
         view.requestMeasure();
       });
     }

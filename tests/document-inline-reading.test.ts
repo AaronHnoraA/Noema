@@ -71,3 +71,27 @@ test("source reveal and preceding edits preserve the chosen inline spoiler state
     host.remove();
   }
 });
+
+test("document-wide spoiler changes update mounted controls and reset for a new note", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const source = "First @@spoiler [answer].\n\nSecond @@spoiler [answer].\n\nTail.";
+  const editor = createEditor(host, { initialContent: source });
+  const checked = () => [...host.querySelectorAll<HTMLInputElement>(".noema-inline-toggle")].map((item) => item.checked);
+  try {
+    editor.setMarkdownSelection(source.length);
+    await Promise.resolve();
+    expect(editor.runCommand("toggle-spoilers")).toBe(true);
+    expect(checked()).toEqual([true, true]);
+    expect(editor.undo()).toBe(false);
+    expect(editor.getMarkdown()).toBe(source);
+    const next = "@@spoiler [new note].\n\nTail.";
+    editor.setMarkdown(next, { history: "reset" });
+    editor.setMarkdownSelection(next.length);
+    await Promise.resolve();
+    expect(checked()).toEqual([false]);
+  } finally {
+    editor.destroy();
+    host.remove();
+  }
+});

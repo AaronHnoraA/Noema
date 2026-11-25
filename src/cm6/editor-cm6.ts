@@ -110,6 +110,7 @@ import { captureHeadingFoldKeys, restoreHeadingFoldKeys } from "./heading-fold.t
 import { forgetViewportDecorationRefresh, scheduleViewportDecorationRefresh } from "./viewport-refresh.ts";
 import { discardMeasuredWidgetView } from "./extensions/visual/widgets/measured-observer.ts";
 import { createMarkdownFeatureExtensions } from "./extensions/index.ts";
+import { toggleEditorSpoilers } from "./extensions/spoilers.ts";
 import {
   beforeChangeDocumentEffect,
   hasBeforeChangeDocumentEffect,
@@ -293,11 +294,24 @@ function previewMarkdownLinkFromEvent(view: EditorView, event: MouseEvent): bool
 
   event.preventDefault();
   event.stopPropagation();
+  showMarkdownLinkPreview(view, href, event.clientX, event.clientY);
+  return true;
+}
+
+function previewMarkdownLinkAtCaret(view: EditorView): boolean {
+  const position = view.state.selection.main.head;
+  const href = markdownHrefAt(view.state, position);
+  if (!href) return false;
+  const anchor = view.coordsAtPos(position) ?? view.contentDOM.getBoundingClientRect();
+  showMarkdownLinkPreview(view, href, anchor.left, anchor.bottom, true);
+  return true;
+}
+
+function showMarkdownLinkPreview(view: EditorView, href: string, x: number, y: number, keyboard = false): void {
   view.dom.dispatchEvent(new CustomEvent("noema:preview-url", {
     bubbles: true,
-    detail: { href, x: event.clientX, y: event.clientY, persistent: true },
+    detail: { href, x, y, persistent: true, keyboard },
   }));
-  return true;
 }
 
 function jupyterHref(href: string): boolean {
@@ -957,6 +971,8 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     },
 
     runCommand(command: EditorCommand, value = ""): boolean {
+      if (command === "preview-link") return previewMarkdownLinkAtCaret(view);
+      if (command === "toggle-spoilers") return toggleEditorSpoilers(view);
       if (options.readOnly) return false;
       return runCommandCM6(view, command, value);
     },
@@ -1328,6 +1344,8 @@ function buildExtensions(
       { key: "Tab", run: (view) => runEditorTab(view) },
       { key: "Shift-Tab", run: (view) => runEditorTab(view, true) },
       { key: "Mod-d", run: selectNextMarkdownOccurrence },
+      { key: "Mod-Shift-k", run: previewMarkdownLinkAtCaret },
+      { key: "Mod-Alt-s", run: toggleEditorSpoilers },
       { key: "Mod-Shift-z", run: cmRedo },
       { key: "Meta-Shift-z", run: cmRedo },
       ...(standalone ? defaultKeymap : []),

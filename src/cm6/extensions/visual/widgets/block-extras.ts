@@ -43,6 +43,7 @@ import {
   type RenderMarkdownHTMLOptions,
 } from "../../../../render-html.ts";
 import { renderedDocumentReferences } from "../document-references.ts";
+import { applyEditorSpoilers } from "../../spoilers.ts";
 import { jumpBackFromFootnote, jumpToFootnoteDefinition } from "./footnotes.ts";
 import {
   ORG_META_PREAMBLE_LINE_LIMIT,
@@ -768,6 +769,7 @@ export function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, sco
   const readSource = (position: number) => orgEnvBlocksFromState(view.state).find((block) => block.from === position)?.body;
   if (hasDocumentViews) numberDocumentViews(root);
   const hydrate = (content: HTMLElement): void => {
+    applyEditorSpoilers(content, view);
     hydrateRenderedMarkdown(content);
     connectDocumentPackages(content);
     connectDocumentExcerpts(content, view);
