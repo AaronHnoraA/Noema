@@ -45,6 +45,7 @@ import {
   readNoteCodeExcerpt,
   readDocumentProjectTree,
   readDocumentVersion,
+  documentRunContext,
   scanSnippets,
   scanTemplates,
   renameRoamTag,
@@ -2695,6 +2696,15 @@ const apiRouter = new ApiRouter().register({
   "noema:api:document-assets:symbol": (body) => gatewayRequest("noema.document.symbol", {
     name: body?.name, action: body?.action,
   }, 10_000),
+  "noema:api:document-assets:run": async (body) => {
+    const action = String(body?.action || "");
+    if (!["start", "status", "open", "stop"].includes(action)) {
+      throw Object.assign(new Error("Unknown document run action"), { statusCode: 400 });
+    }
+    const workingDirectory = action === "start" ? String(body.cwd || ".").trim() || "." : undefined;
+    const context = await documentRunContext(body.notePath, workingDirectory);
+    return gatewayRequest("noema.document.run", { ...context, action, command: body.command, id: body.id }, 10_000);
+  },
   "noema:api:slides:mirror": async (body) => applyWikiMutationResult(await slidesMirror(body || {})),
   ...(jupyterCell ? withWikiMutationHooks(createJupyterApiHandlers(jupyterCell), {
     only: [
@@ -3504,7 +3514,8 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     documentAssets: {
       projectTree: function(body) { return call("noema:api:document-assets:project-tree", [body || {}]); },
       version: function(body) { return call("noema:api:document-assets:version", [body || {}]); },
-      symbol: function(body) { return call("noema:api:document-assets:symbol", [body || {}]); }
+      symbol: function(body) { return call("noema:api:document-assets:symbol", [body || {}]); },
+      run: function(body) { return call("noema:api:document-assets:run", [body || {}]); }
     },
     slides: {
       mirror: function(body) { return call("noema:api:slides:mirror", [body || {}]); }

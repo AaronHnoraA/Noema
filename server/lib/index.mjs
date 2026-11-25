@@ -53,6 +53,7 @@ export {
   readNoteCodeExcerpt,
   readDocumentProjectTree,
   readDocumentVersion,
+  documentRunContext,
   syncRoamDb,
   runtimeDebugSnapshot,
   maybeScheduleWeeklyFullSync,

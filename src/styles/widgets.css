@@ -414,6 +414,31 @@
   .noema-symbol-heading .noema-excerpt-actions { margin-inline-start: 0; }
 }
 
+.noema-document-run [data-run-inactive] { display: none; }
+.noema-document-run .noema-excerpt-heading { border-block-start: 1px solid var(--excerpt-line); }
+.noema-document-run .noema-excerpt-actions { gap: 0.45em; }
+.noema-run-source { min-inline-size: 0; padding: 0.42em 0.6em; }
+.noema-run-source > :first-child { margin-block-start: 0; }
+.noema-run-source > :last-child { margin-block-end: 0; }
+.noema-run-source .noema-run-command, .noema-run-source .noema-run-command code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.noema-run-source .noema-run-directory { display: block; margin-block-end: 0.35em; }
+.noema-run-source .noema-run-command {
+  margin-block: 0.32em;
+  padding: 0.35em 0.48em;
+  border: 1px solid var(--excerpt-line);
+  border-radius: 3px;
+  background: var(--excerpt-panel);
+}
+.noema-run-source .noema-run-command code { padding: 0; border: 0; background: transparent; }
+.noema-run-directory, .noema-run-status { color: var(--aaron-muted, currentColor); overflow-wrap: anywhere; }
+.noema-run-status:empty { display: none; }
+.noema-run-status[data-run-status="failed"] { color: var(--aaron-callout-danger, currentColor); }
+.noema-run-status[data-run-status="succeeded"] { color: var(--aaron-callout-tip, currentColor); }
+
 .callout, .noema-native-callout-body {
   --callout-accent: var(--aaron-callout-note, var(--aaron-link, currentColor));
 }

@@ -977,7 +977,7 @@ async function documentAssetPath(noteInput, rawPath) {
     throw error;
   }
   if (!relativeInsideP(relative(scope.root, file))) throw documentAssetError("The source is outside the current document root", 403);
-  return { path, file };
+  return { path, file, savedNote: scope.savedNote };
 }
 
 export async function readNoteCodeExcerpt(body) {
@@ -1021,6 +1021,16 @@ export async function readDocumentProjectTree(body) {
   if (!Number.isInteger(depth) || depth < 1 || depth > 6) throw documentAssetError("Tree depth must be between 1 and 6", 400);
   const ignored = String(body?.ignore || "").split(/[,\s]+/).filter(Boolean);
   return { ok: true, label: path === "/" ? `${basename(file)}/` : path, ...await readProjectDirectory(file, depth, ignored) };
+}
+
+export async function documentRunContext(noteInput, directory) {
+  if (directory === undefined) {
+    const scope = await workspaceDocumentScope(noteInput);
+    return { note: scope.savedNote };
+  }
+  const { file, savedNote } = await documentAssetPath(noteInput, directory);
+  if (!(await stat(file)).isDirectory()) throw documentAssetError("The command needs a working directory", 400);
+  return { note: savedNote, directory: file };
 }
 
 export async function readDocumentVersion(body) {

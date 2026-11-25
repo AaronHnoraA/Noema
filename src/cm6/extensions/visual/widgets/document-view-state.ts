@@ -1,12 +1,20 @@
 import { MapMode, StateEffect, StateField, Transaction } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import type { DocumentRun } from "../../../../../pages/api-client.ts";
 
 interface TreeChoice {
   readonly file: string | undefined;
   readonly folders: ReadonlyMap<string, boolean>;
 }
 
-type Choice = number | string | readonly number[] | TreeChoice;
+interface RunChoice {
+  readonly launch: Promise<DocumentRun>;
+  readonly note: string;
+  readonly command: string;
+  readonly cwd: string;
+}
+
+type Choice = number | string | readonly number[] | TreeChoice | RunChoice;
 const setDocumentViewChoice = StateEffect.define<{ from: number; choice: Choice }>();
 
 export const documentViewState = StateField.define<ReadonlyMap<number, Choice>>({

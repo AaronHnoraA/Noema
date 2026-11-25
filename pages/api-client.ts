@@ -648,6 +648,18 @@ type DocumentVersion = { ok: boolean; provider: "git" | "jj"; label: string } & 
 export type DocumentSymbolDetails = { kind: string; keys: string[]; signature?: string; summary?: string; file?: string };
 type DocumentSymbol = { ok: boolean } & ({ found: true } & DocumentSymbolDetails | { found: false });
 type DocumentSymbolAction = "help" | "definition";
+type DocumentRunAction = { action: "start"; command: string; cwd: string }
+  | { action: "status" | "open" | "stop"; id: string };
+export type DocumentRun = {
+  ok: boolean;
+  id: string;
+  status: "awaiting" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted" | "cancel-unconfirmed" | "unavailable";
+  hasOutput: boolean;
+  stopRequested: boolean;
+  exitCode?: number;
+  output?: string;
+  message?: string;
+};
 
 type NativeApi = {
   connection?: {
@@ -709,6 +721,7 @@ type NativeApi = {
     projectTree?: (body?: unknown) => Promise<unknown>;
     version?: (body?: unknown) => Promise<unknown>;
     symbol?: (body?: unknown) => Promise<unknown>;
+    run?: (body?: unknown) => Promise<unknown>;
   };
   slides?: {
     mirror?: (body?: unknown) => Promise<unknown>;
@@ -1467,6 +1480,10 @@ export const api = {
     async openSymbol(name: string, action: DocumentSymbolAction): Promise<void> {
       const call = requireMethod(nativeApi().documentAssets?.symbol, "Emacs symbols");
       ensureOk(await call({ name, action }) as { ok: boolean }, "Opening the Emacs symbol failed");
+    },
+    async run(notePath: string, action: DocumentRunAction): Promise<DocumentRun> {
+      const call = requireMethod(nativeApi().documentAssets?.run, "Document run");
+      return ensureOk(await call({ notePath, ...action }) as DocumentRun, "The document run failed");
     },
   },
   jupyterCell: {

@@ -770,6 +770,19 @@
           "usesTikz": false
         }
       }
+    },
+    {
+      "name": "document-run-authored-command",
+      "markdown": "#+begin run Local test {cmd=\"printf check\" cwd=src}\nRun the parser checks here.\n#+end run",
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{run: Local test}\\par\nprintf check\\par\nsrc\\par\n```\n\n\nRun the parser checks here.\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
     }
   ],
   "errorCases": [
