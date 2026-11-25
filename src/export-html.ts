@@ -2,6 +2,7 @@ import DOMPurify from "dompurify";
 
 import { forEachDocumentViewTree } from "./document-view.ts";
 import { renderMathLazy } from "./math-render.ts";
+import { stripHiddenInlineTitle } from "../shared/inline-private-title.mjs";
 
 function renderMathElement(
   tex: string,
@@ -212,10 +213,15 @@ function stripAttrs(el: Element): void {
         && !(attr.name === "aria-hidden" && el.classList.contains("noema-document-card-icon"))
         && !(attr.name === "aria-hidden" && el.classList.contains("noema-qr-symbol"))
         && !(attr.name === "aria-label" && el.classList.contains("noema-window-body"))
+        && !(attr.name === "aria-label" && el.classList.contains("noema-inline-toggle"))
+        && !(attr.name === "aria-expanded" && el.classList.contains("noema-inline-popover-button"))
+        && !(attr.name === "aria-hidden" && el.classList.contains("noema-inline-swatch"))
         && !((attr.name === "aria-label" || attr.name === "aria-hidden" || attr.name === "aria-current") && el.closest(".noema-document-breadcrumb"))
         && !(attr.name === "aria-current" && el.parentElement?.classList.contains("noema-steps-list")))
     ) {
       el.removeAttribute(attr.name);
+    } else if (attr.name === "data-title" || attr.name === "data-note-title") {
+      attr.value = stripHiddenInlineTitle(attr.value);
     }
   }
 }
@@ -339,6 +345,7 @@ export function cleanEditorHTML(root: HTMLElement, inPlace = false): string {
       "loading",
       "sandbox",
       "allow",
+      "popover",
       "referrerpolicy",
     ],
   });

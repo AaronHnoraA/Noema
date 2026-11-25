@@ -30,6 +30,9 @@ import { documentDemonstrationKinds, renderDocumentDemonstration } from "./docum
 import { renderDocumentChat } from "./document-chat.ts";
 import { documentPackageKinds, packageCommandFence, renderDocumentPackage } from "./document-packages.ts";
 import { nativeCalloutKinds, parseQuotedCallout, renderNativeCallout } from "./document-callouts.ts";
+import { inlineReadingNames, readInlineReading, renderInlineReading } from "./document-inline-reading.ts";
+import { connectInlineReadingPopovers } from "./document-inline-popovers.ts";
+import { stripHiddenInlineTitle } from "../shared/inline-private-title.mjs";
 import { documentViewSourceKey, forEachDocumentViewTree } from "./document-view.ts";
 import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
@@ -742,6 +745,21 @@ function privateInlineRule(state: StateInline, silent: boolean): boolean {
   const token = state.push("private_inline", "", 0);
   token.hidden = true;
   state.pos = start + cmd.fullTo;
+  return true;
+}
+
+function inlineReadingRule(state: StateInline, silent: boolean): boolean {
+  const start = state.pos;
+  if (!state.src.startsWith("@@", start)) return false;
+  const name = /^@@([a-z][\w-]*)/i.exec(state.src.slice(start))?.[1]?.toLowerCase();
+  if (!name || !inlineReadingNames.has(name) || markdownEscapedAt(state.src, start) || insideHtmlComment(state.src, start)) return false;
+  const lineEnd = state.src.indexOf("\n", start);
+  const command = scanInlineCommands(state.src.slice(start, lineEnd < 0 ? state.src.length : lineEnd), name)[0];
+  if (!command || command.fullFrom !== 0) return false;
+  const contents = readInlineReading(command);
+  if (!contents) return false;
+  if (!silent) state.push("noema_inline_reading", "span", 0).meta = contents;
+  state.pos = start + command.fullTo;
   return true;
 }
 
@@ -1763,6 +1781,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainSourceBodies?
   md.inline.ruler.before("escape", "comment_inline", commentInlineRule);
   md.inline.ruler.before("escape", "side_comment_inline", sideCommentInlineRule);
   md.inline.ruler.before("escape", "private_inline", privateInlineRule);
+  md.inline.ruler.before("escape", "noema_inline_reading", inlineReadingRule);
 
   md.renderer.rules.math_block = renderMathBlock;
   md.renderer.rules.math_inline = renderMathInline;
@@ -1771,6 +1790,12 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainSourceBodies?
   md.renderer.rules.comment_inline = renderCommentInline;
   md.renderer.rules.side_comment_inline = renderSideCommentInline;
   md.renderer.rules.private_inline = () => "";
+  md.renderer.rules.noema_inline_reading = (tokens, index, _options, env) => {
+    const { inlineReadingDepth = 0 } = env as { inlineReadingDepth?: number };
+    const nested = (markdown: string) => inlineReadingDepth >= 8 ? ""
+      : md.renderInline(markdown, { ...env as object, inlineReadingDepth: inlineReadingDepth + 1 });
+    return renderInlineReading(tokens[index]!.meta, nested, escapeHtml, options.expandDisclosures === true);
+  };
   md.renderer.rules.block_anchor = renderBlockAnchor;
   md.renderer.rules.block_reference = renderBlockReference;
   md.renderer.rules.footnote_reference = (tokens, idx, _opts, env) => {
@@ -2155,7 +2180,7 @@ export function renderPublishedNoteHTML(
   const root = options.root || "./";
   const assetRoot = escapeAttr(root);
   const version = options.noteThemeVersion || "dev";
-  const title = options.title || "Untitled";
+  const title = stripHiddenInlineTitle(options.title || "").trim() || "Untitled";
   const group = options.group || "Root";
   const date = options.date || "Undated";
   const kind = safeNoteKind(options.kind);
@@ -2243,11 +2268,13 @@ export function renderPublishedNoteHTML(
       toggle.setAttribute('aria-expanded', String(!collapsed));
     });
   })();</script>\n`;
-  const scriptHtml = pdf ? "" : standalone ? standaloneScript : `  <script src="${assetRoot}js/note-page.js?v=${escapeAttr(version)}"></script>
+  const inlineReadingScript = !pdf && contentHtml.includes("data-inline-popover-trigger")
+    ? `<script>(${connectInlineReadingPopovers.toString()})(document);</script>\n` : "";
+  const scriptHtml = inlineReadingScript + (pdf ? "" : standalone ? standaloneScript : `  <script src="${assetRoot}js/note-page.js?v=${escapeAttr(version)}"></script>
   <script src="${assetRoot}Noema/pages/published-toc.js?v=${escapeAttr(version)}"></script>
   <script src="${assetRoot}js/mac-window.js?v=${escapeAttr(version)}"></script>
   <script type="module" src="${assetRoot}Noema/pages/published-local-graph.js?v=${escapeAttr(version)}"></script>
-`;
+`);
   const stylesheetHtml = standalone
     ? `  <style data-noema-self-contained>${standalone.styles.replace(/<\/style/giu, "<\\/style")}</style>`
     : `  <link rel="stylesheet" href="${assetRoot}Noema/pages/style.css?v=${escapeAttr(version)}" />

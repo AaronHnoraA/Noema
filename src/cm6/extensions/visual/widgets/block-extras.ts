@@ -71,6 +71,7 @@ import { documentDemonstrationKinds } from "../../../../document-demonstrations.
 import { connectDocumentDemonstrations, DEMO_TEXT_SELECTOR, documentWindowScrollbar } from "./document-demonstrations.ts";
 import { CHAT_TEXT_SELECTOR } from "../../../../document-chat.ts";
 import { connectDocumentSourceCopy } from "./document-source-actions.ts";
+import { INLINE_READING_CONTROL_SELECTOR, connectInlineReadingPopovers } from "../../../../document-inline-popovers.ts";
 import { documentBadgeHasName, documentPackageKinds, PACKAGE_CODE_SELECTOR } from "../../../../document-packages.ts";
 import { connectDocumentPackages } from "./document-packages.ts";
 import { hasNativeCalloutLayout, nativeCalloutKinds, nativeCalloutOpening } from "../../../../document-callouts.ts";
@@ -631,6 +632,7 @@ const documentNavigationSelector = [
   ".noema-document-demo a[href]",
   ".noema-document-window a[href]",
   ".noema-document-chat a[href]",
+  ".noema-inline-reading a[href]",
   ".callout a[href]",
 ].join(", ");
 
@@ -722,6 +724,7 @@ export function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, sco
   const hydrate = (content: HTMLElement): void => {
     hydrateRenderedMarkdown(content);
     connectDocumentPackages(content);
+    connectInlineReadingPopovers(content, () => view.requestMeasure());
     if (!hasDocumentViews) return;
     connectDocumentTabViews(content, view, hydrate, locate);
     connectDocumentDisclosures(content, view, hydrate, locate);
@@ -757,7 +760,7 @@ export const CEIL_READONLY_TEXT_SELECTOR = ".cm-ceil-output, .cm-ceil-source, .c
 const DOCUMENT_READONLY_TEXT_SELECTOR = `${CODE_TREE_TEXT_SELECTOR}, ${DEMO_TEXT_SELECTOR}, ${CHAT_TEXT_SELECTOR}, ${PACKAGE_CODE_SELECTOR}`;
 
 function documentWidgetTextEvent(event: Event): boolean {
-  return readOnlyTextEvent(event, DOCUMENT_READONLY_TEXT_SELECTOR) || documentWindowScrollbar(event);
+  return readOnlyTextEvent(event, `${DOCUMENT_READONLY_TEXT_SELECTOR}, ${INLINE_READING_CONTROL_SELECTOR}`) || documentWindowScrollbar(event);
 }
 
 function nodeElement(node: Node | null | undefined): Element | null {
@@ -3760,7 +3763,7 @@ function focusRenderedColumnPane(
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(".cm-column-pane-grip, .cm-columns-toolbar, .cm-columns-divider")) return;
   if (target?.closest(documentNavigationSelector) || target?.closest(
-    `.noema-document-table-view button, .noema-tab-navigation button, .noema-document-diff button, .noema-document-tree button, .noema-demo-footer button, [data-document-source-copy], [data-copy-package-command], summary, ${DOCUMENT_READONLY_TEXT_SELECTOR}`,
+    `.noema-document-table-view button, .noema-tab-navigation button, .noema-document-diff button, .noema-document-tree button, .noema-demo-footer button, [data-document-source-copy], [data-copy-package-command], ${INLINE_READING_CONTROL_SELECTOR}, summary, ${DOCUMENT_READONLY_TEXT_SELECTOR}`,
   ) || documentWindowScrollbar(event)) return;
 
   // Cmd/Ctrl-click on a link opens the link directly instead of switching edit focus.

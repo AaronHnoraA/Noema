@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
-import { scanInlineCommands } from "../../shared/command-syntax.mjs";
+import { isEscapedCommandStart, scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { approvedEdiffMarkdown } from "../../shared/ediff-source.mjs";
 import { parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
 import { hasDocumentWidgetOptions, splitDocumentWidgetAttrs, splitDocumentWidgetTitle } from "../../shared/document-widget-title.mjs";
 import { parseQuotedCallout } from "../../shared/callout-syntax.mjs";
+import { stripHiddenInlineTitle } from "../../shared/inline-private-title.mjs";
 import { LATEX_MARKS, LATEX_PROMPT_MARK, latexMark } from "../../shared/latex-marks.mjs";
 import {
   layoutFromAttrs,
@@ -32,6 +33,8 @@ const PRIVATE_INLINE = new Set(["todo", "itodo", "project", "milestone", "clock"
 // Review annotations that reach the exported document. Planning bookkeeping
 // (`project`, `milestone`, `clock`) and machine blocks stay private.
 const EXPORTED_ANNOTATIONS = new Set(["todo", "itodo"]);
+const INLINE_READING = new Set(["spoiler", "gloss", "annotation", "symbol", "kbd", "badge", "color", "hidden"]);
+const readingColor = /^(?:#(?:[\da-f]{3}|[\da-f]{6}|[\da-f]{8})|neutral|note|info|tip|important|warning|danger)$/i;
 
 // `\todo` from todonotes cannot live in a moving argument or a tabular cell.
 // Annotations on those lines degrade to an inline form so the document still
@@ -107,7 +110,7 @@ function parseMeta(lines, initial = {}) {
 
 function orgOpen(line) {
   const match = String(line || "").match(/^#\+\s*begin\s+([A-Za-z0-9_-]+)\s*(.*)$/i);
-  return match ? { kind: match[1].toLowerCase(), title: match[2].trim() } : null;
+  return match ? { kind: match[1].toLowerCase(), title: stripHiddenInlineTitle(match[2]).trim() } : null;
 }
 
 function orgClose(line) {
@@ -260,7 +263,8 @@ function transformInlineCommands(line, options, context = {}) {
   const protectedRanges = protectedInlineRanges(line);
   const commands = scanInlineCommands(line)
     .filter((command) => !protectedRanges.some((range) => command.fullFrom >= range.from && command.fullFrom < range.to))
-    .filter((command) => PRIVATE_INLINE.has(command.name) || command.name === "scomment" || command.name === "revision" || command.name === "cite" || command.name === "tag" || command.name === "latexmk");
+    .filter((command) => PRIVATE_INLINE.has(command.name) || command.name === "scomment" || command.name === "revision" || command.name === "cite" || command.name === "tag" || command.name === "latexmk"
+      || (INLINE_READING.has(command.name) && !isEscapedCommandStart(line, command.fullFrom)));
   if (commands.length === 0) return line;
   let out = "";
   let cursor = 0;
@@ -269,7 +273,26 @@ function transformInlineCommands(line, options, context = {}) {
   for (const command of commands) {
     if (command.fullFrom < cursor) continue;
     out += line.slice(cursor, command.fullFrom);
-    if (!annotations && (EXPORTED_ANNOTATIONS.has(command.name) || command.name === "scomment"
+    if (INLINE_READING.has(command.name)) {
+      const depth = context.inlineReadingDepth ?? 0;
+      const body = (text) => depth >= 8 ? "" : transformInlineCommands(text, options, { ...context, inlineReadingDepth: depth + 1 });
+      const label = command.context.trim().replace(/\\([\[\]\\])/g, "$1");
+      const detail = command.args.text?.trim();
+      const literal = (value) => value.replaceAll(/[\\`*_{}\[\]()#<>!|$~^]/g, "\\$&");
+      if (command.name === "hidden") {
+        // The comment is source-only.
+      } else if (command.argsError || !label || (command.name === "color" && !readingColor.test(label))
+        || (["annotation", "gloss"].includes(command.name) && !detail)) out += line.slice(command.fullFrom, command.fullTo);
+      else if (command.name === "spoiler") out += body(command.context.trim());
+      else {
+        const shown = command.name === "color" ? command.args.label?.trim() || label : label;
+        out += ["kbd", "symbol"].includes(command.name) ? rawLatexInline(`\\texttt{${escapeLatexText(shown)}}`) : literal(shown);
+        if (detail && ["annotation", "gloss", "symbol"].includes(command.name)) {
+          const shownDetail = body(detail);
+          if (shownDetail) out += ` (${shownDetail})`;
+        }
+      }
+    } else if (!annotations && (EXPORTED_ANNOTATIONS.has(command.name) || command.name === "scomment"
       || command.name === "revision" || command.name === "comment")) {
       // `annotations: none` in the note metadata strips every review mark.
     } else if (EXPORTED_ANNOTATIONS.has(command.name)) {
@@ -316,7 +339,8 @@ function stripPrivateCommandsFromLinkLabels(line) {
     const span = spans[index];
     const label = result.slice(span.labelFrom, span.labelTo);
     const commands = scanInlineCommands(label)
-      .filter((command) => PRIVATE_INLINE.has(command.name) && !isDisplayCommentCommand(command));
+      .filter((command) => (PRIVATE_INLINE.has(command.name) && !isDisplayCommentCommand(command))
+        || (command.name === "hidden" && !isEscapedCommandStart(label, command.fullFrom)));
     if (commands.length === 0) continue;
     let stripped = label;
     for (let i = commands.length - 1; i >= 0; i -= 1) {

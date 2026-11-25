@@ -1,6 +1,48 @@
 {
   "cases": [
     {
+      "name": "hidden-inline-marker-in-a-code-span-remains-literal-in-environment-title",
+      "markdown": "#+begin note Example `@@hidden [LITERAL_SENTINEL]` @@hidden [SECRET]\nText.\n#+end note",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{remark}[{{Example \\texttt{@@hidden [LITERAL\\_SENTINEL]}}}]\n```\n\n\nText.\n\n\n```{=latex}\n\\end{remark}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "hidden-reading-comment-is-omitted-from-environment-titles-and-adjacent-broken-attrs",
+      "markdown": "#+begin note Visible @@hidden [TITLE_PRIVATE]\nText @@hidden [BODY_PRIVATE]{ More.\n#+end note",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{remark}[Visible]\n```\n\n\nText { More.\n\n\n```{=latex}\n\\end{remark}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "inline-reading-exports-rich-content-and-omits-hidden-notes",
+      "markdown": "Read @@spoiler [**answer** @@hidden [nested draft]]; @@gloss [API]{text=\"Application **interface**\"}; @@annotation [Context]{text=\"[Guide](guide.md)\"}; @@kbd [Ctrl+K]; @@badge [Ready]{tone=tip}; @@color [#389ba0]{label=\"Blue\"}; @@symbol [find-file]{text=\"Open a file.\"}.\n\n[Label @@hidden [link draft]](guide.md). @@hidden [private] Retain this.\n\n`@@hidden [literal]`.",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "Read **answer** ; API (Application **interface**); Context ([Guide](guide.md)); `\\texttt{Ctrl+K}`{=latex}; Ready; Blue; `\\texttt{find-file}`{=latex} (Open a file.).\n\n[Label ](guide.md).  Retain this.\n\n`@@hidden [literal]`.",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "annotated-fences-keep-full-verbatim-code-and-number-lines",
       "markdown": "~~~ts title=\"/journal/ {8} no-line-numbers\" :line-numbers=38 collapsed-lines=1 /cursor/\nconst x = cursor; // [!code focus:1]\ncommit(x); // [!code ++]\n~~~\n\n> ~~~sh line-numbers :no-line-numbers whitespace\n> printf '%s\\n' line\n> ~~~\n\n~~~{.js #existing .numberLines}\nconst untouched = 1;\n~~~",
       "options": {},

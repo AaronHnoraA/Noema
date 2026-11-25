@@ -156,12 +156,37 @@ type orgBlock struct{ Kind, Title string }
 
 func literalCodeEnvironment(kind string) bool { return kind == "diff" || kind == "code-tree" }
 
+var inlineHiddenTitle = regexp.MustCompile(`(?i)@@hidden\b`)
+
+func stripHiddenInlineTitle(title string) string {
+	matches := inlineHiddenTitle.FindAllStringIndex(title, -1)
+	if len(matches) == 0 {
+		return title
+	}
+	literal := protectedInlineRanges(title)
+	var visible strings.Builder
+	cursor := 0
+	for _, span := range matches {
+		from := span[0]
+		if from < cursor || escapedAt(title, from) || rangeContains(literal, from) {
+			continue
+		}
+		commands := scanInlineCommands(title[from:])
+		if len(commands) == 0 || commands[0].Name != "hidden" || commands[0].FullFrom != 0 {
+			continue
+		}
+		visible.WriteString(title[cursor:from])
+		cursor = from + commands[0].FullTo
+	}
+	return visible.String() + title[cursor:]
+}
+
 func orgOpen(line string) *orgBlock {
 	match := orgOpenPattern.FindStringSubmatch(line)
 	if match == nil {
 		return nil
 	}
-	return &orgBlock{Kind: strings.ToLower(match[1]), Title: strings.TrimSpace(match[2])}
+	return &orgBlock{Kind: strings.ToLower(match[1]), Title: strings.TrimSpace(stripHiddenInlineTitle(match[2]))}
 }
 
 func orgClose(line string) string {
@@ -1222,7 +1247,7 @@ func stripPrivateCommandsFromLinkLabels(line string) string {
 		commands := scanInlineCommands(label)
 		for c := len(commands) - 1; c >= 0; c-- {
 			command := commands[c]
-			if privateNames[command.Name] && !displayComment(command) {
+			if privateNames[command.Name] && !displayComment(command) || command.Name == "hidden" && !escapedAt(label, command.FullFrom) {
 				stripped = stripped[:command.FullFrom] + stripped[command.FullTo:]
 			}
 		}
@@ -1295,9 +1320,63 @@ func privateCommandLine(line string, options Options) bool {
 }
 
 type markContext struct {
-	AtParagraphStart bool
-	NextLineVisible  bool
-	MarginSafe       bool
+	AtParagraphStart   bool
+	NextLineVisible    bool
+	MarginSafe         bool
+	InlineReadingDepth int
+}
+
+var inlineReadingKinds = map[string]bool{
+	"spoiler": true, "gloss": true, "annotation": true, "symbol": true, "kbd": true, "badge": true, "color": true, "hidden": true,
+}
+var readingColor = regexp.MustCompile(`(?i)^(?:#(?:[\da-f]{3}|[\da-f]{6}|[\da-f]{8})|neutral|note|info|tip|important|warning|danger)$`)
+var readingLiteral = strings.NewReplacer(`\[`, `[`, `\]`, `]`, `\\`, `\`)
+
+func inlineReadingMarkdown(line string, command inlineCommand, options Options, context markContext, unresolved *[]string) (string, error) {
+	if command.Name == "hidden" {
+		return "", nil
+	}
+	verbatim := strings.TrimSpace(command.Context)
+	label := readingLiteral.Replace(verbatim)
+	detail := strings.TrimSpace(command.Args["text"])
+	if label == "" || command.Name == "color" && !readingColor.MatchString(label) || (command.Name == "annotation" || command.Name == "gloss") && detail == "" {
+		return line[command.FullFrom:command.FullTo], nil
+	}
+	nested := func(value string) (string, error) {
+		if context.InlineReadingDepth >= 8 {
+			return "", nil
+		}
+		child := context
+		child.InlineReadingDepth++
+		return transformInlineCommands(value, options, child, unresolved)
+	}
+	if command.Name == "spoiler" {
+		return nested(verbatim)
+	}
+	if colorLabel := strings.TrimSpace(command.Args["label"]); command.Name == "color" && colorLabel != "" {
+		label = colorLabel
+	}
+	var result strings.Builder
+	if command.Name == "symbol" || command.Name == "kbd" {
+		result.WriteString(rawLatexInline("\\texttt{" + escapeLatexText(label) + "}"))
+	} else {
+		for _, ch := range label {
+			if strings.ContainsRune("\\`*_{}[]()#<>!|$~^", ch) {
+				result.WriteByte('\\')
+			}
+			result.WriteRune(ch)
+		}
+	}
+	if detail != "" && (command.Name == "annotation" || command.Name == "gloss" || command.Name == "symbol") {
+		body, err := nested(detail)
+		if err != nil {
+			return "", err
+		}
+		if body != "" {
+			result.WriteString(" (" + body + ")")
+		}
+	}
+	return result.String(), nil
 }
 
 func validateLatexMark(command inlineCommand, line string, context markContext) (string, markSpec, error) {
@@ -1342,7 +1421,8 @@ func transformInlineCommands(line string, options Options, context markContext, 
 	margin := context.MarginSafe
 	options.InlineOnly = !margin
 	commands := visibleCommands(line, func(command inlineCommand) bool {
-		return privateNames[command.Name] || command.Name == "scomment" || command.Name == "revision" || command.Name == "cite" || command.Name == "tag" || command.Name == "latexmk"
+		return privateNames[command.Name] || command.Name == "scomment" || command.Name == "revision" || command.Name == "cite" || command.Name == "tag" || command.Name == "latexmk" ||
+			inlineReadingKinds[command.Name] && !escapedAt(line, command.FullFrom)
 	})
 	if len(commands) == 0 {
 		return line, nil
@@ -1354,6 +1434,15 @@ func transformInlineCommands(line string, options Options, context markContext, 
 			continue
 		}
 		output.WriteString(line[cursor:command.FullFrom])
+		if inlineReadingKinds[command.Name] {
+			value, err := inlineReadingMarkdown(line, command, options, context, unresolved)
+			if err != nil {
+				return "", err
+			}
+			output.WriteString(value)
+			cursor = command.FullTo
+			continue
+		}
 		if !annotations && (exportedAnnotations[command.Name] || command.Name == "scomment" ||
 			command.Name == "revision" || command.Name == "comment") {
 			// `annotations: none` in the note metadata strips every review mark.
