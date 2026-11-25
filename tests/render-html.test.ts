@@ -9,6 +9,16 @@ import {
 } from "../src/render-html.ts";
 
 describe("shared markdown HTML renderer", () => {
+  test("reads the state of tight and loose task items", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderMarkdownHTML("- [x] Complete\n\n- [ ] Continue\n\nA paragraph.\n\n- [ ] Review\n- [x] Ship");
+    const glyphs = [...host.querySelectorAll<HTMLElement>(".checkbox[role='img']")];
+    expect(glyphs.map((item) => item.getAttribute("aria-label")))
+      .toEqual(["Completed task", "Incomplete task", "Incomplete task", "Completed task"]);
+    expect(glyphs[0]?.parentElement?.tagName).toBe("P");
+    expect(glyphs[2]?.parentElement?.tagName).toBe("LI");
+  });
+
   test("marks only the opening Latin paragraph for a decorative initial", () => {
     const english = renderMarkdownHTML("# Introduction\n\nWe study graphs.\n\nAnother paragraph.", { openingInitial: true });
     expect(english).toContain('<p class="noema-opening-paragraph">We study graphs.</p>');

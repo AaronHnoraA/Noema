@@ -1597,15 +1597,19 @@ function renderOrgEnv(
 function applyTaskCheckboxes(root: ParentNode): void {
   root.querySelectorAll<HTMLLIElement>("li").forEach((li) => {
     if (li.parentElement?.classList.contains("noema-steps-list")) return;
-    const first = li.firstChild;
+    const block = li.firstElementChild?.tagName === "P" ? li.firstElementChild : li;
+    const first = block.firstChild;
     if (!(first instanceof Text)) return;
     const match = first.data.match(/^\[([ xX])\]\s+/);
     if (!match) return;
     first.data = first.data.slice(match[0].length);
     const box = document.createElement("span");
     box.className = "checkbox";
-    box.dataset.checked = match[1]!.toLowerCase() === "x" ? "1" : "0";
-    li.prepend(box);
+    const checked = match[1]!.toLowerCase() === "x";
+    box.dataset.checked = checked ? "1" : "0";
+    box.setAttribute("role", "img");
+    box.setAttribute("aria-label", checked ? "Completed task" : "Incomplete task");
+    block.prepend(box);
   });
 }
 

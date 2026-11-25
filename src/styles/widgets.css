@@ -1238,11 +1238,32 @@
 }
 
 /* ─── CM6 task-list checkbox ─────────────────────────────────────── */
-.cm-editor .cm-task-checkbox {
+.cm-editor button.cm-task-checkbox {
   display: inline-block;
-  vertical-align: -2px;
+  padding: 0 0.42em 0 0.16em;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  vertical-align: middle;
   cursor: pointer;
   user-select: none;
+}
+.cm-editor .cm-task-checkbox .checkbox {
+  display: block;
+}
+.cm-editor .cm-task-checkbox:focus-visible {
+  outline: none;
+}
+.cm-editor .cm-task-checkbox:focus-visible .checkbox {
+  outline: 1px solid var(--aaron-link, currentColor);
+  outline-offset: 2px;
+}
+.cm-editor .cm-line:has(> .cm-task-checkbox[aria-checked="true"]),
+.cm-editor li:has(> .checkbox[data-checked="1"]),
+.cm-editor li > p:has(> .checkbox[data-checked="1"]) {
+  color: var(--aaron-muted, inherit);
 }
 
 /* ─── CM6 image widget ───────────────────────────────────────────── */
@@ -7079,6 +7100,9 @@ body.has-diagram-fullscreen {
 .cm-editor .checkbox[data-checked="1"] {
   background: var(--aaron-red, #d79a9a);
   border-color: var(--aaron-red-dark, #e4b3b3);
+}
+.cm-editor .checkbox[role="img"] {
+  cursor: inherit;
 }
 .cm-editor .checkbox[data-checked="1"]::after {
   content: "";

@@ -3741,16 +3741,23 @@ after
 
     const checkboxes = document.querySelectorAll<HTMLElement>(".cm-task-checkbox");
     expect(checkboxes.length).toBe(2);
+    expect(checkboxes[0]!.tabIndex).toBe(0);
+    expect(checkboxes[0]!.getAttribute("aria-label")).toBe("task one");
     expect(checkboxes[0]!.querySelector(".checkbox")).toBeTruthy();
     expect(checkboxes[1]!.querySelector(".checkbox")?.getAttribute("data-checked")).toBe("1");
 
     // Click unchecked → checked
     checkboxes[0]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(editor.getMarkdown()).toContain("- [x] task one");
+    expect(document.querySelector(".cm-task-checkbox")).toBe(checkboxes[0]);
+    expect(checkboxes[0]!.getAttribute("aria-checked")).toBe("true");
 
     // Click checked → unchecked
     checkboxes[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(editor.getMarkdown()).toContain("- [ ] task two");
+    expect(editor.undo()).toBe(true);
+    expect(editor.getMarkdown()).toContain("- [x] task two");
+    expect(editor.getMarkdown()).toContain("- [x] task one");
     cleanup();
   });
 

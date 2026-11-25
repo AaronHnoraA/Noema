@@ -10,7 +10,7 @@
  * Behavior:
  *   cursor on same line → show raw source ([ ] / [x]) via live-preview hints
  *   cursor elsewhere   → Decoration.replace over TaskMarker range
- *                        with a visual checkbox span
+ *                        with an undoable mouse and keyboard control
  */
 
 import { EditorView } from "@codemirror/view";
@@ -24,35 +24,43 @@ import { dispatchConstructEdit, inlineConstruct } from "../constructs/index.ts";
 // ---------------------------------------------------------------------------
 
 class TaskCheckboxWidget extends MeasuredWidget {
-  checked: boolean;
-  from: number;
-  to: number;
+  readonly checked: boolean;
+  readonly label: string;
 
-  constructor(checked: boolean, from: number, to: number) {
+  constructor(checked: boolean, label: string) {
     super();
     this.checked = checked;
-    this.from = from;
-    this.to = to;
+    this.label = label;
   }
 
   protected measureKey(): string { return ""; }
   protected get measuredBlock(): boolean { return false; }
 
   eq(other: TaskCheckboxWidget): boolean {
-    return this.checked === other.checked && this.from === other.from && this.to === other.to;
+    return this.checked === other.checked && this.label === other.label;
+  }
+
+  updateDOM(dom: HTMLElement, view: EditorView): boolean {
+    const glyph = dom.firstElementChild;
+    if (!(dom instanceof HTMLButtonElement) || !(glyph instanceof HTMLElement)) return false;
+    dom.setAttribute("aria-checked", String(this.checked));
+    dom.setAttribute("aria-label", this.label || "Task");
+    dom.disabled = view.state.readOnly;
+    glyph.dataset.checked = this.checked ? "1" : "0";
+    return true;
   }
 
   toDOM(view: EditorView): HTMLElement {
-    const frame = document.createElement("span");
+    const frame = document.createElement("button");
+    frame.type = "button";
     frame.className = "cm-task-checkbox checkbox-frame";
     frame.setAttribute("role", "checkbox");
-    frame.setAttribute("aria-checked", String(this.checked));
-    frame.setAttribute("tabindex", "-1");
 
     const box = document.createElement("span");
     box.className = "checkbox";
-    box.dataset.checked = this.checked ? "1" : "0";
+    box.setAttribute("aria-hidden", "true");
     frame.append(box);
+    this.updateDOM(frame, view);
 
     frame.addEventListener("mousedown", (e) => {
       e.preventDefault();
@@ -61,10 +69,13 @@ class TaskCheckboxWidget extends MeasuredWidget {
     frame.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      // Replace exactly the marker range ([ ] or [x]) without adding extra space.
-      const raw = view.state.doc.sliceString(this.from, this.to);
+      if (view.state.readOnly) return;
+      const from = view.posAtDOM(frame, -1);
+      const to = from + 3;
+      const raw = view.state.doc.sliceString(from, to);
+      if (!/^\[[ xX]\]$/.test(raw)) return;
       const next = /\[x\]/i.test(raw) ? "[ ]" : "[x]";
-      dispatchConstructEdit(view, { changes: { from: this.from, to: this.to, insert: next } });
+      dispatchConstructEdit(view, { changes: { from, to, insert: next } });
     });
     return frame;
   }
@@ -110,10 +121,11 @@ export const taskListExtension = inlineConstruct({
     const marker = taskMarkerOnLine(state, line);
     if (!marker) return;
     const checked = /\[x\]/i.test(state.doc.sliceString(marker.from, marker.to));
+    const label = line.text.slice(marker.to - line.from).trim();
     yield {
       from: marker.from,
       to: marker.to,
-      widget: () => new TaskCheckboxWidget(checked, marker.from, marker.to),
+      widget: () => new TaskCheckboxWidget(checked, label),
       revealRegion: { from: line.from, to: line.to },
     };
   },
