@@ -38,6 +38,7 @@ import { applyLayoutAttrs, layoutFromAttrs, layoutIsDefault, readLayoutAttrsLine
 import { scheduleViewportDecorationRefresh } from "../../../viewport-refresh.ts";
 import { preserveEditorViewport } from "../../../viewport-stability.ts";
 import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
+import { connectDiagramPreview } from "../../../image-viewer.ts";
 import {
   dispatchConstructEdit,  constructSources,
   constructViewPlugin,
@@ -671,6 +672,7 @@ function renderMermaidWidget(
   }
   const finish = () => {
     if (disposed) return;
+    connectDiagramPreview(div, wrap);
     wrap.removeAttribute("aria-busy");
     wrap.style.removeProperty("min-height");
     if (wrap.isConnected) view.requestMeasure();

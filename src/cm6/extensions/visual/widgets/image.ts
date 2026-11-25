@@ -47,7 +47,7 @@ import {
   figureResizeHandle,
 } from "../../../figure-layout-menu.ts";
 import { imageRowGrip, imageRowAt, imageRowSplitHandle, imageRowHeightHandle, joinNextImage, sizeImageRowItem } from "../../../image-row-layout.ts";
-import { openImageViewer } from "../../../image-viewer.ts";
+import { connectImagePreview, openImageViewer } from "../../../image-viewer.ts";
 import { mountHtmlEmbed, type HtmlEmbedHandle } from "../../../../html-embed.ts";
 import { markdownLinkDestination } from "../../../../markdown-link.ts";
 import {
@@ -290,11 +290,7 @@ class ImageWidget extends MeasuredWidget {
           wrap.title = `Image not found: ${this.src}`;
           view.requestMeasure();
         };
-        img.addEventListener("dblclick", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          openImageViewer(wrap);
-        });
+        connectImagePreview(img, () => openImageViewer(wrap, img));
         wrap.append(img);
         resizableImage = img;
       }

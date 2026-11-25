@@ -57,6 +57,7 @@ import {
 } from "../../../../org-meta.ts";
 import { applyImageLayout, imageLayoutFromAttrs, type ImageLayoutAttrs } from "../../../../image-attrs.ts";
 import { figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
+import { connectDiagramPreview, connectImagePreview, openImageViewer } from "../../../image-viewer.ts";
 import { readLayoutAttrSuffix } from "../../../../layout-attrs.ts";
 import { splitDocumentWidgetTitle } from "../../../../../shared/document-widget-title.mjs";
 import { connectDocumentTableViews, disconnectDocumentTableViews } from "../../../../document-table-view.ts";
@@ -627,7 +628,7 @@ function renderDiagramPreview(source: string, lang: string, div: HTMLElement): v
       renderMermaidLazy(source, div, (err) => {
         div.classList.add("cm-diagram-error");
         div.textContent = err;
-      }, { lang });
+      }, { lang, onRender: () => connectDiagramPreview(div, div) });
     })
     .catch((err: unknown) => {
       if (div.dataset.diagramRenderKey !== key) return;
@@ -789,6 +790,9 @@ export function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, sco
 
 function hydrateRenderedMarkdown(root: HTMLElement): void {
   connectDocumentTableViews(root);
+  for (const image of root.querySelectorAll("img")) {
+    connectImagePreview(image, () => openImageViewer(image, image), true);
+  }
   root.querySelectorAll<HTMLElement>("pre > code[class*='language-']").forEach((code) => {
     const langClass = Array.from(code.classList).find((cls) => cls.startsWith("language-")) ?? "";
     const lang = langClass.slice("language-".length);

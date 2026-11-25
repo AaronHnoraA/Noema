@@ -55,6 +55,8 @@ describe("self-contained HTML export", () => {
     expect(html).toContain("data:image/png;base64,iVBORw==");
     expect(html).toContain("data-standalone-theme");
     expect(html).toContain("data-published-toc");
+    expect(html).toContain("cm-image-viewer");
+    expect(html).toContain("showModal");
     expect(html).not.toMatch(/<link\b[^>]*rel=["']stylesheet/iu);
     expect(html).not.toMatch(/<script\b[^>]*\bsrc=/iu);
     expect(html).not.toContain("http://noema.test/assets/pixel.png");

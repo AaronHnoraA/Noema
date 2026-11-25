@@ -7,6 +7,7 @@ import type StateCore from "markdown-it/lib/rules_core/state_core.mjs";
 import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 
 import { cleanEditorHTML } from "./export-html.ts";
+import { connectImagePreview, connectPublishedImages, openMediaViewer } from "./cm6/image-viewer.ts";
 import { approvedEdiffMarkdown } from "../shared/ediff-source.mjs";
 import { markdownItCjkEmphasis } from "./cjk-emphasis.ts";
 import { parseCodeInfo } from "./code-info.ts";
@@ -2432,7 +2433,9 @@ export function renderPublishedNoteHTML(
     ? `<script>(${connectAdaptiveColumns.toString()})(document, ${layoutAdaptiveColumns.toString()});</script>\n` : "";
   const footnoteScript = !pdf && contentHtml.includes("noema-footnote-reference")
     ? `<script>(${connectPublishedFootnotes.toString()})(document.getElementById("content"));</script>\n` : "";
-  const scriptHtml = inlineReadingScript + adaptiveColumnsScript + footnoteScript + (pdf ? "" : standalone ? standaloneScript : `  <script src="${assetRoot}js/note-page.js?v=${escapeAttr(version)}"></script>
+  const imageScript = !pdf && Boolean(standalone) && contentHtml.includes("<img")
+    ? `<script>(${connectPublishedImages.toString()})(document.getElementById("content"), ${connectImagePreview.toString()}, ${openMediaViewer.toString()});</script>\n` : "";
+  const scriptHtml = inlineReadingScript + adaptiveColumnsScript + footnoteScript + imageScript + (pdf ? "" : standalone ? standaloneScript : `  <script src="${assetRoot}js/note-page.js?v=${escapeAttr(version)}"></script>
   <script src="${assetRoot}Noema/pages/published-toc.js?v=${escapeAttr(version)}"></script>
   <script src="${assetRoot}js/mac-window.js?v=${escapeAttr(version)}"></script>
   <script type="module" src="${assetRoot}Noema/pages/published-local-graph.js?v=${escapeAttr(version)}"></script>

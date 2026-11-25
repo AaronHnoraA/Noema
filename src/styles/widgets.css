@@ -1396,6 +1396,13 @@
   position: fixed;
   inset: 0;
   z-index: 10000;
+  inline-size: 100%;
+  block-size: 100%;
+  max-inline-size: none;
+  max-block-size: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
   background: rgba(8, 10, 16, 0.94);
   color: white;
 }
@@ -1436,6 +1443,36 @@
   left: 50%;
   transform: translateX(-50%);
   font: 0.9em sans-serif;
+}
+.cm-editor .noema-media-trigger {
+  cursor: zoom-in;
+}
+.cm-editor .noema-media-trigger:focus-visible,
+.cm-editor .noema-diagram-enlarge:focus-visible,
+.cm-image-viewer-close:focus-visible {
+  outline: 2px solid var(--aaron-link, currentColor);
+  outline-offset: 2px;
+}
+.cm-editor .cm-mermaid-block-preview {
+  position: relative;
+}
+.cm-editor .noema-diagram-enlarge {
+  position: absolute;
+  inset-block-start: 6px;
+  inset-inline-end: 6px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--aaron-paper-line, currentColor);
+  border-radius: 4px;
+  background: var(--aaron-paper, Canvas);
+  color: var(--aaron-link, LinkText);
+  font: inherit;
+  font-size: 15px;
+  cursor: zoom-in;
 }
 
 /* Progress rows share the org-env colors and spacing of their surroundings. */
