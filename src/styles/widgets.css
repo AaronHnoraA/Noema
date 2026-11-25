@@ -1752,6 +1752,38 @@ ul.noema-document-log > li.noema-log-plain { display: block; }
 .noema-comparison-body > :first-child { margin-block-start: 0.15em; }
 .noema-comparison-body > :last-child { margin-block-end: 0; }
 
+.org-env-content > figure.noema-document-qr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65em 1em;
+  margin: 0;
+  min-inline-size: 0;
+  text-align: start;
+}
+.noema-qr-symbol {
+  display: block;
+  flex: 0 1 auto;
+  max-inline-size: 100%;
+  block-size: auto;
+  outline: 1px solid var(--aaron-paper-line, var(--border, currentColor));
+}
+.org-env-content > .noema-document-qr > figcaption {
+  flex: 1 1 13em;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.noema-document-qr figcaption > :first-child { margin-block-start: 0; }
+.noema-document-qr figcaption p { white-space: normal; }
+.noema-qr-value { color: var(--aaron-muted, currentColor); white-space: pre-wrap; }
+.noema-qr-message { color: var(--aaron-callout-warning, currentColor); }
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);

@@ -44,6 +44,7 @@ const constructs = [
   "#+begin keymap Keys\n- C-x C-f : Open a file\n- C-x C-s : Save\n#+end keymap",
   "#+begin log Build\n- 09:17:12 WARN Render needs review\n- 09:18:12 INFO Ready\n#+end log",
   "#+begin pros-cons Trade-offs\n- Simpler reading\n\n#+col\n\n- More fixtures\n#+end pros-cons",
+  "#+begin qrcode Read on another device {text=https://example.com/notes}\nScan to open the example notes.\n#+end qrcode",
   "#+begin columns\nLeft column prose.\n\n#+col\n\nRight column prose.\n#+end columns",
   "A sentence with @@comment [inline note] attached.",
   "```python\nprint('hello')\nfor i in range(3):\n    print(i)\n```",
@@ -126,6 +127,7 @@ try {
         ["panel", "The panel shows"], ["center", "This line is centered"],
         ["breadcrumb", "- [Home](index.md)"], ["keymap", "- C-x C-f : Open a file"],
         ["log", "- 09:17:12 WARN"], ["pros-cons", "- Simpler reading"],
+        ["qrcode", "Scan to open the example notes."],
         ["footnote", "[^1] too", "navigates"],
       ].filter(([family]) => !process.env.ONLY || process.env.ONLY.split(",").includes(family)).map(([family, needle, click = "opens"]) => {
         const at = markdown.indexOf(needle);

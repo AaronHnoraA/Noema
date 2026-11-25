@@ -12,6 +12,7 @@ const attributesByKind = new Map([
   ["keymap", ["columns"]],
   ["breadcrumb", ["separator"]],
   ["pros-cons", ["pros", "cons"]],
+  ["qrcode", ["text"]],
 ]);
 
 export function hasDocumentWidgetOptions(kind) { return attributesByKind.has(kind); }

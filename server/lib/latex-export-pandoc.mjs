@@ -15,7 +15,7 @@ import {
   splitColumnPanes,
 } from "../../shared/columns-layout.mjs";
 import { tikzPictureSource } from "../../shared/tikz-source.mjs";
-import { citeLatex, convertInline, escapeLatexTitle, isDisplayCommentCommand, latexEnvironmentTitle, revisionLatex } from "./latex-export.mjs";
+import { citeLatex, convertInline, escapeLatexText, escapeLatexTitle, isDisplayCommentCommand, latexEnvironmentTitle, revisionLatex } from "./latex-export.mjs";
 import { revisionKind } from "../../shared/revision-kinds.mjs";
 
 const ENV_MAP = new Map([
@@ -178,6 +178,7 @@ function environmentOpen(kind, title, options) {
     const entries = kind === "card" ? [attrs.description, attrs.href && `${attrs.action || "Open link"}: ${attrs.href}`]
       : kind === "panel" ? [attrs.status] : kind === "statusbar" ? [attrs.mode, attrs.keys, attrs.note] : [];
     details = entries.filter(Boolean).map((entry) => `\n${escapeLatexTitle(entry, options)}\\par`).join("");
+    if (kind === "qrcode" && attrs.text?.trim()) details = `\n${escapeLatexText(attrs.text)}\\par`;
   }
   let env = environmentFor(kind, options.rules);
   let heading = title;

@@ -88,6 +88,7 @@ var documentWidgetOptions = map[string][]string{
 	"keymap":     {"columns"},
 	"breadcrumb": {"separator"},
 	"pros-cons":  {"pros", "cons"},
+	"qrcode":     {"text"},
 }
 
 var defaultEnvironment = map[string]string{
@@ -1716,6 +1717,9 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 		if entry != "" {
 			details += "\n" + escapeLatexTitle(entry, options) + "\\par"
 		}
+	}
+	if kind == "qrcode" && strings.TrimSpace(attributes["text"]) != "" {
+		details = "\n" + escapeLatexText(attributes["text"]) + "\\par"
 	}
 	env := strings.TrimSpace(options.Rules.EnvMap[kind])
 	if env == "" {

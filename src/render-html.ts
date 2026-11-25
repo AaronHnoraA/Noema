@@ -18,6 +18,7 @@ import { renderDocumentSequence } from "./document-sequence.ts";
 import { renderDocumentTableView } from "./document-table-view.ts";
 import { documentFrameKinds, renderDocumentFrame } from "./document-frame.ts";
 import { documentReadingKinds, renderDocumentReading } from "./document-reading.ts";
+import { documentQrFence, documentQrHasText, renderDocumentQrcode } from "./document-qrcode.ts";
 import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
@@ -341,16 +342,19 @@ function orgEnvBlockRule(state: StateBlock, startLine: number, endLine: number, 
   let fenceLen = 0;
   for (let line = startLine + 1; line < endLine; line++) {
     const text = lineText(state, line);
+    const indent = state.sCount[line]! - state.blkIndent;
+    if (indent < 0 && text) break;
+    const canBeFence = indent <= 3;
     if (fenceChar) {
-      const closeFence = text.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
+      const closeFence = canBeFence && text.match(/^(`{3,}|~{3,})[ \t]*$/);
       if (closeFence && closeFence[1]![0] === fenceChar && closeFence[1]!.length >= fenceLen) {
         fenceChar = "";
         fenceLen = 0;
       }
       continue;
     }
-    const openFence = text.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
-    if (openFence) {
+    const openFence = canBeFence && text.match(/^(`{3,}|~{3,})(.*)$/);
+    if (openFence && (openFence[1]![0] !== "`" || !openFence[2]!.includes("`"))) {
       fenceChar = openFence[1]![0]!;
       fenceLen = openFence[1]!.length;
       continue;
@@ -368,8 +372,6 @@ function orgEnvBlockRule(state: StateBlock, startLine: number, endLine: number, 
   if (closeLine < 0) return false;
   if (silent) return true;
 
-  const bodyStart = state.bMarks[startLine + 1] ?? state.eMarks[startLine];
-  const bodyEnd = state.bMarks[closeLine] ?? state.eMarks[closeLine];
   const token = state.push("org_env_block", "org-env-block", 0);
   token.block = true;
   token.map = [startLine, closeLine + 1];
@@ -378,7 +380,7 @@ function orgEnvBlockRule(state: StateBlock, startLine: number, endLine: number, 
     kind,
     title: identity.title,
     blockId: identity.blockId,
-    body: state.src.slice(bodyStart, bodyEnd).replace(/\n$/, ""),
+    body: state.getLines(startLine + 1, closeLine, state.blkIndent, false),
   } satisfies OrgEnvTokenMeta;
   state.line = closeLine + 1;
   return true;
@@ -1382,6 +1384,7 @@ function renderOrgEnv(
     : kindName === "table" ? renderDocumentTableView(md, meta.body, attrs, options.documentTableActions === true, options.documentTableSource)
     : documentFrameKinds.has(kindName) ? renderDocumentFrame(md, kindName, meta.body, attrs)
     : documentReadingKinds.has(kindName) ? renderDocumentReading(md, kindName, meta.body, attrs)
+    : kindName === "qrcode" ? renderDocumentQrcode(md, meta.body, attrs)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kind.toLowerCase() === "fold") {
@@ -1415,14 +1418,35 @@ function applyTaskCheckboxes(root: HTMLElement): void {
   });
 }
 
-function isolateBlockLayoutAttrLines(markdown: string): string {
+const qrEnvironmentLine = /#\+[ \t]*begin[ \t]+qrcode\b/i;
+
+function collectQrLiteralLines(md: MarkdownIt, markdown: string, start: number, result: Set<number>): void {
+  if (!qrEnvironmentLine.test(markdown)) return;
+  const tokens: Token[] = [];
+  md.block.parse(markdown, md, {}, tokens);
+  for (const token of tokens) {
+    if (token.type !== "org_env_block" || !token.map) continue;
+    const bodyStart = start + token.map[0] + 1;
+    const { kind, title, body } = token.meta as OrgEnvTokenMeta;
+    if (kind.toLowerCase() === "qrcode" && !documentQrHasText("qrcode", title)) {
+      const fence = documentQrFence(md, body);
+      if (fence?.map) {
+        for (let line = fence.map[0] + 1; line < fence.map[1] - 1; line++) result.add(bodyStart + line);
+        continue;
+      }
+    }
+    collectQrLiteralLines(md, body, bodyStart, result);
+  }
+}
+
+function isolateBlockLayoutAttrLines(markdown: string, literalLines?: ReadonlySet<number>): string {
   const lines = String(markdown || "").split(/\r?\n/);
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     const prev = out[out.length - 1] ?? "";
     if (
-      readLayoutAttrsLine(line) &&
+      !literalLines?.has(i) && readLayoutAttrsLine(line) &&
       prev.trim() &&
       (TABLE_ROW_LINE_RE.test(prev) || FENCE_CLOSE_LINE_RE.test(prev))
     ) {
@@ -1894,11 +1918,20 @@ function renderMarkdownHTMLUncached(
   options?: RenderMarkdownHTMLOptions,
   topLevelBlocks?: Array<{ from: number; to: number }>,
 ): string {
-  markdown = stripCommentAnchors(approvedEdiffMarkdown(markdown));
+  markdown = approvedEdiffMarkdown(markdown.replace(/\r\n?/g, "\n"));
   const md = markdownItForRender(options);
+  const literalLines = new Set<number>();
+  // A QR fence encodes the authored bytes, including text that resembles
+  // Noema annotations or table layout attributes.
+  if (markdown.includes("{==") || /\n[ \t]*\{/.test(markdown)) {
+    collectQrLiteralLines(md, markdown, 0, literalLines);
+  }
+  markdown = literalLines.size
+    ? markdown.split("\n").map((line, index) => literalLines.has(index) ? line : stripCommentAnchors(line)).join("\n")
+    : stripCommentAnchors(markdown);
   const root = document.createElement("div");
   const env = {};
-  const tokens = md.parse(isolateBlockLayoutAttrLines(markdown), env);
+  const tokens = md.parse(isolateBlockLayoutAttrLines(markdown, literalLines.size ? literalLines : undefined), env);
   if (topLevelBlocks) topLevelBlocks.push(...topLevelBlocksFromTokens(markdown, tokens));
   const protectedHtml = protectIframeNavigationAttrsForDom(md.renderer.render(tokens, md.options, env));
   root.innerHTML = protectedHtml.html;

@@ -58,6 +58,7 @@ import { splitDocumentWidgetTitle } from "../../../../../shared/document-widget-
 import { connectDocumentTableViews, disconnectDocumentTableViews } from "../../../../document-table-view.ts";
 import { documentFrameHasDetails, documentFrameKinds } from "../../../../document-frame.ts";
 import { documentReadingKinds, documentStatusHasDetails } from "../../../../document-reading.ts";
+import { documentQrHasText } from "../../../../document-qrcode.ts";
 import {
   COLUMNS_MAX_COUNT,
   COLUMNS_MIN_WIDTH_PCT,
@@ -6206,6 +6207,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 
 const documentDataEnvironments = new Set([
   "progress", "stats", "chart", "timeline", "steps", "table", ...documentFrameKinds, ...documentReadingKinds,
+  "qrcode",
 ]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
@@ -6320,7 +6322,8 @@ function addOrgEnvBlockExtraDecos(
   }
   addOrgEnvBoundaryDecos(decos, state, block);
   if (documentDataEnvironments.has(block.kind)
-      && (block.body.trim() || documentFrameHasDetails(block.kind, block.title) || documentStatusHasDetails(block.kind, block.title))
+      && (block.body.trim() || documentFrameHasDetails(block.kind, block.title)
+        || documentStatusHasDetails(block.kind, block.title) || documentQrHasText(block.kind, block.title))
       && !opensSource(state, block.from, block.to)) {
     const widget = new DocumentDataWidget(block);
     if (widget.from < widget.to) {
