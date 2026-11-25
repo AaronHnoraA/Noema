@@ -330,6 +330,23 @@ describe("multi-column layout (`#+begin columns` + `#+col`)", () => {
     }
   });
 
+  test.each(["widths=60-40", "columns=2 min-width=18ch"])("leaving columns at EOF preserves every source byte (%s)", (layout) => {
+    const source = `#+begin columns {${layout}}\nLeft.\n\n#+col\n\nRight.\n#+end columns`;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const editor = createEditor(host, { kernel: "cm6", initialContent: source });
+    try {
+      editor.setMarkdownSelection(source.length);
+      host.querySelector<HTMLButtonElement>('button[aria-label="Edit columns source"]')!.click();
+      host.querySelector<HTMLButtonElement>('button[aria-label="Finish editing columns"]')!.click();
+      expect(host.querySelector(".cm-columns-widget")).not.toBeNull();
+      expect(editor.getMarkdown()).toBe(source);
+    } finally {
+      editor.destroy();
+      host.remove();
+    }
+  });
+
   test("mode switch preserves content and Noema block identity", () => {
     const id = "0198fbac-0780-7c99-85e6-333333333333";
     const withId = `#+begin columns {widths=60-40 data-note=keep} {#${id}}\nLeft prose.\n\n#+col\n\nRight prose.\n#+end columns\n\nEnd`;

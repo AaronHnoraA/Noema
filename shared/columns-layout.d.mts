@@ -1,3 +1,5 @@
+import type { AdaptiveColumns } from "./columns-adaptive.mjs";
+
 export const COLUMNS_ENV_KIND: "columns";
 export const COLUMNS_MIN_WIDTH_PCT: number;
 export const COLUMNS_MAX_COUNT: number;
@@ -12,6 +14,7 @@ export type ColumnsSpec = {
   mode: ColumnsMode;
   cols: number;
   widths: number[] | null;
+  adaptive: AdaptiveColumns | null;
   align: ColumnsAlign;
   valign: ColumnsValign;
   gap: ColumnsGap;
@@ -26,6 +29,7 @@ export type ColumnPane = {
   markerFrom: number;
   markerTo: number;
   align: ColumnsAlign;
+  grow: number;
 };
 
 export function normalizeColumnWidths(rawWidths: readonly number[] | null | undefined, count: number): number[];
@@ -43,5 +47,5 @@ export function columnsClasses(spec: ColumnsSpec, paneCount?: number): string;
 export function columnsStyle(spec: ColumnsSpec, paneCount?: number): string;
 export function columnsLatexBlocks(
   spec: ColumnsSpec,
-  transformedPanes: readonly (string | { body: string; align?: ColumnsAlign })[],
+  transformedPanes: readonly (string | { body: string; align?: ColumnsAlign; grow?: number })[],
 ): string[];

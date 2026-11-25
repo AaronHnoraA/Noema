@@ -21,6 +21,7 @@
  */
 
 import { parseAttrArgs } from "./layout-attrs.mjs";
+import { columnPaneGrow, layoutAdaptiveColumns, parseAdaptiveColumns } from "./columns-adaptive.mjs";
 
 export const COLUMNS_ENV_KIND = "columns";
 export const COLUMNS_MIN_WIDTH_PCT = 15;
@@ -132,10 +133,16 @@ export function parseColumnsHeader(title = "") {
   const rawAlign = String(rawAttrs.align || "").toLowerCase();
   const align = VALID_ALIGNS.has(rawAlign) ? rawAlign : "inherit";
   const rawValign = String(rawAttrs.valign || "").toLowerCase();
-  const valign = VALID_VALIGNS.has(rawValign) ? rawValign : "top";
+  const adaptive = mode === "columns" ? parseAdaptiveColumns(rawAttrs) : null;
+  const valign = VALID_VALIGNS.has(rawValign) ? rawValign : (adaptive?.align || "top");
   const rawGap = String(rawAttrs.gap || "").toLowerCase();
   const gap = VALID_GAPS.has(rawGap) ? rawGap : "md";
-  const rule = normalizeBoolRule(rawAttrs.rule) ?? "on";
+  const rule = normalizeBoolRule(rawAttrs.rule ?? rawAttrs.divider) ?? "on";
+  if (adaptive) {
+    if (rawAttrs.columns) extraAttrs.columns = rawAttrs.columns;
+    if (rawAttrs.cols) extraAttrs.cols = rawAttrs.cols;
+    if (rawAttrs.gap && !VALID_GAPS.has(rawGap)) extraAttrs.gap = rawAttrs.gap;
+  }
 
   const widthParts = String(rawAttrs.widths || "").split(/[-,:]/).map((s) => s.trim()).filter(Boolean);
   const parsedWidths = widthParts.map(Number);
@@ -143,11 +150,16 @@ export function parseColumnsHeader(title = "") {
     && parsedWidths.every((n) => Number.isFinite(n) && n > 0)
     ? normalizeColumnWidths(parsedWidths, parsedWidths.length)
     : null;
+  if (adaptive && widths && !adaptive.tracks) {
+    adaptive.tracks = widths.map((value) => ({ value, unit: "fr" }));
+    adaptive.wrap = /^(true|on|yes|1)$/i.test(rawAttrs.wrap || "");
+  }
 
   return {
     mode,
     cols,
     widths,
+    adaptive,
     align,
     valign,
     gap,
@@ -257,6 +269,7 @@ export function splitColumnPanes(body = "", { allowIndentedMarkers = true } = {}
           to: line.to,
           nextFrom: line.nextFrom,
           align: VALID_ALIGNS.has(rawAlign) ? rawAlign : "inherit",
+          grow: columnPaneGrow(attrs.grow),
         });
       }
     }
@@ -265,6 +278,7 @@ export function splitColumnPanes(body = "", { allowIndentedMarkers = true } = {}
   const panes = [];
   let start = 0;
   let paneAlign = "inherit";
+  let paneGrow = 1;
   let markerFrom = -1;
   let markerTo = -1;
   for (const marker of markers) {
@@ -276,9 +290,11 @@ export function splitColumnPanes(body = "", { allowIndentedMarkers = true } = {}
       markerFrom,
       markerTo,
       align: paneAlign,
+      grow: paneGrow,
     });
     start = marker.nextFrom;
     paneAlign = marker.align;
+    paneGrow = marker.grow;
     markerFrom = marker.from;
     markerTo = marker.to;
   }
@@ -289,6 +305,7 @@ export function splitColumnPanes(body = "", { allowIndentedMarkers = true } = {}
     markerFrom,
     markerTo,
     align: paneAlign,
+    grow: paneGrow,
   });
   return panes;
 }
@@ -350,6 +367,7 @@ export function columnsClasses(spec, paneCount = 2) {
   return [
     "noema-columns",
     `noema-columns-${spec.mode}`,
+    spec.adaptive ? "noema-columns-adaptive" : "",
     `noema-columns-gap-${spec.gap || "md"}`,
     `noema-columns-valign-${spec.valign || "top"}`,
     `noema-columns-rule-${count <= 1 ? "off" : (spec.rule || "on")}`,
@@ -374,8 +392,8 @@ export function columnsStyle(spec, paneCount = 2) {
 export function columnsLatexBlocks(spec, transformedPanes) {
   const paneEntries = (transformedPanes || []).map((entry) => (
     typeof entry === "string"
-      ? { body: entry, align: "inherit" }
-      : { body: String(entry?.body ?? ""), align: entry?.align || "inherit" }
+      ? { body: entry, align: "inherit", grow: 1 }
+      : { body: String(entry?.body ?? ""), align: entry?.align || "inherit", grow: entry?.grow || 1 }
   ));
   if (spec.mode === "flow") {
     const cols = Math.max(2, Math.min(4, spec.cols || 2));
@@ -395,6 +413,18 @@ export function columnsLatexBlocks(spec, transformedPanes) {
     ];
   }
   const panes = paneEntries.length > 0 ? paneEntries : [{ body: "", align: "inherit" }];
+  if (spec.adaptive && panes.length > 1) {
+    // TeX chooses its own font and measure after this pass. Plan rows against
+    // a nominal 80-character line and express widths relative to that row.
+    const metrics = { width: 640, ch: 8, em: 16, rem: 16, lh: 24 };
+    const layout = layoutAdaptiveColumns(spec.adaptive, paneEntries.map((pane) => pane.grow), metrics);
+    let from = 0;
+    return layout.rows.flatMap((widths) => {
+      const entries = panes.slice(from, from + widths.length);
+      from += widths.length;
+      return columnsLatexBlocks({ ...spec, adaptive: null, widths: normalizeColumnWidths(widths, widths.length) }, entries);
+    });
+  }
   if (panes.length === 1) {
     const effAlign = panes[0].align !== "inherit" ? panes[0].align : spec.align;
     const body = panes[0].body.trim();

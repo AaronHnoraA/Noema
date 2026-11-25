@@ -440,18 +440,20 @@ func boundedLatexWidth(width string) string {
 }
 
 type columnsSpec struct {
-	Mode   string
-	Cols   int
-	Widths []int
-	Align  string
-	Valign string
-	Gap    string
-	Rule   string
+	Mode     string
+	Cols     int
+	Widths   []int
+	Align    string
+	Valign   string
+	Gap      string
+	Rule     string
+	Adaptive *adaptiveColumns
 }
 
 type columnPane struct {
 	Body  string
 	Align string
+	Grow  float64
 }
 
 func normalizeColumnWidths(raw []float64, count int) []int {
@@ -563,6 +565,10 @@ func parseColumnsHeader(title string) columnsSpec {
 	if strings.EqualFold(attrs["mode"], "flow") {
 		mode = "flow"
 	}
+	var adaptive *adaptiveColumns
+	if mode == "columns" {
+		adaptive = parseAdaptiveColumns(attrs)
+	}
 	cols := 0
 	if mode == "flow" {
 		cols = 2
@@ -583,6 +589,10 @@ func parseColumnsHeader(title string) columnsSpec {
 	switch strings.ToLower(attrs["valign"]) {
 	case "top", "center", "bottom", "stretch":
 		valign = strings.ToLower(attrs["valign"])
+	default:
+		if adaptive != nil && adaptive.align != "" {
+			valign = adaptive.align
+		}
 	}
 	gap := "md"
 	switch strings.ToLower(attrs["gap"]) {
@@ -590,7 +600,11 @@ func parseColumnsHeader(title string) columnsSpec {
 		gap = strings.ToLower(attrs["gap"])
 	}
 	rule := "on"
-	switch strings.ToLower(attrs["rule"]) {
+	rawRule := attrs["rule"]
+	if rawRule == "" {
+		rawRule = attrs["divider"]
+	}
+	switch strings.ToLower(rawRule) {
 	case "off", "false", "0", "no", "none":
 		rule = "off"
 	case "on", "true", "1", "yes", "rule":
@@ -613,7 +627,13 @@ func parseColumnsHeader(title string) columnsSpec {
 			widths = normalizeColumnWidths(parsed, len(parsed))
 		}
 	}
-	return columnsSpec{Mode: mode, Cols: cols, Widths: widths, Align: align, Valign: valign, Gap: gap, Rule: rule}
+	if adaptive != nil && len(widths) > 0 && len(adaptive.tracks) == 0 {
+		for _, width := range widths {
+			adaptive.tracks = append(adaptive.tracks, columnLength{float64(width), "fr"})
+		}
+		adaptive.wrap = adaptiveWrap(attrs["wrap"])
+	}
+	return columnsSpec{Mode: mode, Cols: cols, Widths: widths, Align: align, Valign: valign, Gap: gap, Rule: rule, Adaptive: adaptive}
 }
 
 func splitColumnPanes(body string, allowIndentedMarkers bool) []columnPane {
@@ -621,6 +641,7 @@ func splitColumnPanes(body string, allowIndentedMarkers bool) []columnPane {
 	type colMarker struct {
 		lineIndex int
 		align     string
+		grow      float64
 	}
 	markers := []colMarker{}
 	var fenceChar byte
@@ -675,14 +696,16 @@ func splitColumnPanes(body string, allowIndentedMarkers bool) []columnPane {
 		if envDepth == 0 && (allowIndentedMarkers || !indentedCodePrefix.MatchString(raw)) {
 			if match := colMarkerPattern.FindStringSubmatch(raw); match != nil {
 				align := "inherit"
+				grow := 1.0
 				if match[1] != "" {
 					attrs := layoutAttrsFromTitle(match[1])
+					grow = readColumnGrow(attrs["grow"])
 					switch strings.ToLower(attrs["align"]) {
 					case "left", "center", "right", "justify":
 						align = strings.ToLower(attrs["align"])
 					}
 				}
-				markers = append(markers, colMarker{lineIndex: idx, align: align})
+				markers = append(markers, colMarker{lineIndex: idx, align: align, grow: grow})
 			}
 		}
 	}
@@ -690,12 +713,14 @@ func splitColumnPanes(body string, allowIndentedMarkers bool) []columnPane {
 	panes := make([]columnPane, 0, len(markers)+1)
 	start := 0
 	paneAlign := "inherit"
+	paneGrow := 1.0
 	for _, m := range markers {
-		panes = append(panes, columnPane{Body: strings.Join(lines[start:m.lineIndex], "\n"), Align: paneAlign})
+		panes = append(panes, columnPane{Body: strings.Join(lines[start:m.lineIndex], "\n"), Align: paneAlign, Grow: paneGrow})
 		start = m.lineIndex + 1
 		paneAlign = m.align
+		paneGrow = m.grow
 	}
-	panes = append(panes, columnPane{Body: strings.Join(lines[start:], "\n"), Align: paneAlign})
+	panes = append(panes, columnPane{Body: strings.Join(lines[start:], "\n"), Align: paneAlign, Grow: paneGrow})
 	return panes
 }
 
@@ -755,6 +780,18 @@ func columnsLatexBlocks(spec columnsSpec, panes []columnPane) []string {
 	}
 	if len(panes) == 0 {
 		panes = []columnPane{{Body: "", Align: "inherit"}}
+	}
+	if spec.Adaptive != nil && len(panes) > 1 {
+		rows := adaptivePrintRows(spec.Adaptive, panes)
+		spec.Adaptive = nil
+		blocks := []string{}
+		offset := 0
+		for _, widths := range rows {
+			spec.Widths = normalizeColumnWidths(widths, len(widths))
+			blocks = append(blocks, columnsLatexBlocks(spec, panes[offset:offset+len(widths)])...)
+			offset += len(widths)
+		}
+		return blocks
 	}
 	if len(panes) == 1 {
 		effAlign := panes[0].Align
@@ -918,7 +955,7 @@ func columnsLatexExport(kind, title, body string, options Options, unresolved *[
 		if i < len(labels) {
 			heading = rawLatexBlock("\\textbf{" + escapeLatexTitle(labels[i], options) + "}\\par")
 		}
-		transformed[i] = columnPane{Body: heading + inner.Markdown, Align: pane.Align}
+		transformed[i] = columnPane{Body: heading + inner.Markdown, Align: pane.Align, Grow: pane.Grow}
 	}
 	blocks := columnsLatexBlocks(spec, transformed)
 	if comparisonTitle != "" {

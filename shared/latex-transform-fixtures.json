@@ -783,6 +783,32 @@
           "usesTikz": false
         }
       }
+    },
+    {
+      "name": "columns-responsive-print-tracks",
+      "markdown": "#+begin columns {tracks=\"20ch 2fr 25%\" min-width=12ch gap=2ch align-items=center}\nFixed.\n\n#+col {grow=1.5}\nFlexible.\n\n#+col {align=right}\nPercent.\n#+end columns",
+      "expected": {
+        "meta": {},
+        "markdown": "\n```{=latex}\n\\noindent\\begin{minipage}[c]{0.244\\textwidth}\n```\n\nFixed.\n\n```{=latex}\n\\end{minipage}%\n\\hfill\\begin{minipage}[c]{0.461\\textwidth}\n```\n\nFlexible.\n\n```{=latex}\n\\end{minipage}%\n\\hfill\\begin{minipage}[c]{0.235\\textwidth}\n\\raggedleft\n```\n\nPercent.\n\n```{=latex}\n\\end{minipage}\n```\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "columns-responsive-print-rows",
+      "markdown": "#+begin columns {columns=3 min-width=32ch padding=1ch}\nFirst.\n\n#+col\nSecond.\n\n#+col\nThird.\n#+end columns",
+      "expected": {
+        "meta": {},
+        "markdown": "\n```{=latex}\n\\noindent\\begin{minipage}[t]{0.485\\textwidth}\n```\n\nFirst.\n\n```{=latex}\n\\end{minipage}%\n\\hfill\\begin{minipage}[t]{0.485\\textwidth}\n```\n\nSecond.\n\n```{=latex}\n\\end{minipage}\n```\n\n\nThird.\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
     }
   ],
   "errorCases": [

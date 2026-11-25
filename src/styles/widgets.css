@@ -2784,6 +2784,64 @@ ul.noema-tree-list { margin: 0; padding: 0; list-style: none; }
   background: var(--noema-columns-rule);
   pointer-events: none;
 }
+
+:is(.noema-columns.noema-columns-adaptive:not(.cm-columns-widget):not(.cm-columns-active-top), .noema-columns-adaptive > .cm-columns-content) {
+  grid-template-columns: minmax(0, 1fr);
+  min-inline-size: 0;
+  box-sizing: border-box;
+}
+:is(.noema-columns.noema-columns-adaptive:not(.cm-columns-widget):not(.cm-columns-active-top), .noema-columns-adaptive > .cm-columns-content)[data-columns-ready] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  justify-content: var(--noema-columns-justify, start);
+  column-gap: var(--noema-columns-gap);
+  row-gap: 0;
+  padding: var(--noema-columns-padding, 0);
+}
+.noema-columns-adaptive { position: relative; }
+.noema-columns-adaptive.noema-columns-valign-center { --noema-column-content-align: center; }
+.noema-columns-adaptive.noema-columns-valign-bottom { --noema-column-content-align: end; }
+.noema-columns-adaptive:is(.noema-columns-valign-top, .noema-columns-valign-stretch) { --noema-column-content-align: start; }
+.noema-columns-adaptive [data-column-grow] {
+  box-sizing: border-box;
+  flex: 0 0 var(--noema-column-width, 100%);
+}
+.noema-columns-adaptive [data-column-row-start] {
+  display: flex;
+  flex-direction: column;
+  justify-content: var(--noema-column-content-align, start);
+}
+.noema-columns-adaptive .org-env-heading-label { flex: none; white-space: nowrap; }
+.cm-editor .noema-columns-adaptive org-env-block .org-env-heading-title:not([data-empty="true"]) {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+}
+.noema-columns-adaptive :is(.noema-column-pane, .cm-column-pane-body) > p { margin-block: 0.55em; }
+.noema-columns-adaptive [data-column-last-row="false"] { margin-block-end: max(0.7em, var(--noema-columns-gap)); }
+.noema-columns-adaptive [data-column-stacked="true"][class*="noema-columns-align-"] { text-align: start; }
+.noema-columns-adaptive [data-column-row-start="true"]::before,
+.noema-columns-adaptive:not([data-columns-ready]) > .noema-column-pane::before,
+.noema-columns-adaptive > .cm-columns-content:not([data-columns-ready]) > .cm-column-pane::before { display: none; }
+.noema-columns-row-break { flex: 0 0 100%; block-size: 0; margin-block-end: 0.58em; }
+.noema-columns-adaptive.noema-columns-rule-on > .noema-columns-row-break,
+.noema-columns-adaptive.noema-columns-rule-on > .cm-columns-content > .noema-columns-row-break {
+  border-block-start: 1px solid var(--noema-columns-rule);
+}
+.noema-columns-meter {
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 0;
+  inline-size: 0;
+  block-size: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+.noema-columns-meter > span { display: block; block-size: 0; }
+
 .noema-column-pane > :first-child,
 .cm-column-pane-body > :first-child { margin-top: 0; }
 .noema-column-pane > :last-child,

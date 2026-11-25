@@ -83,6 +83,8 @@ import { SYMBOL_CONTROL_SELECTOR } from "../../../../document-symbol.ts";
 import { connectDocumentSymbols } from "./document-symbol.ts";
 import { RUN_CONTROL_SELECTOR } from "../../../../document-run.ts";
 import { connectDocumentRuns } from "./document-run.ts";
+import { connectAdaptiveColumns } from "../../../../document-columns-adaptive.ts";
+import { layoutAdaptiveColumns } from "../../../../../shared/columns-adaptive.mjs";
 import { connectDocumentPackages } from "./document-packages.ts";
 import { hasNativeCalloutLayout, nativeCalloutKinds, nativeCalloutOpening } from "../../../../document-callouts.ts";
 import { documentViewState, rememberDocumentView } from "./document-view-state.ts";
@@ -740,6 +742,7 @@ export function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, sco
     connectDocumentRepository(content, view);
     connectDocumentSymbols(content, view);
     connectDocumentRuns(content, view, locate);
+    connectAdaptiveColumns(content, layoutAdaptiveColumns, () => view.requestMeasure());
     connectInlineReadingPopovers(content, () => view.requestMeasure());
     if (!hasDocumentViews) return;
     connectDocumentTabViews(content, view, hydrate, locate);
@@ -3338,6 +3341,10 @@ class FoldWidget extends MeasuredWidget {
 
 const setColumnsRawSourceEffect = StateEffect.define<{ from: number; raw: boolean } | null>();
 
+function columnsSourceActive(state: EditorState, block: OrgEnvBlock): boolean {
+  return opensSource(state, block.from, block.to - 1);
+}
+
 const columnsRawSourceField = StateField.define<number | null>({
   create: () => null,
   update(value, tr) {
@@ -3353,7 +3360,7 @@ const columnsRawSourceField = StateField.define<number | null>({
     if (next !== null && (tr.selection != null || tr.docChanged)) {
       const blocks = tr.state.field(orgEnvBlocksField, false) ?? orgEnvBlocksFromState(tr.state);
       const block = blocks.find((b) => b.kind === "columns" && b.from === next);
-      if (!block || !opensSource(tr.state, block.from, block.to)) {
+      if (!block || !columnsSourceActive(tr.state, block)) {
         next = null;
       }
     }
@@ -3446,12 +3453,13 @@ function isNestedInsideColumns(state: EditorState, block: OrgEnvBlock): boolean 
  */
 function activeColumnsStage(state: EditorState, block: OrgEnvBlock): ActiveColumnsStage | null {
   if (block.kind !== "columns") return null;
-  if (!opensSource(state, block.from, block.to)) return null;
+  if (!columnsSourceActive(state, block)) return null;
   if (state.field(columnsRawSourceField, false) === block.from) return null;
   if (isNestedInsideColumns(state, block)) return null;
 
   const sel = visualSelection(state).main;
   const spec = parseColumnsHeader(block.title);
+  if (spec.adaptive) return null;
   const doc = state.doc;
 
   if (spec.mode === "flow") {
@@ -3917,6 +3925,25 @@ function buildColumnsToolbar(
     toolbar.append(sep);
   };
 
+  const addSource = () => addBtn("Source", "Edit columns source", () => {
+    withLiveBlock((live) => {
+      const curSel = view.state.selection.main;
+      const anchor = curSel.from >= live.from && curSel.to < live.to ? curSel.head : live.bodyFrom;
+      preserveEditorViewport(view, () => {
+        view.dispatch({
+          selection: { anchor },
+          effects: setColumnsRawSourceEffect.of({ from: live.from, raw: true }),
+          scrollIntoView: false,
+        });
+        view.focus();
+      }, live.openFrom);
+    });
+  });
+  if (spec.adaptive) {
+    addSource();
+    return toolbar;
+  }
+
   if (spec.mode === "columns") {
     addBtn("+ Col", "Add column", () => {
       withLiveBlock((live) => addColumnPaneLive(view, live, inWysiwygEdit));
@@ -4005,20 +4032,7 @@ function buildColumnsToolbar(
     });
   }
 
-  addBtn("Source", "Edit columns source", () => {
-    withLiveBlock((live) => {
-      const curSel = view.state.selection.main;
-      const anchor = curSel.from >= live.from && curSel.to <= live.to ? curSel.head : live.bodyFrom;
-      preserveEditorViewport(view, () => {
-        view.dispatch({
-          selection: { anchor },
-          effects: setColumnsRawSourceEffect.of({ from: live.from, raw: true }),
-          scrollIntoView: false,
-        });
-        view.focus();
-      }, live.openFrom);
-    });
-  });
+  addSource();
 
   return toolbar;
 }
@@ -4179,6 +4193,8 @@ function appendColumnsDividers(
  * side-by-side WYSIWYG editing inside the single CM6 editor without revealing
  * raw `#+begin`/`#+col`/`#+end` syntax unless the user clicks `Source`.
  */
+const disposeAdaptiveColumns = new WeakMap<HTMLElement, () => void>();
+
 class ColumnsWidget extends MeasuredWidget {
   readonly title: string;
   readonly body: string;
@@ -4231,6 +4247,7 @@ class ColumnsWidget extends MeasuredWidget {
     block.className = `cm-columns-widget ${columnsClasses(spec, paneCount)}`;
     block.style.cssText = columnsStyle(spec, paneCount);
     block.dataset.cols = String(paneCount);
+    if (spec.adaptive) block.dataset.columnsConfig = JSON.stringify(spec.adaptive);
     block.dataset.cmOpenSource = spec.mode === "columns" ? "false" : "true";
     setSourceRange(block, this.from, this.to);
     if (spec.mode === "flow") block.dataset.cmSourceAnchor = String(this.bodyFrom);
@@ -4247,6 +4264,7 @@ class ColumnsWidget extends MeasuredWidget {
           ? `cm-column-pane noema-columns-align-${pane.align}`
           : "cm-column-pane";
         paneEl.dataset.colIndex = String(index);
+        if (spec.adaptive) paneEl.dataset.columnGrow = String(pane.grow);
         const absFrom = this.bodyFrom + pane.from;
         const absTo = Math.max(absFrom, this.bodyFrom + pane.to);
         const leadingWs = pane.body.match(/^\s*/)?.[0].length ?? 0;
@@ -4257,7 +4275,7 @@ class ColumnsWidget extends MeasuredWidget {
         paneEl.dataset.cmSourceAnchor = String(absAnchor);
         paneEl.dataset.cmOpenSource = "false";
 
-        if (!view.state.readOnly && panes.length > 1) {
+        if (!spec.adaptive && !view.state.readOnly && panes.length > 1) {
           const grip = document.createElement("button");
           grip.type = "button";
           grip.className = "cm-column-pane-grip";
@@ -4348,7 +4366,9 @@ class ColumnsWidget extends MeasuredWidget {
 
     block.append(toolbar, content);
 
-    if (spec.mode === "columns") {
+    if (spec.adaptive) {
+      disposeAdaptiveColumns.set(block, connectAdaptiveColumns(block, layoutAdaptiveColumns, () => view.requestMeasure()));
+    } else if (spec.mode === "columns") {
       appendColumnsDividers(view, block, block, content, paneCount, widths, this.from, this.to, source);
     }
 
@@ -4357,6 +4377,8 @@ class ColumnsWidget extends MeasuredWidget {
   }
 
   override destroy(dom: HTMLElement): void {
+    disposeAdaptiveColumns.get(dom)?.();
+    disposeAdaptiveColumns.delete(dom);
     disconnectDocumentTableViews(dom);
     super.destroy(dom);
   }
@@ -4933,6 +4955,9 @@ class ColumnsOpenBannerWidget extends MeasuredWidget {
     meta.className = "cm-columns-banner-meta";
     if (this.spec.mode === "flow") {
       meta.textContent = `${this.paneCount} cols · flowing`;
+    } else if (this.spec.adaptive) {
+      const tracks = this.spec.adaptive.tracks;
+      meta.textContent = tracks ? tracks.map(({value, unit}) => `${value}${unit}`).join(" / ") : `${this.paneCount} responsive columns`;
     } else if (this.paneCount === 1) {
       meta.textContent = "1 col";
     } else if (areEqualColumnWidths(this.widths, this.paneCount)) {
@@ -4944,7 +4969,7 @@ class ColumnsOpenBannerWidget extends MeasuredWidget {
     const actions = document.createElement("span");
     actions.className = "cm-columns-banner-actions";
 
-    if (this.spec.mode === "columns" && !view.state.readOnly && this.paneCount < COLUMNS_MAX_COUNT) {
+    if (this.spec.mode === "columns" && !this.spec.adaptive && !view.state.readOnly && this.paneCount < COLUMNS_MAX_COUNT) {
       const addColBtn = document.createElement("button");
       addColBtn.type = "button";
       addColBtn.className = "cm-columns-banner-btn";
@@ -4988,7 +5013,7 @@ class ColumnsOpenBannerWidget extends MeasuredWidget {
         view.focus();
       }, live.openFrom);
     });
-    actions.append(visualBtn);
+    if (!this.spec.adaptive) actions.append(visualBtn);
 
     const doneBtn = document.createElement("button");
     doneBtn.type = "button";
@@ -5003,27 +5028,15 @@ class ColumnsOpenBannerWidget extends MeasuredWidget {
       const live = liveColumnsBlockForElement(view, bar);
       const blockFrom = live?.openFrom ?? this.openFrom;
       const blockTo = live?.to ?? this.blockTo;
-      const docLen = view.state.doc.length;
-      if (blockTo < docLen) {
-        preserveEditorViewport(view, () => {
-          view.dispatch({
-            selection: { anchor: Math.min(docLen, blockTo + 1) },
-            effects: setColumnsRawSourceEffect.of(null),
-            scrollIntoView: false,
-          });
-          view.focus();
-        }, blockFrom);
-      } else if (!view.state.readOnly) {
-        preserveEditorViewport(view, () => {
-          dispatchConstructEdit(view, {
-            changes: { from: blockTo, insert: "\n" },
-            selection: { anchor: blockTo + 1 },
-            effects: setColumnsRawSourceEffect.of(null),
-            scrollIntoView: false,
-          }, "columns");
-          view.focus();
-        }, blockFrom);
-      }
+      const anchor = Math.min(view.state.doc.length, blockTo + 1);
+      preserveEditorViewport(view, () => {
+        view.dispatch({
+          selection: { anchor },
+          effects: setColumnsRawSourceEffect.of(null),
+          scrollIntoView: false,
+        });
+        view.focus();
+      }, blockFrom);
     });
     actions.append(doneBtn);
 
@@ -5038,12 +5051,12 @@ class ColumnsOpenBannerWidget extends MeasuredWidget {
 /** Editing-state column separator banner replacing each top-level `#+col` line. */
 class ColumnsMarkerBannerWidget extends MeasuredWidget {
   readonly colNumber: number;
-  readonly widthPct: number;
+  readonly widthPct: number | null;
   readonly align: ColumnsAlign;
   readonly from: number;
   readonly to: number;
 
-  constructor(colNumber: number, widthPct: number, align: ColumnsAlign, from: number, to: number) {
+  constructor(colNumber: number, widthPct: number | null, align: ColumnsAlign, from: number, to: number) {
     super();
     this.colNumber = colNumber;
     this.widthPct = widthPct;
@@ -5070,7 +5083,8 @@ class ColumnsMarkerBannerWidget extends MeasuredWidget {
     row.dataset.cmSourceAnchor = String(this.to);
     const pill = document.createElement("span");
     pill.className = "cm-columns-col-pill";
-    const parts = [`Column ${this.colNumber}`, `${this.widthPct}%`];
+    const parts = [`Column ${this.colNumber}`];
+    if (this.widthPct !== null) parts.push(`${this.widthPct}%`);
     if (this.align !== "inherit") parts.push(this.align);
     pill.textContent = parts.join(" · ");
     row.append(pill);
@@ -5146,7 +5160,7 @@ function addColumnsEditingDecos(
       if (!opensSource(state, absFrom, absTo)) {
         decos.push(
           Decoration.replace({
-            widget: new ColumnsMarkerBannerWidget(i + 1, widths[i] ?? 0, pane.align, absFrom, absTo),
+            widget: new ColumnsMarkerBannerWidget(i + 1, spec.adaptive ? null : widths[i] ?? 0, pane.align, absFrom, absTo),
             block: true,
           }).range(absFrom, absTo),
         );
@@ -6377,7 +6391,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
   const hiddenColumnsRanges: Array<readonly [number, number]> = [];
   for (const b of allBlocks) {
     if (b.kind !== "columns") continue;
-    if (!opensSource(view.state, b.from, b.to)) {
+    if (!columnsSourceActive(view.state, b)) {
       hiddenColumnsRanges.push([b.from, b.to]);
       continue;
     }
@@ -6492,7 +6506,7 @@ function addOrgEnvBlockExtraDecos(
     return;
   }
   if (block.kind === "columns") {
-    if (!opensSource(state, block.from, block.to)) {
+    if (!columnsSourceActive(state, block)) {
       decos.push(
         Decoration.replace({
           widget: new ColumnsWidget(block.title, block.body, block.from, block.to, block.bodyFrom, block.bodyTo),
@@ -6742,7 +6756,7 @@ function activeBlockExtraKey(state: EditorState): string {
   }
   for (const block of blocks) {
     if (block.kind === "columns") {
-      if (opensSource(state, block.from, block.to)) {
+      if (columnsSourceActive(state, block)) {
         const stage = activeColumnsStage(state, block);
         if (stage) {
           parts.push(`col-stage:${stage.activeIndex}:${stage.editFrom}:${stage.editTo}:${block.from}:${block.to}`);
@@ -6793,7 +6807,7 @@ function activeBlockExtraKey(state: EditorState): string {
 
 function changesTouchColumnsStructure(state: EditorState, changes: ChangeSet, block: OrgEnvBlock): boolean {
   if (!changesTouchRange(changes, block.from, block.to)) return false;
-  if (!opensSource(state, block.from, block.to)) return true;
+  if (!columnsSourceActive(state, block)) return true;
   const doc = state.doc;
   let touches = false;
   changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {

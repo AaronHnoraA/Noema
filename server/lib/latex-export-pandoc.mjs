@@ -162,7 +162,7 @@ function columnsLatexExport(kind, title, body, conversionOptions) {
   const labels = comparison && panes.length === 2 ? [comparison.attrs.pros || "Pros", comparison.attrs.cons || "Cons"] : [];
   const transformed = panes.map((pane, index) => {
     const heading = labels[index] ? rawLatexBlock(`\\textbf{${escapeLatexTitle(labels[index], conversionOptions)}}\\par`) : "";
-    return { body: heading + transform(pane.body), align: pane.align };
+    return { body: heading + transform(pane.body), align: pane.align, grow: pane.grow };
   });
   const blocks = columnsLatexBlocks(spec, transformed);
   return comparison?.title

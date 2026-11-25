@@ -34,6 +34,8 @@ import { renderDocumentProjectTree } from "./document-project-tree.ts";
 import { documentRepositoryKinds, renderDocumentRepository } from "./document-repository.ts";
 import { renderDocumentSymbol } from "./document-symbol.ts";
 import { renderDocumentRun } from "./document-run.ts";
+import { layoutAdaptiveColumns } from "../shared/columns-adaptive.mjs";
+import { connectAdaptiveColumns } from "./document-columns-adaptive.ts";
 import { nativeCalloutKinds, parseQuotedCallout, renderNativeCallout } from "./document-callouts.ts";
 import { inlineReadingNames, readInlineReading, renderInlineReading } from "./document-inline-reading.ts";
 import { connectInlineReadingPopovers } from "./document-inline-popovers.ts";
@@ -1420,14 +1422,16 @@ function renderOrgEnv(
       return `<div class="${columnsClasses(spec, cols)}" style="${columnsStyle(spec, cols)}" data-cols="${cols}"${idAttr}>${body}</div>`;
     }
     const panes = splitColumnPanes(meta.body);
+    const adaptive = spec.adaptive ? ` data-columns-config="${escapeAttr(JSON.stringify(spec.adaptive))}"` : "";
     const inner = panes.map((pane, index) => {
       const paneClass = pane.align !== "inherit"
         ? `noema-column-pane noema-columns-align-${pane.align}`
         : "noema-column-pane";
       const html = pane.body.trim() ? md.render(pane.body) : "";
-      return `<div class="${paneClass}" data-col-index="${index}">${html}</div>`;
+      const grow = spec.adaptive ? ` data-column-grow="${pane.grow}"` : "";
+      return `<div class="${paneClass}" data-col-index="${index}"${grow}>${html}</div>`;
     }).join("");
-    return `<div class="${columnsClasses(spec, panes.length)}" style="${columnsStyle(spec, panes.length)}" data-cols="${panes.length}"${idAttr}>${inner}</div>`;
+    return `<div class="${columnsClasses(spec, panes.length)}" style="${columnsStyle(spec, panes.length)}" data-cols="${panes.length}"${idAttr}${adaptive}>${inner}</div>`;
   }
   const kindName = kind.toLowerCase();
   const { title, attrs } = splitDocumentWidgetTitle(kindName, meta.title);
@@ -2287,7 +2291,9 @@ export function renderPublishedNoteHTML(
   })();</script>\n`;
   const inlineReadingScript = !pdf && contentHtml.includes("data-inline-popover-trigger")
     ? `<script>(${connectInlineReadingPopovers.toString()})(document);</script>\n` : "";
-  const scriptHtml = inlineReadingScript + (pdf ? "" : standalone ? standaloneScript : `  <script src="${assetRoot}js/note-page.js?v=${escapeAttr(version)}"></script>
+  const adaptiveColumnsScript = !pdf && contentHtml.includes("data-columns-config")
+    ? `<script>(${connectAdaptiveColumns.toString()})(document, ${layoutAdaptiveColumns.toString()});</script>\n` : "";
+  const scriptHtml = inlineReadingScript + adaptiveColumnsScript + (pdf ? "" : standalone ? standaloneScript : `  <script src="${assetRoot}js/note-page.js?v=${escapeAttr(version)}"></script>
   <script src="${assetRoot}Noema/pages/published-toc.js?v=${escapeAttr(version)}"></script>
   <script src="${assetRoot}js/mac-window.js?v=${escapeAttr(version)}"></script>
   <script type="module" src="${assetRoot}Noema/pages/published-local-graph.js?v=${escapeAttr(version)}"></script>
