@@ -641,6 +641,10 @@ export type NoteCodeExcerpt = {
 
 export type ProjectTreeEntry = { label: string; key: string; file: string; directory: boolean; children: ProjectTreeEntry[] };
 type DocumentProjectTree = { ok: boolean; label: string; entries: ProjectTreeEntry[]; truncated: boolean };
+export type DocumentCommit = { id: string; short: string; date: string; author: string; subject: string };
+type DocumentVersion = { ok: boolean; provider: "git" | "jj"; label: string } & (
+  { commits: DocumentCommit[] } | { patch: string; truncated: boolean }
+);
 
 type NativeApi = {
   connection?: {
@@ -698,7 +702,7 @@ type NativeApi = {
     readRegion?: (body?: unknown) => Promise<unknown>;
     readExcerpt?: (body?: unknown) => Promise<unknown>;
   };
-  documentAssets?: { projectTree?: (body?: unknown) => Promise<unknown> };
+  documentAssets?: { projectTree?: (body?: unknown) => Promise<unknown>; version?: (body?: unknown) => Promise<unknown> };
   slides?: {
     mirror?: (body?: unknown) => Promise<unknown>;
   };
@@ -1444,6 +1448,10 @@ export const api = {
     async projectTree(body: unknown): Promise<DocumentProjectTree> {
       const call = requireMethod(nativeApi().documentAssets?.projectTree, "Project directory tree");
       return ensureOk(await call(body) as DocumentProjectTree, "Loading the project tree failed");
+    },
+    async version(body: unknown): Promise<DocumentVersion> {
+      const call = requireMethod(nativeApi().documentAssets?.version, "Repository views");
+      return ensureOk(await call(body) as DocumentVersion, "Loading the repository view failed");
     },
   },
   jupyterCell: {

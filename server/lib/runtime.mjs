@@ -19,6 +19,7 @@ import { noteMacroSpec, parseNoteLocalMacros } from "../../shared/note-macros.mj
 import { durationFromEnv } from "./jupyter-cell.mjs";
 import { DOCUMENT_EXCERPT_FILE_BYTES, documentAssetError, selectDocumentExcerpt } from "./document-excerpts.mjs";
 import { readProjectDirectory } from "./document-project-tree.mjs";
+import { readRepositoryDocumentView } from "./document-repository.mjs";
 import { moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
 import { scanPlanningDocument, planningSourceIsLive } from "../../shared/planning-document.mjs";
 import { maskMetaSummaryContent, orgMetaSummaryRange } from "../../shared/meta-summary.mjs";
@@ -947,24 +948,35 @@ export async function readNoteCodeRegion(body) {
   return { ok: true, file, path: rawPath, id, body: region.body, language: languageForFile(file), mtimeMs: info.mtimeMs, size: info.size };
 }
 
-async function documentAssetPath(noteInput, rawPath) {
+async function workspaceDocumentScope(noteInput) {
   const current = String(noteInput || "").trim();
-  if (!current || !rawPath) throw documentAssetError("A saved note and a source path are required", 400);
+  if (!current) throw documentAssetError("A saved note is required", 400);
   const note = safeOpenFile(current);
   const allowedRoot = contentRootForFile(note);
   const root = await realpath(allowedRoot);
   const savedNote = await realpath(note).catch(() => "");
   if (!savedNote || !relativeInsideP(relative(root, savedNote))) throw documentAssetError("The note is outside the current document root", 403);
   if (!(await stat(savedNote)).isFile()) throw documentAssetError("The current note must be a regular file", 400);
-  const path = resolveNoteCodePath(rawPath, dirname(note), allowedRoot);
+  return { note, savedNote, allowedRoot, root };
+}
+
+function scopedDocumentPath(scope, rawPath) {
+  const path = resolveNoteCodePath(rawPath, dirname(scope.note), scope.allowedRoot);
   if (!path) throw documentAssetError("The source is outside the current document root", 403);
+  return path;
+}
+
+async function documentAssetPath(noteInput, rawPath) {
+  if (!rawPath) throw documentAssetError("A source path is required", 400);
+  const scope = await workspaceDocumentScope(noteInput);
+  const path = scopedDocumentPath(scope, rawPath);
   let file;
   try { file = await realpath(path); }
   catch (error) {
     if (error?.code === "ENOENT") throw documentAssetError("Source file not found", 404);
     throw error;
   }
-  if (!relativeInsideP(relative(root, file))) throw documentAssetError("The source is outside the current document root", 403);
+  if (!relativeInsideP(relative(scope.root, file))) throw documentAssetError("The source is outside the current document root", 403);
   return { path, file };
 }
 
@@ -1009,6 +1021,24 @@ export async function readDocumentProjectTree(body) {
   if (!Number.isInteger(depth) || depth < 1 || depth > 6) throw documentAssetError("Tree depth must be between 1 and 6", 400);
   const ignored = String(body?.ignore || "").split(/[,\s]+/).filter(Boolean);
   return { ok: true, label: path === "/" ? `${basename(file)}/` : path, ...await readProjectDirectory(file, depth, ignored) };
+}
+
+export async function readDocumentVersion(body) {
+  const scope = await workspaceDocumentScope(body?.notePath);
+  const rawPath = String(body?.path || "").trim();
+  const requestedPath = rawPath && resolveInternalContentPath(rawPath, dirname(scope.note), scope.allowedRoot);
+  if (rawPath && !requestedPath) throw documentAssetError("The source is outside the current document root", 403);
+  const filter = requestedPath && canonicalExistingPath(requestedPath);
+  if (filter && !relativeInsideP(relative(scope.root, filter))) throw documentAssetError("The source is outside the current document root", 403);
+  const target = filter || scope.savedNote;
+  const info = await stat(target).catch((error) => {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  });
+  const fallbackFilter = !info && bareRelativeContentPath(rawPath)
+    ? (repository) => canonicalExistingPath(resolve(repository, rawPath)) : undefined;
+  return readRepositoryDocumentView({ root: scope.root, start: info?.isDirectory() ? target : dirname(target), filter,
+    fallbackFilter, kind: body?.kind, vcs: body?.vcs, limit: body?.limit, range: body?.range });
 }
 
 function assetCandidateFile(file) {

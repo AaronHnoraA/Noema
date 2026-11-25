@@ -34,6 +34,8 @@ const attributesByKind = new Map([
   ["include", ["src", "lines", "region", "section", "lang"]],
   ["code-ref", ["src", "lines", "region", "section", "symbol", "context", "lang"]],
   ["project-tree", ["path", "depth", "ignore", "open-depth", "lines", "icon"]],
+  ["git-log", ["path", "vcs", "limit"]],
+  ["git-diff", ["path", "vcs", "range"]],
 ]);
 for (const kind of ["note", "tip", "important", "warning", "caution", "info", "danger"]) {
   attributesByKind.set(kind, ["collapsible", "open", "background", "border-left-width"]);

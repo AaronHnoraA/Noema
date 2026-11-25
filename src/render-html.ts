@@ -31,6 +31,7 @@ import { renderDocumentChat } from "./document-chat.ts";
 import { documentPackageKinds, packageCommandFence, renderDocumentPackage } from "./document-packages.ts";
 import { documentExcerptKinds, renderDocumentExcerpt } from "./document-excerpts.ts";
 import { renderDocumentProjectTree } from "./document-project-tree.ts";
+import { documentRepositoryKinds, renderDocumentRepository } from "./document-repository.ts";
 import { nativeCalloutKinds, parseQuotedCallout, renderNativeCallout } from "./document-callouts.ts";
 import { inlineReadingNames, readInlineReading, renderInlineReading } from "./document-inline-reading.ts";
 import { connectInlineReadingPopovers } from "./document-inline-popovers.ts";
@@ -329,6 +330,8 @@ function envLabel(kind: string): string {
     include: "Include",
     "code-ref": "Code reference",
     "project-tree": "Project tree",
+    "git-log": "History",
+    "git-diff": "Patch",
     comment: "Comment",
     summary: "Summary",
     fold: "Fold",
@@ -1445,6 +1448,7 @@ function renderOrgEnv(
     : documentPackageKinds.has(kindName) ? renderDocumentPackage(md, kindName, title, meta.body, attrs, options.documentTabActions === true)
     : documentExcerptKinds.has(kindName) ? renderDocumentExcerpt(md, meta.body, attrs, options.documentSourceActions === true)
     : kindName === "project-tree" ? renderDocumentProjectTree(md, title, meta.body, attrs, options.documentSourceActions === true)
+    : documentRepositoryKinds.has(kindName) ? renderDocumentRepository(md, kindName, meta.body, attrs, options.documentSourceActions === true)
     : nativeCalloutKinds.has(kindName) ? renderNativeCallout(md, kindName, title, meta.body, attrs, options.documentDisclosureActions === true)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");

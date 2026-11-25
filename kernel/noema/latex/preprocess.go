@@ -110,6 +110,8 @@ var documentWidgetOptions = map[string][]string{
 	"include":      {"src", "lines", "region", "section", "lang"},
 	"code-ref":     {"src", "lines", "region", "section", "symbol", "context", "lang"},
 	"project-tree": {"path", "depth", "ignore", "open-depth", "lines", "icon"},
+	"git-log":      {"path", "vcs", "limit"},
+	"git-diff":     {"path", "vcs", "range"},
 }
 
 var defaultEnvironment = map[string]string{
@@ -2030,6 +2032,8 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 		entries = append(entries, attributes["src"])
 	case "project-tree":
 		entries = append(entries, attributes["path"])
+	case "git-log", "git-diff":
+		entries = append(entries, attributes["path"], attributes["range"])
 	case "npm-badge":
 		if strings.TrimSpace(attributes["name"]) != "" {
 			entries = append(entries, attributes["name"])

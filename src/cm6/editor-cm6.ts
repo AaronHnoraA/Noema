@@ -50,6 +50,7 @@ import { disposeHighlightWorker } from "../code-highlight-async.ts";
 import { disposeMathRuntime } from "../math-render.ts";
 import { INLINE_READING_CONTROL_SELECTOR } from "../document-inline-popovers.ts";
 import { DOCUMENT_EXCERPT_CONTROL_SELECTOR } from "../document-excerpts.ts";
+import { REPOSITORY_CONTROL_SELECTOR } from "../document-repository.ts";
 import {
   runCommandCM6,
   getBlockContextCM6,
@@ -521,7 +522,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     const target = event.target;
     if (
       target instanceof Element
-      && target.closest(`input, textarea, select, button, a, summary, ${INLINE_READING_CONTROL_SELECTOR}, ${DOCUMENT_EXCERPT_CONTROL_SELECTOR}, ${CODE_TREE_TEXT_SELECTOR}, ${DEMO_TEXT_SELECTOR}, ${CHAT_TEXT_SELECTOR}, ${PACKAGE_CODE_SELECTOR}`)
+      && target.closest(`input, textarea, select, button, a, summary, ${INLINE_READING_CONTROL_SELECTOR}, ${DOCUMENT_EXCERPT_CONTROL_SELECTOR}, ${REPOSITORY_CONTROL_SELECTOR}, ${CODE_TREE_TEXT_SELECTOR}, ${DEMO_TEXT_SELECTOR}, ${CHAT_TEXT_SELECTOR}, ${PACKAGE_CODE_SELECTOR}`)
     ) {
       return;
     }

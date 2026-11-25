@@ -44,6 +44,7 @@ import {
   readNoteCodeRegion,
   readNoteCodeExcerpt,
   readDocumentProjectTree,
+  readDocumentVersion,
   scanSnippets,
   scanTemplates,
   renameRoamTag,
@@ -2690,6 +2691,7 @@ const apiRouter = new ApiRouter().register({
   "noema:api:note-code:read-region": (body) => readNoteCodeRegion(body || {}),
   "noema:api:note-code:read-excerpt": (body) => readNoteCodeExcerpt(body || {}),
   "noema:api:document-assets:project-tree": (body) => readDocumentProjectTree(body || {}),
+  "noema:api:document-assets:version": (body) => readDocumentVersion(body || {}),
   "noema:api:slides:mirror": async (body) => applyWikiMutationResult(await slidesMirror(body || {})),
   ...(jupyterCell ? withWikiMutationHooks(createJupyterApiHandlers(jupyterCell), {
     only: [
@@ -3497,7 +3499,8 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       readExcerpt: function(body) { return call("noema:api:note-code:read-excerpt", [body || {}]); }
     },
     documentAssets: {
-      projectTree: function(body) { return call("noema:api:document-assets:project-tree", [body || {}]); }
+      projectTree: function(body) { return call("noema:api:document-assets:project-tree", [body || {}]); },
+      version: function(body) { return call("noema:api:document-assets:version", [body || {}]); }
     },
     slides: {
       mirror: function(body) { return call("noema:api:slides:mirror", [body || {}]); }

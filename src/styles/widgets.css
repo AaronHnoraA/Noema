@@ -343,6 +343,48 @@
 }
 .noema-project-tree [data-tree-icon="colored"] [data-tree-type="directory"] { --tree-icon: var(--aaron-callout-warning, var(--tree-muted)); }
 .noema-project-tree [data-tree-icon="colored"] [data-tree-type="file"] { --tree-icon: var(--tree-accent); }
+.noema-repo-label { min-inline-size: 0; overflow-wrap: anywhere; }
+.noema-repo-range { overflow-wrap: anywhere; }
+.noema-repo-output { min-inline-size: 0; container-type: inline-size; }
+.cm-editor .noema-repo-history { margin: 0; padding: 0; list-style: none; }
+.cm-editor .noema-repo-history > li {
+  display: grid;
+  grid-template-columns: max-content max-content minmax(9ch, 20%) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.15em 0.55em;
+  margin: 0;
+  padding: 0.36em 0.64em;
+  border-block-start: 1px solid var(--excerpt-line);
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+.noema-repo-history time, .noema-repo-author { color: var(--aaron-muted, currentColor); }
+.noema-repo-history time { white-space: nowrap; }
+.noema-repo-author { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.noema-repo-history .noema-repo-hash {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--aaron-link, currentColor);
+  font: inherit;
+  cursor: pointer;
+}
+.noema-repo-hash > code { padding: 0; }
+.cm-editor .noema-document-repository .noema-repo-patch { padding-inline: 0; }
+.noema-repo-patch-row { display: block; min-block-size: 1lh; padding-inline: 0.62em; }
+.noema-repo-patch-row[data-patch-line="added"] { --patch-line: var(--aaron-callout-tip, #2e9e62); }
+.noema-repo-patch-row[data-patch-line="removed"] { --patch-line: var(--aaron-callout-danger, #dd6363); }
+.noema-repo-patch-row:is([data-patch-line="added"], [data-patch-line="removed"]) {
+  background: color-mix(in srgb, var(--patch-line) 12%, transparent);
+  box-shadow: inset 2px 0 0 var(--patch-line);
+}
+.noema-repo-patch-row[data-patch-line="metadata"] { color: var(--aaron-muted, currentColor); }
+@container (max-width: 31em) {
+  .cm-editor .noema-repo-history > li { grid-template-columns: minmax(0, 1fr) max-content; }
+  .noema-repo-author { grid-column: 1 / -1; }
+  .noema-repo-subject { grid-column: 1 / -1; }
+}
 
 .callout, .noema-native-callout-body {
   --callout-accent: var(--aaron-callout-note, var(--aaron-link, currentColor));

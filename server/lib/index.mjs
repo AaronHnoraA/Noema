@@ -52,6 +52,7 @@ export {
   readNoteCodeRegion,
   readNoteCodeExcerpt,
   readDocumentProjectTree,
+  readDocumentVersion,
   syncRoamDb,
   runtimeDebugSnapshot,
   maybeScheduleWeeklyFullSync,
