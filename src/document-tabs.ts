@@ -71,13 +71,14 @@ export function renderDocumentTabs(md: MarkdownIt, kind: string, title: string, 
   const previous = kind === "swiper" ? '<button type="button" class="noema-tab-move" data-move="-1">‹</button>' : "";
   const next = kind === "swiper" ? '<button type="button" class="noema-tab-move" data-move="1">›</button>' : "";
   const offsets = documentPageOffsets(md, kind, body, pages, source);
+  const preamble = first ? md.renderer.render(tokens.slice(0, first), md.options, environment) : "";
   const templates = pages.map(({ content }, index) => {
     const offset = offsets[index];
     return `<template data-view-content="${index}"${offset !== undefined ? ` data-tab-offset="${offset}"` : ""}>`
       + `${md.renderer.render(content, md.options, environment)}</template>`;
   }).join("");
   return `<div class="noema-document-tabs" data-tab-kind="${kind}" data-view-kind="${kind}" data-view-source="${documentViewSourceKey(kind, title, body)}" data-tab-selected="${selected}" data-accent="${accent}">`
-    + (first ? md.renderer.render(tokens.slice(0, first), md.options, environment) : "")
+    + preamble
     + `<div class="noema-tab-navigation">${previous}<div class="noema-tab-strip" role="tablist">${controls}</div>${next}</div>`
     + `<div class="noema-tab-body"></div>${templates}</div>`;
 }

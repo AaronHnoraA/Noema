@@ -103,6 +103,8 @@ var documentWidgetOptions = map[string][]string{
 	"code-tree":  {"lines", "icon", "height", "open-depth"},
 	"field":      {"name", "type", "type-link", "default", "required", "deprecated", "experimental", "enum", "unit", "format", "constraint", "since", "label-width", "separator", "width"},
 	"form":       {"separator", "width"},
+	"window":     {"height", "gap", "no-padding"},
+	"demo":       {"open"},
 }
 
 var defaultEnvironment = map[string]string{

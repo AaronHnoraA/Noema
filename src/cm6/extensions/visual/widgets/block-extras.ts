@@ -66,6 +66,8 @@ import { connectDocumentDisclosures } from "./document-disclosures.ts";
 import { connectDocumentDiffs } from "./document-diff.ts";
 import { documentTreeKinds } from "../../../../document-trees.ts";
 import { documentFieldHasDetails, documentFieldKinds } from "../../../../document-fields.ts";
+import { documentDemonstrationKinds } from "../../../../document-demonstrations.ts";
+import { connectDocumentDemonstrations, DEMO_TEXT_SELECTOR, documentWindowScrollbar } from "./document-demonstrations.ts";
 import { CODE_TREE_TEXT_SELECTOR, connectDocumentTrees } from "./document-trees.ts";
 import {
   COLUMNS_MAX_COUNT,
@@ -614,6 +616,8 @@ const documentNavigationSelector = [
   ".noema-document-tree a[href]",
   ".noema-parameter-field a[href]",
   ".noema-document-fields a[href]",
+  ".noema-document-demo a[href]",
+  ".noema-document-window a[href]",
 ].join(", ");
 
 interface DocumentViewScope {
@@ -683,6 +687,8 @@ function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, scope?: Do
     connectDocumentDisclosures(content, view, hydrate, locate);
     connectDocumentDiffs(content, view, locate);
     connectDocumentTrees(content, view, locate);
+    connectDocumentDemonstrations(content, view, locate,
+      (position) => orgEnvBlocksFromState(view.state).find((block) => block.from === position)?.body);
   };
   hydrate(root);
 }
@@ -708,6 +714,11 @@ function hydrateRenderedMarkdown(root: HTMLElement): void {
  * text, so the editor must not claim pointer or selection events there.
  */
 export const CEIL_READONLY_TEXT_SELECTOR = ".cm-ceil-output, .cm-ceil-source, .cm-ceil-output-popover-body";
+const DOCUMENT_READONLY_TEXT_SELECTOR = `${CODE_TREE_TEXT_SELECTOR}, ${DEMO_TEXT_SELECTOR}`;
+
+function documentWidgetTextEvent(event: Event): boolean {
+  return readOnlyTextEvent(event, DOCUMENT_READONLY_TEXT_SELECTOR) || documentWindowScrollbar(event);
+}
 
 function nodeElement(node: Node | null | undefined): Element | null {
   if (!node) return null;
@@ -3228,7 +3239,7 @@ class FoldWidget extends MeasuredWidget {
     super.destroy(dom);
   }
 
-  ignoreEvent(event: Event): boolean { return readOnlyTextEvent(event, CODE_TREE_TEXT_SELECTOR); }
+  ignoreEvent(event: Event): boolean { return documentWidgetTextEvent(event); }
 }
 
 const setColumnsRawSourceEffect = StateEffect.define<{ from: number; raw: boolean } | null>();
@@ -3408,6 +3419,7 @@ function columnsRenderOptions(): RenderMarkdownHTMLOptions {
     documentDisclosureActions: true,
     documentDiffActions: true,
     documentTreeActions: true,
+    documentDemoActions: true,
     ...(resolver ? { assetResolver: (src: string) => resolver(src) } : {}),
     ...(noteFile ? { noteFile } : {}),
   };
@@ -3679,7 +3691,9 @@ function focusRenderedColumnPane(
   if (event.button !== 0) return;
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(".cm-column-pane-grip, .cm-columns-toolbar, .cm-columns-divider")) return;
-  if (target?.closest(documentNavigationSelector) || target?.closest(".noema-document-table-view button, .noema-tab-navigation button, .noema-document-diff button, .noema-document-tree button, summary")) return;
+  if (target?.closest(documentNavigationSelector) || target?.closest(
+    `.noema-document-table-view button, .noema-tab-navigation button, .noema-document-diff button, .noema-document-tree button, .noema-demo-footer button, summary, ${DOCUMENT_READONLY_TEXT_SELECTOR}`,
+  ) || documentWindowScrollbar(event)) return;
 
   // Cmd/Ctrl-click on a link opens the link directly instead of switching edit focus.
   const link = target?.closest<HTMLAnchorElement>("a[href]") ?? null;
@@ -4253,7 +4267,7 @@ class ColumnsWidget extends MeasuredWidget {
     super.destroy(dom);
   }
 
-  ignoreEvent(event: Event): boolean { return readOnlyTextEvent(event, CODE_TREE_TEXT_SELECTOR); }
+  ignoreEvent(event: Event): boolean { return documentWidgetTextEvent(event); }
 }
 
 /**
@@ -4459,7 +4473,7 @@ class ColumnsActiveTopWidget extends MeasuredWidget {
     super.destroy(dom);
   }
 
-  ignoreEvent(event: Event): boolean { return readOnlyTextEvent(event, CODE_TREE_TEXT_SELECTOR); }
+  ignoreEvent(event: Event): boolean { return documentWidgetTextEvent(event); }
 }
 
 /** Bottom spacer + closing hairline for active WYSIWYG column editing. */
@@ -5156,7 +5170,7 @@ class DocumentDataWidget extends MeasuredWidget {
     super.destroy(dom);
   }
 
-  ignoreEvent(event: Event): boolean { return readOnlyTextEvent(event, CODE_TREE_TEXT_SELECTOR); }
+  ignoreEvent(event: Event): boolean { return documentWidgetTextEvent(event); }
 }
 
 class TikzWidget extends MeasuredWidget {
@@ -6313,7 +6327,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 
 const documentDataEnvironments = new Set([
   "progress", "stats", "chart", "timeline", "steps", "table", ...documentFrameKinds, ...documentReadingKinds,
-  "qrcode", ...documentTabKinds, "accordion", "diff", ...documentTreeKinds, ...documentFieldKinds,
+  "qrcode", ...documentTabKinds, "accordion", "diff", ...documentTreeKinds, ...documentFieldKinds, ...documentDemonstrationKinds,
 ]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "details", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);

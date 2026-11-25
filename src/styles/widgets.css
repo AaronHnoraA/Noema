@@ -2191,6 +2191,74 @@ ul.noema-tree-list { margin: 0; padding: 0; list-style: none; }
 }
 .noema-document-fields[data-field-layout="form"] dd { padding-block-start: 0.18em; }
 
+.noema-document-demo, .noema-document-window {
+  --demonstration-line: var(--aaron-paper-line, var(--border, currentColor));
+  --demonstration-muted: var(--aaron-muted, currentColor);
+  --demonstration-accent: var(--aaron-link, currentColor);
+  min-inline-size: 0;
+  border: 1px solid var(--demonstration-line);
+  white-space: normal;
+}
+.noema-demo-preview, .noema-window-body { padding: 0.5em 0.65em; }
+.noema-demo-preview > :first-child, .noema-window-body > :first-child { margin-block-start: 0; }
+.noema-demo-preview > :last-child, .noema-window-body > :last-child { margin-block-end: 0; }
+.noema-window-body {
+  margin-block-start: var(--document-window-gap, 0);
+  max-block-size: var(--document-window-height, none);
+  overflow: auto;
+}
+.noema-window-body::-webkit-scrollbar { width: 0.45em; background: var(--aaron-panel, transparent); }
+.noema-window-body::-webkit-scrollbar-thumb { background: var(--demonstration-muted); border: 1px solid var(--aaron-panel, transparent); }
+.noema-document-window[data-window-padding="false"] .noema-window-body { padding: 0; }
+.noema-demo-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.1em 0.35em;
+  padding: 0.24em 0.5em;
+  border-block-start: 1px solid var(--demonstration-line);
+  background: var(--aaron-panel, transparent);
+  color: var(--demonstration-muted);
+}
+.noema-demo-footer button {
+  padding: 0.08em 0.24em;
+  background: transparent;
+  border: 1px solid transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.noema-demo-footer [data-demo-toggle]::before {
+  content: "";
+  display: inline-block;
+  width: 0.35em;
+  height: 0.35em;
+  margin-inline-end: 0.5em;
+  border: solid currentColor;
+  border-width: 0 1px 1px 0;
+  vertical-align: 0.16em;
+  transform: rotate(-45deg);
+}
+.noema-demo-footer [data-demo-toggle][aria-expanded="true"]::before { transform: rotate(45deg); }
+.noema-demo-footer button:hover { color: var(--demonstration-accent); }
+.noema-demo-footer button:focus-visible, .noema-window-body:focus-visible { outline: 1px solid var(--demonstration-accent); outline-offset: -1px; }
+.noema-document-demo .noema-demo-source > pre.noema-demo-code {
+  margin: 0;
+  border: 0;
+  border-block-start: 1px solid var(--demonstration-line);
+  border-radius: 0;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.noema-document-demo .noema-demo-code, .noema-document-demo .noema-demo-code > code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media print {
+  .noema-window-body { max-block-size: none; overflow: visible; }
+}
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);

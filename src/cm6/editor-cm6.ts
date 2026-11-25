@@ -141,6 +141,7 @@ import { renderedConstructAt } from "./extensions/visual/constructs/registry.ts"
 import { documentViewState } from "./extensions/visual/widgets/document-view-state.ts";
 import { documentDiffSourceAt } from "./extensions/visual/widgets/document-diff.ts";
 import { CODE_TREE_TEXT_SELECTOR } from "./extensions/visual/widgets/document-trees.ts";
+import { DEMO_TEXT_SELECTOR, documentWindowScrollbar } from "./extensions/visual/widgets/document-demonstrations.ts";
 
 function sourceRangeElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof Element) {
@@ -512,10 +513,11 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
 
   const onSourceWidgetMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0) return;
+    if (documentWindowScrollbar(event)) return;
     const target = event.target;
     if (
       target instanceof Element
-      && target.closest(`input, textarea, select, button, a, summary, ${CODE_TREE_TEXT_SELECTOR}`)
+      && target.closest(`input, textarea, select, button, a, summary, ${CODE_TREE_TEXT_SELECTOR}, ${DEMO_TEXT_SELECTOR}`)
     ) {
       return;
     }

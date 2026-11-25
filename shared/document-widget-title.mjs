@@ -27,6 +27,8 @@ const attributesByKind = new Map([
   ["code-tree", ["lines", "icon", "height", "open-depth"]],
   ["field", ["name", "type", "type-link", "default", "required", "deprecated", "experimental", "enum", "unit", "format", "constraint", "since", "label-width", "separator", "width"]],
   ["form", ["separator", "width"]],
+  ["window", ["height", "gap", "no-padding"]],
+  ["demo", ["open"]],
 ]);
 
 export function hasDocumentWidgetOptions(kind) { return attributesByKind.has(kind); }
