@@ -7,6 +7,25 @@ import { documentViewState, rememberDocumentView } from "./document-view-state.t
 const connected = new WeakSet<HTMLElement>();
 export const CODE_TREE_TEXT_SELECTOR = ".noema-code-tree-preview pre";
 
+export function connectDocumentTreeKeyboard(tree: HTMLElement): void {
+  tree.addEventListener("keydown", (event) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const current = event.target;
+    const controls = [...tree.querySelectorAll<HTMLElement>("summary, a[href], button[data-tree-file]")].filter((item) => {
+      const branch = item.tagName === "SUMMARY" ? item.parentElement?.parentElement : item;
+      return !branch?.closest("details:not([open])");
+    });
+    const index = current instanceof HTMLElement ? controls.indexOf(current) : -1;
+    if (index < 0) return;
+    const next = event.key === "Home" ? 0 : event.key === "End" ? controls.length - 1
+      : Math.max(0, Math.min(controls.length - 1, index + (event.key === "ArrowUp" ? -1 : 1)));
+    event.preventDefault();
+    event.stopPropagation();
+    controls[next]?.focus({ preventScroll: true });
+    controls[next]?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
+}
+
 export function connectDocumentTrees(root: HTMLElement, view: EditorView, locate: (group: HTMLElement) => number | null): void {
   for (const group of root.querySelectorAll<HTMLElement>(".noema-document-tree[data-view-source]")) {
     if (connected.has(group)) continue;
@@ -80,21 +99,6 @@ export function connectDocumentTrees(root: HTMLElement, view: EditorView, locate
       if (copy.isConnected && file === selected) copy.textContent = copied ? "Copied" : "Could not copy";
     });
 
-    tree.addEventListener("keydown", (event) => {
-      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-      const current = event.target;
-      const controls = [...tree.querySelectorAll<HTMLElement>("summary, a[href], button[data-tree-file]")].filter((item) => {
-        const branch = item.tagName === "SUMMARY" ? item.parentElement?.parentElement : item;
-        return !branch?.closest("details:not([open])");
-      });
-      const index = current instanceof HTMLElement ? controls.indexOf(current) : -1;
-      if (index < 0) return;
-      const next = event.key === "Home" ? 0 : event.key === "End" ? controls.length - 1
-        : Math.max(0, Math.min(controls.length - 1, index + (event.key === "ArrowUp" ? -1 : 1)));
-      event.preventDefault();
-      event.stopPropagation();
-      controls[next]?.focus({ preventScroll: true });
-      controls[next]?.scrollIntoView({ block: "nearest", inline: "nearest" });
-    });
+    connectDocumentTreeKeyboard(tree);
   }
 }

@@ -33,6 +33,7 @@ const attributesByKind = new Map([
   ["npm-to", ["tabs", "selected"]],
   ["include", ["src", "lines", "region", "section", "lang"]],
   ["code-ref", ["src", "lines", "region", "section", "symbol", "context", "lang"]],
+  ["project-tree", ["path", "depth", "ignore", "open-depth", "lines", "icon"]],
 ]);
 for (const kind of ["note", "tip", "important", "warning", "caution", "info", "danger"]) {
   attributesByKind.set(kind, ["collapsible", "open", "background", "border-left-width"]);

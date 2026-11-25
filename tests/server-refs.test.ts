@@ -18,6 +18,7 @@ const {
   pathSuggestionsForFile,
   readNoteCodeRegion,
   readNoteCodeExcerpt,
+  readDocumentProjectTree,
   refsFromContent,
   rewriteMarkdownPathReferences,
   roamDbRefsFromContent,
@@ -365,6 +366,31 @@ describe("server note refs", () => {
       await expect(readNoteCodeExcerpt({ notePath, path: "linked.txt" })).rejects.toMatchObject({ statusCode: 403 });
       await writeFile(join(root, "binary.dat"), new Uint8Array([13, 10, 0, 255]));
       await expect(readNoteCodeExcerpt({ notePath, path: "binary.dat" })).rejects.toMatchObject({ statusCode: 415 });
+    } finally {
+      await Promise.all([rm(root, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]);
+    }
+  });
+
+  test("project tree respects depth, ignored names, and canonical workspace boundaries", async () => {
+    const root = await setupRoot("noema-project-tree-");
+    const outside = await mkdtemp(join(tmpdir(), "noema-project-tree-outside-"));
+    try {
+      const notePath = join(root, "note.md");
+      await mkdir(join(root, "src", "feature"), { recursive: true });
+      await mkdir(join(root, "build"));
+      await mkdir(join(root, ".git"));
+      await writeFile(notePath, "# Project\n");
+      await writeFile(join(root, "src", "main.ts"), "const main = 1;\n");
+      await writeFile(join(root, "src", "feature", "first.ts"), "const one = 1;\n");
+      await writeFile(join(root, ".git", "config"), "hidden");
+      await writeFile(join(outside, "operator.txt"), "outside");
+      await symlink(outside, join(root, "linked"));
+      const tree = await readDocumentProjectTree({ notePath, path: "/", depth: 2, ignore: "build" });
+      expect(tree.entries.map((node: { label: string }) => node.label)).toEqual(["src", "note.md"]);
+      expect(tree.entries[0].children.map((node: { label: string }) => node.label)).toEqual(["feature", "main.ts"]);
+      expect(tree.entries[0].children[0]).toMatchObject({ directory: true, children: [] });
+      expect(JSON.stringify(tree)).not.toContain("operator.txt");
+      await expect(readDocumentProjectTree({ notePath, path: "linked" })).rejects.toMatchObject({ statusCode: 403 });
     } finally {
       await Promise.all([rm(root, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]);
     }

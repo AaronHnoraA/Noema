@@ -1,6 +1,17 @@
 {
   "cases": [
     {
+      "name": "project-directory-tree-exports-only-its-authored-list",
+      "markdown": "#+begin project-tree Files {path=docs depth=2 ignore=tmp}\n- Public notes\n#+end project-tree",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{project-tree: Files}\\par\ndocs\\par\n```\n\n\n- Public notes\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": { "usesSideComment": false, "usesTikz": false }
+      }
+    },
+    {
       "name": "workspace-excerpts-export-authored-fallback-without-local-file-access",
       "markdown": "#+begin include Current {src=\"docs/cache.md\" section=\"Cache hit\"}\nPublic fallback.\n#+end include\n\n#+begin code-ref Parser {src=\"src/cache.el\" symbol=noema-load-example context=2}\n~~~elisp\n(message \"Public example\")\n~~~\n#+end code-ref",
       "options": {},

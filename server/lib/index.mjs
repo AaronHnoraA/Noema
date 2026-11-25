@@ -51,6 +51,7 @@ export {
   clearBibliographyCache,
   readNoteCodeRegion,
   readNoteCodeExcerpt,
+  readDocumentProjectTree,
   syncRoamDb,
   runtimeDebugSnapshot,
   maybeScheduleWeeklyFullSync,

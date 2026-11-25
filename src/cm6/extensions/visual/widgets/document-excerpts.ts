@@ -10,7 +10,7 @@ const requests = new Map<string, Promise<NoteCodeExcerpt>>();
 const recent = new Map<string, { value: NoteCodeExcerpt; expiresAt: number }>();
 let recentSize = 0;
 
-function currentNotePath(): string {
+export function currentNotePath(): string {
   if (window.NoemaCurrentFile) return window.NoemaCurrentFile();
   return new URLSearchParams(window.location.search).get("file") || "";
 }
@@ -42,7 +42,7 @@ function readExcerpt(request: ExcerptRequest, refresh: boolean): Promise<NoteCod
 const deferredLoads = new WeakMap<Element, () => void>();
 let observer: IntersectionObserver | undefined;
 
-function loadWhenVisible(node: HTMLElement, load: () => void): void {
+export function loadWhenVisible(node: HTMLElement, load: () => void): void {
   if (typeof IntersectionObserver === "undefined") {
     queueMicrotask(load);
     return;

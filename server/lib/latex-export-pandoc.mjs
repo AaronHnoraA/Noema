@@ -198,6 +198,7 @@ function environmentOpen(kind, title, options) {
       if (attrs.downloads) entries.push(`Downloads: ${attrs.downloads}`);
     }
     if ((kind === "include" || kind === "code-ref") && attrs.src?.trim()) entries.push(attrs.src);
+    if (kind === "project-tree" && attrs.path?.trim()) entries.push(attrs.path);
     details = entries.filter(Boolean).map((entry) => `\n${escapeLatexTitle(entry, options)}\\par`).join("");
     if (kind === "qrcode" && attrs.text?.trim()) details = `\n${escapeLatexText(attrs.text)}\\par`;
   }

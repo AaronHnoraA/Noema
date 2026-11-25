@@ -18,6 +18,7 @@ import { loadMacroSourceFiles, loadUserKatexMacros, MACRO_SOURCE_BYTES_LIMIT, re
 import { noteMacroSpec, parseNoteLocalMacros } from "../../shared/note-macros.mjs";
 import { durationFromEnv } from "./jupyter-cell.mjs";
 import { DOCUMENT_EXCERPT_FILE_BYTES, documentAssetError, selectDocumentExcerpt } from "./document-excerpts.mjs";
+import { readProjectDirectory } from "./document-project-tree.mjs";
 import { moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
 import { scanPlanningDocument, planningSourceIsLive } from "../../shared/planning-document.mjs";
 import { maskMetaSummaryContent, orgMetaSummaryRange } from "../../shared/meta-summary.mjs";
@@ -998,6 +999,16 @@ export async function readNoteCodeExcerpt(body) {
   } finally {
     await handle.close();
   }
+}
+
+export async function readDocumentProjectTree(body) {
+  const path = String(body?.path || "/").trim() || "/";
+  const { file } = await documentAssetPath(body?.notePath, path);
+  if (!(await stat(file)).isDirectory()) throw documentAssetError("The project tree needs a directory", 400);
+  const depth = Number(body?.depth ?? 3);
+  if (!Number.isInteger(depth) || depth < 1 || depth > 6) throw documentAssetError("Tree depth must be between 1 and 6", 400);
+  const ignored = String(body?.ignore || "").split(/[,\s]+/).filter(Boolean);
+  return { ok: true, label: path === "/" ? `${basename(file)}/` : path, ...await readProjectDirectory(file, depth, ignored) };
 }
 
 function assetCandidateFile(file) {

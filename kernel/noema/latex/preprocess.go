@@ -77,38 +77,39 @@ var (
 )
 
 var documentWidgetOptions = map[string][]string{
-	"chart":      {"type", "accent"},
-	"timeline":   {"orientation", "card", "list-style"},
-	"steps":      {"list-style"},
-	"table":      {"sortable", "copy", "highlight-rows", "highlight-columns", "highlight-cells", "highlight", "align", "text-align", "width"},
-	"box":        {"surface", "padding", "text-align", "align", "width"},
-	"card":       {"description", "href", "action", "icon", "accent", "text-align", "align", "width"},
-	"home-box":   {"description", "href", "action", "accent", "surface", "text-align", "align", "width"},
-	"link-card":  {"description", "href", "action", "accent", "surface", "text-align", "align", "width"},
-	"image-card": {"description", "href", "action", "src", "alt", "accent", "surface", "align", "width"},
-	"panel":      {"status", "variant", "focus", "accent", "align", "width"},
-	"statusbar":  {"mode", "keys", "note"},
-	"keymap":     {"columns"},
-	"breadcrumb": {"separator"},
-	"pros-cons":  {"pros", "cons"},
-	"qrcode":     {"text"},
-	"tabs":       {"selected", "accent"},
-	"code-tabs":  {"selected", "accent"},
-	"tab-panel":  {"selected", "accent"},
-	"swiper":     {"selected", "accent"},
-	"details":    {"open"},
-	"accordion":  {"open", "multiple", "expand"},
-	"diff":       {"before", "after", "view"},
-	"file-tree":  {"lines", "collapsible", "clickable", "icon", "open-depth"},
-	"code-tree":  {"lines", "icon", "height", "open-depth"},
-	"field":      {"name", "type", "type-link", "default", "required", "deprecated", "experimental", "enum", "unit", "format", "constraint", "since", "label-width", "separator", "width"},
-	"form":       {"separator", "width"},
-	"window":     {"height", "gap", "no-padding"},
-	"demo":       {"open"},
-	"npm-badge":  {"name", "version", "downloads"},
-	"npm-to":     {"tabs", "selected"},
-	"include":    {"src", "lines", "region", "section", "lang"},
-	"code-ref":   {"src", "lines", "region", "section", "symbol", "context", "lang"},
+	"chart":        {"type", "accent"},
+	"timeline":     {"orientation", "card", "list-style"},
+	"steps":        {"list-style"},
+	"table":        {"sortable", "copy", "highlight-rows", "highlight-columns", "highlight-cells", "highlight", "align", "text-align", "width"},
+	"box":          {"surface", "padding", "text-align", "align", "width"},
+	"card":         {"description", "href", "action", "icon", "accent", "text-align", "align", "width"},
+	"home-box":     {"description", "href", "action", "accent", "surface", "text-align", "align", "width"},
+	"link-card":    {"description", "href", "action", "accent", "surface", "text-align", "align", "width"},
+	"image-card":   {"description", "href", "action", "src", "alt", "accent", "surface", "align", "width"},
+	"panel":        {"status", "variant", "focus", "accent", "align", "width"},
+	"statusbar":    {"mode", "keys", "note"},
+	"keymap":       {"columns"},
+	"breadcrumb":   {"separator"},
+	"pros-cons":    {"pros", "cons"},
+	"qrcode":       {"text"},
+	"tabs":         {"selected", "accent"},
+	"code-tabs":    {"selected", "accent"},
+	"tab-panel":    {"selected", "accent"},
+	"swiper":       {"selected", "accent"},
+	"details":      {"open"},
+	"accordion":    {"open", "multiple", "expand"},
+	"diff":         {"before", "after", "view"},
+	"file-tree":    {"lines", "collapsible", "clickable", "icon", "open-depth"},
+	"code-tree":    {"lines", "icon", "height", "open-depth"},
+	"field":        {"name", "type", "type-link", "default", "required", "deprecated", "experimental", "enum", "unit", "format", "constraint", "since", "label-width", "separator", "width"},
+	"form":         {"separator", "width"},
+	"window":       {"height", "gap", "no-padding"},
+	"demo":         {"open"},
+	"npm-badge":    {"name", "version", "downloads"},
+	"npm-to":       {"tabs", "selected"},
+	"include":      {"src", "lines", "region", "section", "lang"},
+	"code-ref":     {"src", "lines", "region", "section", "symbol", "context", "lang"},
+	"project-tree": {"path", "depth", "ignore", "open-depth", "lines", "icon"},
 }
 
 var defaultEnvironment = map[string]string{
@@ -2027,6 +2028,8 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 		entries = append(entries, attributes["mode"], attributes["keys"], attributes["note"])
 	case "include", "code-ref":
 		entries = append(entries, attributes["src"])
+	case "project-tree":
+		entries = append(entries, attributes["path"])
 	case "npm-badge":
 		if strings.TrimSpace(attributes["name"]) != "" {
 			entries = append(entries, attributes["name"])

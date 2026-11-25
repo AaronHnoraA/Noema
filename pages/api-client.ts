@@ -639,6 +639,9 @@ export type NoteCodeExcerpt = {
   mtimeMs: number;
 };
 
+export type ProjectTreeEntry = { label: string; key: string; file: string; directory: boolean; children: ProjectTreeEntry[] };
+type DocumentProjectTree = { ok: boolean; label: string; entries: ProjectTreeEntry[]; truncated: boolean };
+
 type NativeApi = {
   connection?: {
     status?: () => CoreConnectionStatus;
@@ -695,6 +698,7 @@ type NativeApi = {
     readRegion?: (body?: unknown) => Promise<unknown>;
     readExcerpt?: (body?: unknown) => Promise<unknown>;
   };
+  documentAssets?: { projectTree?: (body?: unknown) => Promise<unknown> };
   slides?: {
     mirror?: (body?: unknown) => Promise<unknown>;
   };
@@ -1434,6 +1438,12 @@ export const api = {
       const call = requireMethod(nativeApi().noteCode?.readExcerpt, "Document source excerpt");
       const result = await call(body) as NoteCodeExcerpt;
       return ensureOk(result, "Loading source excerpt failed");
+    },
+  },
+  documentAssets: {
+    async projectTree(body: unknown): Promise<DocumentProjectTree> {
+      const call = requireMethod(nativeApi().documentAssets?.projectTree, "Project directory tree");
+      return ensureOk(await call(body) as DocumentProjectTree, "Loading the project tree failed");
     },
   },
   jupyterCell: {
