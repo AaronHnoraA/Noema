@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "tabbed-documents-export-every-page-in-source-order",
+      "markdown": "#+begin tabs Guide {selected=2 accent=info}\n### Overview\nFirst page.\n\n### Details\nSecond page.\n#+end tabs\n",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{tabs: Guide}\\par\n```\n\n\n### Overview\nFirst page.\n\n### Details\nSecond page.\n\n\n```{=latex}\n\\end{quote}\n```\n\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "card-variants-retain-captions-and-destinations",
       "markdown": "#+begin home-box Guide {description=\"Start here\" href=https://example.com action=\"Open guide\" surface=quiet}\nOrdinary Markdown.\n#+end home-box\n\n#+begin image-card Cover {src=\"media/cover.png\" alt=\"A descriptive alternative\"}\n#+end image-card\n\n#+begin link-card Related\n[Open another page](guide.md)\n#+end link-card",
       "options": {},

@@ -46,6 +46,7 @@ const constructs = [
   "#+begin qrcode Read on another device {text=https://example.com/notes}\nScan to open the example notes.\n#+end qrcode",
   "#+begin home-box Project guide {description='Research notes' href=#guide}\nThe guide introduces the working document.\n#+end home-box",
   "#+begin image-card Cover\n![A landscape](/noema-scroll-cover.svg){width:220px}\n\nThe figure shows the cover preview.\n#+end image-card",
+  "#+begin tabs Guide\n### Overview\nA tab holds this ordinary paragraph.\n### Details\nDetails with **emphasis**.\n#+end tabs",
   "#+begin columns\nLeft column prose.\n\n#+col\n\nRight column prose.\n#+end columns",
   "A sentence with @@comment [inline note] attached.",
   "```python\nprint('hello')\nfor i in range(3):\n    print(i)\n```",
@@ -131,6 +132,7 @@ try {
         ["log", "- 09:17:12 WARN"], ["pros-cons", "- Simpler reading"],
         ["qrcode", "Scan to open the example notes."],
         ["home-box", "The guide introduces"], ["image-card", "![A landscape]"],
+        ["tabs", "### Overview"],
         ["footnote", "[^1] too", "navigates"],
       ].filter(([family]) => !process.env.ONLY || process.env.ONLY.split(",").includes(family)).map(([family, needle, click = "opens"]) => {
         const at = markdown.indexOf(needle);

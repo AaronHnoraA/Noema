@@ -92,6 +92,10 @@ var documentWidgetOptions = map[string][]string{
 	"breadcrumb": {"separator"},
 	"pros-cons":  {"pros", "cons"},
 	"qrcode":     {"text"},
+	"tabs":       {"selected", "accent"},
+	"code-tabs":  {"selected", "accent"},
+	"tab-panel":  {"selected", "accent"},
+	"swiper":     {"selected", "accent"},
 }
 
 var defaultEnvironment = map[string]string{

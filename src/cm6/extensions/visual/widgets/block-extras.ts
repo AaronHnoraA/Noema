@@ -59,6 +59,8 @@ import { connectDocumentTableViews, disconnectDocumentTableViews } from "../../.
 import { documentFrameHasDetails, documentFrameKinds } from "../../../../document-frame.ts";
 import { documentReadingKinds, documentStatusHasDetails } from "../../../../document-reading.ts";
 import { documentQrHasText } from "../../../../document-qrcode.ts";
+import { documentTabKinds, documentTabSourceKey } from "../../../../document-tabs.ts";
+import { connectDocumentTabViews } from "./document-tabs.ts";
 import {
   COLUMNS_MAX_COUNT,
   COLUMNS_MIN_WIDTH_PCT,
@@ -600,11 +602,46 @@ function renderDiagramPreview(source: string, lang: string, div: HTMLElement): v
 const documentNavigationSelector = [
   '.noema-document-frame:is([data-frame="card"], [data-frame="home-box"], [data-frame="link-card"], [data-frame="image-card"]) a[href]',
   ".noema-document-breadcrumb a[href]",
+  ".noema-document-tabs a[href]",
 ].join(", ");
 
-function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView): void {
-  connectDocumentTableViews(root);
-  if (root.querySelector(documentNavigationSelector)) {
+interface DocumentTabScope {
+  owner: HTMLElement;
+  column?: number;
+}
+
+const tabSourceKeys = new WeakMap<OrgEnvBlock, string>();
+
+function documentTabPosition(view: EditorView, scope: DocumentTabScope, group: HTMLElement): number | null {
+  const { owner, column } = scope;
+  const blocks = orgEnvBlocksFromState(view.state);
+  let position: number;
+  try { position = view.posAtDOM(owner, -1); } catch { return null; }
+  const host = column !== undefined || owner.classList.contains("cm-columns-widget")
+    ? liveColumnsBlockForElement(view, owner)
+    : blocks.find((block) => owner.dataset.orgEnvKind === block.kind
+      ? block.bodyFrom === position || block.from === position : block.from === position);
+  if (!host) return null;
+  const pane = column === undefined ? undefined : splitColumnPanes(host.body)[column];
+  const from = pane ? host.bodyFrom + pane.from : host.from;
+  const to = pane ? host.bodyFrom + pane.to : host.to;
+  const occurrence = Number(group.dataset.tabSourceOccurrence);
+  let found = 0;
+  for (const block of blocks) {
+    if (block.from >= to) break;
+    if (block.from < from || block.kind !== group.dataset.tabKind) continue;
+    let key = tabSourceKeys.get(block);
+    if (key === undefined) {
+      key = documentTabSourceKey(block.kind, splitDocumentWidgetTitle(block.kind, block.title).title, block.body);
+      tabSourceKeys.set(block, key);
+    }
+    if (key === group.dataset.tabSource && found++ === occurrence) return block.from;
+  }
+  return null;
+}
+
+function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, tabScope?: DocumentTabScope): void {
+  if (root.querySelector(`${documentNavigationSelector}, .noema-document-tabs`)) {
     const openAction = (event: MouseEvent): void => {
       if (event.button !== 0 && event.button !== 1) return;
       const target = event.target instanceof Element ? event.target : null;
@@ -624,6 +661,14 @@ function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView): void {
     root.addEventListener("click", openAction);
     root.addEventListener("auxclick", openAction);
   }
+  hydrateRenderedMarkdown(root);
+  const owner = tabScope?.owner ?? root.closest<HTMLElement>("[data-cm-source-from]");
+  connectDocumentTabViews(root, view, hydrateRenderedMarkdown, (group) =>
+    owner ? documentTabPosition(view, tabScope ?? { owner }, group) : null);
+}
+
+function hydrateRenderedMarkdown(root: HTMLElement): void {
+  connectDocumentTableViews(root);
   root.querySelectorAll<HTMLElement>("pre > code[class*='language-']").forEach((code) => {
     const langClass = Array.from(code.classList).find((cls) => cls.startsWith("language-")) ?? "";
     const lang = langClass.slice("language-".length);
@@ -3118,7 +3163,7 @@ class FoldWidget extends MeasuredWidget {
     content.className = "org-env-fold-content org-env-content";
     content.hidden = true;
     content.innerHTML = renderEditorWidgetHTML(this.body.trim());
-    enhanceRenderedMarkdown(content, view);
+    enhanceRenderedMarkdown(content, view, { owner: block });
     stopInteractiveWidgetEvents(content);
 
     block.append(button, content);
@@ -3306,6 +3351,7 @@ function columnsRenderOptions(): RenderMarkdownHTMLOptions {
   const noteFile = currentNoteFile();
   return {
     documentTableActions: true,
+    documentTabActions: true,
     ...(resolver ? { assetResolver: (src: string) => resolver(src) } : {}),
     ...(noteFile ? { noteFile } : {}),
   };
@@ -3577,7 +3623,7 @@ function focusRenderedColumnPane(
   if (event.button !== 0) return;
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(".cm-column-pane-grip, .cm-columns-toolbar, .cm-columns-divider")) return;
-  if (target?.closest(documentNavigationSelector) || target?.closest(".noema-document-table-view button")) return;
+  if (target?.closest(documentNavigationSelector) || target?.closest(".noema-document-table-view button, .noema-tab-navigation button")) return;
 
   // Cmd/Ctrl-click on a link opens the link directly instead of switching edit focus.
   const link = target?.closest<HTMLAnchorElement>("a[href]") ?? null;
@@ -4102,7 +4148,7 @@ class ColumnsWidget extends MeasuredWidget {
         const parsedBlocks: Array<{ from: number; to: number }> = [];
         if (pane.body.trim()) {
           bodyEl.innerHTML = renderMarkdownHTML(pane.body, renderOpts, parsedBlocks);
-          enhanceRenderedMarkdown(bodyEl, view);
+          enhanceRenderedMarkdown(bodyEl, view, { owner: block, column: index });
         } else {
           const empty = document.createElement("p");
           empty.className = "cm-column-pane-empty";
@@ -4118,7 +4164,7 @@ class ColumnsWidget extends MeasuredWidget {
       });
     } else {
       content.innerHTML = renderMarkdownHTML(this.body, renderOpts);
-      enhanceRenderedMarkdown(content, view);
+      enhanceRenderedMarkdown(content, view, { owner: block });
     }
 
     const toolbar = buildColumnsToolbar(
@@ -4290,7 +4336,7 @@ class ColumnsActiveTopWidget extends MeasuredWidget {
         const parsedBlocks: Array<{ from: number; to: number }> = [];
         if (sibling.body.trim()) {
           bodyEl.innerHTML = renderMarkdownHTML(sibling.body, renderOpts, parsedBlocks);
-          enhanceRenderedMarkdown(bodyEl, view);
+          enhanceRenderedMarkdown(bodyEl, view, { owner: top, column: sibling.index });
         } else {
           const empty = document.createElement("p");
           empty.className = "cm-column-pane-empty";
@@ -5041,7 +5087,7 @@ class DocumentDataWidget extends MeasuredWidget {
     const source = buildOrgEnvSource(this.kind, this.title, this.body);
     block.innerHTML = this.kind === "table"
       ? renderMarkdownHTML(source, { documentTableActions: true, documentTableSource: this.body })
-      : renderEditorWidgetHTML(source);
+      : renderEditorWidgetHTML(source, documentTabKinds.has(this.kind) ? this.body : undefined);
     const content = block.querySelector(":scope > org-env-block > .org-env-content");
     if (content) block.replaceChildren(content);
     enhanceRenderedMarkdown(block, view);
@@ -6210,7 +6256,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 
 const documentDataEnvironments = new Set([
   "progress", "stats", "chart", "timeline", "steps", "table", ...documentFrameKinds, ...documentReadingKinds,
-  "qrcode",
+  "qrcode", ...documentTabKinds,
 ]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);

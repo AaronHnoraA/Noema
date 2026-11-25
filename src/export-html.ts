@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 
+import { forEachTabMarkdownTree } from "./document-tabs.ts";
 import { renderMathLazy } from "./math-render.ts";
 
 function renderMathElement(
@@ -53,7 +54,7 @@ function trimDelimiterAfter(mark: HTMLElement, delimiter: string): void {
   if (next instanceof HTMLElement && nodeText(next) === delimiter) next.remove();
 }
 
-function renderInlineMathSources(root: HTMLElement): void {
+function renderInlineMathSources(root: ParentNode): void {
   root.querySelectorAll<HTMLElement>("span[data-noema-math-mark]").forEach((mark) => {
     const tex = mark.getAttribute("data-tex") || mark.textContent || "";
     const display = mark.getAttribute("data-display") === "1";
@@ -73,7 +74,7 @@ function renderInlineMathSources(root: HTMLElement): void {
   });
 }
 
-function renderDisplayMathBlocks(root: HTMLElement): void {
+function renderDisplayMathBlocks(root: ParentNode): void {
   root.querySelectorAll<HTMLElement>("math-block[data-noema-math-block], math-block").forEach((block) => {
     const source = block.querySelector<HTMLElement>(".math-block-source");
     if (!source) return;
@@ -91,7 +92,7 @@ function renderDisplayMathBlocks(root: HTMLElement): void {
   });
 }
 
-function renderOrgEnvBlocks(root: HTMLElement): void {
+function renderOrgEnvBlocks(root: ParentNode): void {
   root.querySelectorAll<HTMLElement>("org-env-block").forEach((block) => {
     block.classList.remove("org-env-active", "org-env-comment-open");
     block.querySelectorAll<HTMLInputElement>("input.org-env-heading-title").forEach((input) => {
@@ -106,7 +107,7 @@ function renderOrgEnvBlocks(root: HTMLElement): void {
   });
 }
 
-function prepareStaticExportHTML(root: HTMLElement): void {
+function prepareStaticExportHTML(root: ParentNode): void {
   renderInlineMathSources(root);
   renderDisplayMathBlocks(root);
   renderOrgEnvBlocks(root);
@@ -154,8 +155,7 @@ function restoreVisualSrcdoc(html: string, srcdocs: readonly string[]): string {
   });
 }
 
-function protectVisualSrcdocAttrs(root: HTMLElement): string[] {
-  const srcdocs: string[] = [];
+function protectVisualSrcdocAttrs(root: ParentNode, srcdocs: string[]): void {
   root.querySelectorAll<HTMLIFrameElement>("iframe.noema-visual-embed[srcdoc]").forEach((frame) => {
     const value = frame.getAttribute("srcdoc");
     if (value == null) return;
@@ -163,7 +163,6 @@ function protectVisualSrcdocAttrs(root: HTMLElement): string[] {
     frame.removeAttribute("srcdoc");
     frame.setAttribute("data-noema-protected-srcdoc", String(index));
   });
-  return srcdocs;
 }
 
 function escapeAttrForProtectedSrcdoc(value: string): string {
@@ -239,10 +238,10 @@ const EDITOR_ONLY_SELECTOR = [
   "[hidden]",
 ].join(",");
 
-function removeEditorOnlyAndStripAttrs(root: HTMLElement): void {
+function removeEditorOnlyAndStripAttrs(root: ParentNode): void {
   root.querySelectorAll(EDITOR_ONLY_SELECTOR).forEach((node) => node.remove());
   root.querySelectorAll("*").forEach(stripAttrs);
-  stripAttrs(root);
+  if (root instanceof Element) stripAttrs(root);
 }
 
 /**
@@ -251,9 +250,12 @@ function removeEditorOnlyAndStripAttrs(root: HTMLElement): void {
  */
 export function cleanEditorHTML(root: HTMLElement, inPlace = false): string {
   const clone = inPlace ? root : root.cloneNode(true) as HTMLElement;
-  prepareStaticExportHTML(clone);
-  removeEditorOnlyAndStripAttrs(clone);
-  const protectedSrcdocs = protectVisualSrcdocAttrs(clone);
+  const protectedSrcdocs: string[] = [];
+  forEachTabMarkdownTree(clone, (tree) => {
+    prepareStaticExportHTML(tree);
+    removeEditorOnlyAndStripAttrs(tree);
+    protectVisualSrcdocAttrs(tree, protectedSrcdocs);
+  });
   const protectedHtml = protectMathML(clone.innerHTML);
   const protectedFrameAttrs = protectVisualIframeAttrs(protectedHtml.html);
   const sanitized = DOMPurify.sanitize(protectedFrameAttrs.html, {

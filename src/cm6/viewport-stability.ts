@@ -132,6 +132,15 @@ export function installFocusOwner(view: EditorView): void {
   };
 }
 
+/** Reveal a control inside its own horizontal strip without moving the editor. */
+export function revealInHorizontalStrip(strip: HTMLElement, control: HTMLElement): void {
+  if (!strip.contains(control)) return;
+  const visible = strip.getBoundingClientRect();
+  const bounds = control.getBoundingClientRect();
+  if (bounds.left < visible.left) strip.scrollLeft += bounds.left - visible.left;
+  else if (bounds.right > visible.right) strip.scrollLeft += bounds.right - visible.right;
+}
+
 export function preserveEditorViewport<T>(
   view: EditorView,
   update: () => T,

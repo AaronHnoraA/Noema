@@ -16,6 +16,10 @@ const attributesByKind = new Map([
   ["breadcrumb", ["separator"]],
   ["pros-cons", ["pros", "cons"]],
   ["qrcode", ["text"]],
+  ["tabs", ["selected", "accent"]],
+  ["code-tabs", ["selected", "accent"]],
+  ["tab-panel", ["selected", "accent"]],
+  ["swiper", ["selected", "accent"]],
 ]);
 
 export function hasDocumentWidgetOptions(kind) { return attributesByKind.has(kind); }

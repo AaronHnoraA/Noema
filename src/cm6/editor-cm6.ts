@@ -138,6 +138,7 @@ import type {
 } from "../editor-api.ts";
 
 import { renderedConstructAt } from "./extensions/visual/constructs/registry.ts";
+import { documentTabState } from "./extensions/visual/widgets/document-tabs.ts";
 
 function sourceRangeElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof Element) {
@@ -1316,6 +1317,7 @@ function buildExtensions(
   const standalone = mode === "standalone";
   return [
     EditorState.allowMultipleSelections.of(true),
+    documentTabState,
     ...(standalone ? [
       EditorState.readOnly.of(!!options.readOnly),
       EditorView.editable.of(!options.readOnly),

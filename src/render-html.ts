@@ -19,6 +19,7 @@ import { renderDocumentTableView } from "./document-table-view.ts";
 import { documentFrameKinds, renderDocumentFrame } from "./document-frame.ts";
 import { documentReadingKinds, renderDocumentReading } from "./document-reading.ts";
 import { documentQrFence, documentQrHasText, renderDocumentQrcode } from "./document-qrcode.ts";
+import { documentTabKinds, forEachTabMarkdownTree, renderDocumentTabs } from "./document-tabs.ts";
 import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
@@ -86,6 +87,10 @@ export type RenderMarkdownHTMLOptions = {
   documentTableActions?: boolean;
   /** Original source for the one table environment being mounted as a widget. */
   documentTableSource?: string;
+  /** Include live controls and inert inactive pages for tabbed documents. */
+  documentTabActions?: boolean;
+  /** Raw body of the one tab environment being mounted as an editor widget. */
+  documentTabSource?: string;
   /**
    * Pictures for the diagram fences in this document, as `{ [key]: svg }` where
    * the key is `diagramFenceKey(lang, source)`. Mermaid needs a browser to lay
@@ -1385,6 +1390,7 @@ function renderOrgEnv(
     : documentFrameKinds.has(kindName) ? renderDocumentFrame(md, kindName, meta.body, attrs)
     : documentReadingKinds.has(kindName) ? renderDocumentReading(md, kindName, meta.body, attrs)
     : kindName === "qrcode" ? renderDocumentQrcode(md, meta.body, attrs)
+    : documentTabKinds.has(kindName) ? renderDocumentTabs(md, kindName, title, meta.body, attrs, options.documentTabActions === true, options.documentTabSource)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kind.toLowerCase() === "fold") {
@@ -1403,7 +1409,7 @@ function renderOrgEnv(
   ].join("");
 }
 
-function applyTaskCheckboxes(root: HTMLElement): void {
+function applyTaskCheckboxes(root: ParentNode): void {
   root.querySelectorAll<HTMLLIElement>("li").forEach((li) => {
     if (li.parentElement?.classList.contains("noema-steps-list")) return;
     const first = li.firstChild;
@@ -1909,8 +1915,9 @@ export function renderMarkdownHTML(
   return renderMarkdownHTMLUncached(markdown, options, topLevelBlocks);
 }
 
-export function renderEditorWidgetHTML(markdown: string): string {
-  return cachedRender("editor-widget", markdown, () => renderMarkdownHTMLUncached(markdown, { documentTableActions: true }));
+export function renderEditorWidgetHTML(markdown: string, documentTabSource?: string): string {
+  const cacheKind = documentTabSource === undefined ? "editor-widget" : "editor-widget-tabs";
+  return cachedRender(cacheKind, markdown, () => renderMarkdownHTMLUncached(markdown, { documentTableActions: true, documentTabActions: true, documentTabSource }));
 }
 
 function renderMarkdownHTMLUncached(
@@ -1946,7 +1953,16 @@ function renderMarkdownHTMLUncached(
     }
   }
   const firstImage = markdown.indexOf("![");
-  if (firstImage >= 0 && markdown.indexOf("![", firstImage + 2) >= 0) root.querySelectorAll<HTMLParagraphElement>("p").forEach((paragraph) => {
+  const multipleImages = firstImage >= 0 && markdown.indexOf("![", firstImage + 2) >= 0;
+  forEachTabMarkdownTree(root, (tree) => {
+    if (multipleImages) applyImageLayoutRows(tree);
+    applyTaskCheckboxes(tree);
+  });
+  return restoreIframeNavigationAttrsFromDom(cleanEditorHTML(root, true), protectedHtml.attrs);
+}
+
+function applyImageLayoutRows(root: ParentNode): void {
+  root.querySelectorAll<HTMLParagraphElement>("p").forEach((paragraph) => {
     const elements = [...paragraph.childNodes].filter((node) => node.nodeType === Node.ELEMENT_NODE) as HTMLElement[];
     if (elements.length < 2 || !elements.every((element) => ["IMG", "VIDEO"].includes(element.tagName))) return;
     if ([...paragraph.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && Boolean(node.textContent?.trim()))) return;
@@ -1960,8 +1976,6 @@ function renderMarkdownHTMLUncached(
       }
     });
   });
-  applyTaskCheckboxes(root);
-  return restoreIframeNavigationAttrsFromDom(cleanEditorHTML(root, true), protectedHtml.attrs);
 }
 
 export function renderMarkdownInlineHTML(
