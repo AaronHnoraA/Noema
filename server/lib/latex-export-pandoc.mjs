@@ -200,6 +200,7 @@ function environmentOpen(kind, title, options) {
     if ((kind === "include" || kind === "code-ref") && attrs.src?.trim()) entries.push(attrs.src);
     if (kind === "project-tree" && attrs.path?.trim()) entries.push(attrs.path);
     if (kind === "git-log" || kind === "git-diff") entries.push(attrs.path, attrs.range);
+    if (kind === "symbol") entries.push(attrs.name);
     details = entries.filter(Boolean).map((entry) => `\n${escapeLatexTitle(entry, options)}\\par`).join("");
     if (kind === "qrcode" && attrs.text?.trim()) details = `\n${escapeLatexText(attrs.text)}\\par`;
   }

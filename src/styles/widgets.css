@@ -386,6 +386,34 @@
   .noema-repo-subject { grid-column: 1 / -1; }
 }
 
+.noema-document-symbol { container-type: inline-size; }
+.noema-document-symbol [hidden],
+.noema-document-symbol[data-symbol-awaiting] :is(.noema-symbol-kind, .noema-excerpt-actions) { display: none; }
+.noema-symbol-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) max-content; gap: 0.38em 0.58em; }
+.noema-symbol-heading .noema-excerpt-actions { gap: 0.5em; }
+.noema-symbol-name { justify-self: start; max-inline-size: 100%; }
+.noema-symbol-name, .noema-symbol-signature, .noema-symbol-metadata { min-inline-size: 0; overflow-wrap: anywhere; }
+.noema-symbol-kind, .noema-symbol-metadata { color: var(--aaron-muted, currentColor); }
+.noema-symbol-kind { white-space: nowrap; }
+.noema-symbol-output:not(:empty) {
+  padding: 0.42em 0.6em;
+  border-block-start: 1px solid var(--excerpt-line);
+  user-select: text;
+}
+.noema-symbol-output p { margin: 0.32em 0; }
+.noema-symbol-output p:only-child { margin: 0; }
+.noema-symbol-output > .noema-symbol-signature { display: block; white-space: pre-wrap; }
+.noema-symbol-metadata { display: flex; flex-wrap: wrap; gap: 0.28em 0.55em; align-items: baseline; }
+.noema-symbol-signature + .noema-symbol-metadata { margin-block-start: 0.32em; }
+@container (max-width: 460px) {
+  .noema-symbol-heading { grid-template-columns: minmax(0, 1fr) max-content; }
+  .noema-symbol-name { grid-column: 1 / -1; }
+}
+@container (max-width: 240px) {
+  .noema-symbol-heading { grid-template-columns: minmax(0, 1fr); }
+  .noema-symbol-heading .noema-excerpt-actions { margin-inline-start: 0; }
+}
+
 .callout, .noema-native-callout-body {
   --callout-accent: var(--aaron-callout-note, var(--aaron-link, currentColor));
 }

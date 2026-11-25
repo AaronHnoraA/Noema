@@ -645,6 +645,9 @@ export type DocumentCommit = { id: string; short: string; date: string; author: 
 type DocumentVersion = { ok: boolean; provider: "git" | "jj"; label: string } & (
   { commits: DocumentCommit[] } | { patch: string; truncated: boolean }
 );
+export type DocumentSymbolDetails = { kind: string; keys: string[]; signature?: string; summary?: string; file?: string };
+type DocumentSymbol = { ok: boolean } & ({ found: true } & DocumentSymbolDetails | { found: false });
+type DocumentSymbolAction = "help" | "definition";
 
 type NativeApi = {
   connection?: {
@@ -702,7 +705,11 @@ type NativeApi = {
     readRegion?: (body?: unknown) => Promise<unknown>;
     readExcerpt?: (body?: unknown) => Promise<unknown>;
   };
-  documentAssets?: { projectTree?: (body?: unknown) => Promise<unknown>; version?: (body?: unknown) => Promise<unknown> };
+  documentAssets?: {
+    projectTree?: (body?: unknown) => Promise<unknown>;
+    version?: (body?: unknown) => Promise<unknown>;
+    symbol?: (body?: unknown) => Promise<unknown>;
+  };
   slides?: {
     mirror?: (body?: unknown) => Promise<unknown>;
   };
@@ -1452,6 +1459,14 @@ export const api = {
     async version(body: unknown): Promise<DocumentVersion> {
       const call = requireMethod(nativeApi().documentAssets?.version, "Repository views");
       return ensureOk(await call(body) as DocumentVersion, "Loading the repository view failed");
+    },
+    async inspectSymbol(name: string): Promise<DocumentSymbol> {
+      const call = requireMethod(nativeApi().documentAssets?.symbol, "Emacs symbols");
+      return ensureOk(await call({ name, action: "inspect" }) as DocumentSymbol, "Loading the Emacs symbol failed");
+    },
+    async openSymbol(name: string, action: DocumentSymbolAction): Promise<void> {
+      const call = requireMethod(nativeApi().documentAssets?.symbol, "Emacs symbols");
+      ensureOk(await call({ name, action }) as { ok: boolean }, "Opening the Emacs symbol failed");
     },
   },
   jupyterCell: {

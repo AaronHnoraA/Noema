@@ -757,6 +757,19 @@
           "usesTikz": false
         }
       }
+    },
+    {
+      "name": "emacs-symbol-authored-fallback",
+      "markdown": "#+begin symbol Sentence motion {name=forward-sentence}\nMove to the next sentence.\n#+end symbol",
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{symbol: Sentence motion}\\par\nforward-sentence\\par\n```\n\n\nMove to the next sentence.\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
     }
   ],
   "errorCases": [

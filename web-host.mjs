@@ -2692,6 +2692,9 @@ const apiRouter = new ApiRouter().register({
   "noema:api:note-code:read-excerpt": (body) => readNoteCodeExcerpt(body || {}),
   "noema:api:document-assets:project-tree": (body) => readDocumentProjectTree(body || {}),
   "noema:api:document-assets:version": (body) => readDocumentVersion(body || {}),
+  "noema:api:document-assets:symbol": (body) => gatewayRequest("noema.document.symbol", {
+    name: body?.name, action: body?.action,
+  }, 10_000),
   "noema:api:slides:mirror": async (body) => applyWikiMutationResult(await slidesMirror(body || {})),
   ...(jupyterCell ? withWikiMutationHooks(createJupyterApiHandlers(jupyterCell), {
     only: [
@@ -3500,7 +3503,8 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
     },
     documentAssets: {
       projectTree: function(body) { return call("noema:api:document-assets:project-tree", [body || {}]); },
-      version: function(body) { return call("noema:api:document-assets:version", [body || {}]); }
+      version: function(body) { return call("noema:api:document-assets:version", [body || {}]); },
+      symbol: function(body) { return call("noema:api:document-assets:symbol", [body || {}]); }
     },
     slides: {
       mirror: function(body) { return call("noema:api:slides:mirror", [body || {}]); }
