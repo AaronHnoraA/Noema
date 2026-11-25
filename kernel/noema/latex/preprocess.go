@@ -1574,6 +1574,29 @@ func markdownContainerLine(line string) containerLine {
 	return containerLine{Content: content, Prefix: line[:len(line)-len(content)], QuoteDepth: depth}
 }
 
+var referenceDefinitionPattern = regexp.MustCompile("^ ?\\[[^\\]\\n]+\\]:")
+var footnoteDefinitionPattern = regexp.MustCompile("^ {0,3}\\[\\^[^\\]\\n]+\\]:")
+
+func linkDefinitionFollowsFootnote(lines []string, index int, container containerLine) bool {
+	if !referenceDefinitionPattern.MatchString(container.Content) || footnoteDefinitionPattern.MatchString(container.Content) {
+		return false
+	}
+	for previous := index - 1; previous >= 0; previous-- {
+		line := markdownContainerLine(lines[previous])
+		if line.QuoteDepth != container.QuoteDepth {
+			return false
+		}
+		if footnoteDefinitionPattern.MatchString(line.Content) {
+			return true
+		}
+		width, end := leadingIndent(line.Content, 0)
+		if width < 2 || end == len(line.Content) {
+			return false
+		}
+	}
+	return false
+}
+
 var listItemPrefix = regexp.MustCompile(`^ *(?:[-+*]|[0-9]{1,9}[.)])[ \t]`)
 
 func leadingIndent(text string, width int) (int, int) {
@@ -2358,6 +2381,9 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 			continue
 		}
 		if !htmlComment {
+			if linkDefinitionFollowsFootnote(lines, index, container) {
+				output = append(output, strings.TrimRight(container.Prefix, " \t"))
+			}
 			if list, end := literalCodeList(lines, index, container); list != nil {
 				output = append(output, list...)
 				index = end

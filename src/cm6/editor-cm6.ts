@@ -48,6 +48,7 @@ import {
 import { foldEffect, syntaxTree, unfoldEffect } from "@codemirror/language";
 import { disposeHighlightWorker } from "../code-highlight-async.ts";
 import { disposeMathRuntime } from "../math-render.ts";
+import { markdownLinkNodeDestination } from "./extensions/visual/document-references.ts";
 import { INLINE_READING_CONTROL_SELECTOR } from "../document-inline-popovers.ts";
 import { DOCUMENT_EXCERPT_CONTROL_SELECTOR } from "../document-excerpts.ts";
 import { REPOSITORY_CONTROL_SELECTOR } from "../document-repository.ts";
@@ -195,72 +196,6 @@ function widgetSourcePosition(view: EditorView, source: HTMLElement): number | n
   }
 }
 
-function hrefFromLinkNode(state: EditorState, from: number, to: number): string | null {
-  let href: string | null = null;
-  syntaxTree(state).iterate({
-    from,
-    to,
-    enter(node) {
-      if (href) return false;
-      if (node.name !== "URL") return;
-      href = markdownLinkDestination(state.doc.sliceString(node.from, node.to), { stripTitle: false });
-      return false;
-    },
-  });
-  if (href) return href;
-  // No inline URL found — may be a reference-style link [text][id] or [text].
-  // Scan the document for a matching LinkReference definition.
-  // Only runs on user click (on-demand), never per keystroke.
-  return resolveRefLinkHref(state, from, to);
-}
-
-function resolveRefLinkHref(state: EditorState, linkFrom: number, linkTo: number): string | null {
-  // Extract the reference label from the Link node: [text][label] or [text] (collapsed ref).
-  let label: string | null = null;
-  syntaxTree(state).iterate({
-    from: linkFrom,
-    to: linkTo,
-    enter(node) {
-      if (label !== null) return false;
-      if (node.name === "LinkLabel") {
-        const raw = state.doc.sliceString(node.from, node.to).trim();
-        // LinkLabel includes the brackets: [id] — strip them
-        label = raw.replace(/^\[|\]$/g, "").trim().toLowerCase();
-        return false;
-      }
-    },
-  });
-  // Collapsed reference [text] uses the link text as the label.
-  if (!label) {
-    const linkText = state.doc.sliceString(linkFrom, linkTo);
-    const m = linkText.match(/^\[([^\]\n]+)\]\s*(?:\[\])?/);
-    label = m?.[1]?.trim().toLowerCase() ?? null;
-  }
-  if (!label) return null;
-  // Walk the syntax tree for a matching LinkReference anywhere in the doc.
-  let resolved: string | null = null;
-  syntaxTree(state).iterate({
-    enter(node) {
-      if (resolved) return false;
-      if (node.name !== "LinkReference") return;
-      // The LinkReference has a LinkLabel child and a URL child.
-      let defLabel: string | null = null;
-      let defUrl: string | null = null;
-      node.node.cursor().iterate((child) => {
-        if (child.name === "LinkLabel") {
-          defLabel = state.doc.sliceString(child.from, child.to).replace(/^\[|\]$/g, "").trim().toLowerCase();
-        }
-        if (child.name === "URL") {
-          defUrl = markdownLinkDestination(state.doc.sliceString(child.from, child.to), { stripTitle: false });
-        }
-      });
-      if (defLabel === label && defUrl) resolved = defUrl;
-      return false; // don't recurse into LinkReference children twice
-    },
-  });
-  return resolved;
-}
-
 function markdownHrefFromLineAt(state: EditorState, pos: number): string | null {
   const line = state.doc.lineAt(Math.max(0, Math.min(pos, state.doc.length)));
   const re = /!?\[[^\]\n]*\]\(((?:[^()\n]|\([^()\n]*\))+)\)/g;
@@ -295,7 +230,7 @@ export function markdownHrefAt(state: EditorState, pos: number): string | null {
     let node: SyntaxNode | null = syntaxTree(state).resolveInner(targetPos, -1);
     while (node) {
       if (node.name === "Link" || node.name === "Autolink" || node.name === "Image") {
-        const href = hrefFromLinkNode(state, node.from, node.to);
+        const href = markdownLinkNodeDestination(state, node);
         if (href) {
           if (jupyterHref(href)) {
             const lineHref = markdownHrefFromLineAt(state, clamped);

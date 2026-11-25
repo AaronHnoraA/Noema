@@ -38,6 +38,7 @@
  */
 
 import { syntaxTree } from "@codemirror/language";
+import { markdownLinkNodeDestination } from "./extensions/visual/document-references.ts";
 import { redo, undo } from "@codemirror/commands";
 import {
   Decoration,
@@ -101,7 +102,6 @@ import { tocIndexFromState } from "./toc-index.ts";
 import { hasViewportDecorationRefresh, viewportDecorationRefreshRanges } from "./viewport-refresh.ts";
 import { changesMightAffectFencedCodeRanges, getFencedCodeRanges } from "./code-ranges.ts";
 import { isDocumentDataBody, orgEnvContextForRange } from "./extensions/visual/widgets/block-extras.ts";
-import { markdownLinkDestination } from "../markdown-link.ts";
 import { preserveEditorViewport } from "./viewport-stability.ts";
 import {
   firstChangedLine,
@@ -174,6 +174,7 @@ const INLINE_MARK_NODES = new Set([
 /** Link delimiters: fold based on cursor inside/outside Link/Image node */
 const LINK_MARK_NODES = new Set([
   "LinkMark", // [ and ]
+  "LinkLabel", // [reference]
   "URL",      // (href)
 ]);
 
@@ -192,21 +193,6 @@ function combineRanges(
   ...lists: Array<readonly { from: number; to: number }[]>
 ): Array<{ from: number; to: number }> {
   return mergeOverlappingRanges(lists.flatMap((list) => Array.from(list)));
-}
-
-function linkHrefFromSpan(state: EditorState, from: number, to: number): string {
-  let href = "";
-  syntaxTree(state).iterate({
-    from,
-    to,
-    enter(node) {
-      if (href) return false;
-      if (node.name !== "URL") return;
-      href = markdownLinkDestination(state.doc.sliceString(node.from, node.to), { stripTitle: false });
-      return false;
-    },
-  });
-  return href;
 }
 
 function isRoamCoreHref(href: string): boolean {
@@ -482,7 +468,8 @@ function collectLivePreviewTokens(
             && doc.sliceString(spanTo, spanTo + 1) === "]") {
             return false;
           }
-          const href = p.name === "Link" ? linkHrefFromSpan(view.state, spanFrom, spanTo) : "";
+          const href = markdownLinkNodeDestination(view.state, p);
+          if (node.name === "LinkLabel" && !href) return false;
           const roamLink = isRoamCoreHref(href);
           let labelFrom = spanFrom;
           let labelTo = spanTo;
@@ -3140,6 +3127,10 @@ function buildLineDecoRanges(
         } else {
           pushLineRange(node.from, node.to, "cm-md-blockquote");
         }
+        return false;
+      }
+      if (node.name === "FootnoteDefinition") {
+        pushLineRange(node.from, node.to, "cm-md-footnote");
         return false;
       }
       if (node.name === "FencedCode" || node.name === "CodeBlock") {

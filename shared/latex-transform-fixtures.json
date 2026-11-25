@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "adjacent-footnote-and-link-definitions-remain-separate-in-pandoc",
+      "markdown": "Text[^a] and [source][cite].\n\n[^a]: First.\n  [nested]: https://example.test/nested\n    Continued.\n[cite]: https://example.test\n\n~~~md\n[^fake]: Literal footnote.\n[fake]: https://example.test/fake\n~~~",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "Text[^a] and [source][cite].\n\n[^a]: First.\n  [nested]: https://example.test/nested\n    Continued.\n\n[cite]: https://example.test\n\n~~~md\n[^fake]: Literal footnote.\n[fake]: https://example.test/fake\n~~~",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "project-directory-tree-exports-only-its-authored-list",
       "markdown": "#+begin project-tree Files {path=docs depth=2 ignore=tmp}\n- Public notes\n#+end project-tree",
       "options": {},

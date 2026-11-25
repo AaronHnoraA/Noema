@@ -39,8 +39,11 @@ import {
   renderMarkdownHTML,
   renderEditorWidgetHTML,
   indexQuotedCallouts,
+  type MarkdownDocumentReferences,
   type RenderMarkdownHTMLOptions,
 } from "../../../../render-html.ts";
+import { renderedDocumentReferences } from "../document-references.ts";
+import { jumpBackFromFootnote, jumpToFootnoteDefinition } from "./footnotes.ts";
 import {
   ORG_META_PREAMBLE_LINE_LIMIT,
   editableMetaEntries,
@@ -634,6 +637,7 @@ function renderDiagramPreview(source: string, lang: string, div: HTMLElement): v
 }
 
 const documentNavigationSelector = [
+  "a[data-document-footnote]",
   '.noema-document-frame:is([data-frame="card"], [data-frame="home-box"], [data-frame="link-card"], [data-frame="image-card"]) a[href]',
   ".noema-document-breadcrumb a[href]",
   ".noema-document-tabs a[href]",
@@ -709,6 +713,7 @@ function documentViewPosition(view: EditorView, scope: DocumentViewScope, group:
 }
 
 export function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, scope?: DocumentViewScope): void {
+  const owner = scope?.owner ?? root.closest<HTMLElement>("[data-cm-source-from]");
   const hasDocumentViews = root.querySelector("[data-view-source]") !== null;
   if (hasDocumentViews || root.querySelector(documentNavigationSelector)) {
     const openAction = (event: MouseEvent): void => {
@@ -717,6 +722,34 @@ export function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, sco
       const link = target?.closest<HTMLAnchorElement>(documentNavigationSelector);
       const href = link?.getAttribute("href");
       if (!link || !href || !root.contains(link)) return;
+      const footnote = link.dataset.documentFootnote;
+      if (footnote && event.button === 0) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (link.classList.contains("noema-footnote-backref")) {
+          jumpBackFromFootnote(view, footnote);
+          return;
+        }
+        const region = link.closest<HTMLElement>("[data-cm-source-from][data-cm-source-to]") || owner;
+        const anchor = owner ?? region ?? root;
+        const base = view.posAtDOM(anchor, -1);
+        const relative = region ? Number(region.dataset.cmSourceFrom) - Number(anchor.dataset.cmSourceFrom) : 0;
+        const first = base + (Number.isFinite(relative) ? relative : 0);
+        const length = region ? Number(region.dataset.cmSourceTo) - Number(region.dataset.cmSourceFrom) : 0;
+        const panel = link.closest<HTMLElement>(".noema-tab-pane[data-tab-line]");
+        const group = panel?.closest<HTMLElement>(".noema-document-tabs");
+        const tabPosition = group ? locate(group) : null;
+        const tabBlock = tabPosition === null ? undefined : orgEnvBlocksFromState(view.state).find((block) => block.from === tabPosition);
+        const doc = view.state.doc;
+        const tabLine = tabBlock && panel ? doc.lineAt(tabBlock.bodyFrom).number + Number(panel.dataset.tabLine) : undefined;
+        const from = tabLine != null && tabLine <= doc.lines
+          ? doc.line(tabLine).from : Math.min(doc.length, first);
+        const to = Math.min(doc.length, Math.max(from, tabBlock?.bodyTo ?? first + length));
+        const refs = Array.from((panel ?? region ?? root).querySelectorAll<HTMLAnchorElement>(".noema-footnote-reference a[data-document-footnote]"))
+          .filter((item) => item.dataset.documentFootnote === footnote);
+        jumpToFootnoteDefinition(view, footnote, from, to, Math.max(0, refs.indexOf(link)));
+        return;
+      }
       const handled = !view.dom.dispatchEvent(new CustomEvent("noema:open-url", {
         bubbles: true,
         cancelable: true,
@@ -730,7 +763,6 @@ export function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, sco
     root.addEventListener("click", openAction);
     root.addEventListener("auxclick", openAction);
   }
-  const owner = scope?.owner ?? root.closest<HTMLElement>("[data-cm-source-from]");
   const locate = (group: HTMLElement) => owner ? documentViewPosition(view, scope ?? { owner }, group) : null;
   const readSource = (position: number) => orgEnvBlocksFromState(view.state).find((block) => block.from === position)?.body;
   if (hasDocumentViews) numberDocumentViews(root);
@@ -3223,8 +3255,10 @@ class FoldWidget extends MeasuredWidget {
   readonly kind: "fold" | "details";
   readonly blockId: string;
   readonly bodyOffset: number;
+  readonly references: MarkdownDocumentReferences | null | undefined;
 
-  constructor(title: string, body: string, from: number, to: number, depth: number, kind: "fold" | "details", blockId: string, bodyOffset: number) {
+  constructor(title: string, body: string, from: number, to: number, depth: number, kind: "fold" | "details", blockId: string,
+    bodyOffset: number, references?: MarkdownDocumentReferences | null) {
     super();
     this.title = title;
     this.body = body;
@@ -3234,6 +3268,7 @@ class FoldWidget extends MeasuredWidget {
     this.kind = kind;
     this.blockId = blockId;
     this.bodyOffset = bodyOffset;
+    this.references = body.includes("[") ? references : undefined;
   }
 
   protected measureKey(): string { return `${this.kind}:` + shortHash(this.title + ":" + this.body); }
@@ -3249,6 +3284,7 @@ class FoldWidget extends MeasuredWidget {
       && this.kind === other.kind
       && this.blockId === other.blockId
       && this.bodyOffset === other.bodyOffset
+      && this.references === other.references
       && this.body === other.body
       && this.from === other.from
       && this.to === other.to
@@ -3263,7 +3299,7 @@ class FoldWidget extends MeasuredWidget {
       root.dataset.cmOpenSource = "true";
       root.dataset.orgEnvKind = this.kind;
       const title = this.blockId ? `${this.title} {#${this.blockId}}` : this.title;
-      root.innerHTML = renderEditorWidgetHTML(buildOrgEnvSource(this.kind, title, this.body));
+      root.innerHTML = renderEditorWidgetHTML(buildOrgEnvSource(this.kind, title, this.body), undefined, this.references);
       const content = root.querySelector<HTMLElement>(":scope > details > .noema-disclosure-body");
       if (this.body.trim() && content) content.dataset.cmSourceOffset = String(this.bodyOffset);
       if (!view.state.readOnly && !view.state.facet(passiveReaderFacet)) {
@@ -3293,13 +3329,15 @@ class FoldWidget extends MeasuredWidget {
     block.setAttribute("data-kind", "fold");
     block.setAttribute("data-title", this.title);
     block.setAttribute("data-label", envLabel("fold"));
-    block.setAttribute("data-fold-open", "false");
+    const initiallyOpen = view.state.field(documentViewState, false)?.get(this.from) === 1;
+    block.setAttribute("data-fold-open", String(initiallyOpen));
+    block.classList.toggle("org-env-fold-open", initiallyOpen);
     block.style.setProperty("--org-env-depth", String(this.depth));
 
     const button = document.createElement("button");
     button.type = "button";
     button.className = "org-env-fold-summary";
-    button.setAttribute("aria-expanded", "false");
+    button.setAttribute("aria-expanded", String(initiallyOpen));
 
     const marker = document.createElement("span");
     marker.className = "org-env-fold-marker";
@@ -3317,13 +3355,15 @@ class FoldWidget extends MeasuredWidget {
       block.classList.toggle("org-env-fold-open", open);
       block.setAttribute("data-fold-open", open ? "true" : "false");
       button.setAttribute("aria-expanded", open ? "true" : "false");
+      rememberDocumentView(view, view.posAtDOM(block, -1), open ? 1 : 0);
       if (block.isConnected) view.requestMeasure();
     });
 
     const content = document.createElement("div");
     content.className = "org-env-fold-content org-env-content";
-    content.hidden = true;
-    content.innerHTML = renderEditorWidgetHTML(this.body.trim());
+    content.hidden = !initiallyOpen;
+    content.dataset.cmSourceOffset = String(this.bodyOffset);
+    content.innerHTML = renderEditorWidgetHTML(this.body.trim(), undefined, this.references);
     enhanceRenderedMarkdown(content, view, { owner: block });
     stopInteractiveWidgetEvents(content);
 
@@ -3512,7 +3552,7 @@ function activeColumnsStage(state: EditorState, block: OrgEnvBlock): ActiveColum
   };
 }
 
-function columnsRenderOptions(): RenderMarkdownHTMLOptions {
+function columnsRenderOptions(references?: MarkdownDocumentReferences | null): RenderMarkdownHTMLOptions {
   const resolver = typeof window !== "undefined" ? window.NoemaResolveAssetUrl : undefined;
   const noteFile = currentNoteFile();
   return {
@@ -3522,6 +3562,7 @@ function columnsRenderOptions(): RenderMarkdownHTMLOptions {
     documentDiffActions: true,
     documentTreeActions: true,
     documentSourceActions: true,
+    documentReferences: references ?? undefined,
     ...(resolver ? { assetResolver: (src: string) => resolver(src) } : {}),
     ...(noteFile ? { noteFile } : {}),
   };
@@ -4202,6 +4243,7 @@ class ColumnsWidget extends MeasuredWidget {
   readonly to: number;
   readonly bodyFrom: number;
   readonly bodyTo: number;
+  readonly references: MarkdownDocumentReferences | null | undefined;
 
   constructor(
     title: string,
@@ -4210,6 +4252,7 @@ class ColumnsWidget extends MeasuredWidget {
     to: number,
     bodyFrom: number,
     bodyTo: number,
+    references?: MarkdownDocumentReferences | null,
   ) {
     super();
     this.title = title;
@@ -4218,6 +4261,7 @@ class ColumnsWidget extends MeasuredWidget {
     this.to = to;
     this.bodyFrom = bodyFrom;
     this.bodyTo = bodyTo;
+    this.references = body.includes("[") ? references : undefined;
   }
 
   protected measureKey(): string { return `columns:${shortHash(this.title + "\n" + this.body)}`; }
@@ -4229,6 +4273,7 @@ class ColumnsWidget extends MeasuredWidget {
   eq(other: ColumnsWidget): boolean {
     return this.title === other.title
       && this.body === other.body
+      && this.references === other.references
       && this.from === other.from
       && this.to === other.to;
   }
@@ -4241,7 +4286,7 @@ class ColumnsWidget extends MeasuredWidget {
       ? Math.max(2, Math.min(4, spec.cols || 2))
       : Math.max(1, panes.length);
     const widths = resolvedColumnWidths(spec, paneCount);
-    const renderOpts = columnsRenderOptions();
+    const renderOpts = columnsRenderOptions(this.references);
 
     const block = document.createElement("div");
     block.className = `cm-columns-widget ${columnsClasses(spec, paneCount)}`;
@@ -4485,7 +4530,7 @@ class ColumnsActiveTopWidget extends MeasuredWidget {
       activeBackdrop.style.width = columnWidthCss(this.widths, this.activeIndex);
       stage.append(activeBackdrop);
 
-      const renderOpts = columnsRenderOptions();
+      const renderOpts = columnsRenderOptions(view.state.field(renderedDocumentReferences, false));
       const siblingEls = new Map<number, HTMLElement>();
       for (const sibling of this.siblings) {
         const paneEl = document.createElement("div");
@@ -5227,8 +5272,9 @@ class DocumentDataWidget extends MeasuredWidget {
   readonly from: number;
   readonly to: number;
   readonly depth: number;
+  readonly references: MarkdownDocumentReferences | null | undefined;
 
-  constructor(block: OrgEnvBlock) {
+  constructor(block: OrgEnvBlock, references?: MarkdownDocumentReferences | null) {
     super();
     this.kind = block.kind;
     this.title = block.kind === "progress" || block.kind === "stats" ? "" : block.title;
@@ -5236,6 +5282,7 @@ class DocumentDataWidget extends MeasuredWidget {
     this.from = block.bodyFrom;
     this.to = Math.max(this.from, block.bodyTo - 1);
     this.depth = block.depth;
+    this.references = block.body.includes("[") ? references : undefined;
   }
 
   protected measureKey(): string { return `${this.kind}:${shortHash(this.title + "\n" + this.body)}`; }
@@ -5250,7 +5297,7 @@ class DocumentDataWidget extends MeasuredWidget {
 
   eq(other: DocumentDataWidget): boolean {
     return this.kind === other.kind && this.title === other.title && this.body === other.body
-      && this.from === other.from && this.to === other.to && this.depth === other.depth;
+      && this.from === other.from && this.to === other.to && this.depth === other.depth && this.references === other.references;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -5265,8 +5312,8 @@ class DocumentDataWidget extends MeasuredWidget {
     }
     const source = buildOrgEnvSource(this.kind, this.title, this.body);
     block.innerHTML = this.kind === "table"
-      ? renderMarkdownHTML(source, { documentTableActions: true, documentTableSource: this.body })
-      : renderEditorWidgetHTML(source, (documentTabKinds.has(this.kind) || this.kind === "accordion") ? this.body : undefined);
+      ? renderMarkdownHTML(source, { documentTableActions: true, documentTableSource: this.body, documentReferences: this.references ?? undefined })
+      : renderEditorWidgetHTML(source, (documentTabKinds.has(this.kind) || this.kind === "accordion") ? this.body : undefined, this.references);
     const content = block.querySelector(":scope > org-env-block > .org-env-content");
     if (content) block.replaceChildren(content);
     enhanceRenderedMarkdown(block, view, { owner: block });
@@ -6509,7 +6556,8 @@ function addOrgEnvBlockExtraDecos(
     if (!columnsSourceActive(state, block)) {
       decos.push(
         Decoration.replace({
-          widget: new ColumnsWidget(block.title, block.body, block.from, block.to, block.bodyFrom, block.bodyTo),
+          widget: new ColumnsWidget(block.title, block.body, block.from, block.to, block.bodyFrom, block.bodyTo,
+            state.field(renderedDocumentReferences, false)),
           block: true,
         }).range(block.from, block.to),
       );
@@ -6554,7 +6602,8 @@ function addOrgEnvBlockExtraDecos(
   if ((block.kind === "fold" || block.kind === "details") && !opensSource(state, block.from, block.to)) {
     decos.push(
       Decoration.replace({
-        widget: new FoldWidget(block.title, block.body, block.from, block.to, block.depth, block.kind, block.blockId, block.bodyFrom - block.from),
+        widget: new FoldWidget(block.title, block.body, block.from, block.to, block.depth, block.kind, block.blockId,
+          block.bodyFrom - block.from, state.field(renderedDocumentReferences, false)),
         block: true,
       }).range(block.from, block.to),
     );
@@ -6569,7 +6618,7 @@ function addOrgEnvBlockExtraDecos(
         || documentExcerptHasPath(block.kind, block.title) || block.kind === "project-tree" || documentRepositoryKinds.has(block.kind)
         || block.kind === "symbol" || block.kind === "run")
       && !opensSource(state, block.from, block.to)) {
-    const widget = new DocumentDataWidget(block);
+    const widget = new DocumentDataWidget(block, state.field(renderedDocumentReferences, false));
     if (widget.from < widget.to) {
       decos.push(Decoration.replace({ widget, block: true }).range(widget.from, widget.to));
       occupied?.push([block.bodyFrom, block.bodyTo]);
@@ -6994,6 +7043,9 @@ const blockExtrasDecorations = StateField.define<DecorationSet>({
       return rebuildForRevealChange(value, oldKey, newKey, (from, to) => buildBlockExtraDecoRanges(tr.state, from, to));
     }
     if (tr.docChanged) {
+      if (tr.startState.field(renderedDocumentReferences, false) !== tr.state.field(renderedDocumentReferences, false)) {
+        return buildBlockExtraDecos(tr.state);
+      }
       if (canMapBlockExtraDecos(tr.startState, tr.changes)) {
         const mapped = value.map(tr.changes);
         return (tr.state.field(blockExtraRangesField, false)?.toc.length ?? 0) > 0
@@ -7084,6 +7136,7 @@ export const blockExtrasExtension: Extension = [
   persistentVisualStateField(tocFoldField, createTocFoldState),
   columnsRawSourceField,
   deferredBlockExtraRefresh,
+  renderedDocumentReferences,
   persistentVisualStateField(blockExtrasDecorations, buildBlockExtraDecos),
   // Org environments, TOC, rules, front matter, cells: whatever the field draws.
   constructSources.of(drawnConstructSource("block-extra", "structure", (state) => state.field(blockExtrasDecorations, false))),

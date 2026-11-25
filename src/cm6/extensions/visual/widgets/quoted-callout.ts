@@ -1,11 +1,12 @@
 import { StateField, type EditorState, type Extension, type Text, type Transaction } from "@codemirror/state";
 import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
-import { indexQuotedCallouts, renderEditorWidgetHTML } from "../../../../render-html.ts";
+import { indexQuotedCallouts, renderEditorWidgetHTML, type MarkdownDocumentReferences } from "../../../../render-html.ts";
 import { disconnectDocumentTableViews } from "../../../../document-table-view.ts";
 import { preserveEditorViewport } from "../../../viewport-stability.ts";
 import { drawnConstructSource, constructSources, selectionOpensSource, transactionChangesPinning } from "../constructs/index.ts";
 import { persistentVisualStateField } from "../visual-mode.ts";
 import { passiveReaderFacet, pointerSelectionEffect } from "../selection.ts";
+import { renderedDocumentReferences } from "../document-references.ts";
 import { blockExtraReplacesRange, enhanceRenderedMarkdown } from "./block-extras.ts";
 import { MeasuredWidget } from "./measured-widget.ts";
 import { shortHash } from "./measured-observer.ts";
@@ -22,17 +23,19 @@ class QuotedCalloutWidget extends MeasuredWidget {
   readonly source: string;
   readonly from: number;
   readonly to: number;
+  readonly references: MarkdownDocumentReferences | null | undefined;
 
-  constructor(source: string, from: number, to: number) {
+  constructor(source: string, from: number, to: number, references?: MarkdownDocumentReferences | null) {
     super();
     this.source = source;
     this.from = from;
     this.to = to;
+    this.references = references;
   }
 
   protected measureKey(): string { return "quoted-callout:" + shortHash(this.source); }
   protected estimatedHeightFallback(): number { return 80; }
-  eq(other: QuotedCalloutWidget): boolean { return this.source === other.source; }
+  eq(other: QuotedCalloutWidget): boolean { return this.source === other.source && this.references === other.references; }
 
   toDOM(view: EditorView): HTMLElement {
     const root = document.createElement("div");
@@ -40,7 +43,7 @@ class QuotedCalloutWidget extends MeasuredWidget {
     root.dataset.cmSourceFrom = String(this.from);
     root.dataset.cmSourceTo = String(this.to);
     root.dataset.cmOpenSource = "true";
-    root.innerHTML = renderEditorWidgetHTML(this.source);
+    root.innerHTML = renderEditorWidgetHTML(this.source, undefined, this.references);
     enhanceRenderedMarkdown(root, view);
     const position = () => view.posAtDOM(root, -1);
     if (root.querySelector("details.callout") && !view.state.readOnly && !view.state.facet(passiveReaderFacet)) {
@@ -78,7 +81,9 @@ function displaysQuotedCallout(state: EditorState, { from, to }: CalloutRange): 
 
 function renderRanges(state: EditorState, ranges: readonly CalloutRange[]): DecorationSet {
   return Decoration.set(ranges.filter((range) => displaysQuotedCallout(state, range)).map(({ from, to }) =>
-    Decoration.replace({ block: true, widget: new QuotedCalloutWidget(state.doc.sliceString(from, to), from, to) }).range(from, to)));
+    Decoration.replace({ block: true, widget: new QuotedCalloutWidget(
+      state.doc.sliceString(from, to), from, to, state.field(renderedDocumentReferences, false),
+    ) }).range(from, to)));
 }
 
 function createQuotedCallouts(state: EditorState): CalloutState {

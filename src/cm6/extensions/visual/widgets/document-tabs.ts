@@ -34,6 +34,8 @@ export function connectDocumentTabViews(root: HTMLElement, view: EditorView, hyd
         panel.setAttribute("aria-labelledby", button.id);
         panel.tabIndex = 0;
         const offset = templates[index]?.dataset.tabOffset;
+        const line = templates[index]?.dataset.tabLine;
+        if (line !== undefined) panel.dataset.tabLine = line;
         if (offset !== undefined && group.parentElement?.parentElement === root
             && root.dataset.orgEnvKind === group.dataset.tabKind) panel.dataset.cmSourceOffset = offset;
         body.append(panel);

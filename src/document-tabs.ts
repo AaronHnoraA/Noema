@@ -64,10 +64,11 @@ export function renderDocumentTabs(md: MarkdownIt, kind: string, title: string, 
   if (!interactive) return `<div class="noema-document-tabs-static">${md.renderer.render(tokens, md.options, environment)}</div>`;
   const offsets = documentPageOffsets(md, kind, body, pages, source);
   const preamble = first ? md.renderer.render(tokens.slice(0, first), md.options, environment) : "";
-  return renderDocumentTabGroup(md, kind, title, body, attrs, pages.map(({ label, content }, index) => ({
+  return renderDocumentTabGroup(md, kind, title, body, attrs, pages.map(({ label, content, line }, index) => ({
     label,
     html: md.renderer.render(content, md.options, environment),
     offset: offsets[index],
+    line,
   })), preamble);
 }
 
@@ -75,6 +76,7 @@ interface RenderedDocumentTab {
   label: string;
   html: string;
   offset?: number;
+  line?: number;
 }
 
 export function renderDocumentTabGroup(md: MarkdownIt, kind: string, title: string, body: string, attrs: AttrMap, pages: readonly RenderedDocumentTab[], preamble = ""): string {
@@ -88,8 +90,8 @@ export function renderDocumentTabGroup(md: MarkdownIt, kind: string, title: stri
   }).join("");
   const previous = kind === "swiper" ? '<button type="button" class="noema-tab-move" data-move="-1">‹</button>' : "";
   const next = kind === "swiper" ? '<button type="button" class="noema-tab-move" data-move="1">›</button>' : "";
-  const templates = pages.map(({ html, offset }, index) => {
-    return `<template data-view-content="${index}"${offset !== undefined ? ` data-tab-offset="${offset}"` : ""}>`
+  const templates = pages.map(({ html, offset, line }, index) => {
+    return `<template data-view-content="${index}"${offset !== undefined ? ` data-tab-offset="${offset}"` : ""}${line !== undefined ? ` data-tab-line="${line}"` : ""}>`
       + `${html}</template>`;
   }).join("");
   return `<div class="noema-document-tabs" data-tab-kind="${kind}" data-view-kind="${kind}" data-view-source="${documentViewSourceKey(kind, title, body)}" data-tab-selected="${selected}" data-accent="${accent}">`

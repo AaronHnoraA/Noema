@@ -13,11 +13,12 @@ import type { Tree } from "@lezer/common";
 import { inlineMathMarkdownExtension } from "../../../inline-math.ts";
 import { nestingAwareLinkExtension } from "./nested-links.ts";
 import { cjkEmphasisMarkdownExtension } from "../../../cjk-emphasis.ts";
+import { footnoteDefinitions } from "./footnote-definitions.ts";
 
 const markdownOptions = {
   addKeymap: false,
   base: markdownLanguage,
-  extensions: [inlineMathMarkdownExtension, nestingAwareLinkExtension, cjkEmphasisMarkdownExtension],
+  extensions: [inlineMathMarkdownExtension, nestingAwareLinkExtension, cjkEmphasisMarkdownExtension, footnoteDefinitions],
 };
 
 const localParser = markdown(markdownOptions).language.parser;

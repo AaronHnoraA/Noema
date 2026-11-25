@@ -439,6 +439,18 @@ function markdownContainerLine(line) {
   return { content, quoteDepth, prefix: source.slice(0, source.length - content.length) };
 }
 
+function linkDefinitionFollowsFootnote(lines, index, container) {
+  if (!/^ ?\[[^^\]\n][^\]\n]*\]:/.test(container.content)) return false;
+  for (let previous = index - 1; previous >= 0; previous--) {
+    const line = markdownContainerLine(lines[previous]);
+    if (line.quoteDepth !== container.quoteDepth) return false;
+    if (/^ {0,3}\[\^[^\]\n]+\]:/.test(line.content)) return true;
+    const { width, end } = leadingIndent(line.content);
+    if (width < 2 || end === line.content.length) return false;
+  }
+  return false;
+}
+
 const listItemPrefix = /^ *(?:[-+*]|\d{1,9}[.)])(?=[ \t])/;
 
 function leadingIndent(text, start = 0) {
@@ -871,6 +883,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
     if (displayMath) { if (container.content.trim()) output.push(line); continue; }
 
     if (!htmlComment) {
+      if (linkDefinitionFollowsFootnote(lines, index, container)) output.push(container.prefix.trimEnd());
       const list = literalCodeList(lines, index, container);
       if (list) {
         output.push(...list.lines);

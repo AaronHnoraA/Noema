@@ -4068,7 +4068,8 @@ iframe.noema-embed-fullscreen {
   color: color-mix(in srgb, var(--block-c), var(--aaron-ink, #e4ecff) 20%);
   font-weight: 700;
 }
-.cm-editor .cm-org-env-label {
+.cm-editor .cm-org-env-label,
+.noema-standalone-page .cm-editor .org-env-heading-label {
   display: inline-block;
   font: 700 10px/1.4 ui-monospace, monospace;
   text-transform: uppercase;
@@ -4974,6 +4975,14 @@ iframe.noema-embed-fullscreen {
 }
 
 /* ─── Standard Markdown footnotes ───────────────────────────────── */
+.cm-editor .cm-md-footnote {
+  padding-inline-start: 0.55em;
+  border-inline-start: 2px solid color-mix(in srgb, var(--aaron-paper-line, #414b61), transparent 25%);
+  color: var(--aaron-muted, #a9bed3);
+}
+.cm-editor :is(.cm-md-footnote, .noema-footnote-definition) {
+  font-size: 0.88em;
+}
 .cm-editor .cm-footnote-reference button {
   padding: 0 0.16em;
   border: 0;
@@ -4990,12 +4999,12 @@ iframe.noema-embed-fullscreen {
   color: var(--aaron-link, #9de7ff);
   font: 700 0.72em/1 var(--aaron-font-sans, system-ui, sans-serif);
 }
-.cm-editor .cm-footnote-definition-label button {
-  margin-left: 0.25em;
+.cm-editor .cm-footnote-return {
+  margin-inline-start: 0.46em;
   border: 0;
   padding: 0 0.15em;
   background: transparent;
-  color: inherit;
+  color: var(--aaron-link, #9de7ff);
   cursor: pointer;
   font: inherit;
 }
@@ -5069,7 +5078,26 @@ iframe.noema-embed-fullscreen {
   padding: 0.3em 0 0.3em 1.15em;
   border-left: 2px solid color-mix(in srgb, var(--aaron-paper-line, #414b61), transparent 25%);
   color: var(--aaron-muted, #a9bed3);
-  font-size: 0.88em;
+}
+.noema-standalone-page .typora-web-wrap {
+  box-sizing: border-box;
+  max-inline-size: 64rem;
+  margin-inline: auto;
+  padding-inline: clamp(18px, 5vw, 48px);
+}
+.noema-standalone-page .cm-editor org-env-block > .org-env-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin-block-end: 0.3em;
+  border: 0;
+}
+.noema-standalone-page .cm-editor org-env-block > .org-env-heading > .org-env-heading-title {
+  width: auto;
+  min-inline-size: 0;
+  border: 0;
+  padding: 0;
+  cursor: inherit;
 }
 .cm-editor .noema-footnote-number {
   margin-left: -0.75em;

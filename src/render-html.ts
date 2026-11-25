@@ -120,6 +120,8 @@ export type RenderMarkdownHTMLOptions = {
   documentTreeActions?: boolean;
   /** Include copy and source inspection controls in live examples. */
   documentSourceActions?: boolean;
+  /** Reference definitions from the owning editable document. */
+  documentReferences?: MarkdownDocumentReferences;
   /** Expose every disclosure in a print document. */
   expandDisclosures?: boolean;
   /**
@@ -171,6 +173,7 @@ type OrgEnvTokenMeta = {
   title: string;
   blockId: string;
   body: string;
+  referenceTokens?: readonly Token[];
 };
 
 type SemanticHeadingTokenMeta = {
@@ -202,6 +205,16 @@ type FootnoteEnvironment = {
   labels: string[];
   numbers: Record<string, number>;
   references: Record<string, number>;
+  defined: Set<string>;
+  namespace: string;
+  isolatedScopes: { count: number };
+};
+
+type MarkdownFootnoteDefinition = { number: number; line: number; body: string };
+export type MarkdownDocumentReferences = {
+  readonly footnotes: ReadonlyMap<string, MarkdownFootnoteDefinition>;
+  readonly links: Record<string, { href: string; title: string }>;
+  readonly signature: string;
 };
 
 const ORG_ENV_OPEN_RE = /^\s*#\+\s*begin\s+(\S+)(?:[ \t]+([^\n]*?))?[ \t]*$/i;
@@ -419,12 +432,20 @@ function orgEnvBlockRule(state: StateBlock, startLine: number, endLine: number, 
   token.block = true;
   token.map = [startLine, closeLine + 1];
   const identity = parseOrgEnvIdentityTitle(kind, open[2]?.trim() ?? "");
-  token.meta = {
+  const meta: OrgEnvTokenMeta = {
     kind,
     title: identity.title,
     blockId: identity.blockId,
     body: state.getLines(startLine + 1, closeLine, state.blkIndent, false),
-  } satisfies OrgEnvTokenMeta;
+  };
+  const env = state.env as Record<string, unknown>;
+  if (!env.noemaReferencesIndexed && !opaqueReferenceBlocks.has(kind.toLowerCase())
+      && referenceDefinitionCandidate.test(meta.body)) {
+    const nested: Token[] = [];
+    state.md.block.parse(meta.body, state.md, env, nested);
+    meta.referenceTokens = nested;
+  }
+  token.meta = meta;
   state.line = closeLine + 1;
   return true;
 }
@@ -536,7 +557,10 @@ function privateCommandLineRule(state: StateBlock, startLine: number, _endLine: 
 function ensureFootnoteEnvironment(env: Record<string, unknown>): FootnoteEnvironment {
   const existing = env.noemaFootnotes as FootnoteEnvironment | undefined;
   if (existing) return existing;
-  const created: FootnoteEnvironment = { labels: [], numbers: Object.create(null), references: Object.create(null) };
+  const created: FootnoteEnvironment = {
+    labels: [], numbers: Object.create(null), references: Object.create(null), defined: new Set(),
+    namespace: "", isolatedScopes: { count: 0 },
+  };
   env.noemaFootnotes = created;
   return created;
 }
@@ -560,8 +584,8 @@ function footnoteDefinitionRule(state: StateBlock, startLine: number, endLine: n
   let nextLine = startLine + 1;
   while (nextLine < endLine) {
     const continuation = lineText(state, nextLine);
-    if (/^[ \t]{2,}\S/.test(continuation)) {
-      body.push(continuation.replace(/^[ \t]{2,4}/, ""));
+    if ((state.sCount[nextLine] ?? 0) - state.blkIndent >= 2 && /\S/.test(continuation)) {
+      body.push(continuation);
       nextLine++;
       continue;
     }
@@ -597,8 +621,99 @@ function footnoteReferenceRule(state: StateInline, silent: boolean): boolean {
   return true;
 }
 
-function footnoteDomId(label: string): string {
-  return encodeURIComponent(label).replace(/%/g, "-");
+function footnoteDomId(state: FootnoteEnvironment, label: string): string {
+  return state.namespace + label.replace(/[^A-Za-z\d_-]/gu, (character) => `~${character.codePointAt(0)!.toString(16)}~`);
+}
+
+const referenceDefinitionCandidate = /\]:/;
+const opaqueReferenceBlocks = new Set(["comment", "ediff", "html", "meta", "tikz"]);
+
+function collectDocumentFootnotes(
+  tokens: readonly Token[], definitions: Map<string, MarkdownFootnoteDefinition>, lineOffset = 0,
+): void {
+  for (const token of tokens) {
+    if (!token.map) continue;
+    if (token.type === "footnote_definition") {
+      const { label } = token.meta as FootnoteTokenMeta;
+      if (!definitions.has(label)) {
+        definitions.set(label, { number: definitions.size + 1, line: lineOffset + token.map[0], body: token.content });
+      }
+    } else if (token.type === "org_env_block") {
+      const { referenceTokens } = token.meta as OrgEnvTokenMeta;
+      if (referenceTokens) collectDocumentFootnotes(referenceTokens, definitions, lineOffset + token.map[0] + 1);
+    }
+  }
+}
+
+function indexNestedDocumentReferences(state: StateCore): void {
+  const env = state.env as Record<string, unknown>;
+  if (env.noemaReferencesIndexed) return;
+  env.noemaReferencesIndexed = true;
+  if (!referenceDefinitionCandidate.test(state.src)) return;
+  const definitions = new Map<string, MarkdownFootnoteDefinition>();
+  collectDocumentFootnotes(state.tokens, definitions);
+  const footnotes = ensureFootnoteEnvironment(env);
+  footnotes.labels = [];
+  footnotes.numbers = Object.create(null);
+  for (const label of definitions.keys()) footnoteNumber(env, label);
+  for (const token of state.tokens) {
+    if (token.type !== "footnote_definition") continue;
+    const meta = token.meta as FootnoteTokenMeta;
+    meta.number = footnoteNumber(env, meta.label);
+  }
+}
+
+/** Read actual Markdown definitions for a source-owned editor, including nested blocks. */
+export function indexMarkdownDocumentReferences(source: string): MarkdownDocumentReferences | null {
+  if (!referenceDefinitionCandidate.test(source)) return null;
+  const md = markdownItForRender();
+  const env: Record<string, unknown> = {};
+  const tokens: Token[] = [];
+  md.block.parse(source, md, env, tokens);
+  const footnotes = new Map<string, MarkdownFootnoteDefinition>();
+  collectDocumentFootnotes(tokens, footnotes);
+  const links = (env.references ?? {}) as MarkdownDocumentReferences["links"];
+  if (!footnotes.size && !Object.keys(links).length) return null;
+  return { footnotes, links, signature: JSON.stringify([[...footnotes.keys()], links]) };
+}
+
+function markdownInDocument(md: MarkdownIt, env: Record<string, unknown>, isolated = false): MarkdownIt {
+  const scoped = Object.create(md) as MarkdownIt;
+  const parentNotes = ensureFootnoteEnvironment(env);
+  const namespace = isolated ? `private-${++parentNotes.isolatedScopes.count}:` : parentNotes.namespace;
+  const inherited = (child: Record<string, unknown> = {}): Record<string, unknown> => {
+    if (isolated) {
+      const local = ensureFootnoteEnvironment(child);
+      local.namespace = namespace;
+      local.isolatedScopes = parentNotes.isolatedScopes;
+      return child;
+    }
+    child.references = env.references;
+    child.noemaFootnotes = parentNotes;
+    child.noemaReferencesIndexed = true;
+    return child;
+  };
+  scoped.parse = (source, child) => md.parse(source, inherited(child));
+  scoped.render = (source, child) => md.render(source, inherited(child));
+  scoped.parseInline = (source, child) => md.parseInline(source, inherited(child));
+  scoped.renderInline = (source, child) => md.renderInline(source, inherited(child));
+  return scoped;
+}
+
+/** The static back link falls back to the first use when JavaScript is unavailable. */
+function connectPublishedFootnotes(root: HTMLElement): void {
+  root.addEventListener("click", (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const reference = target?.closest<HTMLAnchorElement>(".noema-footnote-reference a");
+    const from = reference?.parentElement?.id;
+    const to = reference?.hash.slice(1);
+    if (!from || !to) return;
+    const definition = root.ownerDocument.getElementById(to);
+    if (definition && root.contains(definition)) {
+      definition.querySelector(".noema-footnote-backref")?.setAttribute("href", `#${from}`);
+    }
+  });
 }
 
 /**
@@ -1782,6 +1897,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainSourceBodies?
   md.block.ruler.before("paragraph", "toc_block", tocRule, { alt: ["paragraph"] });
   md.block.ruler.before("paragraph", "private_command_line", privateCommandLineRule, { alt: ["paragraph"] });
   md.block.ruler.before("reference", "footnote_definition", footnoteDefinitionRule, { alt: ["paragraph", "reference", "blockquote"] });
+  md.core.ruler.before("inline", "noema_document_references", indexNestedDocumentReferences);
   md.core.ruler.push("noema_callouts", (state) => noemaCalloutsRule(state, options.documentDisclosureActions === true));
   md.core.ruler.before("text_join", "noema_field_delimiter", documentFieldDelimiter);
   md.core.ruler.push("noema_block_identity", blockIdentityRule);
@@ -1824,15 +1940,20 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainSourceBodies?
     const state = ensureFootnoteEnvironment(env as Record<string, unknown>);
     const occurrence = (state.references[meta.label] ?? 0) + 1;
     state.references[meta.label] = occurrence;
-    const id = footnoteDomId(meta.label);
-    return `<sup class="noema-footnote-reference" id="fnref-${id}-${occurrence}"><a href="#fn-${id}" role="doc-noteref" aria-label="Footnote ${meta.number}">${meta.number}</a></sup>`;
+    const id = footnoteDomId(state, meta.label);
+    const source = state.namespace ? "" : ` data-document-footnote="${escapeAttr(meta.label)}"`;
+    return `<sup class="noema-footnote-reference" id="fnref-${id}-${occurrence}"><a href="#fn-${id}" role="doc-noteref"${source} aria-label="Footnote ${meta.number}">${meta.number}</a></sup>`;
   };
   md.renderer.rules.footnote_definition = (tokens, idx, _opts, env) => {
     const token = tokens[idx]!;
     const meta = token.meta as FootnoteTokenMeta;
-    const id = footnoteDomId(meta.label);
+    const state = ensureFootnoteEnvironment(env as Record<string, unknown>);
+    if (state.defined.has(meta.label)) return "";
+    state.defined.add(meta.label);
+    const id = footnoteDomId(state, meta.label);
+    const source = state.namespace ? "" : ` data-document-footnote="${escapeAttr(meta.label)}"`;
     const body = md.renderInline(token.content, env as Record<string, unknown>);
-    return `<div class="noema-footnote-definition" id="fn-${id}" role="doc-footnote"><span class="noema-footnote-number">${meta.number}.</span> <span class="noema-footnote-body">${body}</span> <a class="noema-footnote-backref" href="#fnref-${id}-1" aria-label="Back to reference">↩</a></div>\n`;
+    return `<div class="noema-footnote-definition" id="fn-${id}" role="doc-footnote"><span class="noema-footnote-number">${meta.number}.</span> <span class="noema-footnote-body">${body}</span> <a class="noema-footnote-backref" href="#fnref-${id}-1"${source} aria-label="Back to reference">↩</a></div>\n`;
   };
   md.renderer.rules.private_command_line = (tokens, idx) => {
     const token = tokens[idx]!;
@@ -1844,7 +1965,11 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainSourceBodies?
       "</div>",
     ].join("");
   };
-  md.renderer.rules.org_env_block = (tokens, idx) => renderOrgEnv(md, tokens, idx, options, plainSourceBodies);
+  md.renderer.rules.org_env_block = (tokens, idx, _opts, env) => {
+    const kind = (tokens[idx]!.meta as OrgEnvTokenMeta).kind.toLowerCase();
+    const parser = markdownInDocument(md, env as Record<string, unknown>, opaqueReferenceBlocks.has(kind));
+    return renderOrgEnv(parser, tokens, idx, options, plainSourceBodies);
+  };
   md.renderer.rules.semantic_heading_block = renderSemanticHeading;
   md.renderer.rules.front_matter = (tokens, idx, _opts, _env, _renderer) =>
     `<yaml-block><pre>${escapeHtml(tokens[idx]!.content)}</pre></yaml-block>`;
@@ -2094,12 +2219,13 @@ export function renderMarkdownHTML(
   return renderMarkdownHTMLUncached(markdown, options, topLevelBlocks);
 }
 
-export function renderEditorWidgetHTML(markdown: string, documentViewSource?: string): string {
+export function renderEditorWidgetHTML(markdown: string, documentViewSource?: string, documentReferences?: MarkdownDocumentReferences | null): string {
   const cacheKind = documentViewSource === undefined ? "editor-widget" : "editor-widget-sections";
-  return cachedRender(cacheKind, markdown, () => renderMarkdownHTMLUncached(markdown, {
+  const render = () => renderMarkdownHTMLUncached(markdown, {
     documentTableActions: true, documentTabActions: true, documentViewSource, documentDisclosureActions: true, documentDiffActions: true,
-    documentTreeActions: true, documentSourceActions: true,
-  }));
+    documentTreeActions: true, documentSourceActions: true, documentReferences: documentReferences ?? undefined,
+  });
+  return documentReferences ? render() : cachedRender(cacheKind, markdown, render);
 }
 
 function renderMarkdownHTMLUncached(
@@ -2126,7 +2252,13 @@ function renderMarkdownHTMLUncached(
     for (const bodies of plainSourceBodies.values()) bodies.reverse();
   }
   const root = document.createElement("div");
-  const env = {};
+  const env: Record<string, unknown> = {};
+  if (options?.documentReferences) {
+    const { footnotes, links } = options.documentReferences;
+    env.references = Object.assign(Object.create(null), links);
+    env.noemaReferencesIndexed = true;
+    for (const label of footnotes.keys()) footnoteNumber(env, label);
+  }
   const tokens = md.parse(prepared, env);
   if (topLevelBlocks) topLevelBlocks.push(...topLevelBlocksFromTokens(markdown, tokens));
   const protectedHtml = protectIframeNavigationAttrsForDom(md.renderer.render(tokens, md.options, env));
@@ -2215,6 +2347,7 @@ export function renderPublishedNoteHTML(
   const shellClass = classList(
     "noema-shell",
     "published-note-page",
+    standalone && "noema-standalone-page",
     pdf && "published-note-pdf",
     hidden && "hidden-note-page",
     kind !== "default" && `note-kind-${kind}`,
@@ -2293,7 +2426,9 @@ export function renderPublishedNoteHTML(
     ? `<script>(${connectInlineReadingPopovers.toString()})(document);</script>\n` : "";
   const adaptiveColumnsScript = !pdf && contentHtml.includes("data-columns-config")
     ? `<script>(${connectAdaptiveColumns.toString()})(document, ${layoutAdaptiveColumns.toString()});</script>\n` : "";
-  const scriptHtml = inlineReadingScript + adaptiveColumnsScript + (pdf ? "" : standalone ? standaloneScript : `  <script src="${assetRoot}js/note-page.js?v=${escapeAttr(version)}"></script>
+  const footnoteScript = !pdf && contentHtml.includes("noema-footnote-reference")
+    ? `<script>(${connectPublishedFootnotes.toString()})(document.getElementById("content"));</script>\n` : "";
+  const scriptHtml = inlineReadingScript + adaptiveColumnsScript + footnoteScript + (pdf ? "" : standalone ? standaloneScript : `  <script src="${assetRoot}js/note-page.js?v=${escapeAttr(version)}"></script>
   <script src="${assetRoot}Noema/pages/published-toc.js?v=${escapeAttr(version)}"></script>
   <script src="${assetRoot}js/mac-window.js?v=${escapeAttr(version)}"></script>
   <script type="module" src="${assetRoot}Noema/pages/published-local-graph.js?v=${escapeAttr(version)}"></script>
