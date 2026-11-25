@@ -22,6 +22,6 @@ export function renderDocumentDemonstration(md: MarkdownIt, kind: string, title:
   const sourceOpen = enabled(attrs.open);
   return `<div class="noema-document-demo" data-view-kind="demo" data-view-source="${source}" data-demo-open="${sourceOpen}">${preview}`
     + '<div class="noema-demo-footer"><button type="button" data-demo-toggle>Source</button>'
-    + '<button type="button" data-demo-copy>Copy source</button></div><div class="noema-demo-source"></div>'
-    + `<template data-demo-fallback>${md.utils.escapeHtml(original ? original + "\n" : "")}</template></div>`;
+    + '<button type="button" data-demo-copy data-document-source-copy>Copy source</button></div><div class="noema-demo-source"></div>'
+    + `<template data-document-source-body>${md.utils.escapeHtml(original ? original + "\n" : "")}</template></div>`;
 }

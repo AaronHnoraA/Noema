@@ -142,6 +142,7 @@ import { documentViewState } from "./extensions/visual/widgets/document-view-sta
 import { documentDiffSourceAt } from "./extensions/visual/widgets/document-diff.ts";
 import { CODE_TREE_TEXT_SELECTOR } from "./extensions/visual/widgets/document-trees.ts";
 import { DEMO_TEXT_SELECTOR, documentWindowScrollbar } from "./extensions/visual/widgets/document-demonstrations.ts";
+import { CHAT_TEXT_SELECTOR } from "../document-chat.ts";
 
 function sourceRangeElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof Element) {
@@ -517,7 +518,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     const target = event.target;
     if (
       target instanceof Element
-      && target.closest(`input, textarea, select, button, a, summary, ${CODE_TREE_TEXT_SELECTOR}, ${DEMO_TEXT_SELECTOR}`)
+      && target.closest(`input, textarea, select, button, a, summary, ${CODE_TREE_TEXT_SELECTOR}, ${DEMO_TEXT_SELECTOR}, ${CHAT_TEXT_SELECTOR}`)
     ) {
       return;
     }

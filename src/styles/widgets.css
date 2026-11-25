@@ -2259,6 +2259,54 @@ ul.noema-tree-list { margin: 0; padding: 0; list-style: none; }
   .noema-window-body { max-block-size: none; overflow: visible; }
 }
 
+.noema-document-chat {
+  --chat-line: var(--aaron-paper-line, var(--border, currentColor));
+  --chat-muted: var(--aaron-muted, currentColor);
+  --chat-accent: var(--aaron-link, currentColor);
+  min-inline-size: 0;
+  white-space: normal;
+}
+.noema-document-chat > ol.noema-chat-messages {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.55em;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.noema-document-chat > ol.noema-chat-messages > li { list-style: none; white-space: normal; margin: 0; }
+.noema-chat-message {
+  justify-self: start;
+  min-inline-size: 0;
+  max-inline-size: min(90%, 66ch);
+  padding: 0.18em 0.65em;
+  border-inline-start: 1px solid var(--chat-line);
+  overflow-wrap: anywhere;
+}
+.noema-chat-message[data-chat-side="self"] {
+  justify-self: end;
+  border-inline-start: 0;
+  border-inline-end: 1px solid var(--chat-accent);
+}
+.noema-chat-author { color: var(--chat-muted); }
+.noema-chat-message[data-chat-side="self"] .noema-chat-author { text-align: end; color: var(--chat-accent); }
+.noema-chat-body > :first-child { margin-block-start: 0; }
+.noema-chat-body > :last-child { margin-block-end: 0; }
+.noema-document-chat .noema-chat-body :is(pre, pre > code) { white-space: pre-wrap; overflow-wrap: anywhere; }
+.noema-chat-body pre { user-select: text; -webkit-user-select: text; cursor: text; }
+.noema-chat-time {
+  justify-self: center;
+  max-inline-size: 100%;
+  padding-inline: 0.7em;
+  text-align: center;
+  color: var(--chat-muted);
+  overflow-wrap: anywhere;
+}
+.noema-chat-footer { display: flex; justify-content: flex-end; margin-block-start: 0.5em; }
+.noema-chat-footer button { background: transparent; border: 0; color: var(--chat-muted); font: inherit; cursor: pointer; }
+.noema-chat-footer button:hover { color: var(--chat-accent); }
+.noema-chat-footer button:focus-visible { outline: 1px solid var(--chat-accent); }
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);

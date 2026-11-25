@@ -37,6 +37,10 @@ export function hasDocumentWidgetOptions(kind) { return attributesByKind.has(kin
 export function splitDocumentWidgetTitle(kind, source) {
   const knownKeys = attributesByKind.get(kind);
   if (!knownKeys) return { title: source, attrs: {} };
+  return splitDocumentWidgetAttrs(source, knownKeys);
+}
+
+export function splitDocumentWidgetAttrs(source, knownKeys) {
   const suffix = /(?:^|\s)(\{[^{}]*\})$/u.exec(source);
   const attributes = suffix && readTrailingAttrs(source, source.length - suffix[1].length, { knownKeys });
   return attributes ? { title: source.slice(0, attributes.from).trimEnd(), attrs: attributes.attrs } : { title: source, attrs: {} };

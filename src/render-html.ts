@@ -25,6 +25,7 @@ import { documentDiffSides, renderDocumentDiff } from "./document-diff.ts";
 import { documentCodeTree, documentTreeKinds, renderDocumentTree } from "./document-trees.ts";
 import { documentFieldDelimiter, documentFieldKinds, renderDocumentFields } from "./document-fields.ts";
 import { documentDemonstrationKinds, renderDocumentDemonstration } from "./document-demonstrations.ts";
+import { renderDocumentChat } from "./document-chat.ts";
 import { documentViewSourceKey, forEachDocumentViewTree } from "./document-view.ts";
 import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
@@ -103,8 +104,8 @@ export type RenderMarkdownHTMLOptions = {
   documentDiffActions?: boolean;
   /** Include file and folder controls in editor tree views. */
   documentTreeActions?: boolean;
-  /** Include source inspection controls for the live demo. */
-  documentDemoActions?: boolean;
+  /** Include copy and source inspection controls in live examples. */
+  documentSourceActions?: boolean;
   /** Expose every disclosure in a print document. */
   expandDisclosures?: boolean;
   /**
@@ -1356,7 +1357,7 @@ function renderOrgEnv(
   tokens: Token[],
   idx: number,
   options: RenderMarkdownHTMLOptions = {},
-  plainDemoSources?: Map<string, string[]>,
+  plainSourceBodies?: Map<string, string[]>,
 ): string {
   const meta = tokens[idx]!.meta as OrgEnvTokenMeta;
   const kind = meta.kind;
@@ -1412,7 +1413,8 @@ function renderOrgEnv(
     : kindName === "diff" ? renderDocumentDiff(md, title, meta.body, attrs, options.documentDiffActions === true)
     : documentTreeKinds.has(kindName) ? renderDocumentTree(md, kindName, title, meta.body, attrs, options.documentTreeActions === true)
     : documentFieldKinds.has(kindName) ? renderDocumentFields(md, kindName, meta.body, attrs)
-    : documentDemonstrationKinds.has(kindName) ? renderDocumentDemonstration(md, kindName, title, meta.body, attrs, options.documentDemoActions === true, plainDemoSources)
+    : documentDemonstrationKinds.has(kindName) ? renderDocumentDemonstration(md, kindName, title, meta.body, attrs, options.documentSourceActions === true, plainSourceBodies)
+    : kindName === "chat" ? renderDocumentChat(md, title, meta.body, options.documentSourceActions === true, plainSourceBodies)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kindName === "details" && renderedBody !== null) return renderedBody;
@@ -1448,23 +1450,23 @@ function applyTaskCheckboxes(root: ParentNode): void {
 }
 
 const literalFenceEnvironment = /#\+[ \t]*begin[ \t]+(?:qrcode|diff|code-tree)\b/i;
-const demoOpening = /#\+[ \t]*begin[ \t]+demo\b/i;
+const sourceViewOpening = /#\+[ \t]*begin[ \t]+(?:chat|demo)\b/i;
 
-function collectDemoSources(md: MarkdownIt, input: string, sources: Map<string, string[]>): void {
-  if (!demoOpening.test(input)) return;
+function collectSourceViewBodies(md: MarkdownIt, input: string, sources: Map<string, string[]>): void {
+  if (!sourceViewOpening.test(input)) return;
   const tokens: Token[] = [];
   md.block.parse(input, md, {}, tokens);
   for (const token of tokens) {
     if (token.type !== "org_env_block") continue;
     const { kind, title, body } = token.meta as OrgEnvTokenMeta;
     const mode = kind.toLowerCase();
-    if (mode === "demo") {
+    if (mode === "demo" || mode === "chat") {
       const key = documentViewSourceKey(mode, splitDocumentWidgetTitle(mode, title).title, body);
       const previous = sources.get(key);
       if (previous) previous.push(body);
       else sources.set(key, [body]);
     }
-    if (mode !== "html" && mode !== "tikz" && mode !== "meta") collectDemoSources(md, body, sources);
+    if (mode !== "html" && mode !== "tikz" && mode !== "meta") collectSourceViewBodies(md, body, sources);
   }
 }
 
@@ -1712,7 +1714,7 @@ function renderBlockReference(tokens: Token[], idx: number): string {
     + ` title="${escapeAttr(blockId)}">${escapeHtml(label)}</span>`;
 }
 
-function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainDemoSources?: Map<string, string[]>): MarkdownIt {
+function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainSourceBodies?: Map<string, string[]>): MarkdownIt {
   const md = new MarkdownIt({
     html: options.allowHtml === true,
     linkify: true,
@@ -1782,7 +1784,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainDemoSources?:
       "</div>",
     ].join("");
   };
-  md.renderer.rules.org_env_block = (tokens, idx) => renderOrgEnv(md, tokens, idx, options, plainDemoSources);
+  md.renderer.rules.org_env_block = (tokens, idx) => renderOrgEnv(md, tokens, idx, options, plainSourceBodies);
   md.renderer.rules.semantic_heading_block = renderSemanticHeading;
   md.renderer.rules.front_matter = (tokens, idx, _opts, _env, _renderer) =>
     `<yaml-block><pre>${escapeHtml(tokens[idx]!.content)}</pre></yaml-block>`;
@@ -1870,8 +1872,8 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainDemoSources?:
 // state, so default calls can share the configured parser.
 let defaultMarkdownIt: MarkdownIt | undefined;
 
-function markdownItForRender(options?: RenderMarkdownHTMLOptions, plainDemoSources?: Map<string, string[]>): MarkdownIt {
-  return options ? createMarkdownIt(options, plainDemoSources) : (defaultMarkdownIt ??= createMarkdownIt({}));
+function markdownItForRender(options?: RenderMarkdownHTMLOptions, plainSourceBodies?: Map<string, string[]>): MarkdownIt {
+  return options ? createMarkdownIt(options, plainSourceBodies) : (defaultMarkdownIt ??= createMarkdownIt({}));
 }
 
 /** Source spans for top-level rendered blocks, using the same Markdown parser
@@ -1966,7 +1968,7 @@ export function renderEditorWidgetHTML(markdown: string, documentViewSource?: st
   const cacheKind = documentViewSource === undefined ? "editor-widget" : "editor-widget-sections";
   return cachedRender(cacheKind, markdown, () => renderMarkdownHTMLUncached(markdown, {
     documentTableActions: true, documentTabActions: true, documentViewSource, documentDisclosureActions: true, documentDiffActions: true,
-    documentTreeActions: true, documentDemoActions: true,
+    documentTreeActions: true, documentSourceActions: true,
   }));
 }
 
@@ -1977,8 +1979,8 @@ function renderMarkdownHTMLUncached(
 ): string {
   const source = markdown.replace(/\r\n?/g, "\n");
   markdown = approvedEdiffMarkdown(source);
-  const plainDemoSources = options?.documentDemoActions && demoOpening.test(source) ? new Map<string, string[]>() : undefined;
-  const md = markdownItForRender(options, plainDemoSources);
+  const plainSourceBodies = options?.documentSourceActions && sourceViewOpening.test(source) ? new Map<string, string[]>() : undefined;
+  const md = markdownItForRender(options, plainSourceBodies);
   const literalLines = new Set<number>();
   // QR and diff fences consume their literal bytes, including text that
   // resembles Noema annotations or table layout attributes.
@@ -1989,9 +1991,9 @@ function renderMarkdownHTMLUncached(
     ? markdown.split("\n").map((line, index) => literalLines.has(index) ? line : stripCommentAnchors(line)).join("\n")
     : stripCommentAnchors(markdown);
   const prepared = isolateBlockLayoutAttrLines(markdown, literalLines.size ? literalLines : undefined);
-  if (plainDemoSources && source !== prepared) {
-    collectDemoSources(md, source, plainDemoSources);
-    for (const bodies of plainDemoSources.values()) bodies.reverse();
+  if (plainSourceBodies && source !== prepared) {
+    collectSourceViewBodies(md, source, plainSourceBodies);
+    for (const bodies of plainSourceBodies.values()) bodies.reverse();
   }
   const root = document.createElement("div");
   const env = {};

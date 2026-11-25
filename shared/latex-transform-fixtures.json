@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "chat-keeps-messages-and-does-not-echo-layout-attributes",
+      "markdown": "# + example\n\n#+begin chat Review\n### 10:30 {timestamp=true}\n### Lin\nRead the [guide](guide.md).\n### Me {self=true} ###\nCode example follows.\n\n~~~text\n### literal {self=true}\n~~~\n#+end chat",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "# + example\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{chat: Review}\\par\n```\n\n\n### 10:30\n### Lin\nRead the [guide](guide.md).\n### Me ###\nCode example follows.\n\n~~~text\n### literal {self=true}\n~~~\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "demonstrations-retain-rendered-content-in-export",
       "markdown": "#+begin demo Preview {open=true}\nSee **rendered** example.\n#+end demo\n\n#+begin window Viewer {height=5lh gap=1lh no-padding=true}\n- First line\n- Last line\n#+end window",
       "options": {},

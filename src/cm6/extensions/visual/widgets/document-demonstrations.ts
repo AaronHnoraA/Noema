@@ -1,8 +1,8 @@
 import type { EditorView } from "@codemirror/view";
 import { renderHighlightedCode } from "../../../../code-highlight-dom.ts";
-import { writeSystemClipboard } from "../../../../system-clipboard.ts";
 import { preserveEditorViewport } from "../../../viewport-stability.ts";
 import { documentViewState, rememberDocumentView } from "./document-view-state.ts";
+import { readDocumentSource, type LocateDocumentView, type ReadDocumentViewSource } from "./document-source-actions.ts";
 
 export const DEMO_TEXT_SELECTOR = ".noema-demo-code";
 const connected = new WeakSet<HTMLElement>();
@@ -22,19 +22,16 @@ export function documentWindowScrollbar(event: Event): boolean {
 export function connectDocumentDemonstrations(
   root: HTMLElement,
   view: EditorView,
-  locate: (group: HTMLElement) => number | null,
-  sourceAt: (position: number) => string | undefined,
+  locate: LocateDocumentView,
+  sourceAt: ReadDocumentViewSource,
 ): void {
   for (const group of root.querySelectorAll<HTMLElement>('.noema-document-demo[data-view-kind="demo"]')) {
     if (connected.has(group)) continue;
     const sourcePanel = group.querySelector<HTMLElement>(":scope > .noema-demo-source");
     const control = group.querySelector<HTMLButtonElement>(":scope > .noema-demo-footer > [data-demo-toggle]");
-    const copy = group.querySelector<HTMLButtonElement>(":scope > .noema-demo-footer > [data-demo-copy]");
-    const fallback = group.querySelector<HTMLTemplateElement>(":scope > template[data-demo-fallback]");
-    if (!sourcePanel || !control || !copy) continue;
+    if (!sourcePanel || !control) continue;
     connected.add(group);
     const authored = group.dataset.demoOpen === "true";
-    const read = (from: number | null) => (from === null ? undefined : sourceAt(from)) ?? fallback?.content.textContent ?? "";
     const show = (open: boolean, from: number | null) => {
       control.setAttribute("aria-expanded", String(open));
       sourcePanel.hidden = !open;
@@ -46,7 +43,7 @@ export function connectDocumentDemonstrations(
       const pre = group.ownerDocument.createElement("pre");
       pre.className = "noema-demo-code";
       const code = group.ownerDocument.createElement("code");
-      const source = read(from);
+      const source = readDocumentSource(group, from, sourceAt);
       if (source.length < 12_000) renderHighlightedCode(code, source, "markdown");
       else code.textContent = source;
       pre.append(code);
@@ -71,10 +68,6 @@ export function connectDocumentDemonstrations(
       };
       if (from === null) toggle();
       else preserveEditorViewport(view, toggle, from);
-    });
-    copy.addEventListener("click", async () => {
-      const copied = await writeSystemClipboard(read(locate(group)));
-      if (copy.isConnected) copy.textContent = copied ? "Copied" : "Could not copy";
     });
   }
 }

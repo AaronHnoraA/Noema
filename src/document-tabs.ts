@@ -8,6 +8,7 @@ export const documentTabKinds = new Set(["tabs", "code-tabs", "tab-panel", "swip
 
 interface Page {
   label: string;
+  heading?: string;
   content: Token[];
   line: number;
 }
@@ -32,6 +33,7 @@ export function documentPages(md: MarkdownIt, kind: string, body: string) {
     const content = tokens.slice(index + 3, sameLevel[page + 1]);
     return {
       label: headingLabel(md, tokens[index + 1]!, environment) || `Page ${page + 1}`,
+      heading: tokens[index + 1]!.content,
       content,
       line: content[0]?.map?.[0] ?? tokens[index]!.map![0],
     };

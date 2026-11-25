@@ -63,7 +63,7 @@ test("nested demo copies authored markup and publication retains only approved o
     const html = renderMarkdownHTML(source);
     expect(html).toContain("Original");
     expect(html).not.toContain("Revised");
-    expect(html).not.toContain("data-demo-fallback");
+    expect(html).not.toContain("data-document-source-body");
   } finally {
     setSystemClipboardWriter(null);
     editor.destroy();

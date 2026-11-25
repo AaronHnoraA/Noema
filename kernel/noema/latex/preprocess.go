@@ -60,6 +60,7 @@ var (
 	yamlBoundaryPattern    = regexp.MustCompile(`^(?:---|\.\.\.)\s*$`)
 	yamlCommentPattern     = regexp.MustCompile(`\s+#.*$`)
 	semanticAtx            = regexp.MustCompile(`^( {0,3})(#{1,6})(?:[ \t]+(.*)|[ \t]*)$`)
+	atxClosing             = regexp.MustCompile(`[ \t]+#+[ \t]*$`)
 	setextUnderline        = regexp.MustCompile(`^ {0,3}(?:=+|-+)[ \t]*$`)
 	calloutPattern         = regexp.MustCompile(`^(\s*>\s*)\[!([A-Za-z]+)\](?:\s+(.+))?\s*$`)
 	proofTitleWordPattern  = regexp.MustCompile(`(?i)^proof\b`)
@@ -1824,6 +1825,10 @@ func exportWidgetTitle(kind, title string) (string, map[string]string) {
 		return title, nil
 	}
 	title = strings.TrimSpace(widgetAnchorPattern.ReplaceAllString(title, ""))
+	return splitWidgetAttrs(title, keys)
+}
+
+func splitWidgetAttrs(title string, keys []string) (string, map[string]string) {
 	if suffix := widgetAttributePattern.FindStringSubmatchIndex(title); suffix != nil {
 		attributes := layoutAttrsFromTitle(title[suffix[2]:suffix[3]])
 		for _, key := range keys {
@@ -2182,6 +2187,16 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 		}
 		if privateCommandLine(line, options) {
 			continue
+		}
+		if len(stack) > 0 && stack[len(stack)-1].Kind == "chat" {
+			if heading := semanticAtx.FindStringSubmatch(line); heading != nil && heading[3] != "" {
+				closing := atxClosing.FindString(heading[3])
+				label := strings.TrimSuffix(heading[3], closing)
+				title, attrs := splitWidgetAttrs(label, []string{"self", "timestamp"})
+				if attrs != nil {
+					line = line[:len(line)-len(heading[3])] + title + closing
+				}
+			}
 		}
 		if semantic := semanticCommandOnLine(line); semantic != nil {
 			level := semanticMarkdownLevel(*semantic)

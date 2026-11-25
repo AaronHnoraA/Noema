@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { approvedEdiffMarkdown } from "../../shared/ediff-source.mjs";
 import { parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
-import { hasDocumentWidgetOptions, splitDocumentWidgetTitle } from "../../shared/document-widget-title.mjs";
+import { hasDocumentWidgetOptions, splitDocumentWidgetAttrs, splitDocumentWidgetTitle } from "../../shared/document-widget-title.mjs";
 import { LATEX_MARKS, LATEX_PROMPT_MARK, latexMark } from "../../shared/latex-marks.mjs";
 import {
   layoutFromAttrs,
@@ -869,6 +869,14 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
 
     if (privateCommandLine(line, conversionOptions)) {
       continue;
+    }
+    if (stack.at(-1)?.kind === "chat") {
+      const heading = /^( {0,3}#{1,6}[ \t]+)(.+)$/.exec(line);
+      if (heading) {
+        const closing = /[ \t]+#+[ \t]*$/.exec(heading[2])?.[0] ?? "";
+        const label = heading[2].slice(0, heading[2].length - closing.length);
+        line = heading[1] + splitDocumentWidgetAttrs(label, ["self", "timestamp"]).title + closing;
+      }
     }
     const semantic = semanticCommandOnLine(line);
     if (semantic) {
