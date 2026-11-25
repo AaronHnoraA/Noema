@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "annotated-fences-keep-full-verbatim-code-and-number-lines",
+      "markdown": "~~~ts title=\"/journal/ {8} no-line-numbers\" :line-numbers=38 collapsed-lines=1 /cursor/\nconst x = cursor; // [!code focus:1]\ncommit(x); // [!code ++]\n~~~\n\n> ~~~sh line-numbers :no-line-numbers whitespace\n> printf '%s\\n' line\n> ~~~\n\n~~~{.js #existing .numberLines}\nconst untouched = 1;\n~~~",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "~~~{.ts .numberLines startFrom=\"38\"}\nconst x = cursor; // [!code focus:1]\ncommit(x); // [!code ++]\n~~~\n\n> ~~~sh\n> printf '%s\\n' line\n> ~~~\n\n~~~{.js #existing .numberLines}\nconst untouched = 1;\n~~~",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "folded-callouts-keep-content-in-latex",
       "markdown": "> [!TIP]- **Setup**\n> Body in the collapsed quote.\n\n> [!NOTE]+\n> Body in the open quote.\n\n#+begin warning Versions {collapsible=true open=false}\nNative content remains.\n#+end warning",
       "options": {},

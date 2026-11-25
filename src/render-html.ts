@@ -10,6 +10,8 @@ import { cleanEditorHTML } from "./export-html.ts";
 import { approvedEdiffMarkdown } from "../shared/ediff-source.mjs";
 import { markdownItCjkEmphasis } from "./cjk-emphasis.ts";
 import { parseCodeInfo } from "./code-info.ts";
+import { enhancedCode } from "./code-annotation.ts";
+import { renderAnnotatedCode } from "./document-code.ts";
 import { supportedDiagramLang } from "./diagram-langs.ts";
 import { hydrateDiagramForeignObjectMarkup, sanitizeDiagramSvg } from "./diagram-sanitize.ts";
 import { renderStatsBody } from "./document-stats.ts";
@@ -1843,6 +1845,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainSourceBodies?
       return renderDiagramFence(token, layout, options.diagrams);
     }
     const info = parseCodeInfo(token.info);
+    if (enhancedCode(info, token.content)) return renderAnnotatedCode(md, info, token.content, options.expandDisclosures === true);
     if (!info.title && info.highlight.length === 0) return originalFence(tokens, idx, opts, env, self);
     // Only the language reaches markdown-it's highlighter; the title becomes
     // the code card's caption and the marked lines a data attribute.
@@ -1886,6 +1889,24 @@ let defaultMarkdownIt: MarkdownIt | undefined;
 
 function markdownItForRender(options?: RenderMarkdownHTMLOptions, plainSourceBodies?: Map<string, string[]>): MarkdownIt {
   return options ? createMarkdownIt(options, plainSourceBodies) : (defaultMarkdownIt ??= createMarkdownIt({}));
+}
+
+/** Line indexes for authored tail folds, using the same list and quote grammar as HTML. */
+export function indexCodeTails(markdown: string): Array<{ opener: number; from: number; to: number; lines: number }> {
+  if (!markdown.includes("collapsed-lines")) return [];
+  const md = markdownItForRender();
+  const tokens: Token[] = [];
+  md.block.parse(markdown, md, {}, tokens);
+  return tokens.flatMap((token) => {
+    if (token.type !== "fence" || !token.map || !token.info.includes("collapsed-lines") || supportedDiagramLang(token.info)) return [];
+    const info = parseCodeInfo(token.info);
+    if (info.collapsedLines === null) return [];
+    const opener = token.map[0];
+    const body = token.content.endsWith("\n") ? token.content.slice(0, -1) : token.content;
+    const bodyLines = token.content.length ? body.split("\n").length : 0;
+    return [{ opener, from: opener + 1 + Math.min(info.collapsedLines, bodyLines), to: opener + bodyLines,
+      lines: Math.max(0, bodyLines - info.collapsedLines) }];
+  });
 }
 
 export function indexQuotedCallouts(markdown: string): {

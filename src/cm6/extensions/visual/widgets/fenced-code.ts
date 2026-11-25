@@ -23,16 +23,20 @@ import {
 } from "@codemirror/view";
 import { MeasuredWidget } from "./measured-widget.ts";
 import { observeWidget, shortHash, unobserveWidget } from "./measured-observer.ts";
-import { StateEffect, StateField, type ChangeSet, type EditorState, type Text } from "@codemirror/state";
+import { MapMode, StateEffect, StateField, Transaction, type ChangeSet, type EditorState, type Text } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import type { Range } from "@codemirror/state";
+import type { SyntaxNode } from "@lezer/common";
 import { highlightCodeForEditor, onCodeHighlightReady } from "../../../../code-highlight-async.ts";
 import { supportedDiagramLang } from "../../../../diagram-langs.ts";
-import { parseCodeInfo } from "../../../../code-info.ts";
+import { parseCodeInfo, type CodeInfo } from "../../../../code-info.ts";
+import { codeHighlightSource, codeRowClasses, codeRows, codeWhitespaceMarks, codeWordMarks, enhancedCode, type CodeRow } from "../../../../code-annotation.ts";
+import { indexCodeTails } from "../../../../render-html.ts";
 import { writeSystemClipboard } from "../../../../system-clipboard.ts";
 import { getBlockMathRanges, rangeAtPosition, rangeInsideAny, rangeOverlapsAny } from "../../../math-ranges.ts";
 import { applyLayoutAttrs, layoutFromAttrs, layoutIsDefault, readLayoutAttrsLine, type LayoutAttrs } from "../../../../layout-attrs.ts";
 import { scheduleViewportDecorationRefresh } from "../../../viewport-refresh.ts";
+import { preserveEditorViewport } from "../../../viewport-stability.ts";
 import { figureHeightHandle, figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
 import {
   dispatchConstructEdit,  constructSources,
@@ -210,26 +214,72 @@ async function copyText(text: string): Promise<boolean> {
   return writeSystemClipboard(text);
 }
 
-type CodeFold = { key: string; from: number; to: number; lines: number };
-type CodeFoldState = { folds: readonly CodeFold[]; decorations: DecorationSet };
+type CodeFold = { key: string; from: number; to: number; lines: number; opener?: number };
+type CodeTextSegment = { from: number; to: number; offset: number };
+
+function readFenceCode(doc: Text, node: SyntaxNode): { body: string; segments: CodeTextSegment[] } {
+  const segments: CodeTextSegment[] = [];
+  const parts: string[] = [];
+  let offset = 0;
+  for (const part of node.getChildren("CodeText")) {
+    segments.push({ from: part.from, to: part.to, offset });
+    parts.push(doc.sliceString(part.from, part.to));
+    offset += part.to - part.from;
+  }
+  return { body: parts.join(""), segments };
+}
+type CodeFoldState = {
+  folds: readonly CodeFold[];
+  manual: readonly CodeFold[];
+  tails: readonly CodeFold[];
+  expanded: ReadonlySet<number>;
+  decorations: DecorationSet;
+};
 const MAX_CODE_FOLDS = 128;
 
 const toggleCodeFoldEffect = StateEffect.define<CodeFold>();
+const toggleCodeTailEffect = StateEffect.define<number>();
+
+function toggleCodeTail(view: EditorView, opener: number): void {
+  preserveEditorViewport(view, () => view.dispatch({
+    effects: toggleCodeTailEffect.of(opener),
+    annotations: Transaction.addToHistory.of(false),
+  }), opener);
+}
 
 class CodeFoldPlaceholderWidget extends MeasuredWidget {
   readonly lines: number;
-  constructor(lines: number) {
+  readonly tail: boolean;
+  constructor(lines: number, tail: boolean) {
     super();
     this.lines = lines;
+    this.tail = tail;
   }
   protected measureKey(): string { return `code-fold:${this.lines}`; }
   protected measureGroupKey(): string { return "code-fold"; }
   protected estimatedHeightFallback(): number { return 30; }
-  eq(other: CodeFoldPlaceholderWidget): boolean { return this.lines === other.lines; }
+  eq(other: CodeFoldPlaceholderWidget): boolean { return this.lines === other.lines && this.tail === other.tail; }
   toDOM(view: EditorView): HTMLElement {
     const block = document.createElement("div");
     block.className = "cm-code-fold-placeholder";
-    block.textContent = `${this.lines} ${this.lines === 1 ? "line" : "lines"} collapsed`;
+    const description = `${this.lines} ${this.lines === 1 ? "line" : "lines"}`;
+    if (this.tail) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = `Show ${description} ▾`;
+      button.setAttribute("aria-expanded", "false");
+      button.addEventListener("mousedown", (event) => event.stopPropagation());
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const position = view.posAtDOM(block, -1);
+        const tail = view.state.field(codeFoldField).tails.find((entry) => entry.from === position);
+        if (tail?.opener === undefined) return;
+        toggleCodeTail(view, tail.opener);
+        const header = view.domAtPos(tail.opener).node.parentElement?.closest(".cm-line");
+        header?.querySelector<HTMLElement>(".cm-code-fold-button")?.focus({ preventScroll: true });
+      });
+      block.append(button);
+    } else block.textContent = `${description} collapsed`;
     return this.registerMeasured(block, view);
   }
   ignoreEvent(): boolean { return true; }
@@ -239,52 +289,115 @@ function codeFoldDecorations(state: EditorState, folds: readonly CodeFold[]): De
   const decorations: Range<Decoration>[] = [];
   for (const fold of folds) {
     const { from, to } = codeFoldRange(state, fold);
-    if (from >= to) continue;
+    if (from >= to) {
+      if (fold.opener !== undefined) {
+        decorations.push(Decoration.widget({ widget: new CodeFoldPlaceholderWidget(fold.lines, true), block: true, side: -1 }).range(from));
+      }
+      continue;
+    }
     decorations.push(Decoration.replace({
-      widget: new CodeFoldPlaceholderWidget(fold.lines),
+      widget: new CodeFoldPlaceholderWidget(fold.lines, fold.opener !== undefined),
       block: true,
     }).range(from, to));
   }
   return Decoration.set(decorations, true);
 }
 
-const createCodeFoldState = (): CodeFoldState => ({ folds: [], decorations: Decoration.none });
+function indexedCodeTails(state: EditorState): CodeFold[] {
+  const doc = state.doc;
+  const excluded = getBlockMathRanges(state);
+  return indexCodeTails(doc.toString()).flatMap((entry) => {
+    const opener = doc.line(entry.opener + 1).from;
+    const to = doc.line(entry.to + 1).to;
+    if (rangeOverlapsAny(opener, to, excluded)) return [];
+    return [{ key: `code-tail:${opener}`, opener, from: entry.lines ? doc.line(entry.from + 1).from : to, to, lines: entry.lines }];
+  });
+}
+
+function assembleCodeFolds(state: EditorState, manual: readonly CodeFold[], tails: readonly CodeFold[], expanded: ReadonlySet<number>): CodeFoldState {
+  const folds = [...manual, ...tails.filter((entry) => entry.lines && !expanded.has(entry.opener!))];
+  return { folds, manual, tails, expanded, decorations: codeFoldDecorations(state, folds) };
+}
+
+function createCodeFoldState(state: EditorState): CodeFoldState {
+  return assembleCodeFolds(state, [], indexedCodeTails(state), new Set());
+}
+
+function codeTailsNeedRescan(previous: EditorState, changed: EditorState, changes: ChangeSet, hasTails: boolean): boolean {
+  let rescan = false;
+  changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+    if (rescan) return;
+    const before = previous.doc.sliceString(previous.doc.lineAt(fromA).from, previous.doc.lineAt(toA).to);
+    const after = changed.doc.sliceString(changed.doc.lineAt(fromB).from, changed.doc.lineAt(toB).to);
+    if (before.includes("collapsed-lines") || after.includes("collapsed-lines")) rescan = true;
+    else if (hasTails) {
+      const removed = previous.doc.sliceString(fromA, toA);
+      rescan ||= /[\n`~>]/.test(removed) || /[\n`~>]/.test(inserted.toString())
+        || /^\s*(?:[-+*]|\d+[.)])[ \t]/.test(before) || /^\s*(?:[-+*]|\d+[.)])[ \t]/.test(after);
+    }
+  });
+  return rescan;
+}
 
 const codeFoldField = StateField.define<CodeFoldState>({
   create: createCodeFoldState,
   update(value, transaction) {
-    let folds: CodeFold[] = [];
+    if (!transaction.docChanged && !transaction.effects.some((effect) => effect.is(toggleCodeFoldEffect) || effect.is(toggleCodeTailEffect))) return value;
+    let manual: CodeFold[] = [];
+    let tails = value.tails;
+    const expanded = new Set<number>();
     if (transaction.docChanged) {
       const tree = syntaxTree(transaction.state);
-      for (const fold of value.folds.slice(0, MAX_CODE_FOLDS)) {
+      for (const fold of value.manual) {
         const mappedFrom = transaction.changes.mapPos(fold.from, -1);
         let node = tree.resolve(Math.max(0, Math.min(mappedFrom, transaction.newDoc.length)), 1);
         while (node.parent && node.name !== "FencedCode") node = node.parent;
         if (node.name !== "FencedCode") continue;
-        const textNode = node.getChild("CodeText");
-        if (!textNode || textNode.from >= textNode.to) continue;
-        const source = transaction.newDoc.sliceString(textNode.from, textNode.to);
-        folds.push({
-          key: `code:${textNode.from}`,
-          from: textNode.from,
-          to: textNode.to,
-          lines: Math.max(1, source.split(/\r?\n/).length),
+        const { body, segments } = readFenceCode(transaction.newDoc, node);
+        const from = segments[0]?.from;
+        if (from === undefined || !body.length) continue;
+        manual.push({
+          key: `code:${from}`,
+          from,
+          to: segments.at(-1)!.to,
+          lines: body.split("\n").length,
+        });
+      }
+      for (const opener of value.expanded) {
+        const position = transaction.changes.mapPos(opener, 1, MapMode.TrackDel);
+        if (position !== null) expanded.add(transaction.newDoc.lineAt(position).from);
+      }
+      if (codeTailsNeedRescan(transaction.startState, transaction.state, transaction.changes, tails.length > 0)) {
+        tails = indexedCodeTails(transaction.state);
+        const current = new Set(tails.map((entry) => entry.opener));
+        for (const opener of expanded) if (!current.has(opener)) expanded.delete(opener);
+        const foldable = new Set(tails.filter((entry) => entry.lines > 0).map((entry) => entry.opener));
+        manual = manual.filter((entry) => {
+          const bodyLine = transaction.newDoc.lineAt(entry.from).number;
+          return bodyLine <= 1 || !foldable.has(transaction.newDoc.line(bodyLine - 1).from);
+        });
+      } else if (tails.length > 0) {
+        tails = tails.map((entry) => {
+          const opener = transaction.changes.mapPos(entry.opener!, 1);
+          return { ...entry, key: `code-tail:${opener}`, opener,
+            from: transaction.changes.mapPos(entry.from, -1), to: transaction.changes.mapPos(entry.to, 1) };
         });
       }
     } else {
-      folds = Array.from(value.folds);
+      manual = [...value.manual];
+      for (const opener of value.expanded) expanded.add(opener);
     }
-    let changed = transaction.docChanged;
     for (const effect of transaction.effects) {
-      if (!effect.is(toggleCodeFoldEffect)) continue;
-      changed = true;
-      const existing = folds.findIndex((fold) => fold.key === effect.value.key);
-      if (existing >= 0) folds.splice(existing, 1);
-      else if (folds.length < MAX_CODE_FOLDS) folds.push(effect.value);
+      if (effect.is(toggleCodeFoldEffect)) {
+        const existing = manual.findIndex((fold) => fold.key === effect.value.key);
+        if (existing >= 0) manual.splice(existing, 1);
+        else if (manual.length < MAX_CODE_FOLDS) manual.push(effect.value);
+      } else if (effect.is(toggleCodeTailEffect)) {
+        if (expanded.has(effect.value)) expanded.delete(effect.value);
+        else expanded.add(effect.value);
+      }
     }
-    return changed
-      ? { folds, decorations: codeFoldDecorations(transaction.state, folds) }
-      : value;
+    return assembleCodeFolds(transaction.state, manual, tails, expanded);
   },
   provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
 });
@@ -300,14 +413,18 @@ class CodeFoldButtonWidget extends MeasuredWidget {
   protected measureKey(): string { return ""; }
   protected get measuredBlock(): boolean { return false; }
   eq(other: CodeFoldButtonWidget): boolean {
-    return this.fold.key === other.fold.key && this.folded === other.folded;
+    return this.fold.key === other.fold.key && this.fold.lines === other.fold.lines && this.folded === other.folded;
   }
   toDOM(view: EditorView): HTMLElement {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "cm-code-fold-button";
-    button.textContent = this.folded ? "Show" : "Fold";
-    button.title = this.folded ? "Expand code block" : "Collapse code block";
+    const tail = this.fold.opener !== undefined;
+    button.textContent = tail ? (this.folded ? "More" : "Less") : (this.folded ? "Show" : "Fold");
+    button.title = tail ? (this.folded ? `Show ${this.fold.lines} more lines of code` : "Collapse extra lines")
+      : (this.folded ? "Expand code block" : "Collapse code block");
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-expanded", String(!this.folded));
     button.addEventListener("mousedown", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -315,8 +432,16 @@ class CodeFoldButtonWidget extends MeasuredWidget {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      view.dispatch({ effects: toggleCodeFoldEffect.of(this.fold) });
-      view.requestMeasure();
+      if (tail) {
+        const position = view.posAtDOM(button, -1);
+        const opener = view.state.doc.lineAt(position).from;
+        toggleCodeTail(view, opener);
+        view.domAtPos(opener).node.parentElement?.closest(".cm-line")
+          ?.querySelector<HTMLElement>(".cm-code-fold-button")?.focus({ preventScroll: true });
+      } else {
+        view.dispatch({ effects: toggleCodeFoldEffect.of(this.fold) });
+        view.requestMeasure();
+      }
     });
     return button;
   }
@@ -820,6 +945,47 @@ function patchMermaidDecosNearChanges(
 // Fenced code — ViewPlugin (viewport-only, inline marks + lang badge only)
 // ---------------------------------------------------------------------------
 
+function decorateCodeRows(view: EditorView, decos: Range<Decoration>[], info: CodeInfo, rows: readonly CodeRow[], segments: readonly CodeTextSegment[], stop: number): void {
+  const doc = view.state.doc;
+  const cursor = doc.lineAt(visualSelection(view.state).main.head).number;
+  const numberWidth = info.numbers === null ? 0 : String(info.numbers + rows.length - 1).length;
+  const highlighted = new Set(info.highlight);
+  const visible = view.visibleRanges;
+  let range = 0;
+  let part = 0;
+  for (let index = 0; index < stop && range < visible.length; index++) {
+    const row = rows[index]!;
+    while (segments[part + 1] && segments[part + 1]!.offset <= row.from) part++;
+    const segment = segments[part]!;
+    const from = segment.from + row.from - segment.offset;
+    const end = from + row.text.length;
+    while (visible[range] && from > visible[range]!.to) range++;
+    const line = doc.lineAt(from);
+    if (!visible[range] || line.to < visible[range]!.from) continue;
+    const number = info.numbers === null ? undefined : { "data-code-number": String(info.numbers + index), style: `--code-number-width:${numberWidth}ch` };
+    const classes = codeRowClasses(row, highlighted.has(index + 1));
+    if (classes || info.numbers !== null) decos.push(Decoration.line({ class: classes, attributes: number }).range(line.from));
+    if (row.markerLength) pushMark(decos, end, end + row.markerLength, cursor === line.number ? "syntax-hint" : "syntax-hidden");
+    for (const mark of [...codeWhitespaceMarks(row.text, info), ...codeWordMarks(row.text, [...info.words, ...row.words])]) {
+      pushMark(decos, from + mark.from, from + mark.to, mark.className);
+    }
+  }
+}
+
+function addCodeSyntax(decos: Range<Decoration>[], language: string, text: string, segments: readonly CodeTextSegment[]): void {
+  const highlights = highlightCodeForEditor(language, text);
+  let part = 0;
+  for (const mark of highlights) {
+    while (segments[part + 1] && segments[part + 1]!.offset <= mark.from) part++;
+    for (let index = part; index < segments.length; index++) {
+      const segment = segments[index]!;
+      if (segment.offset >= mark.to) break;
+      const shift = segment.from - segment.offset;
+      pushMark(decos, Math.max(segment.from, mark.from + shift), Math.min(segment.to, mark.to + shift), mark.className);
+    }
+  }
+}
+
 function buildFencedCodeDecos(view: EditorView): DecorationSet {
   const decos: Range<Decoration>[] = [];
   const sel = visualSelection(view.state).main;
@@ -827,6 +993,8 @@ function buildFencedCodeDecos(view: EditorView): DecorationSet {
   const cursorLine = doc.lineAt(sel.from).number;
   const blockMathRanges = getBlockMathRanges(view.state);
   const fenceExcludedRanges = blockMathRanges;
+  const folds = view.state.field(codeFoldField, false);
+  const visited = new Set<number>();
 
   for (const { from: vFrom, to: vTo } of view.visibleRanges) {
     syntaxTree(view.state).iterate({
@@ -836,10 +1004,10 @@ function buildFencedCodeDecos(view: EditorView): DecorationSet {
         if (rangeInsideAny(node.from, node.to, fenceExcludedRanges)) return false;
         if (node.name !== "FencedCode") return;
         if (rangeOverlapsAny(node.from, node.to, fenceExcludedRanges)) return false;
+        if (visited.has(node.from)) return false;
+        visited.add(node.from);
 
         const infoNode = node.node.getChild("CodeInfo");
-        const textNode = node.node.getChild("CodeText");
-
         const infoText = infoNode ? doc.sliceString(infoNode.from, infoNode.to) : "";
         const info = parseCodeInfo(infoText);
         const lang = info.lang;
@@ -847,20 +1015,20 @@ function buildFencedCodeDecos(view: EditorView): DecorationSet {
         // Mermaid is handled by the StateField above — skip here
         if (supportedDiagramLang(infoText.trim())) return false;
 
-        const codeBody = textNode
-          ? doc.sliceString(textNode.from, textNode.to)
-          : "";
-        const foldKey = `code:${textNode?.from ?? node.from}`;
-        const fold = textNode ? {
-          key: foldKey,
-          from: textNode.from,
-          to: textNode.to,
-          lines: Math.max(1, codeBody.split(/\r?\n/).length),
-        } : null;
-        const folded = Boolean(fold && view.state.field(codeFoldField, false)?.folds
-          .some((entry) => entry.key === foldKey));
-
+        const { body: codeBody, segments } = readFenceCode(doc, node.node);
+        const bodyStart = segments[0]?.from;
         const openFenceLine = doc.lineAt(node.from);
+        const tail = folds?.tails.find((entry) => entry.opener === openFenceLine.from && entry.lines > 0);
+        const fold = tail ?? (bodyStart !== undefined ? {
+          key: `code:${bodyStart}`,
+          from: bodyStart,
+          to: segments.at(-1)!.to,
+          lines: codeBody.split("\n").length,
+        } : null);
+        const folded = Boolean(fold && folds?.folds.some((entry) => entry.key === fold.key));
+        const bodyVisible = !folded || Boolean(tail);
+        const rows = bodyStart !== undefined && bodyVisible && enhancedCode(info, codeBody) ? codeRows(codeBody, true) : null;
+
         const openFenceLineNum = openFenceLine.number;
         const closeFenceLine = node.to > openFenceLine.to
           ? doc.lineAt(node.to - 1)
@@ -885,16 +1053,18 @@ function buildFencedCodeDecos(view: EditorView): DecorationSet {
             side: 1,
           }).range(fenceMarkEnd),
         );
-        if (textNode && info.highlight.length > 0 && !folded) {
-          const firstBodyLine = doc.lineAt(textNode.from).number;
-          const lastBodyLine = doc.lineAt(Math.max(textNode.from, textNode.to)).number;
+        if (rows) {
+          decorateCodeRows(view, decos, info, rows, segments, folded && tail ? Math.max(0, rows.length - tail.lines) : rows.length);
+        } else if (bodyStart !== undefined && info.highlight.length > 0 && bodyVisible) {
+          const firstBodyLine = doc.lineAt(bodyStart).number;
+          const lastBodyLine = doc.lineAt(segments.at(-1)!.to).number;
           for (const n of info.highlight) {
             const lineNumber = firstBodyLine + n - 1;
             if (lineNumber > lastBodyLine) break;
             decos.push(Decoration.line({ class: "cm-code-line-highlight" }).range(doc.line(lineNumber).from));
           }
         }
-        if (textNode) {
+        if (bodyStart !== undefined) {
           decos.push(
             Decoration.widget({ widget: new CodeCopyButtonWidget(codeBody), side: 2 }).range(fenceMarkEnd),
           );
@@ -920,16 +1090,7 @@ function buildFencedCodeDecos(view: EditorView): DecorationSet {
         }
 
         // Syntax highlighting
-        if (textNode && lang && codeBody && !folded) {
-          const ranges = highlightCodeForEditor(lang, codeBody);
-          for (const r of ranges) {
-            const from = textNode.from + r.from;
-            const to = textNode.from + r.to;
-            if (from < to) {
-              decos.push(Decoration.mark({ class: r.className }).range(from, to));
-            }
-          }
-        }
+        if (lang && codeBody && bodyVisible) addCodeSyntax(decos, lang, rows ? codeHighlightSource(codeBody, rows) : codeBody, segments);
 
         return false;
       },
@@ -940,11 +1101,11 @@ function buildFencedCodeDecos(view: EditorView): DecorationSet {
   return Decoration.set(decos, true);
 }
 
-const FENCE_CHROME_LINE_RE = /^[ \t]{0,3}(?:`{3,}|~{3,})/;
+const FENCE_CHROME_LINE_RE = /`{3,}|~{3,}/;
 
 function activeFenceChromeLineKey(view: EditorView): string {
-  const line = view.state.doc.lineAt(visualSelection(view.state).main.from);
-  return FENCE_CHROME_LINE_RE.test(line.text) ? String(line.number) : "";
+  const line = view.state.doc.lineAt(visualSelection(view.state).main.head);
+  return FENCE_CHROME_LINE_RE.test(line.text) || line.text.includes("[!code") ? String(line.number) : "";
 }
 
 function pushMark(
@@ -975,7 +1136,7 @@ const fencedCodeViewPlugin = constructViewPlugin({
   build: buildFencedCodeDecos,
   revealKey: activeFenceChromeLineKey,
   invalidates: (update) => update.transactions.some((transaction) =>
-    transaction.effects.some((effect) => effect.is(toggleCodeFoldEffect))),
+    transaction.effects.some((effect) => effect.is(toggleCodeFoldEffect) || effect.is(toggleCodeTailEffect))),
   beforeUpdate: mapDiagramSourceRanges,
   // Code drawn before its highlighter loaded is drawn again once it has.
   setup: (view) => onCodeHighlightReady(() => {
@@ -989,6 +1150,7 @@ const fencedCodeViewPlugin = constructViewPlugin({
 
 /** The source range a code fold hides: whole lines, as its placeholder replaces them. */
 function codeFoldRange(state: EditorState, fold: CodeFold): { from: number; to: number } {
+  if (fold.opener !== undefined) return { from: fold.from, to: fold.to };
   const from = state.doc.lineAt(Math.max(0, Math.min(fold.from, state.doc.length))).from;
   const end = Math.max(from, Math.min(Math.max(fold.from, fold.to - 1), state.doc.length));
   return { from, to: state.doc.lineAt(end).to };

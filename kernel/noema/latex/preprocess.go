@@ -1689,6 +1689,50 @@ func fenceRun(content string, closeOnly bool) (byte, int, bool) {
 	return ch, end - i, true
 }
 
+var codeInfoParts = regexp.MustCompile(`title=(?:"[^"]*"|'[^']*'|\S+)|\{[\d\s,-]+\}|/[^/\s][^/\n]*/|\S+`)
+var codePresentationOption = regexp.MustCompile(`^:?(line-numbers|no-line-numbers|collapsed-lines|no-collapsed-lines|indent-guides|whitespace)(?:=(\d+))?$`)
+var codePresentationDecoration = regexp.MustCompile(`^(?:title=|\{[\d\s,-]+\}$|/[^/\s][^/\n]*/$)`)
+var codeLanguage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_+.#-]*$`)
+
+// Translate view-specific fence options into Pandoc's code block grammar. The
+// complete authored body follows verbatim, including its comment annotations.
+func pandocCodeInfo(info string) (string, bool) {
+	language := ""
+	numbers := -1
+	changed := false
+	for index, token := range codeInfoParts.FindAllString(info, -1) {
+		if option := codePresentationOption.FindStringSubmatch(token); option != nil {
+			changed = true
+			switch option[1] {
+			case "line-numbers":
+				if option[2] == "" {
+					numbers = 1
+				} else if start, err := strconv.Atoi(option[2]); err == nil && start <= 10_000_000 {
+					numbers = start
+				}
+			case "no-line-numbers":
+				numbers = -1
+			}
+		} else if codePresentationDecoration.MatchString(token) {
+			changed = true
+		} else if index == 0 && codeLanguage.MatchString(token) {
+			language = token
+		} else {
+			return "", false
+		}
+	}
+	if language == "" {
+		language = "text"
+	}
+	if numbers < 0 {
+		return language, changed
+	}
+	if language == "c#" {
+		language = "cs"
+	}
+	return fmt.Sprintf(`{.%s .numberLines startFrom="%d"}`, language, numbers), changed
+}
+
 // thematicBreak reports a CommonMark thematic break: up to three spaces, then
 // three or more of one of - * _ with optional spaces or tabs between them.
 func thematicBreak(content string) bool {
@@ -2135,12 +2179,14 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 					break
 				}
 			}
+			indent := len(container.Content) - len(strings.TrimLeft(container.Content, " "))
 			if literalCode {
-				indent := len(container.Content) - len(strings.TrimLeft(container.Content, " "))
 				line = container.Prefix + container.Content[:indent+length] + "text"
 				if container.QuoteDepth > 0 && index > 0 && strings.TrimSpace(markdownContainerLine(lines[index-1]).Content) != "" {
 					output = append(output, strings.TrimRight(container.Prefix, " \t"))
 				}
+			} else if info, ok := pandocCodeInfo(container.Content[indent+length:]); ok {
+				line = container.Prefix + container.Content[:indent+length] + info
 			}
 			output = append(output, line)
 			continue

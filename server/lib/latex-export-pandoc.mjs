@@ -671,6 +671,32 @@ export function extractNoemaMetadata(markdown) {
   return parseMeta(lines, frontMatter.meta);
 }
 
+const codeInfoParts = /title=(?:"[^"]*"|'[^']*'|\S+)|\{[\d\s,-]+\}|\/[^/\s][^/\n]*\/|\S+/g;
+const codePresentationOption = /^:?(line-numbers|no-line-numbers|collapsed-lines|no-collapsed-lines|indent-guides|whitespace)(?:=(\d+))?$/;
+
+function pandocCodeInfo(info) {
+  const tokens = info.match(codeInfoParts) ?? [];
+  let language = "";
+  let numbers = null;
+  let changed = false;
+  for (const [index, token] of tokens.entries()) {
+    const option = codePresentationOption.exec(token);
+    if (option) {
+      changed = true;
+      if (option[1] === "line-numbers") {
+        const start = Number(option[2] ?? 1);
+        if (Number.isSafeInteger(start) && start <= 10_000_000) numbers = start;
+      } else if (option[1] === "no-line-numbers") numbers = null;
+    } else if (/^(?:title=|\{[\d\s,-]+\}$|\/[^/\s][^/\n]*\/$)/.test(token)) changed = true;
+    else if (index === 0 && /^[A-Za-z0-9][A-Za-z0-9_+.\-#]*$/.test(token)) language = token;
+    else return null;
+  }
+  if (!changed) return null;
+  if (numbers === null) return language || "text";
+  if (language === "c#") language = "cs";
+  return `{.${language || "text"} .numberLines startFrom="${numbers}"}`;
+}
+
 export function preprocessNoemaForPandoc(markdown, options = {}) {
   const source = approvedEdiffMarkdown(String(markdown || "").replace(/\r\n?/g, "\n"));
   const lines = source.split("\n");
@@ -792,7 +818,8 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
       if (literalCode && container.quoteDepth && markdownContainerLine(lines[index - 1]).content.trim()) {
         output.push(container.prefix.trimEnd());
       }
-      output.push(literalCode ? `${container.prefix}${fenceMatch[0]}text` : line);
+      const info = literalCode ? "text" : pandocCodeInfo(container.content.slice(fenceMatch[0].length));
+      output.push(info === null ? line : `${container.prefix}${fenceMatch[0]}${info}`);
       continue;
     }
     if (displayMath && container.quoteDepth !== displayMath.quoteDepth) {

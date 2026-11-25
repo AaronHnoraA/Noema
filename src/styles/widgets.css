@@ -4476,6 +4476,85 @@ iframe.noema-embed-fullscreen {
   background: color-mix(in srgb, var(--aaron-highlight, #d8b45a), transparent 82%);
   box-shadow: inset 2px 0 0 color-mix(in srgb, var(--aaron-accent, #d8b45a), transparent 25%);
 }
+.noema-code-highlight { --code-line-accent: var(--aaron-accent, #d8b45a); }
+.noema-code-add { --code-line-accent: var(--aaron-callout-tip, #2e9e62); }
+.noema-code-remove, .noema-code-error { --code-line-accent: var(--aaron-callout-danger, #db6868); }
+.noema-code-warning { --code-line-accent: var(--aaron-callout-warning, #dd9329); }
+:is(.cm-editor .cm-line, .noema-code-row).noema-code-focused {
+  background: color-mix(in srgb, var(--aaron-link, currentColor) 6%, var(--aaron-code-bg, transparent));
+}
+:is(.cm-editor .cm-line, .noema-code-row):is(.noema-code-highlight, .noema-code-add, .noema-code-remove, .noema-code-error, .noema-code-warning) {
+  background: color-mix(in srgb, var(--code-line-accent) 14%, var(--aaron-code-bg, transparent));
+  box-shadow: inset 2px 0 0 var(--code-line-accent);
+}
+:is(.cm-editor .cm-line, .noema-code-row).noema-code-dim { color: var(--aaron-muted, inherit); }
+.noema-code-dim :is([class^="code-token-"], [class*=" code-token-"]) { opacity: 0.62; }
+:is(.cm-editor .cm-line, .noema-code-row)[data-code-number]::before {
+  display: inline-block;
+  inline-size: var(--code-number-width, 2ch);
+  margin-inline-end: 0.9em;
+  color: var(--aaron-muted, currentColor);
+  content: attr(data-code-number) / "";
+  text-align: end;
+  text-indent: 0;
+  user-select: none;
+}
+:is(.cm-editor .cm-line, .noema-code-row).noema-code-focused[data-code-number]::before { color: var(--aaron-ink, currentColor); }
+:is(.cm-editor .cm-line.cm-md-code-block, .noema-code-row)[data-code-number] {
+  --code-gutter: calc(var(--code-number-width, 2ch) + 0.9em);
+  padding-inline-start: calc(0.55em + var(--code-gutter));
+  text-indent: calc(-1 * var(--code-gutter));
+}
+.noema-code-word {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--aaron-accent, #d8b45a) 26%, transparent);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+:is(.noema-code-space, .noema-code-tab) { position: relative; }
+:is(.noema-code-space, .noema-code-tab)::before {
+  position: absolute;
+  inset-inline-start: 0;
+  color: var(--aaron-muted, currentColor);
+  text-indent: 0;
+  user-select: none;
+  pointer-events: none;
+}
+.noema-code-space::before { content: "·" / ""; }
+.noema-code-tab::before { content: "⇥" / ""; }
+.noema-code-guide { box-shadow: inset 1px 0 0 color-mix(in srgb, var(--aaron-muted, currentColor) 42%, transparent); }
+.noema-code-annotated {
+  --code-rail: var(--aaron-paper-line, currentColor);
+  min-inline-size: 0;
+  margin: 0.65em 0;
+  overflow: hidden;
+  border: 1px solid var(--code-rail);
+  border-radius: 6px;
+  background: var(--aaron-code-bg, transparent);
+}
+.noema-code-annotated > .noema-code-title {
+  padding: 0.28em 0.65em;
+  border-block-end: 1px solid var(--code-rail);
+  color: var(--aaron-muted, inherit);
+}
+.noema-code-annotated pre {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  overflow: auto;
+}
+.noema-code-annotated pre > code { padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.noema-code-row { display: block; min-block-size: 1lh; padding-inline: 0.55em; }
+.noema-code-tail > summary,
+.cm-editor .cm-code-fold-placeholder > button {
+  padding: 0.22em 0.55em;
+  color: var(--aaron-muted, inherit);
+  cursor: pointer;
+}
+.noema-code-tail > summary { border-block-start: 1px solid var(--code-rail); }
+.cm-editor .cm-code-fold-placeholder > button { border: 0; border-radius: 3px; background: transparent; font: inherit; }
+:is(.noema-code-tail > summary, .cm-editor .cm-code-fold-placeholder > button):is(:hover, :focus-visible) { color: var(--aaron-link, inherit); }
 .cm-editor .cm-code-lang-input {
   box-sizing: border-box;
   width: 7.5em;
