@@ -423,7 +423,7 @@ class CodeFoldButtonWidget extends MeasuredWidget {
     button.textContent = tail ? (this.folded ? "More" : "Less") : (this.folded ? "Show" : "Fold");
     button.title = tail ? (this.folded ? `Show ${this.fold.lines} more lines of code` : "Collapse extra lines")
       : (this.folded ? "Expand code block" : "Collapse code block");
-    button.setAttribute("aria-label", button.title);
+    if (tail) button.setAttribute("aria-label", button.title);
     button.setAttribute("aria-expanded", String(!this.folded));
     button.addEventListener("mousedown", (event) => {
       event.preventDefault();
