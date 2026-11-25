@@ -150,6 +150,13 @@ function sourceRangeElement(target: EventTarget | null): HTMLElement | null {
 }
 
 function sourceAnchorForClick(source: HTMLElement, event: MouseEvent, from: number, to: number): number {
+  if (event.target instanceof Element) {
+    const cell = event.target.closest<HTMLElement>("[data-cm-source-offset]");
+    if (cell && source.contains(cell)) {
+      const offset = Number(cell.dataset.cmSourceOffset);
+      if (Number.isFinite(offset)) return Math.max(from, Math.min(to, from + offset));
+    }
+  }
   const explicit = Number(source.dataset.cmSourceAnchor);
   if (Number.isFinite(explicit)) {
     const originalFrom = Number(source.dataset.cmSourceFrom);

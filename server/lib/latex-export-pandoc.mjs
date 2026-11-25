@@ -164,7 +164,7 @@ function environmentFor(kind, rules) {
 }
 
 function environmentOpen(kind, title, options) {
-  if (kind === "chart" || kind === "timeline" || kind === "steps") {
+  if (kind === "chart" || kind === "timeline" || kind === "steps" || kind === "table") {
     title = splitDocumentWidgetTitle(kind, parseOrgEnvIdentityTitle(kind, title).title).title;
   }
   let env = environmentFor(kind, options.rules);

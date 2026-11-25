@@ -1,6 +1,7 @@
 import type MarkdownIt from "markdown-it";
 import type { AttrMap } from "../shared/layout-attrs.mjs";
-import { documentDataAccents, parseDocumentDataTable, parseDocumentNumber } from "./document-data-table.ts";
+import { documentDataAccents, literalDocumentDataSource, parseDocumentDataTable } from "./document-data-table.ts";
+import { parseTableNumber } from "./cm6/table-model.ts";
 
 const chartTypes = ["bar", "stacked", "heatmap", "line"] as const;
 type ChartType = typeof chartTypes[number];
@@ -138,23 +139,10 @@ function lineChart(headings: string[], rows: ChartRow[]): string | null {
     + "</div>" + chartTable(headings, rows, false);
 }
 
-function gfmRowWidth(line: string): number {
-  // Markdown-it's GFM rule makes a pipe literal if a backslash precedes it.
-  const cells = line.trim().split(/(?<!\\)\|/);
-  const leading = cells[0] === "" ? 1 : 0;
-  const trailing = cells.at(-1) === "" ? 1 : 0;
-  return cells.length - leading - trailing;
-}
-
 export function renderChartBody(md: MarkdownIt, body: string, type: ChartType, accent: string): string | null {
   const table = parseDocumentDataTable(md, body);
   if (!table) return null;
-  const lines = body.split(/\r\n?|\n/);
-  if (table.rowStarts.some((start) => gfmRowWidth(lines[start] ?? "") !== table.headings.length)) {
-    // GFM silently crops extra cells and fills absent ones. Show the authored
-    // data so a malformed row can be corrected without guessing what was lost.
-    return `<pre class="noema-chart-source"><code>${md.utils.escapeHtml(body)}</code></pre>`;
-  }
+  if (table.rowWidths.some((width) => width !== table.headings.length)) return literalDocumentDataSource(md, body);
   if (table.headings.length < 2 || (type !== "heatmap" && table.headings.length !== 2)) return null;
   if (table.headings.some((heading) => !heading.content.trim())) return null;
   const { content } = table;
@@ -167,7 +155,7 @@ export function renderChartBody(md: MarkdownIt, body: string, type: ChartType, a
     const values: ChartValue[] = [];
     for (const cell of cells) {
       const source = cell.content.trim();
-      const number = parseDocumentNumber(source);
+      const number = parseTableNumber(source);
       if (number === null && (source || type === "bar" || type === "stacked")) return null;
       values.push({ source, number });
     }

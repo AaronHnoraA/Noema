@@ -1,9 +1,10 @@
 import type MarkdownIt from "markdown-it";
-import { documentDataAccents, parseDocumentDataTable, parseDocumentNumber } from "./document-data-table.ts";
+import { documentDataAccents, literalDocumentDataSource, parseDocumentDataTable } from "./document-data-table.ts";
+import { parseTableNumber } from "./cm6/table-model.ts";
 
 function renderSparkline(source: string): string {
   const points = source.split(",").map((point) => point.trim());
-  const values = points.map(parseDocumentNumber);
+  const values = points.map(parseTableNumber);
   if (!values.every((point) => point !== null)) return "";
   const low = values.reduce((a, b) => Math.min(a, b), Infinity);
   const high = values.reduce((a, b) => Math.max(a, b), -Infinity);
@@ -18,6 +19,7 @@ function renderSparkline(source: string): string {
 export function renderStatsBody(md: MarkdownIt, body: string): string | null {
   const table = parseDocumentDataTable(md, body);
   if (!table || table.headings.length < 2 || table.headings.length > 6) return null;
+  if (table.rowWidths.some((width) => width < 2 || width > table.headings.length)) return literalDocumentDataSource(md, body);
   const { rows, content } = table;
   if (!rows.every((row) => row[0]?.content.trim() && row[1]?.content.trim())) return null;
 

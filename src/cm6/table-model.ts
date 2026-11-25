@@ -70,6 +70,12 @@ export function splitTableCells(line: string): string[] {
   return cells.map(({ from, to }) => line.slice(from, to).trim());
 }
 
+export function parseTableNumber(source: string): number | null {
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(source)) return null;
+  const value = Number(source);
+  return Number.isFinite(value) ? value : null;
+}
+
 /** Sort body rows only. A click creates one collator; no sorting work runs
  * while typing, and equal keys keep their source order. */
 export function sortTableBodyRows<T>(
@@ -77,20 +83,16 @@ export function sortTableBodyRows<T>(
   cells: (row: T) => readonly string[], bodyStart = 1,
 ): T[] {
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-  const number = (value: string): number | null => {
-    const text = value.trim();
-    return /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(text) ? Number(text) : null;
-  };
+  const data = rows.slice(bodyStart).map((row) => {
+    const label = (cells(row)[column] ?? "").trim();
+    return { row, label, number: parseTableNumber(label) };
+  });
   return [
     ...rows.slice(0, bodyStart),
-    ...rows.slice(bodyStart).map((row, index) => ({ row, index })).sort((a, b) => {
-      const left = cells(a.row)[column] ?? "";
-      const right = cells(b.row)[column] ?? "";
-      const leftNumber = number(left);
-      const rightNumber = number(right);
-      const order = leftNumber !== null && rightNumber !== null
-        ? Math.sign(leftNumber - rightNumber) : collator.compare(left, right);
-      return direction * order || a.index - b.index;
+    ...data.sort((a, b) => {
+      if (a.number === null && b.number === null) return direction * collator.compare(a.label, b.label);
+      if (a.number === null || b.number === null) return direction * (a.number === null ? 1 : -1);
+      return direction * Math.sign(a.number - b.number);
     }).map(({ row }) => row),
   ];
 }

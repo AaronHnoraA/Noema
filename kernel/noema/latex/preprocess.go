@@ -79,6 +79,7 @@ var documentWidgetOptions = map[string][]string{
 	"chart":    {"type", "accent"},
 	"timeline": {"orientation", "card", "list-style"},
 	"steps":    {"list-style"},
+	"table":    {"sortable", "copy", "highlight-rows", "highlight-columns", "highlight-cells", "highlight", "align", "text-align", "width"},
 }
 
 var defaultEnvironment = map[string]string{

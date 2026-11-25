@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "table-keeps-source-order-and-display-title",
+      "markdown": "#+begin table Stage durations {sortable=true copy=true highlight-cells='1:2'} {#table-verify}\n| Stage | Duration (ms) |\n| --- | ---: |\n| Parse | -4 |\n| Draw | 8 |\n#+end table",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{table: Stage durations}\\par\n```\n\n\n| Stage | Duration (ms) |\n| --- | ---: |\n| Parse | -4 |\n| Draw | 8 |\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "sequence-keeps-markdown-list-and-display-title",
       "markdown": "#+begin timeline Milestones {orientation=horizontal card=true} {#timeline-link}\n- [success] Monday\n- Friday\n#+end timeline\n\n#+begin steps Actions {list-style=decimal}\n3. [x] Plan\n4. [ ] Review\n#+end steps",
       "options": {},

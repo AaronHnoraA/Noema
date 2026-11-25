@@ -4,6 +4,7 @@ const attributesByKind = new Map([
   ["chart", ["type", "accent"]],
   ["timeline", ["orientation", "card", "list-style"]],
   ["steps", ["list-style"]],
+  ["table", ["sortable", "copy", "highlight-rows", "highlight-columns", "highlight-cells", "highlight", "align", "text-align", "width"]],
 ]);
 
 /** Separate a widget's options after the block anchor has been removed. */

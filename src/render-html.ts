@@ -15,6 +15,7 @@ import { hydrateDiagramForeignObjectMarkup, sanitizeDiagramSvg } from "./diagram
 import { renderStatsBody } from "./document-stats.ts";
 import { parseDocumentChartOptions, renderChartBody } from "./document-chart.ts";
 import { renderDocumentSequence } from "./document-sequence.ts";
+import { renderDocumentTableView } from "./document-table-view.ts";
 import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
@@ -78,6 +79,10 @@ export type RenderMarkdownHTMLOptions = {
   allowHtml?: boolean;
   /** Render @@cell command lines as read-only hydration targets instead of hiding them. */
   renderJupyterCells?: boolean;
+  /** Include local table controls and their raw copy source for the editor. */
+  documentTableActions?: boolean;
+  /** Original source for the one table environment being mounted as a widget. */
+  documentTableSource?: string;
   /**
    * Pictures for the diagram fences in this document, as `{ [key]: svg }` where
    * the key is `diagramFenceKey(lang, source)`. Mermaid needs a browser to lay
@@ -295,6 +300,7 @@ function envLabel(kind: string): string {
     chart: "Chart",
     timeline: "Timeline",
     steps: "Steps",
+    table: "Table",
     tikz: "TikZ",
     convention: "Convention",
     axiom: "Axiom",
@@ -1324,7 +1330,7 @@ function renderOrgEnv(
   md: MarkdownIt,
   tokens: Token[],
   idx: number,
-  _options: RenderMarkdownHTMLOptions = {},
+  options: RenderMarkdownHTMLOptions = {},
 ): string {
   const meta = tokens[idx]!.meta as OrgEnvTokenMeta;
   const kind = meta.kind;
@@ -1371,6 +1377,7 @@ function renderOrgEnv(
     : kindName === "stats" ? renderStatsBody(md, meta.body)
     : chart?.type && chart.accent ? renderChartBody(md, meta.body, chart.type, chart.accent)
     : kindName === "timeline" || kindName === "steps" ? renderDocumentSequence(md, meta.body, kindName, attrs)
+    : kindName === "table" ? renderDocumentTableView(md, meta.body, attrs, options.documentTableActions === true, options.documentTableSource)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kind.toLowerCase() === "fold") {
@@ -1872,6 +1879,10 @@ export function renderMarkdownHTML(
 ): string {
   if (!options && !topLevelBlocks) return cachedRender("block", markdown, () => renderMarkdownHTMLUncached(markdown));
   return renderMarkdownHTMLUncached(markdown, options, topLevelBlocks);
+}
+
+export function renderEditorWidgetHTML(markdown: string): string {
+  return cachedRender("editor-widget", markdown, () => renderMarkdownHTMLUncached(markdown, { documentTableActions: true }));
 }
 
 function renderMarkdownHTMLUncached(

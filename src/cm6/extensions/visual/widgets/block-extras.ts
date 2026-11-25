@@ -37,6 +37,7 @@ import {
 import {
   renderMarkdownInlineHTML,
   renderMarkdownHTML,
+  renderEditorWidgetHTML,
   type RenderMarkdownHTMLOptions,
 } from "../../../../render-html.ts";
 import {
@@ -54,6 +55,7 @@ import { applyImageLayout, imageLayoutFromAttrs, type ImageLayoutAttrs } from ".
 import { figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
 import { readLayoutAttrSuffix } from "../../../../layout-attrs.ts";
 import { splitDocumentWidgetTitle } from "../../../../../shared/document-widget-title.mjs";
+import { connectDocumentTableViews, disconnectDocumentTableViews } from "../../../../document-table-view.ts";
 import {
   COLUMNS_MAX_COUNT,
   COLUMNS_MIN_WIDTH_PCT,
@@ -593,6 +595,7 @@ function renderDiagramPreview(source: string, lang: string, div: HTMLElement): v
 }
 
 function enhanceRenderedMarkdown(root: HTMLElement): void {
+  connectDocumentTableViews(root);
   root.querySelectorAll<HTMLElement>("pre > code[class*='language-']").forEach((code) => {
     const langClass = Array.from(code.classList).find((cls) => cls.startsWith("language-")) ?? "";
     const lang = langClass.slice("language-".length);
@@ -3086,12 +3089,17 @@ class FoldWidget extends MeasuredWidget {
     const content = document.createElement("div");
     content.className = "org-env-fold-content org-env-content";
     content.hidden = true;
-    content.innerHTML = renderMarkdownHTML(this.body.trim());
+    content.innerHTML = renderEditorWidgetHTML(this.body.trim());
     enhanceRenderedMarkdown(content);
     stopInteractiveWidgetEvents(content);
 
     block.append(button, content);
     return this.registerMeasured(block, view);
+  }
+
+  override destroy(dom: HTMLElement): void {
+    disconnectDocumentTableViews(dom);
+    super.destroy(dom);
   }
 
   ignoreEvent(): boolean { return false; }
@@ -3269,6 +3277,7 @@ function columnsRenderOptions(): RenderMarkdownHTMLOptions {
   const resolver = typeof window !== "undefined" ? window.NoemaResolveAssetUrl : undefined;
   const noteFile = currentNoteFile();
   return {
+    documentTableActions: true,
     ...(resolver ? { assetResolver: (src: string) => resolver(src) } : {}),
     ...(noteFile ? { noteFile } : {}),
   };
@@ -3540,6 +3549,7 @@ function focusRenderedColumnPane(
   if (event.button !== 0) return;
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(".cm-column-pane-grip, .cm-columns-toolbar, .cm-columns-divider")) return;
+  if (target?.closest(".noema-document-table-view button")) return;
 
   // Cmd/Ctrl-click on a link opens the link directly instead of switching edit focus.
   const link = target?.closest<HTMLAnchorElement>("a[href]") ?? null;
@@ -4108,6 +4118,11 @@ class ColumnsWidget extends MeasuredWidget {
     return this.registerMeasured(block, view);
   }
 
+  override destroy(dom: HTMLElement): void {
+    disconnectDocumentTableViews(dom);
+    super.destroy(dom);
+  }
+
   ignoreEvent(): boolean { return false; }
 }
 
@@ -4307,6 +4322,11 @@ class ColumnsActiveTopWidget extends MeasuredWidget {
 
     stopInteractiveWidgetEvents(top);
     return this.registerMeasured(top, view);
+  }
+
+  override destroy(dom: HTMLElement): void {
+    disconnectDocumentTableViews(dom);
+    super.destroy(dom);
   }
 
   ignoreEvent(): boolean { return false; }
@@ -4988,12 +5008,19 @@ class DocumentDataWidget extends MeasuredWidget {
     block.style.setProperty("--org-env-depth", String(this.depth));
     setSourceRange(block, this.from, this.to);
     block.dataset.cmOpenSource = "true";
-    block.innerHTML = renderMarkdownHTML(buildOrgEnvSource(this.kind, this.title, this.body));
+    const source = buildOrgEnvSource(this.kind, this.title, this.body);
+    block.innerHTML = renderMarkdownHTML(source, this.kind === "table"
+      ? { documentTableActions: true, documentTableSource: this.body } : undefined);
     const content = block.querySelector(":scope > org-env-block > .org-env-content");
     if (content) block.replaceChildren(content);
     enhanceRenderedMarkdown(block);
     stopInteractiveWidgetEvents(block);
     return this.registerMeasured(block, view);
+  }
+
+  override destroy(dom: HTMLElement): void {
+    disconnectDocumentTableViews(dom);
+    super.destroy(dom);
   }
 
   ignoreEvent(): boolean { return false; }
@@ -6150,7 +6177,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 // Decoration builder (full-doc scan — these constructs are sparse)
 // ---------------------------------------------------------------------------
 
-const documentDataEnvironments = new Set(["progress", "stats", "chart", "timeline", "steps"]);
+const documentDataEnvironments = new Set(["progress", "stats", "chart", "timeline", "steps", "table"]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
 

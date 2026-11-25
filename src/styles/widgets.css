@@ -1449,6 +1449,100 @@
 }
 .noema-steps-list > li::marker { color: var(--sequence-accent); }
 
+.noema-document-table-view {
+  --document-table-line: var(--aaron-paper-line, var(--border, currentColor));
+  --document-table-muted: var(--aaron-muted, currentColor);
+  --document-table-highlight: var(--aaron-callout-warning, var(--document-table-muted));
+  inline-size: min(100%, var(--document-table-width, 100%));
+  min-inline-size: 0;
+  white-space: normal;
+}
+
+.noema-document-table-view[data-table-align="center"] { margin-inline: auto; }
+.noema-document-table-view[data-table-align="right"] { margin-inline-start: auto; }
+.noema-document-table-view[data-accent="neutral"] { --document-table-highlight: var(--document-table-muted); }
+.noema-document-table-view[data-accent="primary"] { --document-table-highlight: var(--aaron-accent, var(--document-table-muted)); }
+.noema-document-table-view[data-accent="info"] { --document-table-highlight: var(--aaron-callout-info, var(--document-table-muted)); }
+.noema-document-table-view[data-accent="success"] { --document-table-highlight: var(--aaron-green, var(--document-table-muted)); }
+.noema-document-table-view[data-accent="danger"] { --document-table-highlight: var(--aaron-callout-danger, var(--document-table-muted)); }
+.noema-document-table-view[data-accent="important"] { --document-table-highlight: var(--aaron-callout-quote, var(--document-table-muted)); }
+
+.noema-document-table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: end;
+  gap: 0.6em;
+  margin-block-end: 0.35em;
+  color: var(--document-table-muted);
+}
+
+.noema-document-table-view:not([data-table-active]) :is(.noema-document-table-tools, .noema-document-table-sort) { display: none; }
+.noema-document-table-view:not([data-table-overflow]) [data-pan-table],
+.noema-document-table-view:not([data-table-overflow]) .noema-document-table-tools:not(:has([data-copy-table])) { display: none; }
+.noema-document-table-tools [data-pan-table] { margin-inline-end: auto; }
+.noema-document-table-view .noema-document-table-scroll {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--document-table-line) transparent;
+}
+
+.noema-document-table-view .noema-document-table-scroll table {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  table-layout: auto;
+  border-collapse: collapse;
+  border-block: 1px solid var(--document-table-line);
+}
+
+.noema-document-table-view .noema-document-table-scroll :is(th, td) {
+  border: 0;
+  padding: 0.16em 0.55em;
+  background: transparent;
+  font: inherit;
+  font-variant: inherit;
+  letter-spacing: inherit;
+  vertical-align: middle;
+}
+
+.noema-document-table-view thead { border-block-end: 1px solid var(--document-table-line); }
+.noema-document-table-view .noema-document-table-scroll th { white-space: nowrap; }
+.noema-document-table-view .noema-document-table-scroll td:first-child { white-space: nowrap; }
+.noema-document-table-view .noema-document-table-scroll th:is([aria-sort="ascending"], [aria-sort="descending"]) {
+  background: color-mix(in srgb, var(--aaron-link, currentColor) 10%, transparent);
+  box-shadow: inset 0 -2px color-mix(in srgb, var(--aaron-link, currentColor) 72%, var(--document-table-line));
+}
+.noema-document-table-view .noema-document-table-scroll td { min-inline-size: 4em; }
+.noema-document-table-view .noema-document-table-scroll td[data-highlight="true"] {
+  background: color-mix(in srgb, var(--document-table-highlight) 17%, transparent);
+}
+
+.noema-document-table-view button {
+  font: inherit;
+  white-space: nowrap;
+  border: 0;
+  background: transparent;
+  color: var(--document-table-muted);
+  cursor: pointer;
+  padding: 0 0.25em;
+}
+
+.noema-document-table-view .noema-document-table-sort {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 1.35em;
+  margin-inline-start: 0.25em;
+  padding: 0;
+}
+.noema-document-table-view th:is([aria-sort="ascending"], [aria-sort="descending"]) .noema-document-table-sort,
+.noema-document-table-view button:hover { color: var(--aaron-link, currentColor); }
+.noema-document-table-view :is(button, .noema-document-table-scroll):focus-visible {
+  outline: 1px solid var(--aaron-link, currentColor);
+  outline-offset: -1px;
+}
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);
