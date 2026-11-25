@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "sequence-keeps-markdown-list-and-display-title",
+      "markdown": "#+begin timeline Milestones {orientation=horizontal card=true} {#timeline-link}\n- [success] Monday\n- Friday\n#+end timeline\n\n#+begin steps Actions {list-style=decimal}\n3. [x] Plan\n4. [ ] Review\n#+end steps",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{timeline: Milestones}\\par\n```\n\n\n- [success] Monday\n- Friday\n\n\n```{=latex}\n\\end{quote}\n```\n\n\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{steps: Actions}\\par\n```\n\n\n3. [x] Plan\n4. [ ] Review\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "chart-keeps-table-and-display-title",
       "markdown": "#+begin chart Stage durations {type=bar accent=info} {#chart-verify}\n| Stage | Duration (ms) |\n| --- | ---: |\n| Parse | -4 |\n| Draw | 8 |\n#+end chart",
       "options": {},

@@ -53,7 +53,7 @@ import {
 import { applyImageLayout, imageLayoutFromAttrs, type ImageLayoutAttrs } from "../../../../image-attrs.ts";
 import { figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
 import { readLayoutAttrSuffix } from "../../../../layout-attrs.ts";
-import { parseDocumentChartTitle } from "../../../../document-chart.ts";
+import { splitDocumentWidgetTitle } from "../../../../../shared/document-widget-title.mjs";
 import {
   COLUMNS_MAX_COUNT,
   COLUMNS_MIN_WIDTH_PCT,
@@ -4959,7 +4959,7 @@ class DocumentDataWidget extends MeasuredWidget {
   constructor(block: OrgEnvBlock) {
     super();
     this.kind = block.kind;
-    this.title = block.kind === "chart" ? block.title : "";
+    this.title = block.kind === "progress" || block.kind === "stats" ? "" : block.title;
     this.body = block.body;
     this.from = block.bodyFrom;
     this.to = block.bodyTo - 1;
@@ -5669,7 +5669,7 @@ function addOrgEnvBoundaryDecos(
   if (!openActive) {
     decos.push(
       Decoration.replace({
-        widget: new OrgEnvOpenWidget(block.kind, block.kind === "chart" ? parseDocumentChartTitle(block.title).title : block.title,
+        widget: new OrgEnvOpenWidget(block.kind, splitDocumentWidgetTitle(block.kind, block.title).title,
           block.blockId, block.titleAnchor - block.openFrom, block.depth),
         block: true,
       }).range(block.openFrom, block.openTo),
@@ -6150,7 +6150,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 // Decoration builder (full-doc scan — these constructs are sparse)
 // ---------------------------------------------------------------------------
 
-const documentDataEnvironments = new Set(["progress", "stats", "chart"]);
+const documentDataEnvironments = new Set(["progress", "stats", "chart", "timeline", "steps"]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
 

@@ -13,7 +13,9 @@ import { parseCodeInfo } from "./code-info.ts";
 import { supportedDiagramLang } from "./diagram-langs.ts";
 import { hydrateDiagramForeignObjectMarkup, sanitizeDiagramSvg } from "./diagram-sanitize.ts";
 import { renderStatsBody } from "./document-stats.ts";
-import { parseDocumentChartTitle, renderChartBody } from "./document-chart.ts";
+import { parseDocumentChartOptions, renderChartBody } from "./document-chart.ts";
+import { renderDocumentSequence } from "./document-sequence.ts";
+import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
 import { layoutClasses, layoutFromAttrs, layoutStyle, readLayoutAttrSuffix, readLayoutAttrsLine, type LayoutAttrs } from "./layout-attrs.ts";
@@ -291,6 +293,8 @@ function envLabel(kind: string): string {
     progress: "Progress",
     stats: "Stats",
     chart: "Chart",
+    timeline: "Timeline",
+    steps: "Steps",
     tikz: "TikZ",
     convention: "Convention",
     axiom: "Axiom",
@@ -1359,13 +1363,14 @@ function renderOrgEnv(
     return `<div class="${columnsClasses(spec, panes.length)}" style="${columnsStyle(spec, panes.length)}" data-cols="${panes.length}"${idAttr}>${inner}</div>`;
   }
   const kindName = kind.toLowerCase();
-  const chart = kindName === "chart" ? parseDocumentChartTitle(meta.title) : null;
-  const title = chart?.title ?? meta.title;
+  const { title, attrs } = splitDocumentWidgetTitle(kindName, meta.title);
+  const chart = kindName === "chart" ? parseDocumentChartOptions(attrs) : null;
   const blockId = meta.blockId;
   const label = envLabel(kind);
   const renderedBody = kindName === "progress" ? renderProgressBody(md, meta.body)
     : kindName === "stats" ? renderStatsBody(md, meta.body)
     : chart?.type && chart.accent ? renderChartBody(md, meta.body, chart.type, chart.accent)
+    : kindName === "timeline" || kindName === "steps" ? renderDocumentSequence(md, meta.body, kindName, attrs)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kind.toLowerCase() === "fold") {
@@ -1386,6 +1391,7 @@ function renderOrgEnv(
 
 function applyTaskCheckboxes(root: HTMLElement): void {
   root.querySelectorAll<HTMLLIElement>("li").forEach((li) => {
+    if (li.parentElement?.classList.contains("noema-steps-list")) return;
     const first = li.firstChild;
     if (!(first instanceof Text)) return;
     const match = first.data.match(/^\[([ xX])\]\s+/);

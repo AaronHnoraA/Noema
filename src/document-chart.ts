@@ -1,16 +1,14 @@
 import type MarkdownIt from "markdown-it";
-import { splitChartTitle } from "../shared/document-chart.mjs";
+import type { AttrMap } from "../shared/layout-attrs.mjs";
 import { documentDataAccents, parseDocumentDataTable, parseDocumentNumber } from "./document-data-table.ts";
 
 const chartTypes = ["bar", "stacked", "heatmap", "line"] as const;
 type ChartType = typeof chartTypes[number];
 
-export function parseDocumentChartTitle(source: string): { title: string; type: ChartType | null; accent: string | null } {
-  const { title, attrs } = splitChartTitle(source);
+export function parseDocumentChartOptions(attrs: AttrMap): { type: ChartType | null; accent: string | null } {
   const type = attrs.type?.toLowerCase() || "bar";
   const accent = attrs.accent?.toLowerCase() || "primary";
   return {
-    title,
     type: chartTypes.find((name) => name === type) ?? null,
     accent: documentDataAccents.has(accent) ? accent : null,
   };

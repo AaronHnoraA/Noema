@@ -1326,6 +1326,129 @@
 .noema-chart-line .noema-chart-table thead { border-block-end: 1px solid var(--chart-line); }
 .noema-chart-line .noema-chart-table table { border-block-width: 1px; }
 
+.noema-document-sequence {
+  --sequence-line: var(--aaron-paper-line, var(--border, currentColor));
+  --sequence-accent: var(--aaron-callout-note, var(--aaron-accent, currentColor));
+  --sequence-body: color-mix(in srgb, var(--aaron-panel, currentColor) 35%, transparent);
+  container-type: inline-size;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.noema-document-sequence :is(.noema-timeline-list, .noema-steps-list) {
+  margin: 0;
+  padding-inline-start: 1.35em;
+}
+
+.noema-document-sequence :is(.noema-timeline-list, .noema-steps-list)[data-marker="decimal"] { list-style: decimal; }
+.noema-document-sequence .noema-steps-list[data-marker="bullet"] { list-style: disc; }
+.noema-document-sequence :is([data-marker="none"], .noema-timeline-list[data-marker="bullet"]) { list-style: none; }
+
+.noema-document-sequence :is(.noema-timeline-list, .noema-steps-list) :is(li, p) { white-space: normal; }
+.noema-document-sequence :is(.noema-timeline-list, .noema-steps-list) > li > p { margin-block: 0 0.45em; }
+.noema-document-sequence :is(.noema-timeline-list, .noema-steps-list) > li > :last-child { margin-block-end: 0; }
+
+.noema-document-sequence .noema-timeline-list > li {
+  position: relative;
+  margin: 0 0 0.55em;
+  padding: 0.12em 0.42em 0.12em 0.38em;
+}
+
+.noema-document-sequence .noema-timeline-list > li:last-child { margin-block-end: 0; }
+.noema-timeline-list [data-event-status="success"] { --sequence-accent: var(--aaron-green, currentColor); }
+.noema-timeline-list [data-event-status="info"] { --sequence-accent: var(--aaron-callout-info, currentColor); }
+.noema-timeline-list [data-event-status="warning"] { --sequence-accent: var(--aaron-callout-warning, currentColor); }
+.noema-timeline-list [data-event-status="danger"] { --sequence-accent: var(--aaron-callout-danger, currentColor); }
+
+.noema-timeline-list[data-marker="bullet"] > li::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset-inline-start: -0.95em;
+  inset-block-start: 0.66em;
+  inline-size: 0.38em;
+  block-size: 0.38em;
+  border-radius: 50%;
+  background: var(--sequence-accent);
+}
+
+.noema-timeline-list[data-marker="bullet"] > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: calc(-0.76em - 0.5px);
+  inset-block: 0.85em -1.4em;
+  inline-size: 1px;
+  background: var(--sequence-line);
+}
+
+.noema-document-sequence .noema-timeline-list[data-card="true"] > li {
+  min-inline-size: 0;
+  padding: 0.34em 0.58em;
+  background: var(--sequence-body);
+  box-shadow: inset 0 0 0 1px var(--sequence-line);
+}
+
+.noema-timeline-status,
+.noema-step-status {
+  display: inline-block;
+  margin-inline-start: 0.6em;
+  color: color-mix(in srgb, var(--sequence-accent) 70%, var(--aaron-muted, currentColor));
+}
+
+.noema-timeline-heading,
+.noema-timeline-title { display: block; }
+
+.noema-timeline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.6em;
+  color: var(--aaron-muted, currentColor);
+}
+
+.noema-timeline-meta > .noema-timeline-status { margin-inline-start: 0; }
+
+@container (min-width: 35rem) {
+  .noema-document-sequence .noema-timeline-list[data-orientation="horizontal"] {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 11.5rem), 1fr));
+    gap: 1.25em 0.65em;
+    padding-block-start: 0.75em;
+    padding-inline-start: 0;
+  }
+
+  .noema-document-sequence .noema-timeline-list[data-orientation="horizontal"] > li { margin: 0; }
+  .noema-timeline-list[data-orientation="horizontal"][data-marker="decimal"] { list-style-position: inside; }
+  .noema-timeline-list[data-orientation="horizontal"][data-marker="bullet"] > li::before {
+    inset-inline-start: 0.55em;
+    inset-block-start: -0.65em;
+  }
+
+  .noema-timeline-list[data-orientation="horizontal"][data-marker="bullet"] > li:not(:last-child)::after {
+    inset-inline-start: 0.74em;
+    inset-block: -0.46em auto;
+    inline-size: calc(100% - 0.74em);
+    block-size: 1px;
+  }
+}
+
+.noema-document-sequence .noema-steps-list > li {
+  margin: 0;
+  padding: 0.25em 0.55em;
+  border-block-end: 1px solid var(--sequence-line);
+}
+
+.noema-document-sequence .noema-steps-list { list-style-position: outside; }
+.noema-document-sequence .noema-steps-list > li:last-child { border-block-end: 0; }
+.noema-steps-list > li[data-step-state="done"] { --sequence-accent: var(--aaron-green, currentColor); }
+.noema-steps-list > li[data-step-state="pending"] { --sequence-accent: var(--aaron-muted, currentColor); }
+.noema-steps-list > li[data-step-state="current"] {
+  background: var(--sequence-body);
+  box-shadow: inset 2px 0 var(--sequence-accent);
+}
+.noema-steps-list > li::marker { color: var(--sequence-accent); }
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);

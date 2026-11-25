@@ -50,30 +50,36 @@ var latexMarks = map[string]markSpec{
 }
 
 var (
-	orgOpenPattern        = regexp.MustCompile(`(?i)^#\+\s*begin\s+([A-Za-z0-9_-]+)\s*(.*)$`)
-	orgClosePattern       = regexp.MustCompile(`(?i)^#\+\s*end\s+([A-Za-z0-9_-]+)\s*$`)
-	metaOpenPattern       = regexp.MustCompile(`(?i)^#\+begin\s+meta\s*$`)
-	metaClosePattern      = regexp.MustCompile(`(?i)^#\+end\s+meta\s*$`)
-	metaPairPattern       = regexp.MustCompile(`^([A-Za-z0-9_-]+):\s*(.*)$`)
-	yamlPairPattern       = regexp.MustCompile(`^([A-Za-z0-9_-]+)\s*:\s*(.*)$`)
-	yamlStartPattern      = regexp.MustCompile(`^---\s*$`)
-	yamlBoundaryPattern   = regexp.MustCompile(`^(?:---|\.\.\.)\s*$`)
-	yamlCommentPattern    = regexp.MustCompile(`\s+#.*$`)
-	semanticAtx           = regexp.MustCompile(`^( {0,3})(#{1,6})(?:[ \t]+(.*)|[ \t]*)$`)
-	setextUnderline       = regexp.MustCompile(`^ {0,3}(?:=+|-+)[ \t]*$`)
-	calloutPattern        = regexp.MustCompile(`^(\s*>\s*)\[!([A-Za-z]+)\](?:\s+(.+))?\s*$`)
-	proofTitleWordPattern = regexp.MustCompile(`(?i)^proof\b`)
-	layoutAttrPattern     = regexp.MustCompile(`(?i)([A-Za-z][A-Za-z0-9_-]*)\s*[:=]\s*("[^"]*"|'[^']*'|[^,;\s]+)|([A-Za-z][A-Za-z0-9_-]*)`)
-	layoutDimension       = regexp.MustCompile(`^(\d+(?:\.\d+)?)(%|px|em|rem|vw|vh|ch)?$`)
-	tikzDocumentPattern   = regexp.MustCompile(`(?i)\\documentclass\b|\\begin\s*\{\s*document\s*\}`)
-	tikzPicturePattern    = regexp.MustCompile(`(?is)\\begin\s*\{\s*tikzpicture\s*\}.*\\end\s*\{\s*tikzpicture\s*\}`)
-	columnsAnchorPattern  = regexp.MustCompile(`\s+\{#[0-9a-fA-F-]+\}\s*$`)
-	chartAnchorPattern    = regexp.MustCompile(`(?:^|[ \t]+)\{#[A-Za-z0-9][A-Za-z0-9._:-]{2,127}(?:[ \t]+[^{}\r\n]*)?\}$`)
-	chartAttributePattern = regexp.MustCompile(`(?:^|[ \t]+)(\{[^{}]*\})$`)
-	colMarkerPattern      = regexp.MustCompile(`(?i)^[ \t]*#\+col(?:[ \t]+(\{[^{}\r\n]*\}))?[ \t]*$`)
-	colOrgOpenPattern     = regexp.MustCompile(`(?i)^[ \t]*#\+begin[ \t]+([A-Za-z][\w-]*)\b`)
-	colOrgClosePattern    = regexp.MustCompile(`(?i)^[ \t]*#\+end[ \t]+([A-Za-z][\w-]*)[ \t]*$`)
+	orgOpenPattern         = regexp.MustCompile(`(?i)^#\+\s*begin\s+([A-Za-z0-9_-]+)\s*(.*)$`)
+	orgClosePattern        = regexp.MustCompile(`(?i)^#\+\s*end\s+([A-Za-z0-9_-]+)\s*$`)
+	metaOpenPattern        = regexp.MustCompile(`(?i)^#\+begin\s+meta\s*$`)
+	metaClosePattern       = regexp.MustCompile(`(?i)^#\+end\s+meta\s*$`)
+	metaPairPattern        = regexp.MustCompile(`^([A-Za-z0-9_-]+):\s*(.*)$`)
+	yamlPairPattern        = regexp.MustCompile(`^([A-Za-z0-9_-]+)\s*:\s*(.*)$`)
+	yamlStartPattern       = regexp.MustCompile(`^---\s*$`)
+	yamlBoundaryPattern    = regexp.MustCompile(`^(?:---|\.\.\.)\s*$`)
+	yamlCommentPattern     = regexp.MustCompile(`\s+#.*$`)
+	semanticAtx            = regexp.MustCompile(`^( {0,3})(#{1,6})(?:[ \t]+(.*)|[ \t]*)$`)
+	setextUnderline        = regexp.MustCompile(`^ {0,3}(?:=+|-+)[ \t]*$`)
+	calloutPattern         = regexp.MustCompile(`^(\s*>\s*)\[!([A-Za-z]+)\](?:\s+(.+))?\s*$`)
+	proofTitleWordPattern  = regexp.MustCompile(`(?i)^proof\b`)
+	layoutAttrPattern      = regexp.MustCompile(`(?i)([A-Za-z][A-Za-z0-9_-]*)\s*[:=]\s*("[^"]*"|'[^']*'|[^,;\s]+)|([A-Za-z][A-Za-z0-9_-]*)`)
+	layoutDimension        = regexp.MustCompile(`^(\d+(?:\.\d+)?)(%|px|em|rem|vw|vh|ch)?$`)
+	tikzDocumentPattern    = regexp.MustCompile(`(?i)\\documentclass\b|\\begin\s*\{\s*document\s*\}`)
+	tikzPicturePattern     = regexp.MustCompile(`(?is)\\begin\s*\{\s*tikzpicture\s*\}.*\\end\s*\{\s*tikzpicture\s*\}`)
+	columnsAnchorPattern   = regexp.MustCompile(`\s+\{#[0-9a-fA-F-]+\}\s*$`)
+	widgetAnchorPattern    = regexp.MustCompile(`(?:^|[ \t]+)\{#[A-Za-z0-9][A-Za-z0-9._:-]{2,127}(?:[ \t]+[^{}\r\n]*)?\}$`)
+	widgetAttributePattern = regexp.MustCompile(`(?:^|[ \t]+)(\{[^{}]*\})$`)
+	colMarkerPattern       = regexp.MustCompile(`(?i)^[ \t]*#\+col(?:[ \t]+(\{[^{}\r\n]*\}))?[ \t]*$`)
+	colOrgOpenPattern      = regexp.MustCompile(`(?i)^[ \t]*#\+begin[ \t]+([A-Za-z][\w-]*)\b`)
+	colOrgClosePattern     = regexp.MustCompile(`(?i)^[ \t]*#\+end[ \t]+([A-Za-z][\w-]*)[ \t]*$`)
 )
+
+var documentWidgetOptions = map[string][]string{
+	"chart":    {"type", "accent"},
+	"timeline": {"orientation", "card", "list-style"},
+	"steps":    {"list-style"},
+}
 
 var defaultEnvironment = map[string]string{
 	"definition": "definition", "define": "definition", "theorem": "theorem", "lemma": "lemma",
@@ -1628,12 +1634,15 @@ func subparagraphLatex(rawTitle string, options Options) string {
 }
 
 func environmentOpen(kind, title string, options Options) (string, string) {
-	if kind == "chart" {
-		title = strings.TrimSpace(chartAnchorPattern.ReplaceAllString(title, ""))
-		if suffix := chartAttributePattern.FindStringSubmatchIndex(title); suffix != nil {
+	if keys := documentWidgetOptions[kind]; len(keys) > 0 {
+		title = strings.TrimSpace(widgetAnchorPattern.ReplaceAllString(title, ""))
+		if suffix := widgetAttributePattern.FindStringSubmatchIndex(title); suffix != nil {
 			attributes := layoutAttrsFromTitle(title[suffix[2]:suffix[3]])
-			if attributes["type"] != "" || attributes["accent"] != "" {
-				title = strings.TrimRight(title[:suffix[0]], " \t")
+			for _, key := range keys {
+				if attributes[key] != "" {
+					title = strings.TrimRight(title[:suffix[0]], " \t")
+					break
+				}
 			}
 		}
 	}
