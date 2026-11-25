@@ -137,6 +137,8 @@ import type {
   WritingModeOptions,
 } from "../editor-api.ts";
 
+import { renderedConstructAt } from "./extensions/visual/constructs/registry.ts";
+
 function sourceRangeElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof Element) {
     return target.closest<HTMLElement>("[data-cm-source-from][data-cm-source-to]");
@@ -150,7 +152,8 @@ function sourceRangeElement(target: EventTarget | null): HTMLElement | null {
 function sourceAnchorForClick(source: HTMLElement, event: MouseEvent, from: number, to: number): number {
   const explicit = Number(source.dataset.cmSourceAnchor);
   if (Number.isFinite(explicit)) {
-    return Math.max(from, Math.min(to, explicit));
+    const originalFrom = Number(source.dataset.cmSourceFrom);
+    return Math.max(from, Math.min(to, from + explicit - originalFrom));
   }
   const rect = source.getBoundingClientRect();
   // Inline math is delimited by the two-character `\(` … `\)`; other inline
@@ -538,9 +541,14 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     const formula = mathBlock || inlineMath
       ? formulaRangeAtWidgetPosition(view.state, widgetPosition ?? datasetFrom)
       : null;
-    const from = formula?.from ?? datasetFrom;
-    const to = formula?.to ?? datasetTo;
-    if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) return;
+    const construct = widgetPosition == null || formula ? null : renderedConstructAt(view, widgetPosition);
+    // A point widget next to open source has a live position too, but does
+    // not occupy the source span written on its DOM.
+    const replacement = construct && construct.from === widgetPosition
+      && construct.to - construct.from === datasetTo - datasetFrom ? construct : null;
+    const from = formula?.from ?? replacement?.from ?? datasetFrom;
+    const to = formula?.to ?? replacement?.to ?? datasetTo;
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to || to > view.state.doc.length) return;
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();

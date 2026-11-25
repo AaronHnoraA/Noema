@@ -3666,6 +3666,21 @@ after
     cleanup();
   });
 
+  test("an image preview beside open source keeps a click within that source", () => {
+    const md = "Before.\n\n![Pic](picture.png)\n\nAfter.";
+    const { editor, cleanup } = mountCM6(md);
+    try {
+      const from = md.indexOf("![Pic]");
+      editor.setMarkdownSelection(from + 3);
+      const preview = document.querySelector(".cm-image-widget")!;
+      expect(editor.view.posAtDOM(preview)).toBe(md.indexOf("\n\nAfter"));
+      preview.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      expect(editor.getMarkdownSelection().from).toBe(from + 1);
+    } finally {
+      cleanup();
+    }
+  });
+
   test("every click maps through the painted layout when CM coords drift, wrapped figures or not", async () => {
     const md = "![alt](missing.png)\n\nhello world";
     const { editor, cleanup } = mountCM6(md);

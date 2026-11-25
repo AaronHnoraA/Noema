@@ -286,6 +286,7 @@ function envLabel(kind: string): string {
     comment: "Comment",
     summary: "Summary",
     fold: "Fold",
+    progress: "Progress",
     tikz: "TikZ",
     convention: "Convention",
     axiom: "Axiom",
@@ -1286,6 +1287,31 @@ function tikzTitleLayout(title: string): LayoutAttrs {
   return imageLayoutFromAttrs(trailing.attrs);
 }
 
+const PROGRESS_ITEM = /^( {0,3})[-+*][ \t](.+)[:：][ \t]*(\d+(?:\.\d+)?)[ \t]*(?:%|\/[ \t]*(\d+(?:\.\d+)?))[ \t]*$/;
+
+function renderProgressBody(md: MarkdownIt, body: string): string | null {
+  const rows: string[] = [];
+  let indent: string | undefined;
+  for (const line of body.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const match = PROGRESS_ITEM.exec(line);
+    if (!match) return null;
+    indent ??= match[1];
+    if (match[1] !== indent) return null;
+    const label = match[2]!.trim();
+    const value = Number(match[3]);
+    const max = match[4] === undefined ? 100 : Number(match[4]);
+    if (!label || !Number.isFinite(value) || !Number.isFinite(max) || max <= 0) return null;
+    const shown = match[4] === undefined ? `${match[3]}%` : `${match[3]}/${match[4]}`;
+    rows.push(
+      `<div class="noema-progress-row"><div class="noema-progress-label">${md.renderInline(label)}</div>`
+      + `<progress class="noema-progress-bar" value="${Math.min(value, max)}" max="${max}" aria-label="${escapeAttr(label)}"></progress>`
+      + `<div class="noema-progress-value">${shown}</div></div>`,
+    );
+  }
+  return rows.length ? `<div class="noema-progress-rows">${rows.join("")}</div>` : null;
+}
+
 function renderOrgEnv(
   md: MarkdownIt,
   tokens: Token[],
@@ -1331,7 +1357,8 @@ function renderOrgEnv(
   const title = meta.title;
   const blockId = meta.blockId;
   const label = envLabel(kind);
-  const body = meta.body.trim() ? md.render(meta.body) : "";
+  const progress = kind.toLowerCase() === "progress" ? renderProgressBody(md, meta.body) : null;
+  const body = progress ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kind.toLowerCase() === "fold") {
     return [
       `<details class="org-env-fold" data-kind="fold" data-title="${escapeAttr(title)}" data-label="${escapeAttr(label)}">`,

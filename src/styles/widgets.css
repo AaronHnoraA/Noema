@@ -1061,6 +1061,55 @@
   font: 0.9em sans-serif;
 }
 
+/* Progress rows share the org-env colors and spacing of their surroundings. */
+.noema-progress-rows {
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(2rem, 3fr) max-content;
+  align-items: center;
+  gap: 0.24em 0.8em;
+}
+
+.noema-progress-row { display: contents; }
+
+.noema-progress-label {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.noema-progress-value {
+  text-align: end;
+  color: var(--aaron-role-faded, var(--muted-foreground, currentColor));
+}
+
+.noema-progress-bar {
+  display: block;
+  inline-size: 100%;
+  block-size: 0.35em;
+  appearance: none;
+  border: 0;
+  background: var(--aaron-paper-line, var(--border, #64748b));
+  border-radius: 1em;
+  overflow: hidden;
+  accent-color: var(--aaron-title, var(--primary, #517eac));
+}
+
+.noema-progress-bar::-webkit-progress-bar { background: transparent; }
+.noema-progress-bar::-webkit-progress-value { background: var(--aaron-title, var(--primary, #517eac)); }
+.noema-progress-bar::-moz-progress-bar { background: var(--aaron-title, var(--primary, #517eac)); }
+
+@container (max-width: 30rem) {
+  .noema-progress-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 0.25em 0.8em;
+  }
+
+  .noema-progress-bar { grid-area: 2 / 1 / 3 / 3; }
+}
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);

@@ -1680,15 +1680,15 @@ class OrgEnvOpenWidget extends MeasuredWidget {
   kind: string;
   title: string;
   blockId: string;
-  anchor: number;
+  titleOffset: number;
   depth: number;
 
-  constructor(kind: string, title: string, blockId: string, anchor: number, depth: number) {
+  constructor(kind: string, title: string, blockId: string, titleOffset: number, depth: number) {
     super();
     this.kind = kind;
     this.title = title;
     this.blockId = blockId;
-    this.anchor = anchor;
+    this.titleOffset = titleOffset;
     this.depth = depth;
   }
 
@@ -1702,7 +1702,7 @@ class OrgEnvOpenWidget extends MeasuredWidget {
     return this.kind === other.kind
       && this.title === other.title
       && this.blockId === other.blockId
-      && this.anchor === other.anchor
+      && this.titleOffset === other.titleOffset
       && this.depth === other.depth;
   }
 
@@ -1743,7 +1743,8 @@ class OrgEnvOpenWidget extends MeasuredWidget {
     div.addEventListener("mousedown", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const anchor = Math.max(0, Math.min(this.anchor, view.state.doc.length));
+      const line = view.state.doc.lineAt(view.posAtDOM(div, -1));
+      const anchor = Math.min(line.to, line.from + this.titleOffset);
       preserveEditorViewport(view, () => {
         view.dispatch({ selection: { anchor } });
         view.focus();
@@ -4946,6 +4947,52 @@ class HtmlWidget extends MeasuredWidget {
   ignoreEvent(): boolean { return true; }
 }
 
+class ProgressWidget extends MeasuredWidget {
+  readonly body: string;
+  readonly from: number;
+  readonly to: number;
+  readonly depth: number;
+
+  constructor(block: OrgEnvBlock) {
+    super();
+    this.body = block.body;
+    this.from = block.bodyFrom;
+    this.to = block.bodyTo - 1;
+    this.depth = block.depth;
+  }
+
+  protected measureKey(): string { return "progress:" + shortHash(this.body); }
+
+  protected measureGroupKey(): string {
+    return `progress:rows:${Math.min(8, Math.ceil(this.body.split("\n").length / 5))}`;
+  }
+
+  protected estimatedHeightFallback(): number {
+    return this.body.split("\n").length * 28;
+  }
+
+  eq(other: ProgressWidget): boolean {
+    return this.body === other.body && this.from === other.from && this.to === other.to && this.depth === other.depth;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const block = document.createElement("div");
+    block.className = "cm-progress-env-widget cm-org-env-line";
+    block.dataset.orgEnvKind = "progress";
+    block.style.setProperty("--org-env-depth", String(this.depth));
+    setSourceRange(block, this.from, this.to);
+    block.dataset.cmOpenSource = "true";
+    block.innerHTML = renderMarkdownHTML(buildOrgEnvSource("progress", "", this.body));
+    const content = block.querySelector(":scope > org-env-block > .org-env-content");
+    if (content) block.replaceChildren(content);
+    enhanceRenderedMarkdown(block);
+    stopInteractiveWidgetEvents(block);
+    return this.registerMeasured(block, view);
+  }
+
+  ignoreEvent(): boolean { return false; }
+}
+
 class TikzWidget extends MeasuredWidget {
   title: string;
   body: string;
@@ -5616,7 +5663,7 @@ function addOrgEnvBoundaryDecos(
   if (!openActive) {
     decos.push(
       Decoration.replace({
-        widget: new OrgEnvOpenWidget(block.kind, block.title, block.blockId, block.titleAnchor, block.depth),
+        widget: new OrgEnvOpenWidget(block.kind, block.title, block.blockId, block.titleAnchor - block.openFrom, block.depth),
         block: true,
       }).range(block.openFrom, block.openTo),
     );
@@ -6096,6 +6143,9 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 // Decoration builder (full-doc scan — these constructs are sparse)
 // ---------------------------------------------------------------------------
 
+const sourceRevealEnvironments = new Set(["comment", "fold", "av", "embed", "progress"]);
+const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
+
 function addOrgEnvBlockExtraDecos(
   decos: CMRange<Decoration>[],
   occupied: Array<[number, number]> | null,
@@ -6200,6 +6250,14 @@ function addOrgEnvBlockExtraDecos(
     return;
   }
   addOrgEnvBoundaryDecos(decos, state, block);
+  if (block.kind === "progress" && block.body.trim() && !opensSource(state, block.from, block.to)) {
+    const widget = new ProgressWidget(block);
+    decos.push(Decoration.replace({
+      widget,
+      block: true,
+    }).range(widget.from, widget.to));
+    occupied?.push([block.bodyFrom, block.bodyTo]);
+  }
 }
 
 function buildBlockExtraDecoRanges(
@@ -6406,11 +6464,13 @@ function activeBlockExtraKey(state: EditorState): string {
       }
       continue;
     }
-    if (((block.kind === "comment" || block.kind === "fold" || block.kind === "av" || block.kind === "embed") && opensSource(state, block.from, block.to))
+    if ((sourceRevealEnvironments.has(block.kind) && opensSource(state, block.from, block.to))
         || (block.kind === "ediff" && opensSource(state, block.from, block.to, "caret-interior"))
         || (block.kind === "tikz" && tikzSourceActive(state, block))) {
       parts.push(`${block.kind}:${block.from}:${block.to}`);
-      continue;
+      // Progress replaces only the body. Its heading and footer still track
+      // caret transitions independently while the body source is open.
+      if (block.kind !== "progress") continue;
     }
     if (opensSource(state, block.openFrom, block.openTo)) {
       parts.push(`org-open:${block.openFrom}:${block.openTo}:${block.from}:${block.to}`);
@@ -6463,8 +6523,7 @@ function canMapBlockExtraDecos(state: EditorState, changes: ChangeSet): boolean 
   if (blocks.some((block) => (
     block.kind === "columns"
       ? changesTouchColumnsStructure(state, changes, block)
-      : (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz" || block.kind === "av" || block.kind === "embed" || block.kind === "ediff")
-        && changesTouchRange(changes, block.from, block.to)
+      : wholeBlockEnvironments.has(block.kind) && changesTouchRange(changes, block.from, block.to)
   ))) {
     return false;
   }
@@ -6484,8 +6543,7 @@ function canPatchBlockExtraDecosNearChanges(state: EditorState, changes: ChangeS
   return !blocks.some((block) => (
     block.kind === "columns"
       ? changesTouchColumnsStructure(state, changes, block)
-      : (block.kind === "meta" || block.kind === "comment" || block.kind === "fold" || block.kind === "html" || block.kind === "tikz" || block.kind === "av" || block.kind === "embed" || block.kind === "ediff")
-        && changesTouchRange(changes, block.from, block.to)
+      : wholeBlockEnvironments.has(block.kind) && changesTouchRange(changes, block.from, block.to)
   ));
 }
 
@@ -6536,9 +6594,7 @@ function patchBlockExtraDecosForOrgEnvTitleChange(
     || block.kind === "columns"
     || (block.kind === "ediff" && !opensSource(state, block.from, block.to, "caret-interior"))
     || (block.kind === "tikz" && !tikzSourceActive(state, block))
-    || (block.kind === "av" && !opensSource(state, block.from, block.to))
-    || (block.kind === "embed" && !opensSource(state, block.from, block.to))
-    || ((block.kind === "comment" || block.kind === "fold") && !opensSource(state, block.from, block.to));
+    || (sourceRevealEnvironments.has(block.kind) && !opensSource(state, block.from, block.to));
   const ranges = fullBlockWidgetActive
     ? [{ from: block.from, to: block.to }]
     : [{ from: block.openFrom, to: block.openTo }, { from: block.closeFrom, to: block.closeTo }];

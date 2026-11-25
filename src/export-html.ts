@@ -207,7 +207,7 @@ function stripAttrs(el: Element): void {
       attr.name === "contenteditable" ||
       attr.name === "data-pos" ||
       attr.name === "data-unsafe-href" ||
-      attr.name.startsWith("aria-")
+      (attr.name.startsWith("aria-") && !(el.localName === "progress" && attr.name === "aria-label"))
     ) {
       el.removeAttribute(attr.name);
     }
