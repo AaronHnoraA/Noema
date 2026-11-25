@@ -69,6 +69,7 @@ describe("the viewport has one owner", () => {
     const owners: Record<string, string> = {
       "src/cm6/editor-cm6.ts": "jumping to a heading from the outline",
       "src/cm6/extensions/visual/widgets/block-extras.ts": "jumping to a heading from a [toc] entry",
+      "src/cm6/extensions/visual/widgets/document-trees.ts": "revealing the tree control the reader just focused with a navigation key",
     };
     const offenders = editorFiles
       .filter((path) => !(path in owners))

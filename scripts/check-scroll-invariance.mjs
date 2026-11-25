@@ -49,6 +49,8 @@ const constructs = [
   "#+begin tabs Guide\n### Overview\nA tab holds this ordinary paragraph.\n### Details\nDetails with **emphasis**.\n#+end tabs",
   "#+begin accordion Review {open=1}\n### Source\nThe first disclosure has a longer explanation and an ordinary list.\n### Limits\nMore detail.\n#+end accordion",
   "#+begin diff Layout review\n~~~text\nDraft source marker\nrows=2\nwidth=small\n~~~\n\n~~~text\nDraft source marker\nrows=3\nwidth=auto\n~~~\n#+end diff",
+  "#+begin file-tree Paths {collapsible=true clickable=true}\n- source\n  - overview.md\n  - options.md\n#+end file-tree",
+  "#+begin code-tree Samples\n### layout/render.js\n~~~javascript\nconst render = true;\n~~~\n\n### layout/panel.js\n~~~javascript\nconst panel = true;\n~~~\n#+end code-tree",
   "#+begin columns\nLeft column prose.\n\n#+col\n\nRight column prose.\n#+end columns",
   "A sentence with @@comment [inline note] attached.",
   "```python\nprint('hello')\nfor i in range(3):\n    print(i)\n```",
@@ -137,6 +139,8 @@ try {
         ["tabs", "### Overview"],
         ["accordion", "### Source"],
         ["diff", "~~~text\nDraft source marker"],
+        ["file-tree", "- source\n  - overview.md"],
+        ["code-tree", "### layout/render.js"],
         ["footnote", "[^1] too", "navigates"],
       ].filter(([family]) => !process.env.ONLY || process.env.ONLY.split(",").includes(family)).map(([family, needle, click = "opens"]) => {
         const at = markdown.indexOf(needle);
@@ -181,7 +185,9 @@ try {
         // sits below the box top, which is not movement.
         const lineTop = editor.view.documentTop + editor.view.lineBlockAt(editor.view.state.doc.lineAt(from).from).top;
         // The middle: a corner can be a tool (a table toolbar button), not the construct.
-        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2,
+        const previewHead = el.querySelector(".noema-code-tree-path")?.getBoundingClientRect();
+        return { x: previewHead ? previewHead.left + 2 : rect.left + rect.width / 2,
+          y: previewHead ? previewHead.top + previewHead.height / 2 : rect.top + rect.height / 2,
           top: host.scrollTop, lineTop, cls: String(el.className).split(/\s+/)[0] };
       }, { from, to });
       /** Sample the viewport for MS after an action: every scrollTop it passed through. */
@@ -283,6 +289,33 @@ try {
             after.top != null && Math.abs(after.top - text.top) <= TOLERANCE && Math.abs(after.head - text.pos) <= 1,
             { textTop: text.top, after });
         }
+      }
+
+      if (targets.some(({ family }) => family === "code-tree")) {
+        const from = markdown.indexOf("### layout/render.js");
+        await scrollTo(from, "unfocused start");
+        const tree = page.locator(".noema-document-code-tree");
+        const preview = tree.locator("pre code");
+        const text = await preview.evaluate((el) => {
+          const node = document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode();
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const rect = range.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, mid: (rect.top + rect.bottom) / 2 };
+        });
+        await page.mouse.move(text.left, text.mid);
+        await page.mouse.down();
+        await page.mouse.move(text.right, text.mid, { steps: 6 });
+        await page.mouse.up();
+        const selected = await page.evaluate(() => document.getSelection().toString());
+        record("code-tree native drag selects preview text", selected.includes("const"), { selected });
+        await page.evaluate(() => document.getSelection().removeAllRanges());
+        const before = await page.evaluate(() => host.scrollTop);
+        await tree.getByRole("button", { name: "panel.js" }).press("Enter");
+        const path = await sample(500);
+        const file = await preview.textContent();
+        record("code-tree switching previews stays on the same page", file === "const panel = true;\n"
+          && path.every((top) => Math.abs(top - before) <= TOLERANCE), { file, before, after: path.at(-1) });
       }
 
       // A table's inline formula opens a real CM6 cell. Its source line is

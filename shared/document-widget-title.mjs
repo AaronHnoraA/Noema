@@ -23,6 +23,8 @@ const attributesByKind = new Map([
   ["details", ["open"]],
   ["accordion", ["open", "multiple", "expand"]],
   ["diff", ["before", "after", "view"]],
+  ["file-tree", ["lines", "collapsible", "clickable", "icon", "open-depth"]],
+  ["code-tree", ["lines", "icon", "height", "open-depth"]],
 ]);
 
 export function hasDocumentWidgetOptions(kind) { return attributesByKind.has(kind); }

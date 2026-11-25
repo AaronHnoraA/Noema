@@ -26,6 +26,7 @@ const ENV_MAP = new Map([
 ]);
 const REMARK_BLOCKS = new Set(["comment", "summary", "note", "important", "warning", "attention", "fold"]);
 const HIDDEN_BLOCKS = new Set(["lean4", "src", "source", "meta", "ediff"]);
+const literalCodeEnvironments = new Set(["diff", "code-tree"]);
 const PRIVATE_INLINE = new Set(["todo", "itodo", "project", "milestone", "clock", "comment", "cell", "lean4", "note-code"]);
 // Review annotations that reach the exported document. Planning bookkeeping
 // (`project`, `milestone`, `clock`) and machine blocks stay private.
@@ -394,6 +395,83 @@ function markdownContainerLine(line) {
   return { content, quoteDepth, prefix: source.slice(0, source.length - content.length) };
 }
 
+const listItemPrefix = /^ *(?:[-+*]|\d{1,9}[.)])(?=[ \t])/;
+
+function leadingIndent(text, start = 0) {
+  let width = start;
+  let end = 0;
+  for (; end < text.length; end += 1) {
+    if (text[end] === " ") width += 1;
+    else if (text[end] === "\t") width += 4 - width % 4;
+    else break;
+  }
+  return { width, end };
+}
+
+function listItemMargin(text, marker) {
+  const { width } = leadingIndent(text.slice(marker.length), marker.length);
+  return width - marker.length > 4 ? marker.length + 1 : width;
+}
+
+function enclosingListMargin(lines, start, quoteDepth, indent) {
+  for (let index = start - 1; index >= 0; index -= 1) {
+    const line = markdownContainerLine(lines[index]);
+    if (!line.content.trim() && !line.quoteDepth) continue;
+    if (line.quoteDepth !== quoteDepth) return -1;
+    const leading = leadingIndent(line.content);
+    if (!line.content.trim() || leading.width >= indent) continue;
+    const text = " ".repeat(leading.width) + line.content.slice(leading.end);
+    const marker = listItemPrefix.exec(text)?.[0];
+    if (marker) {
+      const margin = listItemMargin(text, marker);
+      if (margin <= indent) return margin;
+      return -1;
+    }
+    if (leading.width === 0) return -1;
+  }
+  return -1;
+}
+
+// Keep the Markdown list prefix and measure literal fences from the item's
+// margin. A continued item can contain a tree on a later line.
+function literalCodeList(lines, start, { content, quoteDepth, prefix }) {
+  if (!content.includes("#+")) return null;
+  const leading = leadingIndent(content);
+  const text = " ".repeat(leading.width) + content.slice(leading.end);
+  const marker = listItemPrefix.exec(text)?.[0];
+  const tail = marker ? text.slice(marker.length) : text;
+  const kind = orgOpen(tail.trimStart())?.kind;
+  if (!literalCodeEnvironments.has(kind)) return null;
+  const parent = leading.width === 0 ? -1 : enclosingListMargin(lines, start, quoteDepth, leading.width);
+  if (!marker && (parent < 0 || leading.width - parent > 3)) return null;
+  if (marker && leading.width > Math.max(0, parent) + 3) return null;
+  const indent = marker ? listItemMargin(text, marker) : parent;
+
+  const output = [lines[start]];
+  let fence;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = markdownContainerLine(lines[index]);
+    if (line.quoteDepth !== quoteDepth) return null;
+    if (!line.content.trim()) { output.push(lines[index]); continue; }
+    const padding = leadingIndent(line.content);
+    if (padding.width < indent) return null;
+    const body = " ".repeat(padding.width - indent) + line.content.slice(padding.end);
+    if (fence) {
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(body)?.[1];
+      if (close && close[0] === fence[0] && close.length >= fence.length) fence = undefined;
+      output.push(lines[index]);
+      continue;
+    }
+    if (padding.width - indent <= 3 && orgClose(body.trimStart()) === kind) return { end: index, lines: [...output, lines[index]] };
+    const open = /^ {0,3}(`{3,}|~{3,})/.exec(body);
+    if (!open) { output.push(lines[index]); continue; }
+    fence = open[1];
+    if (markdownContainerLine(lines[index - 1]).content.trim()) output.push(prefix.trimEnd());
+    output.push(line.prefix + " ".repeat(indent) + open[0] + "text");
+  }
+  return null;
+}
+
 function semanticCommandOnLine(line) {
   const content = String(line || "");
   const command = scanInlineCommands(content).find((candidate) => candidate.name === "section" || candidate.name === "part");
@@ -591,7 +669,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
   });
   const output = [];
   const stack = [];
-  const quotedDiffDepths = [];
+  const quotedLiteralDepths = [];
   let hidden = null;
   let hiddenDepth = 0;
   let fence = null;
@@ -681,7 +759,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
       rawColumns.lines.push(line);
       continue;
     }
-    while (quotedDiffDepths.length && quotedDiffDepths.at(-1) > container.quoteDepth) quotedDiffDepths.pop();
+    while (quotedLiteralDepths.length && quotedLiteralDepths.at(-1) > container.quoteDepth) quotedLiteralDepths.pop();
     if (fence && container.quoteDepth !== fence.quoteDepth) {
       output.push(`${fence.prefix}${fence.char.repeat(fence.length)}`);
       fence = null;
@@ -695,11 +773,11 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
     const fenceMatch = container.content.match(/^ {0,3}(`{3,}|~{3,})/);
     if (fenceMatch) {
       fence = { char: fenceMatch[1][0], length: fenceMatch[1].length, quoteDepth: container.quoteDepth, prefix: container.prefix };
-      const literalDiff = quotedDiffDepths.length || stack.some(({ kind }) => kind === "diff");
-      if (literalDiff && container.quoteDepth && markdownContainerLine(lines[index - 1]).content.trim()) {
+      const literalCode = quotedLiteralDepths.length || stack.some(({ kind }) => literalCodeEnvironments.has(kind));
+      if (literalCode && container.quoteDepth && markdownContainerLine(lines[index - 1]).content.trim()) {
         output.push(container.prefix.trimEnd());
       }
-      output.push(literalDiff ? `${container.prefix}${fenceMatch[0]}text` : line);
+      output.push(literalCode ? `${container.prefix}${fenceMatch[0]}text` : line);
       continue;
     }
     if (displayMath && container.quoteDepth !== displayMath.quoteDepth) {
@@ -720,6 +798,15 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
     // but it ends Pandoc's `$$` block (and is an error in TeX), leaving the
     // rest of the formula as text: `\begin{aligned}` outside math mode.
     if (displayMath) { if (container.content.trim()) output.push(line); continue; }
+
+    if (!htmlComment) {
+      const list = literalCodeList(lines, index, container);
+      if (list) {
+        output.push(...list.lines);
+        index = list.end;
+        continue;
+      }
+    }
 
     // A thematic break is a rule in the editor's CommonMark.  Pandoc reads a
     // `---` line followed by text as a YAML metadata block or a multiline table
@@ -797,8 +884,8 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
 
     if (container.quoteDepth) {
       const marker = container.content.trimStart();
-      if (orgOpen(marker)?.kind === "diff") quotedDiffDepths.push(container.quoteDepth);
-      else if (orgClose(marker) === "diff" && quotedDiffDepths.at(-1) === container.quoteDepth) quotedDiffDepths.pop();
+      if (literalCodeEnvironments.has(orgOpen(marker)?.kind)) quotedLiteralDepths.push(container.quoteDepth);
+      else if (literalCodeEnvironments.has(orgClose(marker)) && quotedLiteralDepths.at(-1) === container.quoteDepth) quotedLiteralDepths.pop();
     }
     const begin = orgOpen(line);
     if (begin) {

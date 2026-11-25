@@ -99,6 +99,8 @@ var documentWidgetOptions = map[string][]string{
 	"details":    {"open"},
 	"accordion":  {"open", "multiple", "expand"},
 	"diff":       {"before", "after", "view"},
+	"file-tree":  {"lines", "collapsible", "clickable", "icon", "open-depth"},
+	"code-tree":  {"lines", "icon", "height", "open-depth"},
 }
 
 var defaultEnvironment = map[string]string{
@@ -117,6 +119,8 @@ var privateNames = map[string]bool{
 }
 
 type orgBlock struct{ Kind, Title string }
+
+func literalCodeEnvironment(kind string) bool { return kind == "diff" || kind == "code-tree" }
 
 func orgOpen(line string) *orgBlock {
 	match := orgOpenPattern.FindStringSubmatch(line)
@@ -1403,6 +1407,129 @@ func markdownContainerLine(line string) containerLine {
 	return containerLine{Content: content, Prefix: line[:len(line)-len(content)], QuoteDepth: depth}
 }
 
+var listItemPrefix = regexp.MustCompile(`^ *(?:[-+*]|[0-9]{1,9}[.)])[ \t]`)
+
+func leadingIndent(text string, width int) (int, int) {
+	for index := 0; index < len(text); index++ {
+		switch text[index] {
+		case ' ':
+			width++
+		case '\t':
+			width += 4 - width%4
+		default:
+			return width, index
+		}
+	}
+	return width, len(text)
+}
+
+func listItemMargin(text string, marker int) int {
+	width, _ := leadingIndent(text[marker:], marker)
+	if width-marker > 4 {
+		return marker + 1
+	}
+	return width
+}
+
+func enclosingListMargin(lines []string, start, quoteDepth, indent int) int {
+	for index := start - 1; index >= 0; index-- {
+		line := markdownContainerLine(lines[index])
+		blank := strings.TrimSpace(line.Content) == ""
+		if blank && line.QuoteDepth == 0 {
+			continue
+		}
+		if line.QuoteDepth != quoteDepth {
+			break
+		}
+		width, prefix := leadingIndent(line.Content, 0)
+		if blank || width >= indent {
+			continue
+		}
+		text := strings.Repeat(" ", width) + line.Content[prefix:]
+		if marker := listItemPrefix.FindString(text); marker != "" {
+			margin := listItemMargin(text, len(marker)-1)
+			if margin <= indent {
+				return margin
+			}
+			break
+		}
+		if width == 0 {
+			break
+		}
+	}
+	return -1
+}
+
+// Measure fences relative to a list item's margin, including continued items.
+func literalCodeList(lines []string, start int, container containerLine) ([]string, int) {
+	if !strings.Contains(container.Content, "#+") {
+		return nil, start
+	}
+	width, prefix := leadingIndent(container.Content, 0)
+	text := strings.Repeat(" ", width) + container.Content[prefix:]
+	marker := listItemPrefix.FindString(text)
+	tail := text
+	if marker != "" {
+		tail = text[len(marker)-1:]
+	}
+	begin := orgOpen(strings.TrimLeft(tail, " \t"))
+	if begin == nil || !literalCodeEnvironment(begin.Kind) {
+		return nil, start
+	}
+	parent := -1
+	if width > 0 {
+		parent = enclosingListMargin(lines, start, container.QuoteDepth, width)
+	}
+	indent := parent
+	if marker != "" {
+		if width > max(0, parent)+3 {
+			return nil, start
+		}
+		indent = listItemMargin(text, len(marker)-1)
+	} else if parent < 0 || width-parent > 3 {
+		return nil, start
+	}
+	margin := strings.Repeat(" ", indent)
+	output := []string{lines[start]}
+	var fence *fenceState
+	for index := start + 1; index < len(lines); index++ {
+		line := markdownContainerLine(lines[index])
+		if line.QuoteDepth != container.QuoteDepth {
+			break
+		}
+		if strings.TrimSpace(line.Content) == "" {
+			output = append(output, lines[index])
+			continue
+		}
+		width, prefix := leadingIndent(line.Content, 0)
+		if width < indent {
+			break
+		}
+		body := strings.Repeat(" ", width-indent) + line.Content[prefix:]
+		if fence != nil {
+			if ch, length, ok := fenceRun(body, true); ok && ch == fence.Char && length >= fence.Length {
+				fence = nil
+			}
+			output = append(output, lines[index])
+			continue
+		}
+		if width-indent <= 3 && orgClose(strings.TrimLeft(body, " ")) == begin.Kind {
+			return append(output, lines[index]), index
+		}
+		if ch, length, ok := fenceRun(body, false); ok {
+			fence = &fenceState{Char: ch, Length: length}
+			if strings.TrimSpace(markdownContainerLine(lines[index-1]).Content) != "" {
+				output = append(output, strings.TrimRight(container.Prefix, " \t"))
+			}
+			padding := width - indent
+			output = append(output, line.Prefix+margin+body[:padding+length]+"text")
+		} else {
+			output = append(output, lines[index])
+		}
+	}
+	return nil, start
+}
+
 type braceState struct {
 	Depth int
 	Quote byte
@@ -1817,7 +1944,7 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 	hidden := ""
 	hiddenDepth := 0
 	var fence *fenceState
-	var quotedDiffDepths []int
+	var quotedLiteralDepths []int
 	displayMathDepth := -1
 	displayMathPrefix := ""
 	var rawTikz *tikzBlock
@@ -1913,8 +2040,8 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 			rawColumns.Lines = append(rawColumns.Lines, line)
 			continue
 		}
-		for len(quotedDiffDepths) > 0 && quotedDiffDepths[len(quotedDiffDepths)-1] > container.QuoteDepth {
-			quotedDiffDepths = quotedDiffDepths[:len(quotedDiffDepths)-1]
+		for len(quotedLiteralDepths) > 0 && quotedLiteralDepths[len(quotedLiteralDepths)-1] > container.QuoteDepth {
+			quotedLiteralDepths = quotedLiteralDepths[:len(quotedLiteralDepths)-1]
 		}
 		if fence != nil && container.QuoteDepth != fence.QuoteDepth {
 			output = append(output, fence.Prefix+strings.Repeat(string(fence.Char), fence.Length))
@@ -1929,14 +2056,14 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 		}
 		if ch, length, ok := fenceRun(container.Content, false); ok {
 			fence = &fenceState{Char: ch, Length: length, QuoteDepth: container.QuoteDepth, Prefix: container.Prefix}
-			literalDiff := len(quotedDiffDepths) > 0
+			literalCode := len(quotedLiteralDepths) > 0
 			for _, opened := range stack {
-				if opened.Kind == "diff" {
-					literalDiff = true
+				if literalCodeEnvironment(opened.Kind) {
+					literalCode = true
 					break
 				}
 			}
-			if literalDiff {
+			if literalCode {
 				indent := len(container.Content) - len(strings.TrimLeft(container.Content, " "))
 				line = container.Prefix + container.Content[:indent+length] + "text"
 				if container.QuoteDepth > 0 && index > 0 && strings.TrimSpace(markdownContainerLine(lines[index-1]).Content) != "" {
@@ -1968,6 +2095,13 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 				output = append(output, line)
 			}
 			continue
+		}
+		if !htmlComment {
+			if list, end := literalCodeList(lines, index, container); list != nil {
+				output = append(output, list...)
+				index = end
+				continue
+			}
 		}
 		// A thematic break is a rule in the editor's CommonMark.  Pandoc reads a
 		// `---` line followed by text as a YAML metadata block or a multiline
@@ -2050,10 +2184,10 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 		}
 		if container.QuoteDepth > 0 {
 			marker := strings.TrimLeft(container.Content, " \t")
-			if begin := orgOpen(marker); begin != nil && begin.Kind == "diff" {
-				quotedDiffDepths = append(quotedDiffDepths, container.QuoteDepth)
-			} else if orgClose(marker) == "diff" && len(quotedDiffDepths) > 0 && quotedDiffDepths[len(quotedDiffDepths)-1] == container.QuoteDepth {
-				quotedDiffDepths = quotedDiffDepths[:len(quotedDiffDepths)-1]
+			if begin := orgOpen(marker); begin != nil && literalCodeEnvironment(begin.Kind) {
+				quotedLiteralDepths = append(quotedLiteralDepths, container.QuoteDepth)
+			} else if literalCodeEnvironment(orgClose(marker)) && len(quotedLiteralDepths) > 0 && quotedLiteralDepths[len(quotedLiteralDepths)-1] == container.QuoteDepth {
+				quotedLiteralDepths = quotedLiteralDepths[:len(quotedLiteralDepths)-1]
 			}
 		}
 		if begin := orgOpen(line); begin != nil {

@@ -1,6 +1,76 @@
 {
   "cases": [
     {
+      "name": "tab-continued-code-tree-keeps-fences-literal",
+      "markdown": "1.  Text before\n\n\t#+begin code-tree Samples\n\t### a.tex\n\t~~~{=latex}\n\t\\textbf{literal sample}\n\t~~~\n\n\t### b.html\n\t~~~{=html}\n\t<b>literal sample</b>\n\t~~~\n\t#+end code-tree\n\n~~~{=latex}\n\\par outside\n~~~",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "1.  Text before\n\n\t#+begin code-tree Samples\n\t### a.tex\n\n    ~~~text\n\t\\textbf{literal sample}\n\t~~~\n\n\t### b.html\n\n    ~~~text\n\t<b>literal sample</b>\n\t~~~\n\t#+end code-tree\n\n~~~{=latex}\n\\par outside\n~~~",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "nested-list-code-tree-keeps-fences-literal",
+      "markdown": "- Top\n  - Level 2\n    - #+begin code-tree Samples\n      ### a.tex\n      ~~~{=latex}\n      \\textbf{literal sample}\n      ~~~\n\n      ### b.html\n      ~~~{=html}\n      <b>literal sample</b>\n      ~~~\n      #+end code-tree\n\n~~~{=latex}\n\\par outside\n~~~",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "- Top\n  - Level 2\n    - #+begin code-tree Samples\n      ### a.tex\n\n      ~~~text\n      \\textbf{literal sample}\n      ~~~\n\n      ### b.html\n\n      ~~~text\n      <b>literal sample</b>\n      ~~~\n      #+end code-tree\n\n~~~{=latex}\n\\par outside\n~~~",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "continued-list-code-tree-keeps-fences-literal",
+      "markdown": "- Text before\n\n  #+begin code-tree Samples\n  ### a.tex\n  ~~~{=latex}\n  \\textbf{literal sample}\n  ~~~\n\n  ### b.html\n  ~~~{=html}\n  <b>literal sample</b>\n  ~~~\n  #+end code-tree\n\n~~~{=latex}\n\\par outside\n~~~",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "- Text before\n\n  #+begin code-tree Samples\n  ### a.tex\n\n  ~~~text\n  \\textbf{literal sample}\n  ~~~\n\n  ### b.html\n\n  ~~~text\n  <b>literal sample</b>\n  ~~~\n  #+end code-tree\n\n~~~{=latex}\n\\par outside\n~~~",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "quoted-ordered-list-diff-keeps-fences-literal",
+      "markdown": "> 12. #+begin diff Plain\n>     ~~~{=latex}\n>     \\textbf{literal sample}\n>     ~~~\n>\n>     ~~~{=html}\n>     <b>literal sample</b>\n>     ~~~\n>     #+end diff\n\n~~~{=latex}\n\\par outside\n~~~",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "> 12. #+begin diff Plain\n>\n>     ~~~text\n>     \\textbf{literal sample}\n>     ~~~\n>\n>     ~~~text\n>     <b>literal sample</b>\n>     ~~~\n>     #+end diff\n\n~~~{=latex}\n\\par outside\n~~~",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "list-code-tree-keeps-fences-literal",
+      "markdown": "- #+begin code-tree Raw\n  ### a.tex\n  ~~~{=latex}\n  \\textbf{literal sample}\n  ~~~\n\n  ### b.html\n  ~~~{=html}\n  <b>literal sample</b>\n  ~~~\n  #+end code-tree\n\n~~~{=latex}\n\\par outside\n~~~",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "- #+begin code-tree Raw\n  ### a.tex\n\n  ~~~text\n  \\textbf{literal sample}\n  ~~~\n\n  ### b.html\n\n  ~~~text\n  <b>literal sample</b>\n  ~~~\n  #+end code-tree\n\n~~~{=latex}\n\\par outside\n~~~",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "quoted-diff-keeps-fences-literal-without-affecting-outside-fences",
       "markdown": "> #+begin diff\n> ~~~{=latex}\n> \\textbf{literal sample}\n> ~~~\n>\n> ~~~{=html}\n> <b>literal sample</b>\n> ~~~\n> #+end diff\n\n~~~{=latex}\n\\par outside\n~~~",
       "options": {},

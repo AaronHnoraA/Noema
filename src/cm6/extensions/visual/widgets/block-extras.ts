@@ -64,6 +64,8 @@ import { documentViewSourceKey, numberDocumentViews } from "../../../../document
 import { connectDocumentTabViews } from "./document-tabs.ts";
 import { connectDocumentDisclosures } from "./document-disclosures.ts";
 import { connectDocumentDiffs } from "./document-diff.ts";
+import { documentTreeKinds } from "../../../../document-trees.ts";
+import { CODE_TREE_TEXT_SELECTOR, connectDocumentTrees } from "./document-trees.ts";
 import {
   COLUMNS_MAX_COUNT,
   COLUMNS_MIN_WIDTH_PCT,
@@ -96,7 +98,7 @@ import { renderJupyterVariablesTable } from "../../../../jupyter-variables-view.
 import { tocIndexFromState, type MarkdownHeading } from "../../../toc-index.ts";
 import { scanInlineCommands } from "../../../../command-syntax.ts";
 import { semanticOutlineFromCommand, type SemanticOutline } from "../../../../semantic-outline.ts";
-import { highlightCodeForEditor } from "../../../../code-highlight-async.ts";
+import { renderHighlightedCode } from "../../../../code-highlight-dom.ts";
 import { BLOCK_ANCHOR_SOURCE, parseOrgEnvIdentityTitle, shortBlockId } from "../../../../../shared/block-identity.mjs";
 import type { JupyterWidgetKernelMessage } from "../../../../jupyter-widget-runtime.ts";
 import type { JupyterMarkdownParser, WidgetMountFn } from "../../../../jupyter-rendermime.ts";
@@ -608,6 +610,7 @@ const documentNavigationSelector = [
   ".noema-document-breadcrumb a[href]",
   ".noema-document-tabs a[href]",
   ".noema-document-disclosure a[href]",
+  ".noema-document-tree a[href]",
 ].join(", ");
 
 interface DocumentViewScope {
@@ -676,6 +679,7 @@ function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, scope?: Do
     connectDocumentTabViews(content, view, hydrate, locate);
     connectDocumentDisclosures(content, view, hydrate, locate);
     connectDocumentDiffs(content, view, locate);
+    connectDocumentTrees(content, view, locate);
   };
   hydrate(root);
 }
@@ -709,12 +713,16 @@ function nodeElement(node: Node | null | undefined): Element | null {
 
 /** Whether EVENT concerns a selection in `@@cell` read-only text. */
 export function ceilReadOnlyTextEvent(event: Event): boolean {
+  return readOnlyTextEvent(event, CEIL_READONLY_TEXT_SELECTOR);
+}
+
+function readOnlyTextEvent(event: Event, selector: string): boolean {
   if (event.type === "selectionchange") {
     const selection = document.getSelection();
-    return Boolean(nodeElement(selection?.anchorNode)?.closest(CEIL_READONLY_TEXT_SELECTOR));
+    return Boolean(nodeElement(selection?.anchorNode)?.closest(selector));
   }
   const target = event.target instanceof Node ? nodeElement(event.target) : null;
-  return Boolean(target?.closest(CEIL_READONLY_TEXT_SELECTOR));
+  return Boolean(target?.closest(selector));
 }
 
 /** Plain text of a rendered output area, as a reader would copy it. */
@@ -1188,17 +1196,7 @@ function highlightedCeilCode(code: string, language: string): HTMLElement {
   const pre = document.createElement("pre");
   const codeEl = document.createElement("code");
   pre.append(codeEl);
-  const ranges = highlightCodeForEditor(language, code);
-  let pos = 0;
-  for (const range of ranges) {
-    if (range.from > pos) codeEl.append(document.createTextNode(code.slice(pos, range.from)));
-    const span = document.createElement("span");
-    span.className = range.className;
-    span.textContent = code.slice(range.from, range.to);
-    codeEl.append(span);
-    pos = range.to;
-  }
-  if (pos < code.length) codeEl.append(document.createTextNode(code.slice(pos)));
+  renderHighlightedCode(codeEl, code, language);
   return pre;
 }
 
@@ -3227,7 +3225,7 @@ class FoldWidget extends MeasuredWidget {
     super.destroy(dom);
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(event: Event): boolean { return readOnlyTextEvent(event, CODE_TREE_TEXT_SELECTOR); }
 }
 
 const setColumnsRawSourceEffect = StateEffect.define<{ from: number; raw: boolean } | null>();
@@ -3406,6 +3404,7 @@ function columnsRenderOptions(): RenderMarkdownHTMLOptions {
     documentTabActions: true,
     documentDisclosureActions: true,
     documentDiffActions: true,
+    documentTreeActions: true,
     ...(resolver ? { assetResolver: (src: string) => resolver(src) } : {}),
     ...(noteFile ? { noteFile } : {}),
   };
@@ -3677,7 +3676,7 @@ function focusRenderedColumnPane(
   if (event.button !== 0) return;
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(".cm-column-pane-grip, .cm-columns-toolbar, .cm-columns-divider")) return;
-  if (target?.closest(documentNavigationSelector) || target?.closest(".noema-document-table-view button, .noema-tab-navigation button, .noema-document-diff button, summary")) return;
+  if (target?.closest(documentNavigationSelector) || target?.closest(".noema-document-table-view button, .noema-tab-navigation button, .noema-document-diff button, .noema-document-tree button, summary")) return;
 
   // Cmd/Ctrl-click on a link opens the link directly instead of switching edit focus.
   const link = target?.closest<HTMLAnchorElement>("a[href]") ?? null;
@@ -4251,7 +4250,7 @@ class ColumnsWidget extends MeasuredWidget {
     super.destroy(dom);
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(event: Event): boolean { return readOnlyTextEvent(event, CODE_TREE_TEXT_SELECTOR); }
 }
 
 /**
@@ -4457,7 +4456,7 @@ class ColumnsActiveTopWidget extends MeasuredWidget {
     super.destroy(dom);
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(event: Event): boolean { return readOnlyTextEvent(event, CODE_TREE_TEXT_SELECTOR); }
 }
 
 /** Bottom spacer + closing hairline for active WYSIWYG column editing. */
@@ -5154,7 +5153,7 @@ class DocumentDataWidget extends MeasuredWidget {
     super.destroy(dom);
   }
 
-  ignoreEvent(): boolean { return false; }
+  ignoreEvent(event: Event): boolean { return readOnlyTextEvent(event, CODE_TREE_TEXT_SELECTOR); }
 }
 
 class TikzWidget extends MeasuredWidget {
@@ -6311,7 +6310,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 
 const documentDataEnvironments = new Set([
   "progress", "stats", "chart", "timeline", "steps", "table", ...documentFrameKinds, ...documentReadingKinds,
-  "qrcode", ...documentTabKinds, "accordion", "diff",
+  "qrcode", ...documentTabKinds, "accordion", "diff", ...documentTreeKinds,
 ]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "details", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);

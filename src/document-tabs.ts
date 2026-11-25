@@ -12,7 +12,7 @@ interface Page {
   line: number;
 }
 
-export function headingLabel(md: MarkdownIt, token: Token, environment: object): string {
+export function headingLabel(md: MarkdownIt, token: Pick<Token, "content" | "children">, environment: object): string {
   const children = (token.children ?? []).map((child) => {
     if (child.type !== "code_inline" && child.type !== "math_inline") return child;
     const text = new Token("text", "", 0);

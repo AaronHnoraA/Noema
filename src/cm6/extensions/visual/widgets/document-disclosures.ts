@@ -46,7 +46,7 @@ export function connectDocumentDisclosures(root: HTMLElement, view: EditorView, 
       if (!view.dom.contains(group)) return;
       const position = locate(group);
       const choice = position === null ? undefined : view.state.field(documentViewState, false)?.get(position);
-      show(typeof choice === "object" ? choice.filter((index) => index < items.length) : authored);
+      show(typeof choice === "object" && "filter" in choice ? choice.filter((index) => index < items.length) : authored);
     };
     if (view.dom.contains(group)) initialize();
     else queueMicrotask(initialize);

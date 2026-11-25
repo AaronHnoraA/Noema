@@ -22,6 +22,7 @@ import { documentQrFence, documentQrHasText, renderDocumentQrcode } from "./docu
 import { documentTabKinds, renderDocumentTabs } from "./document-tabs.ts";
 import { documentDisclosureKinds, renderDocumentDisclosure } from "./document-disclosures.ts";
 import { documentDiffSides, renderDocumentDiff } from "./document-diff.ts";
+import { documentCodeTree, documentTreeKinds, renderDocumentTree } from "./document-trees.ts";
 import { forEachDocumentViewTree } from "./document-view.ts";
 import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
@@ -98,6 +99,8 @@ export type RenderMarkdownHTMLOptions = {
   documentDisclosureActions?: boolean;
   /** Include layout and copy controls for a read-only comparison in the editor. */
   documentDiffActions?: boolean;
+  /** Include file and folder controls in editor tree views. */
+  documentTreeActions?: boolean;
   /** Expose every disclosure in a print document. */
   expandDisclosures?: boolean;
   /**
@@ -1402,6 +1405,7 @@ function renderOrgEnv(
     : documentTabKinds.has(kindName) ? renderDocumentTabs(md, kindName, title, meta.body, attrs, options.documentTabActions === true, options.documentViewSource)
     : documentDisclosureKinds.has(kindName) ? renderDocumentDisclosure(md, kindName, title, meta.body, attrs, options.documentDisclosureActions === true, blockId, options.documentViewSource)
     : kindName === "diff" ? renderDocumentDiff(md, title, meta.body, attrs, options.documentDiffActions === true)
+    : documentTreeKinds.has(kindName) ? renderDocumentTree(md, kindName, title, meta.body, attrs, options.documentTreeActions === true)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kindName === "details" && renderedBody !== null) return renderedBody;
@@ -1436,7 +1440,7 @@ function applyTaskCheckboxes(root: ParentNode): void {
   });
 }
 
-const literalFenceEnvironment = /#\+[ \t]*begin[ \t]+(?:qrcode|diff)\b/i;
+const literalFenceEnvironment = /#\+[ \t]*begin[ \t]+(?:qrcode|diff|code-tree)\b/i;
 
 function collectLiteralFenceLines(md: MarkdownIt, markdown: string, start: number, result: Set<number>): void {
   if (!literalFenceEnvironment.test(markdown)) return;
@@ -1448,7 +1452,8 @@ function collectLiteralFenceLines(md: MarkdownIt, markdown: string, start: numbe
     const { kind, title, body } = token.meta as OrgEnvTokenMeta;
     const mode = kind.toLowerCase();
     const fences = mode === "qrcode" && !documentQrHasText("qrcode", title) ? [documentQrFence(md, body)]
-      : mode === "diff" ? documentDiffSides(md, body)?.map(({ fence }) => fence) : undefined;
+      : mode === "diff" ? documentDiffSides(md, body)?.map(({ fence }) => fence)
+      : mode === "code-tree" ? documentCodeTree(md, body)?.files.map(({ fence }) => fence) : undefined;
     if (fences?.some((fence) => fence?.map)) {
       for (const fence of fences) {
         if (!fence?.map) continue;
@@ -1934,6 +1939,7 @@ export function renderEditorWidgetHTML(markdown: string, documentViewSource?: st
   const cacheKind = documentViewSource === undefined ? "editor-widget" : "editor-widget-sections";
   return cachedRender(cacheKind, markdown, () => renderMarkdownHTMLUncached(markdown, {
     documentTableActions: true, documentTabActions: true, documentViewSource, documentDisclosureActions: true, documentDiffActions: true,
+    documentTreeActions: true,
   }));
 }
 
@@ -1976,7 +1982,7 @@ function renderMarkdownHTMLUncached(
     if (multipleImages) applyImageLayoutRows(tree);
     applyTaskCheckboxes(tree);
     if (options?.expandDisclosures) {
-      for (const item of tree.querySelectorAll<HTMLDetailsElement>("details.noema-document-disclosure")) item.open = true;
+      for (const item of tree.querySelectorAll<HTMLDetailsElement>("details.noema-document-disclosure, .noema-document-tree details[data-tree-directory]")) item.open = true;
       return;
     }
     for (const accordion of tree.querySelectorAll('.noema-document-accordion[data-accordion-single="true"]:not([data-view-source])')) {

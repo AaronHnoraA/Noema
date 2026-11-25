@@ -2048,6 +2048,89 @@ ul.noema-document-log > li.noema-log-plain { display: block; }
   }
 }
 
+.noema-document-tree {
+  --tree-line: var(--aaron-paper-line, var(--border, currentColor));
+  --tree-muted: var(--aaron-muted, currentColor);
+  --tree-accent: var(--aaron-link, currentColor);
+  min-inline-size: 0;
+  white-space: normal;
+}
+ul.noema-tree-list { margin: 0; padding: 0; list-style: none; }
+.noema-tree-list li { margin: 0; list-style: none; white-space: normal; }
+.noema-tree-list .noema-tree-list { margin-inline-start: 0.52em; padding-inline-start: 0.76em; }
+.noema-document-tree[data-tree-lines="true"] .noema-tree-list .noema-tree-list { border-inline-start: 1px solid var(--tree-line); }
+.noema-tree-row, .noema-tree-list summary { padding: 0.12em 0.35em; overflow-wrap: anywhere; }
+.noema-tree-list summary { list-style-position: inside; cursor: pointer; }
+.noema-tree-list summary::marker { color: var(--tree-muted); }
+.noema-tree-name, .noema-tree-description { white-space: normal; }
+.noema-tree-description { margin-inline-start: 0.6em; color: var(--tree-muted); }
+.noema-tree-name[data-tree-change="added"] { --tree-change: var(--aaron-green, currentColor); }
+.noema-tree-name[data-tree-change="removed"] { --tree-change: var(--aaron-callout-danger, currentColor); }
+.noema-tree-name[data-tree-change] :is(.noema-tree-change, a) { color: var(--tree-change); }
+.noema-tree-change { margin-inline-end: 0.25em; }
+.noema-document-tree:is([data-tree-icon="simple"], [data-tree-icon="colored"]) .noema-tree-name::before {
+  content: "";
+  display: inline-block;
+  inline-size: 0.52em;
+  block-size: 0.66em;
+  margin-inline-end: 0.42em;
+  border: 1px solid var(--tree-muted);
+  vertical-align: -0.01em;
+}
+.noema-document-tree .noema-tree-name[data-tree-type="directory"]::before { block-size: 0.46em; border-radius: 0.08em; }
+.noema-document-tree[data-tree-icon="colored"] .noema-tree-name[data-tree-type="directory"]::before { border-color: var(--aaron-callout-warning, var(--tree-muted)); }
+.noema-document-tree[data-tree-icon="colored"] .noema-tree-name[data-tree-type="file"]::before { border-color: var(--tree-accent); }
+.noema-document-code-tree { display: flex; flex-wrap: wrap; gap: 0.7em; align-items: flex-start; }
+.noema-code-tree-files { flex: 1 1 11em; min-inline-size: 0; }
+.noema-code-tree-preview { flex: 3 1 23em; min-inline-size: 0; border: 1px solid var(--tree-line); }
+.noema-code-tree-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.2em 0.5em;
+  padding: 0.3em 0.5em;
+  border-block-end: 1px solid var(--tree-line);
+  background: var(--aaron-panel, transparent);
+}
+.noema-code-tree-path { min-inline-size: 0; overflow-wrap: anywhere; color: var(--tree-muted, inherit); }
+.noema-document-code-tree button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.noema-tree-name > button { max-inline-size: 100%; padding: 0.08em 0.28em; }
+.noema-tree-name > button[aria-pressed="true"] {
+  border-color: var(--tree-line);
+  color: var(--tree-accent);
+  background: color-mix(in srgb, var(--tree-accent) 10%, transparent);
+}
+.noema-code-tree-head > button { color: var(--tree-muted); }
+.noema-document-tree :is(button, summary):hover { color: var(--tree-accent); }
+.noema-document-tree :is(a, button, summary):focus-visible { outline: 1px solid var(--tree-accent); outline-offset: -1px; }
+.noema-document-code-tree .noema-code-tree-preview > pre {
+  margin: 0;
+  border: 0;
+  max-block-size: calc(var(--code-tree-height, 18) * 1lh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  cursor: text;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.noema-document-code-tree .noema-code-tree-preview > pre,
+.noema-document-code-tree .noema-code-tree-preview > pre > code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.noema-code-tree-preview > pre:focus-visible { outline: 1px solid var(--tree-accent); outline-offset: -1px; }
+.noema-code-tree-preview > pre::-webkit-scrollbar { width: 0.45em; background: var(--aaron-panel, transparent); }
+.noema-code-tree-preview > pre::-webkit-scrollbar-thumb { background: var(--tree-muted); border: 1px solid var(--aaron-panel, transparent); }
+.noema-document-code-tree-static > section + section { margin-block-start: 0.6em; }
+@media print {
+  .noema-document-tree details[data-tree-directory]::details-content { content-visibility: visible; }
+}
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);
