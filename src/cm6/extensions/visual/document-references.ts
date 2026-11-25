@@ -28,6 +28,7 @@ export function referencesForSource(
   references: MarkdownDocumentReferences | null | undefined, source: string,
 ): MarkdownDocumentReferences | null | undefined {
   if (!references || source.includes("[")) return references;
+  if (references.components.size && /#\+[ \t]*begin[ \t]+component\b/i.test(source)) return references;
   return Object.keys(references.abbreviations).some((key) => source.includes(key.slice(1))) ? references : undefined;
 }
 

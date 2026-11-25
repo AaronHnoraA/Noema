@@ -13,9 +13,8 @@ const textAlignments = new Set(["start", "end", ...alignmentKinds]);
 const surfaces = new Set(["none", "paper", "quiet", "raised"]);
 const cardIcons = new Map([["link", "↗"], ["file", "▤"], ["check", "✓"], ["info", "ⓘ"]]);
 
-export function documentFrameHasDetails(kind: string, rawTitle: string): boolean {
+export function documentFrameHasDetails(kind: string, rawTitle: string, attrs = splitDocumentWidgetTitle(kind, rawTitle).attrs): boolean {
   if (!cardFrameKinds.has(kind) && kind !== "panel") return false;
-  const { attrs } = splitDocumentWidgetTitle(kind, rawTitle);
   if (kind === "panel") return Boolean(attrs.status);
   return Boolean(attrs.description || (attrs.href && safeHref(attrs.href)) || cardIcons.has(attrs.icon?.toLowerCase() || "")
     || (kind === "image-card" && ((attrs.src && safeHref(attrs.src)) || attrs.alt)));

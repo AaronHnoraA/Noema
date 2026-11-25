@@ -2914,6 +2914,10 @@ ul.noema-tree-list { margin: 0; padding: 0; list-style: none; }
   padding: var(--noema-columns-padding, 0);
 }
 .noema-columns-adaptive { position: relative; }
+.noema-columns.noema-columns-adaptive.noema-columns-rule-off:not(.cm-columns-widget):not(.cm-columns-active-top),
+.cm-editor .cm-columns-widget.noema-columns-adaptive.noema-columns-rule-off > .cm-columns-content {
+  border-block-color: transparent;
+}
 .noema-columns-adaptive.noema-columns-valign-center { --noema-column-content-align: center; }
 .noema-columns-adaptive.noema-columns-valign-bottom { --noema-column-content-align: end; }
 .noema-columns-adaptive:is(.noema-columns-valign-top, .noema-columns-valign-stretch) { --noema-column-content-align: start; }
@@ -4183,12 +4187,16 @@ iframe.noema-embed-fullscreen {
   font-weight: 700;
 }
 .cm-editor .cm-org-env-label,
+.cm-editor [data-document-component] > .org-env-heading > .org-env-heading-label,
 .noema-standalone-page .cm-editor .org-env-heading-label {
   display: inline-block;
   font: 700 10px/1.4 ui-monospace, monospace;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: inherit;
+}
+.cm-editor [data-document-component] > .org-env-heading > .org-env-heading-title {
+  border-bottom-color: transparent;
 }
 .cm-editor .cm-org-env-block .org-env-heading-title {
   display: inline-block;

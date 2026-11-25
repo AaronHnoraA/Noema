@@ -10,9 +10,8 @@ const negative = (value?: string) => /^(?:false|no|off|0)$/i.test(value || "");
 
 const surfaces = new Set(["quote", "quiet", "raised", "none"]);
 
-export function nativeCalloutOpening(kind: string, title: string): boolean | null {
+export function nativeCalloutOpening(kind: string, title: string, attrs = splitDocumentWidgetTitle(kind, title).attrs): boolean | null {
   if (!nativeCalloutKinds.has(kind)) return null;
-  const { attrs } = splitDocumentWidgetTitle(kind, title);
   return affirmative(attrs.collapsible) ? !negative(attrs.open) : null;
 }
 

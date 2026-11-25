@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"regexp"
 	"sort"
@@ -899,7 +900,7 @@ func columnsLatexBlocks(spec columnsSpec, panes []columnPane) []string {
 	return out
 }
 
-func columnsLatexExport(kind, title, body string, options Options, unresolved *[]string) ([]string, error) {
+func columnsLatexExport(kind, title, body string, options Options, unresolved *[]string, components map[string]*componentHeader) ([]string, error) {
 	specTitle := title
 	comparisonTitle := ""
 	var comparisonAttrs map[string]string
@@ -917,7 +918,7 @@ func columnsLatexExport(kind, title, body string, options Options, unresolved *[
 		}
 	}
 	if spec.Mode == "flow" {
-		inner, err := Prepare(body, options)
+		inner, err := prepare(body, options, components)
 		if err != nil {
 			return nil, err
 		}
@@ -926,12 +927,12 @@ func columnsLatexExport(kind, title, body string, options Options, unresolved *[
 	}
 	panes := splitColumnPanes(body, kind != "pros-cons")
 	if kind == "pros-cons" && (len(panes) != 2 || strings.TrimSpace(panes[0].Body) == "" || strings.TrimSpace(panes[1].Body) == "") {
-		inner, err := Prepare(body, options)
+		inner, err := prepare(body, options, components)
 		if err != nil {
 			return nil, err
 		}
 		appendWarnings(inner.Warnings)
-		opened, env := environmentOpen(kind, title, options)
+		opened, env := environmentOpen(kind, title, options, nil)
 		return []string{rawLatexBlock(opened), inner.Markdown, rawLatexBlock("\\end{" + env + "}")}, nil
 	}
 	var labels []string
@@ -946,7 +947,7 @@ func columnsLatexExport(kind, title, body string, options Options, unresolved *[
 	}
 	transformed := make([]columnPane, len(panes))
 	for i, pane := range panes {
-		inner, err := Prepare(pane.Body, options)
+		inner, err := prepare(pane.Body, options, components)
 		if err != nil {
 			return nil, err
 		}
@@ -2125,8 +2126,10 @@ func splitWidgetAttrs(title string, keys []string) (string, map[string]string) {
 	return title, nil
 }
 
-func environmentOpen(kind, title string, options Options) (string, string) {
-	title, attributes := exportWidgetTitle(kind, title)
+func environmentOpen(kind, title string, options Options, attributes map[string]string) (string, string) {
+	if attributes == nil {
+		title, attributes = exportWidgetTitle(kind, title)
+	}
 	var entries []string
 	switch kind {
 	case "card", "home-box", "link-card", "image-card":
@@ -2243,9 +2246,16 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 }
 
 func Prepare(markdown string, options Options) (PrepareResult, error) {
+	return prepare(markdown, options, nil)
+}
+
+func prepare(markdown string, options Options, components map[string]*componentHeader) (PrepareResult, error) {
 	source := normalizeNewlines(markdown)
 	lines := strings.Split(source, "\n")
 	yaml, frontMatterEnd := parseYAMLFrontMatter(lines)
+	if components == nil {
+		components = collectDocumentComponents(source, lines, frontMatterEnd+1)
+	}
 	meta := parseMeta(lines, yaml)
 	hiddenKinds := map[string]bool{}
 	for kind := range defaultHiddenBlocks {
@@ -2361,7 +2371,7 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 			if orgClose(line) == rawColumns.Kind {
 				rawColumns.Depth--
 				if rawColumns.Depth == 0 {
-					block, err := columnsLatexExport(rawColumns.Kind, rawColumns.Title, strings.Join(rawColumns.Lines, "\n"), options, &unresolved)
+					block, err := columnsLatexExport(rawColumns.Kind, rawColumns.Title, strings.Join(rawColumns.Lines, "\n"), options, &unresolved, components)
 					if err != nil {
 						return PrepareResult{}, err
 					}
@@ -2561,7 +2571,30 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 				rawColumns = &columnsBlock{Kind: begin.Kind, Title: begin.Title, Line: lineNumber, Lines: []string{}, Depth: 1}
 				continue
 			}
-			opened, env := environmentOpen(begin.Kind, begin.Title, options)
+			kind, title := begin.Kind, begin.Title
+			var inherited map[string]string
+			if kind == "component" {
+				header := parseComponentHeader(title)
+				if header != nil && header.Kind != "" && components[header.Name] != nil {
+					next := index + 1
+					for next < len(lines) && strings.TrimSpace(lines[next]) == "" {
+						next++
+					}
+					if next < len(lines) && orgClose(lines[next]) == "component" {
+						index = next
+						continue
+					}
+				}
+				if header != nil && header.Kind == "" {
+					title = header.Title
+					if base := components[header.Name]; base != nil && componentPropertiesValid(base.Kind, header.Properties) {
+						kind = base.Kind
+						inherited = maps.Clone(base.Properties)
+						maps.Copy(inherited, header.Properties)
+					}
+				}
+			}
+			opened, env := environmentOpen(kind, title, options, inherited)
 			stack = append(stack, openedBlock{begin.Kind, env})
 			output = append(output, rawLatexBlock(opened))
 			continue

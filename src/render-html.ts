@@ -11,6 +11,7 @@ import { cleanEditorHTML } from "./export-html.ts";
 import { connectImagePreview, connectPublishedImages, openMediaViewer } from "./cm6/image-viewer.ts";
 import { connectStandaloneReading } from "./standalone-reading.ts";
 import { installDefinitionLists } from "./markdown-definition-lists.ts";
+import { collectDocumentComponents, parseDocumentComponentHeader, resolveDocumentComponent, type DocumentComponentDefinitions } from "../shared/document-components.mjs";
 import { approvedEdiffMarkdown } from "../shared/ediff-source.mjs";
 import { markdownItCjkEmphasis } from "./cjk-emphasis.ts";
 import { parseCodeInfo } from "./code-info.ts";
@@ -125,7 +126,8 @@ export type RenderMarkdownHTMLOptions = {
   /** Include copy and source inspection controls in live examples. */
   documentSourceActions?: boolean;
   /** Reference definitions from the owning editable document. */
-  documentReferences?: MarkdownDocumentReferences;
+  /** Pass null for a fragment whose parent document has no applicable definitions. */
+  documentReferences?: MarkdownDocumentReferences | null;
   /** Expose every disclosure in a print document. */
   expandDisclosures?: boolean;
   /**
@@ -219,6 +221,7 @@ export type MarkdownDocumentReferences = {
   readonly footnotes: ReadonlyMap<string, MarkdownFootnoteDefinition>;
   readonly links: Record<string, { href: string; title: string }>;
   readonly abbreviations: Readonly<Record<string, string>>;
+  readonly components: DocumentComponentDefinitions;
   readonly signature: string;
 };
 
@@ -698,17 +701,21 @@ function indexNestedDocumentReferences(state: StateCore): void {
 
 /** Read actual Markdown definitions for a source-owned editor, including nested blocks. */
 export function indexMarkdownDocumentReferences(source: string): MarkdownDocumentReferences | null {
-  if (!referenceDefinitionCandidate.test(source)) return null;
-  const md = markdownItForRender();
+  const components = collectDocumentComponents(source);
+  const hasReferences = referenceDefinitionCandidate.test(source);
+  if (!hasReferences && !components.size) return null;
   const env: Record<string, unknown> = {};
-  const tokens: Token[] = [];
-  md.block.parse(source, md, env, tokens);
   const footnotes = new Map<string, MarkdownFootnoteDefinition>();
-  collectDocumentFootnotes(tokens, footnotes);
+  if (hasReferences) {
+    const md = markdownItForRender();
+    const tokens: Token[] = [];
+    md.block.parse(source, md, env, tokens);
+    collectDocumentFootnotes(tokens, footnotes);
+  }
   const links = (env.references ?? {}) as MarkdownDocumentReferences["links"];
   const abbreviations = (env.abbreviations ?? {}) as MarkdownDocumentReferences["abbreviations"];
-  if (!footnotes.size && !Object.keys(links).length && !Object.keys(abbreviations).length) return null;
-  return { footnotes, links, abbreviations, signature: JSON.stringify([[...footnotes.keys()], links, abbreviations]) };
+  if (!footnotes.size && !Object.keys(links).length && !Object.keys(abbreviations).length && !components.size) return null;
+  return { footnotes, links, abbreviations, components, signature: JSON.stringify([[...footnotes.keys()], links, abbreviations, [...components]]) };
 }
 
 export type DefinitionSourceLine = "term" | "body" | "continuation";
@@ -769,6 +776,7 @@ function markdownInDocument(md: MarkdownIt, env: Record<string, unknown>, isolat
     }
     child.references = env.references;
     child.abbreviations = env.abbreviations;
+    child.noemaComponents = env.noemaComponents;
     child.noemaFootnotes = parentNotes;
     child.noemaReferencesIndexed = true;
     return child;
@@ -1589,9 +1597,10 @@ function renderOrgEnv(
   idx: number,
   options: RenderMarkdownHTMLOptions = {},
   plainSourceBodies?: Map<string, string[]>,
+  component?: ReturnType<typeof resolveDocumentComponent>,
 ): string {
   const meta = tokens[idx]!.meta as OrgEnvTokenMeta;
-  const kind = meta.kind;
+  const kind = component?.kind ?? meta.kind;
   if (kind.toLowerCase() === "meta") return renderMetaCover(md, meta.body);
   // Pending review is editor-only; published/exported content is the approved note.
   if (kind.toLowerCase() === "ediff") return "";
@@ -1629,7 +1638,7 @@ function renderOrgEnv(
     return `<div class="${columnsClasses(spec, panes.length)}" style="${columnsStyle(spec, panes.length)}" data-cols="${panes.length}"${idAttr}${adaptive}>${inner}</div>`;
   }
   const kindName = kind.toLowerCase();
-  const { title, attrs } = splitDocumentWidgetTitle(kindName, meta.title);
+  const { title, attrs } = component ?? splitDocumentWidgetTitle(kindName, meta.title);
   const chart = kindName === "chart" ? parseDocumentChartOptions(attrs) : null;
   const blockId = meta.blockId;
   const label = envLabel(kind);
@@ -1667,7 +1676,7 @@ function renderOrgEnv(
     ].join("");
   }
   return [
-    `<org-env-block data-kind="${escapeAttr(kind)}" data-title="${escapeAttr(title)}" data-label="${escapeAttr(label)}"${blockId ? ` data-block-id="${escapeAttr(blockId)}"` : ""} data-comment-open="false">`,
+    `<org-env-block data-kind="${escapeAttr(kind)}" data-title="${escapeAttr(title)}" data-label="${escapeAttr(label)}"${component ? ' data-document-component="true"' : ""}${blockId ? ` data-block-id="${escapeAttr(blockId)}"` : ""} data-comment-open="false">`,
     `<span class="org-env-heading"><span class="org-env-heading-label">${escapeHtml(label)}</span><span class="org-env-heading-title" data-empty="${title ? "false" : "true"}">${md.renderInline(title)}</span>${blockId ? `<span class="org-env-block-id" title="${escapeAttr(blockId)}" aria-label="Block ID ${escapeAttr(blockId)}">#${escapeHtml(shortBlockId(blockId))}</span>` : ""}</span>`,
     `<div class="org-env-content">${body}</div>`,
     "</org-env-block>",
@@ -2058,9 +2067,15 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainSourceBodies?
     ].join("");
   };
   md.renderer.rules.org_env_block = (tokens, idx, _opts, env) => {
-    const kind = (tokens[idx]!.meta as OrgEnvTokenMeta).kind.toLowerCase();
-    const parser = markdownInDocument(md, env as Record<string, unknown>, opaqueReferenceBlocks.has(kind));
-    return renderOrgEnv(parser, tokens, idx, options, plainSourceBodies);
+    const meta = tokens[idx]!.meta as OrgEnvTokenMeta;
+    const kind = meta.kind.toLowerCase();
+    const environment = env as Record<string, unknown>;
+    const definitions = environment.noemaComponents as DocumentComponentDefinitions | undefined;
+    const header = kind === "component" ? parseDocumentComponentHeader(meta.title) : null;
+    if (header?.role === "definition" && !meta.body.trim() && definitions?.has(header.name)) return "";
+    const component = header?.role === "instance" ? resolveDocumentComponent(meta.title, definitions) : null;
+    const parser = markdownInDocument(md, environment, opaqueReferenceBlocks.has(kind));
+    return renderOrgEnv(parser, tokens, idx, options, plainSourceBodies, component);
   };
   md.renderer.rules.semantic_heading_block = renderSemanticHeading;
   md.renderer.rules.front_matter = (tokens, idx, _opts, _env, _renderer) =>
@@ -2315,7 +2330,7 @@ export function renderEditorWidgetHTML(markdown: string, documentViewSource?: st
   const cacheKind = documentViewSource === undefined ? "editor-widget" : "editor-widget-sections";
   const render = () => renderMarkdownHTMLUncached(markdown, {
     documentTableActions: true, documentTabActions: true, documentViewSource, documentDisclosureActions: true, documentDiffActions: true,
-    documentTreeActions: true, documentSourceActions: true, documentReferences: documentReferences ?? undefined,
+    documentTreeActions: true, documentSourceActions: true, documentReferences: documentReferences ?? null,
   });
   return documentReferences ? render() : cachedRender(cacheKind, markdown, render);
 }
@@ -2345,6 +2360,9 @@ function renderMarkdownHTMLUncached(
   }
   const root = document.createElement("div");
   const env: Record<string, unknown> = {};
+  const components = options?.documentReferences === undefined
+    ? collectDocumentComponents(markdown) : options.documentReferences?.components;
+  if (components?.size) env.noemaComponents = components;
   if (options?.documentReferences) {
     const { footnotes, links, abbreviations } = options.documentReferences;
     env.references = Object.assign(Object.create(null), links);

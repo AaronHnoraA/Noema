@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "document-components-retain-native-print-roles-and-fallbacks",
+      "markdown": "\t#+begin note Literal sample\n\n#+begin component First {use=review}\nMain text.\n#+end component\n\n#+begin component review {kind=card width=38ch accent=info description=\"Review notes @@hidden [PRIVATE-PRESET]\"} {#component-review}\n#+end component\n\n#+begin columns\nLeft pane.\n#+col\n#+begin component Second {use=review accent=warning description=\"Detail notes @@hidden [PRIVATE-INSTANCE]\"} {#component-detail}\nNested text.\n#+end component\n#+end columns\n\n#+begin component Fallback {use=review width=bad}\nStill readable.\n#+end component",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\t#+begin note Literal sample\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{card: First}\\par\nReview notes\\par\n```\n\n\nMain text.\n\n\n```{=latex}\n\\end{quote}\n```\n\n\n\n\n\n```{=latex}\n\\noindent\\begin{minipage}[t]{0.485\\textwidth}\n```\n\nLeft pane.\n\n```{=latex}\n\\end{minipage}%\n\\hfill\\begin{minipage}[t]{0.485\\textwidth}\n```\n\n```{=latex}\n\\begin{quote}\n\\textbf{card: Second}\\par\nDetail notes\\par\n```\n\n\nNested text.\n\n\n```{=latex}\n\\end{quote}\n```\n\n```{=latex}\n\\end{minipage}\n```\n\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{component: Fallback}\\par\n```\n\n\nStill readable.\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "definitions-preserve-alias-terms-and-abbreviation-expansions",
       "markdown": "Public API.\n\nEncoder\nWriter\n: Keep **order**.\n\n: Preserve bytes.\n\n*[API]: Application interface.\n\n~~~text\n*[API]: literal example\n~~~",
       "options": {},
@@ -50,7 +64,10 @@
         "meta": {},
         "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{project-tree: Files}\\par\ndocs\\par\n```\n\n\n- Public notes\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
         "warnings": [],
-        "features": { "usesSideComment": false, "usesTikz": false }
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
       }
     },
     {
@@ -61,7 +78,10 @@
         "meta": {},
         "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{include: Current}\\par\ndocs/cache.md\\par\n```\n\n\nPublic fallback.\n\n\n```{=latex}\n\\end{quote}\n```\n\n\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{code-ref: Parser}\\par\nsrc/cache.el\\par\n```\n\n\n~~~elisp\n(message \"Public example\")\n~~~\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
         "warnings": [],
-        "features": { "usesSideComment": false, "usesTikz": false }
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
       }
     },
     {

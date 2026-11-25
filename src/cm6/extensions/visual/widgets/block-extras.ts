@@ -61,6 +61,7 @@ import { figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-
 import { connectDiagramPreview, connectImagePreview, openImageViewer } from "../../../image-viewer.ts";
 import { readLayoutAttrSuffix } from "../../../../layout-attrs.ts";
 import { splitDocumentWidgetTitle } from "../../../../../shared/document-widget-title.mjs";
+import { parseDocumentComponentHeader, resolveDocumentComponent } from "../../../../../shared/document-components.mjs";
 import { connectDocumentTableViews, disconnectDocumentTableViews } from "../../../../document-table-view.ts";
 import { documentFrameHasDetails, documentFrameKinds } from "../../../../document-frame.ts";
 import { documentReadingKinds, documentStatusHasDetails } from "../../../../document-reading.ts";
@@ -693,8 +694,8 @@ function documentViewPosition(view: EditorView, scope: DocumentViewScope, group:
   }
   const host = column !== undefined || owner.classList.contains("cm-columns-widget")
     ? liveColumnsBlockForElement(view, owner)
-    : blocks.find((block) => owner.dataset.orgEnvKind === block.kind
-      ? block.bodyFrom === position || block.from === position : block.from === position);
+    : blocks.find((block) => block.from === position || (block.bodyFrom === position
+      && (owner.dataset.orgEnvKind === block.kind || owner.classList.contains("cm-document-data-widget"))));
   if (!host) return null;
   const pane = column === undefined ? undefined : splitColumnPanes(host.body)[column];
   const from = pane ? host.bodyFrom + pane.from : host.from;
@@ -702,13 +703,18 @@ function documentViewPosition(view: EditorView, scope: DocumentViewScope, group:
   if (quote) return quotedCalloutPosition(view.state.doc, group, from, to);
   const occurrence = Number(group.dataset.viewOccurrence);
   let found = 0;
+  const components = view.state.field(renderedDocumentReferences, false)?.components;
   for (const block of blocks) {
     if (block.from >= to) break;
-    if (block.from < from || block.kind !== group.dataset.viewKind) continue;
-    let key = documentViewSourceKeys.get(block);
+    if (block.from < from) continue;
+    const component = block.kind === "component" ? resolveDocumentComponent(block.title, components) : null;
+    const kind = component?.kind ?? block.kind;
+    if (kind !== group.dataset.viewKind) continue;
+    let key = component ? undefined : documentViewSourceKeys.get(block);
     if (key === undefined) {
-      key = documentViewSourceKey(block.kind, splitDocumentWidgetTitle(block.kind, block.title).title, block.body);
-      documentViewSourceKeys.set(block, key);
+      const title = component?.title ?? splitDocumentWidgetTitle(kind, block.title).title;
+      key = documentViewSourceKey(kind, title, block.body);
+      if (!component) documentViewSourceKeys.set(block, key);
     }
     if (key === group.dataset.viewSource && found++ === occurrence) return block.from;
   }
@@ -3242,7 +3248,7 @@ class CommentWidget extends MeasuredWidget {
     const content = document.createElement("div");
     content.className = "org-env-content";
     content.hidden = true;
-    content.innerHTML = renderMarkdownHTML(this.body.trim());
+    content.innerHTML = renderMarkdownHTML(this.body.trim(), { documentReferences: null });
     enhanceRenderedMarkdown(content, view);
     stopInteractiveWidgetEvents(content);
 
@@ -3569,7 +3575,7 @@ function columnsRenderOptions(references?: MarkdownDocumentReferences | null): R
     documentDiffActions: true,
     documentTreeActions: true,
     documentSourceActions: true,
-    documentReferences: references ?? undefined,
+    documentReferences: references ?? null,
     ...(resolver ? { assetResolver: (src: string) => resolver(src) } : {}),
     ...(noteFile ? { noteFile } : {}),
   };
@@ -5274,6 +5280,8 @@ class HtmlWidget extends MeasuredWidget {
 
 class DocumentDataWidget extends MeasuredWidget {
   readonly kind: string;
+  readonly visualKind: string;
+  readonly hasCalloutHeader: boolean;
   readonly title: string;
   readonly body: string;
   readonly from: number;
@@ -5281,15 +5289,18 @@ class DocumentDataWidget extends MeasuredWidget {
   readonly depth: number;
   readonly references: MarkdownDocumentReferences | null | undefined;
 
-  constructor(block: OrgEnvBlock, references?: MarkdownDocumentReferences | null) {
+  constructor(block: OrgEnvBlock, references: MarkdownDocumentReferences | null | undefined,
+    component: ReturnType<typeof resolveDocumentComponent>) {
     super();
     this.kind = block.kind;
+    this.visualKind = component?.kind ?? block.kind;
+    this.hasCalloutHeader = nativeCalloutOpening(this.visualKind, block.title, component?.attrs) !== null;
     this.title = block.kind === "progress" || block.kind === "stats" ? "" : block.title;
     this.body = block.body;
     this.from = block.bodyFrom;
     this.to = Math.max(this.from, block.bodyTo - 1);
     this.depth = block.depth;
-    this.references = referencesForSource(references, block.body);
+    this.references = block.kind === "component" ? references : referencesForSource(references, block.body);
   }
 
   protected measureKey(): string { return `${this.kind}:${shortHash(this.title + "\n" + this.body)}`; }
@@ -5303,15 +5314,15 @@ class DocumentDataWidget extends MeasuredWidget {
   }
 
   eq(other: DocumentDataWidget): boolean {
-    return this.kind === other.kind && this.title === other.title && this.body === other.body
+    return this.kind === other.kind && this.visualKind === other.visualKind && this.title === other.title && this.body === other.body
       && this.from === other.from && this.to === other.to && this.depth === other.depth && this.references === other.references;
   }
 
   toDOM(view: EditorView): HTMLElement {
     const block = document.createElement("div");
     block.className = "cm-document-data-widget cm-org-env-line";
-    block.dataset.orgEnvKind = this.kind;
-    if (nativeCalloutOpening(this.kind, this.title) !== null) block.dataset.nativeCalloutHeader = "true";
+    block.dataset.orgEnvKind = this.visualKind;
+    if (this.hasCalloutHeader) block.dataset.nativeCalloutHeader = "true";
     block.style.setProperty("--org-env-depth", String(this.depth));
     if (this.from < this.to) {
       setSourceRange(block, this.from, this.to);
@@ -5319,7 +5330,7 @@ class DocumentDataWidget extends MeasuredWidget {
     }
     const source = buildOrgEnvSource(this.kind, this.title, this.body);
     block.innerHTML = this.kind === "table"
-      ? renderMarkdownHTML(source, { documentTableActions: true, documentTableSource: this.body, documentReferences: this.references ?? undefined })
+      ? renderMarkdownHTML(source, { documentTableActions: true, documentTableSource: this.body, documentReferences: this.references ?? null })
       : renderEditorWidgetHTML(source, (documentTabKinds.has(this.kind) || this.kind === "accordion") ? this.body : undefined, this.references);
     const content = block.querySelector(":scope > org-env-block > .org-env-content");
     if (content) block.replaceChildren(content);
@@ -5560,7 +5571,7 @@ function renderMetaWidget(
     const content = document.createElement("div");
     content.className = "noema-meta-abstract-content";
     if (summary.body.trim()) {
-      content.innerHTML = renderMarkdownHTML(summary.body);
+      content.innerHTML = renderMarkdownHTML(summary.body, { documentReferences: null });
       hydrateMetaSummaryCitations(content, summary, bodyFrom);
       wireRenderedMarkdownLinks(content);
     }
@@ -5999,16 +6010,18 @@ function addOrgEnvBoundaryDecos(
   decos: CMRange<Decoration>[],
   state: EditorState,
   block: OrgEnvBlock,
+  component: ReturnType<typeof resolveDocumentComponent>,
 ): void {
   const openActive = opensSource(state, block.openFrom, block.openTo);
   const closeActive = orgEnvCloseBoundaryActive(state, block);
+  const kind = component?.kind ?? block.kind;
 
   if (!openActive) {
     const calloutOpen = block.body.trim() && !opensSource(state, block.from, block.to)
-      ? nativeCalloutOpening(block.kind, block.title) : null;
+      ? nativeCalloutOpening(kind, block.title, component?.attrs) : null;
     decos.push(
       Decoration.replace({
-        widget: new OrgEnvOpenWidget(block.kind, splitDocumentWidgetTitle(block.kind, block.title).title,
+        widget: new OrgEnvOpenWidget(kind, component?.title ?? splitDocumentWidgetTitle(block.kind, block.title).title,
           block.blockId, block.titleAnchor - block.openFrom, block.depth, calloutOpen),
         block: true,
       }).range(block.openFrom, block.openTo),
@@ -6020,7 +6033,7 @@ function addOrgEnvBoundaryDecos(
   if (!closeActive) {
     decos.push(
       Decoration.replace({
-        widget: new OrgEnvEndWidget(block.kind, block.depth),
+        widget: new OrgEnvEndWidget(kind, block.depth),
         block: true,
       }).range(block.closeFrom, block.closeTo),
     );
@@ -6442,6 +6455,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
   const visibleBottom = docTop + viewportBlocks[viewportBlocks.length - 1]!.bottom;
 
   const allBlocks = orgEnvBlocksFromState(view.state);
+  const components = view.state.field(renderedDocumentReferences, false)?.components;
   const hiddenColumnsRanges: Array<readonly [number, number]> = [];
   for (const b of allBlocks) {
     if (b.kind !== "columns") continue;
@@ -6477,7 +6491,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
         ? docTop + view.lineBlockAt(block.closeFrom).bottom
         : visibleBottom;
       return {
-        kind: block.kind,
+        kind: (block.kind === "component" ? resolveDocumentComponent(block.title, components)?.kind : undefined) ?? block.kind,
         depth: block.depth,
         top,
         height: Math.max(0, bottom - top),
@@ -6500,10 +6514,11 @@ const documentDataEnvironments = new Set([
   "symbol",
   "run",
 ]);
-const sourceRevealEnvironments = new Set(["comment", "fold", "details", "av", "embed", ...documentDataEnvironments]);
+const sourceRevealEnvironments = new Set(["comment", "fold", "details", "av", "embed", "component", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
 
 function hasDocumentDataBody(block: OrgEnvBlock): boolean {
+  if (block.kind === "component") return parseDocumentComponentHeader(block.title)?.role === "instance";
   return documentDataEnvironments.has(block.kind) || hasNativeCalloutLayout(block.kind, block.title);
 }
 
@@ -6617,15 +6632,17 @@ function addOrgEnvBlockExtraDecos(
     occupied?.push([block.from, block.to]);
     return;
   }
-  addOrgEnvBoundaryDecos(decos, state, block);
+  const references = state.field(renderedDocumentReferences, false);
+  const component = block.kind === "component" ? resolveDocumentComponent(block.title, references?.components) : null;
+  addOrgEnvBoundaryDecos(decos, state, block, component);
   if (hasDocumentDataBody(block)
-      && (block.body.trim() || documentFrameHasDetails(block.kind, block.title)
+      && (block.body.trim() || documentFrameHasDetails(component?.kind ?? block.kind, block.title, component?.attrs)
         || documentStatusHasDetails(block.kind, block.title) || documentQrHasText(block.kind, block.title)
         || documentFieldHasDetails(block.kind, block.title) || documentBadgeHasName(block.kind, block.title)
         || documentExcerptHasPath(block.kind, block.title) || block.kind === "project-tree" || documentRepositoryKinds.has(block.kind)
         || block.kind === "symbol" || block.kind === "run")
       && !opensSource(state, block.from, block.to)) {
-    const widget = new DocumentDataWidget(block, state.field(renderedDocumentReferences, false));
+    const widget = new DocumentDataWidget(block, references, component);
     if (widget.from < widget.to) {
       decos.push(Decoration.replace({ widget, block: true }).range(widget.from, widget.to));
       occupied?.push([block.bodyFrom, block.bodyTo]);

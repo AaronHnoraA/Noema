@@ -38,6 +38,7 @@ const attributesByKind = new Map([
   ["git-diff", ["path", "vcs", "range"]],
   ["symbol", ["name"]],
   ["run", ["cmd", "cwd"]],
+  ["component", ["kind", "use"]],
 ]);
 for (const kind of ["note", "tip", "important", "warning", "caution", "info", "danger"]) {
   attributesByKind.set(kind, ["collapsible", "open", "background", "border-left-width"]);

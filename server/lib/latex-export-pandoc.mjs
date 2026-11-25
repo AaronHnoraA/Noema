@@ -3,6 +3,7 @@ import { isEscapedCommandStart, scanInlineCommands } from "../../shared/command-
 import { approvedEdiffMarkdown } from "../../shared/ediff-source.mjs";
 import { parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
 import { hasDocumentWidgetOptions, splitDocumentWidgetAttrs, splitDocumentWidgetTitle } from "../../shared/document-widget-title.mjs";
+import { collectDocumentComponents, parseDocumentComponentHeader, resolveDocumentComponent } from "../../shared/document-components.mjs";
 import { parseQuotedCallout } from "../../shared/callout-syntax.mjs";
 import { stripHiddenInlineTitle } from "../../shared/inline-private-title.mjs";
 import { LATEX_MARKS, LATEX_PROMPT_MARK, latexMark } from "../../shared/latex-marks.mjs";
@@ -29,6 +30,7 @@ const ENV_MAP = new Map([
 const REMARK_BLOCKS = new Set(["comment", "summary", "note", "important", "warning", "attention", "fold"]);
 const HIDDEN_BLOCKS = new Set(["lean4", "src", "source", "meta", "ediff"]);
 const literalCodeEnvironments = new Set(["diff", "code-tree"]);
+const documentComponentContext = Symbol("document component definitions");
 const PRIVATE_INLINE = new Set(["todo", "itodo", "project", "milestone", "clock", "comment", "cell", "lean4", "note-code"]);
 // Review annotations that reach the exported document. Planning bookkeeping
 // (`project`, `milestone`, `clock`) and machine blocks stay private.
@@ -174,10 +176,11 @@ function environmentFor(kind, rules) {
   return String(extra || ENV_MAP.get(kind) || "").trim();
 }
 
-function environmentOpen(kind, title, options) {
+function environmentOpen(kind, title, options, inheritedAttrs) {
   let details = "";
   if (hasDocumentWidgetOptions(kind)) {
-    const widget = splitDocumentWidgetTitle(kind, parseOrgEnvIdentityTitle(kind, title).title);
+    const widget = inheritedAttrs ? { title, attrs: inheritedAttrs }
+      : splitDocumentWidgetTitle(kind, parseOrgEnvIdentityTitle(kind, title).title);
     title = widget.title;
     const { attrs } = widget;
     const entries = ["card", "home-box", "link-card", "image-card"].includes(kind)
@@ -767,6 +770,7 @@ function pandocCodeInfo(info) {
 export function preprocessNoemaForPandoc(markdown, options = {}) {
   const source = approvedEdiffMarkdown(String(markdown || "").replace(/\r\n?/g, "\n"));
   const lines = source.split("\n");
+  const components = options[documentComponentContext] ?? collectDocumentComponents(source);
   const frontMatter = parseYamlFrontMatter(lines);
   const meta = extractNoemaMetadata(source);
   const hiddenKinds = new Set([...HIDDEN_BLOCKS, ...(Array.isArray(options.rules?.hiddenBlocks) ? options.rules.hiddenBlocks.map((value) => String(value).toLowerCase()) : [])]);
@@ -796,7 +800,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
   const exportAnnotations = options.disableAnnotations === true
     ? false
     : String(meta.annotations || "").trim().toLowerCase() !== "none";
-  const conversionOptions = { ...options, unresolvedCitations, exportAnnotations };
+  const conversionOptions = { ...options, unresolvedCitations, exportAnnotations, [documentComponentContext]: components };
 
   for (let index = 0; index < lines.length; index += 1) {
     let line = lines[index];
@@ -1024,7 +1028,18 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
         rawColumns = { kind: begin.kind, title: begin.title, line: lineNumber, lines: [], depth: 1, fence: null };
         continue;
       }
-      const opened = environmentOpen(begin.kind, begin.title, conversionOptions);
+      const header = begin.kind === "component" ? parseDocumentComponentHeader(begin.title) : null;
+      if (header?.role === "definition" && components.has(header.name)) {
+        let next = index + 1;
+        while (next < lines.length && !lines[next].trim()) next++;
+        if (orgClose(lines[next]) === "component") {
+          index = next;
+          continue;
+        }
+      }
+      const use = header?.role === "instance" ? resolveDocumentComponent(begin.title, components) : null;
+      const opened = environmentOpen(use?.kind ?? begin.kind,
+        use?.title ?? (header?.role === "instance" ? header.title : begin.title), conversionOptions, use?.attrs);
       stack.push({ kind: begin.kind, env: opened.env, line: lineNumber });
       output.push(rawLatexBlock(opened.latex));
       continue;
