@@ -210,6 +210,7 @@ function stripAttrs(el: Element): void {
       (attr.name.startsWith("aria-") && !(el.localName === "progress" && attr.name === "aria-label")
         && !((attr.name === "aria-label" || attr.name === "aria-hidden") && el.closest(".noema-chart"))
         && !((attr.name === "aria-label" || attr.name === "aria-sort") && el.closest(".noema-document-table-view"))
+        && !(attr.name === "aria-hidden" && el.classList.contains("noema-document-card-icon"))
         && !(attr.name === "aria-current" && el.parentElement?.classList.contains("noema-steps-list")))
     ) {
       el.removeAttribute(attr.name);
@@ -255,7 +256,7 @@ export function cleanEditorHTML(root: HTMLElement, inPlace = false): string {
   const protectedFrameAttrs = protectVisualIframeAttrs(protectedHtml.html);
   const sanitized = DOMPurify.sanitize(protectedFrameAttrs.html, {
     USE_PROFILES: { html: true, svg: true, mathMl: true },
-    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|file|zotero|roam|noema-asset):|[#/]|\.{0,2}\/|[A-Za-z0-9._~!$&'()*+,;=@%-]+(?:[/?#]|$))/i,
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|file|zotero|roam|noema|noema-asset|marginnote(?:\d+)?(?:app)?):|[#/]|\.{0,2}\/|[A-Za-z0-9._~!$&'()*+,;=@%-]+(?:[/?#]|$))/i,
     ADD_TAGS: [
       "math",
       "mrow",

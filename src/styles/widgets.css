@@ -1543,6 +1543,81 @@
   outline-offset: -1px;
 }
 
+.noema-document-frame,
+.noema-document-alignment {
+  --document-text-align: start;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  text-align: var(--document-text-align, start);
+  white-space: normal;
+}
+
+:is(.noema-document-frame, .noema-document-alignment)[data-text-align="center"] { --document-text-align: center; }
+:is(.noema-document-frame, .noema-document-alignment)[data-text-align="left"] { --document-text-align: left; }
+:is(.noema-document-frame, .noema-document-alignment)[data-text-align="end"] { --document-text-align: end; }
+:is(.noema-document-frame, .noema-document-alignment)[data-text-align="right"] { --document-text-align: right; }
+:is(.noema-document-frame, .noema-document-alignment)[data-text-align="justify"] { --document-text-align: justify; }
+
+.noema-document-frame .noema-document-frame-body :is(p, li),
+.noema-document-alignment[data-text-align] :is(p, li) { text-align: inherit; white-space: normal; }
+.noema-document-frame[data-text-align="center"] :is(ul, ol),
+.noema-document-alignment:is([data-text-align="center"], [data-text-align="right"]) > :is(ul, ol) { list-style-position: inside; }
+
+.noema-document-frame {
+  --document-frame-line: var(--aaron-paper-line, var(--border, currentColor));
+  --document-frame-accent: var(--document-frame-line);
+  --document-frame-muted: var(--aaron-muted, currentColor);
+  box-sizing: border-box;
+  display: grid;
+  gap: 0.42em;
+  inline-size: min(100%, var(--document-frame-width, 100%));
+  padding-block: 0.48em;
+  padding-inline: min(12%, var(--document-frame-padding, 0.75em));
+  border: 1px solid var(--document-frame-line);
+}
+
+.noema-document-frame[data-frame-align="center"] { margin-inline: auto; }
+.noema-document-frame[data-frame-align="right"] { margin-inline-start: auto; }
+.noema-document-frame[data-surface="paper"] { background: var(--aaron-paper, transparent); }
+.noema-document-frame[data-surface="quiet"] { background: color-mix(in srgb, var(--aaron-panel, transparent) 30%, transparent); }
+.noema-document-frame[data-surface="raised"] { background: var(--aaron-panel, transparent); }
+.noema-document-frame[data-variant="flat"] { background: transparent; }
+.noema-document-frame[data-accent="primary"] { --document-frame-accent: var(--aaron-accent, var(--document-frame-line)); }
+.noema-document-frame[data-accent="info"] { --document-frame-accent: var(--aaron-callout-info, var(--document-frame-line)); }
+.noema-document-frame[data-accent="success"] { --document-frame-accent: var(--aaron-green, var(--document-frame-line)); }
+.noema-document-frame[data-accent="warning"] { --document-frame-accent: var(--aaron-callout-warning, var(--document-frame-line)); }
+.noema-document-frame[data-accent="danger"] { --document-frame-accent: var(--aaron-callout-danger, var(--document-frame-line)); }
+.noema-document-frame[data-accent="important"] { --document-frame-accent: var(--aaron-callout-quote, var(--document-frame-line)); }
+
+.noema-document-frame[data-frame="card"] { border-block-start-color: var(--document-frame-accent); }
+.noema-document-frame[data-frame="panel"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.noema-document-frame[data-frame="panel"] > .noema-document-frame-body { flex: 1 1 14em; }
+.noema-document-frame[data-focus="true"] {
+  border-color: color-mix(in srgb, var(--document-frame-accent) 66%, var(--document-frame-line));
+}
+
+.noema-document-frame-body > :first-child,
+.noema-document-alignment > :first-child { margin-block-start: 0; }
+.noema-document-frame-body > :last-child,
+.noema-document-alignment > :last-child { margin-block-end: 0; }
+.noema-document-frame-body > p + p,
+.noema-document-alignment > p + p { margin-block-start: 0.4em; }
+
+.noema-document-card-description { color: var(--document-frame-muted); }
+.noema-document-card-icon { margin-inline-end: 0.45em; color: var(--document-frame-accent); }
+.noema-document-card-action { justify-self: start; }
+.noema-document-card-action:focus-visible { outline: 1px solid var(--aaron-link, currentColor); outline-offset: 2px; }
+.noema-document-panel-status {
+  justify-self: end;
+  color: color-mix(in srgb, var(--document-frame-accent) 60%, var(--document-frame-muted));
+}
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);

@@ -5,7 +5,12 @@ const attributesByKind = new Map([
   ["timeline", ["orientation", "card", "list-style"]],
   ["steps", ["list-style"]],
   ["table", ["sortable", "copy", "highlight-rows", "highlight-columns", "highlight-cells", "highlight", "align", "text-align", "width"]],
+  ["box", ["surface", "padding", "text-align", "align", "width"]],
+  ["card", ["description", "href", "action", "icon", "accent", "text-align", "align", "width"]],
+  ["panel", ["status", "variant", "focus", "accent", "align", "width"]],
 ]);
+
+export function hasDocumentWidgetOptions(kind) { return attributesByKind.has(kind); }
 
 /** Separate a widget's options after the block anchor has been removed. */
 export function splitDocumentWidgetTitle(kind, source) {

@@ -10,17 +10,42 @@
  */
 
 function cleanAttrValue(value) {
-  return String(value ?? "").trim().replace(/^["']|["']$/g, "");
+  const raw = String(value ?? "").trim();
+  const quote = raw[0];
+  if (raw.length >= 2 && (quote === '"' || quote === "'") && raw.at(-1) === quote) {
+    return raw.slice(1, -1).replace(/\\([\\"'])/g, "$1");
+  }
+  return raw;
+}
+
+function splitAttributeChunks(body) {
+  const chunks = [];
+  let start = 0;
+  let quote = "";
+  for (let at = 0; at < body.length; at++) {
+    const char = body[at];
+    if (quote) {
+      if (char === "\\") at++;
+      else if (char === quote) quote = "";
+    } else if ((char === '"' || char === "'") && (at === 0 || /[\s=:]/.test(body[at - 1]))) {
+      quote = char;
+    } else if (char === "," || char === ";") {
+      chunks.push(body.slice(start, at));
+      start = at + 1;
+    }
+  }
+  chunks.push(body.slice(start));
+  return chunks;
 }
 
 export function parseAttrArgs(raw = "") {
   const body = String(raw || "").trim().replace(/^\{/, "").replace(/\}$/, "").trim();
   if (!body) return {};
   const out = {};
-  for (const chunk of body.split(/[;,]/)) {
+  for (const chunk of splitAttributeChunks(body)) {
     const item = chunk.trim();
     if (!item) continue;
-    const attrPattern = /([A-Za-z][\w-]*)(?:\s*[:=]\s*("[^"]*"|'[^']*'|.*?))?(?=\s+[A-Za-z][\w-]*(?:\s*[:=]|\s*$)|$)/g;
+    const attrPattern = /([A-Za-z][\w-]*)(?:\s*[:=]\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|.*?))?(?=\s+[A-Za-z][\w-]*(?:\s*[:=]|\s*$)|$)/g;
     let matched = false;
     for (const match of item.matchAll(attrPattern)) {
       matched = true;

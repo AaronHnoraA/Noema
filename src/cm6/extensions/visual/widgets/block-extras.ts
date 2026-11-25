@@ -56,6 +56,7 @@ import { figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-
 import { readLayoutAttrSuffix } from "../../../../layout-attrs.ts";
 import { splitDocumentWidgetTitle } from "../../../../../shared/document-widget-title.mjs";
 import { connectDocumentTableViews, disconnectDocumentTableViews } from "../../../../document-table-view.ts";
+import { documentFrameHasDetails, documentFrameKinds } from "../../../../document-frame.ts";
 import {
   COLUMNS_MAX_COUNT,
   COLUMNS_MIN_WIDTH_PCT,
@@ -594,8 +595,28 @@ function renderDiagramPreview(source: string, lang: string, div: HTMLElement): v
     });
 }
 
-function enhanceRenderedMarkdown(root: HTMLElement): void {
+function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView): void {
   connectDocumentTableViews(root);
+  if (root.querySelector(".noema-document-card-action[href]")) {
+    const openCardAction = (event: MouseEvent): void => {
+      if (event.button !== 0 && event.button !== 1) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const link = target?.closest<HTMLAnchorElement>(".noema-document-card-action[href]");
+      const href = link?.getAttribute("href");
+      if (!link || !href || !root.contains(link)) return;
+      const handled = !view.dom.dispatchEvent(new CustomEvent("noema:open-url", {
+        bubbles: true,
+        cancelable: true,
+        detail: { href, newWindow: markdownLinkOpensNewWindow(href, event), sourcePos: view.posAtDOM(link, -1) },
+      }));
+      if (handled) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    root.addEventListener("click", openCardAction);
+    root.addEventListener("auxclick", openCardAction);
+  }
   root.querySelectorAll<HTMLElement>("pre > code[class*='language-']").forEach((code) => {
     const langClass = Array.from(code.classList).find((cls) => cls.startsWith("language-")) ?? "";
     const lang = langClass.slice("language-".length);
@@ -3009,7 +3030,7 @@ class CommentWidget extends MeasuredWidget {
     content.className = "org-env-content";
     content.hidden = true;
     content.innerHTML = renderMarkdownHTML(this.body.trim());
-    enhanceRenderedMarkdown(content);
+    enhanceRenderedMarkdown(content, view);
     stopInteractiveWidgetEvents(content);
 
     block.append(button, content);
@@ -3090,7 +3111,7 @@ class FoldWidget extends MeasuredWidget {
     content.className = "org-env-fold-content org-env-content";
     content.hidden = true;
     content.innerHTML = renderEditorWidgetHTML(this.body.trim());
-    enhanceRenderedMarkdown(content);
+    enhanceRenderedMarkdown(content, view);
     stopInteractiveWidgetEvents(content);
 
     block.append(button, content);
@@ -3549,7 +3570,7 @@ function focusRenderedColumnPane(
   if (event.button !== 0) return;
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(".cm-column-pane-grip, .cm-columns-toolbar, .cm-columns-divider")) return;
-  if (target?.closest(".noema-document-table-view button")) return;
+  if (target?.closest(".noema-document-table-view button, .noema-document-card-action")) return;
 
   // Cmd/Ctrl-click on a link opens the link directly instead of switching edit focus.
   const link = target?.closest<HTMLAnchorElement>("a[href]") ?? null;
@@ -4074,7 +4095,7 @@ class ColumnsWidget extends MeasuredWidget {
         const parsedBlocks: Array<{ from: number; to: number }> = [];
         if (pane.body.trim()) {
           bodyEl.innerHTML = renderMarkdownHTML(pane.body, renderOpts, parsedBlocks);
-          enhanceRenderedMarkdown(bodyEl);
+          enhanceRenderedMarkdown(bodyEl, view);
         } else {
           const empty = document.createElement("p");
           empty.className = "cm-column-pane-empty";
@@ -4090,7 +4111,7 @@ class ColumnsWidget extends MeasuredWidget {
       });
     } else {
       content.innerHTML = renderMarkdownHTML(this.body, renderOpts);
-      enhanceRenderedMarkdown(content);
+      enhanceRenderedMarkdown(content, view);
     }
 
     const toolbar = buildColumnsToolbar(
@@ -4262,7 +4283,7 @@ class ColumnsActiveTopWidget extends MeasuredWidget {
         const parsedBlocks: Array<{ from: number; to: number }> = [];
         if (sibling.body.trim()) {
           bodyEl.innerHTML = renderMarkdownHTML(sibling.body, renderOpts, parsedBlocks);
-          enhanceRenderedMarkdown(bodyEl);
+          enhanceRenderedMarkdown(bodyEl, view);
         } else {
           const empty = document.createElement("p");
           empty.className = "cm-column-pane-empty";
@@ -4982,7 +5003,7 @@ class DocumentDataWidget extends MeasuredWidget {
     this.title = block.kind === "progress" || block.kind === "stats" ? "" : block.title;
     this.body = block.body;
     this.from = block.bodyFrom;
-    this.to = block.bodyTo - 1;
+    this.to = Math.max(this.from, block.bodyTo - 1);
     this.depth = block.depth;
   }
 
@@ -5006,14 +5027,17 @@ class DocumentDataWidget extends MeasuredWidget {
     block.className = "cm-document-data-widget cm-org-env-line";
     block.dataset.orgEnvKind = this.kind;
     block.style.setProperty("--org-env-depth", String(this.depth));
-    setSourceRange(block, this.from, this.to);
-    block.dataset.cmOpenSource = "true";
+    if (this.from < this.to) {
+      setSourceRange(block, this.from, this.to);
+      block.dataset.cmOpenSource = "true";
+    }
     const source = buildOrgEnvSource(this.kind, this.title, this.body);
-    block.innerHTML = renderMarkdownHTML(source, this.kind === "table"
-      ? { documentTableActions: true, documentTableSource: this.body } : undefined);
+    block.innerHTML = this.kind === "table"
+      ? renderMarkdownHTML(source, { documentTableActions: true, documentTableSource: this.body })
+      : renderEditorWidgetHTML(source);
     const content = block.querySelector(":scope > org-env-block > .org-env-content");
     if (content) block.replaceChildren(content);
-    enhanceRenderedMarkdown(block);
+    enhanceRenderedMarkdown(block, view);
     stopInteractiveWidgetEvents(block);
     return this.registerMeasured(block, view);
   }
@@ -6177,7 +6201,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 // Decoration builder (full-doc scan — these constructs are sparse)
 // ---------------------------------------------------------------------------
 
-const documentDataEnvironments = new Set(["progress", "stats", "chart", "timeline", "steps", "table"]);
+const documentDataEnvironments = new Set(["progress", "stats", "chart", "timeline", "steps", "table", ...documentFrameKinds]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
 
@@ -6290,13 +6314,15 @@ function addOrgEnvBlockExtraDecos(
     return;
   }
   addOrgEnvBoundaryDecos(decos, state, block);
-  if (documentDataEnvironments.has(block.kind) && block.body.trim() && !opensSource(state, block.from, block.to)) {
+  if (documentDataEnvironments.has(block.kind) && (block.body.trim() || documentFrameHasDetails(block.kind, block.title))
+      && !opensSource(state, block.from, block.to)) {
     const widget = new DocumentDataWidget(block);
-    decos.push(Decoration.replace({
-      widget,
-      block: true,
-    }).range(widget.from, widget.to));
-    occupied?.push([block.bodyFrom, block.bodyTo]);
+    if (widget.from < widget.to) {
+      decos.push(Decoration.replace({ widget, block: true }).range(widget.from, widget.to));
+      occupied?.push([block.bodyFrom, block.bodyTo]);
+    } else {
+      decos.push(Decoration.widget({ widget, block: true, side: -1 }).range(block.closeFrom));
+    }
   }
 }
 

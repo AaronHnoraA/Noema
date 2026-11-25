@@ -36,6 +36,10 @@ const constructs = [
   "#+begin timeline Delivery {orientation=horizontal}\n- [success] Monday · Parse\n- Wednesday · Draw\n- Friday · Review\n#+end timeline",
   "#+begin steps Review\n3. [x] Set scope\n4. [ ] Check details\n5. [ ] Publish\n#+end steps",
   "#+begin table Timings {sortable=true copy=true}\n| Work | Latency (ms) |\n|---|---:|\n| Parse | 4 |\n| Paint | 14 |\n#+end table",
+  "#+begin box Reading {surface=quiet}\nThe reading box holds prose and its ordinary links.\n#+end box",
+  "#+begin card Guide {description='Read the manual' href=https://example.com}\nThe card explains where to start.\n#+end card",
+  "#+begin panel Progress {status='In review' focus=true}\nThe panel shows the current review status.\n#+end panel",
+  "#+begin center An aligned paragraph\nThis line is centered.\n#+end center",
   "#+begin columns\nLeft column prose.\n\n#+col\n\nRight column prose.\n#+end columns",
   "A sentence with @@comment [inline note] attached.",
   "```python\nprint('hello')\nfor i in range(3):\n    print(i)\n```",
@@ -114,6 +118,8 @@ try {
         ["progress", "- Parse: 100%"], ["stats", "| Metric | Value |"], ["chart", "| Phase | Duration (ms) |"],
         ["timeline", "- [success] Monday"], ["steps", "3. [x] Set scope"],
         ["table-view", "| Work | Latency (ms) |"],
+        ["box", "The reading box holds"], ["card", "The card explains"],
+        ["panel", "The panel shows"], ["center", "This line is centered"],
         ["footnote", "[^1] too", "navigates"],
       ].filter(([family]) => !process.env.ONLY || process.env.ONLY.split(",").includes(family)).map(([family, needle, click = "opens"]) => {
         const at = markdown.indexOf(needle);

@@ -63,7 +63,7 @@ var (
 	setextUnderline        = regexp.MustCompile(`^ {0,3}(?:=+|-+)[ \t]*$`)
 	calloutPattern         = regexp.MustCompile(`^(\s*>\s*)\[!([A-Za-z]+)\](?:\s+(.+))?\s*$`)
 	proofTitleWordPattern  = regexp.MustCompile(`(?i)^proof\b`)
-	layoutAttrPattern      = regexp.MustCompile(`(?i)([A-Za-z][A-Za-z0-9_-]*)\s*[:=]\s*("[^"]*"|'[^']*'|[^,;\s]+)|([A-Za-z][A-Za-z0-9_-]*)`)
+	layoutAttrPattern      = regexp.MustCompile(`(?i)([A-Za-z][A-Za-z0-9_-]*)\s*[:=]\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,;\s]+)|([A-Za-z][A-Za-z0-9_-]*)`)
 	layoutDimension        = regexp.MustCompile(`^(\d+(?:\.\d+)?)(%|px|em|rem|vw|vh|ch)?$`)
 	tikzDocumentPattern    = regexp.MustCompile(`(?i)\\documentclass\b|\\begin\s*\{\s*document\s*\}`)
 	tikzPicturePattern     = regexp.MustCompile(`(?is)\\begin\s*\{\s*tikzpicture\s*\}.*\\end\s*\{\s*tikzpicture\s*\}`)
@@ -80,6 +80,9 @@ var documentWidgetOptions = map[string][]string{
 	"timeline": {"orientation", "card", "list-style"},
 	"steps":    {"list-style"},
 	"table":    {"sortable", "copy", "highlight-rows", "highlight-columns", "highlight-cells", "highlight", "align", "text-align", "width"},
+	"box":      {"surface", "padding", "text-align", "align", "width"},
+	"card":     {"description", "href", "action", "icon", "accent", "text-align", "align", "width"},
+	"panel":    {"status", "variant", "focus", "accent", "align", "width"},
 }
 
 var defaultEnvironment = map[string]string{
@@ -160,7 +163,7 @@ func tikzPictureSource(source string) string {
 func cleanLayoutValue(value string) string {
 	raw := strings.TrimSpace(value)
 	if len(raw) >= 2 && ((raw[0] == '"' && raw[len(raw)-1] == '"') || (raw[0] == '\'' && raw[len(raw)-1] == '\'')) {
-		raw = raw[1 : len(raw)-1]
+		raw = strings.NewReplacer(`\\`, `\`, `\"`, `"`, `\'`, `'`).Replace(raw[1 : len(raw)-1])
 	}
 	return strings.TrimSpace(raw)
 }
@@ -1635,6 +1638,7 @@ func subparagraphLatex(rawTitle string, options Options) string {
 }
 
 func environmentOpen(kind, title string, options Options) (string, string) {
+	details := ""
 	if keys := documentWidgetOptions[kind]; len(keys) > 0 {
 		title = strings.TrimSpace(widgetAnchorPattern.ReplaceAllString(title, ""))
 		if suffix := widgetAttributePattern.FindStringSubmatchIndex(title); suffix != nil {
@@ -1643,6 +1647,24 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 				if attributes[key] != "" {
 					title = strings.TrimRight(title[:suffix[0]], " \t")
 					break
+				}
+			}
+			entries := []string{}
+			if kind == "card" {
+				entries = append(entries, attributes["description"])
+				if href := attributes["href"]; href != "" {
+					action := attributes["action"]
+					if action == "" {
+						action = "Open link"
+					}
+					entries = append(entries, action+": "+href)
+				}
+			} else if kind == "panel" {
+				entries = append(entries, attributes["status"])
+			}
+			for _, entry := range entries {
+				if entry != "" {
+					details += "\n" + escapeLatexTitle(entry, options) + "\\par"
 				}
 			}
 		}
@@ -1669,7 +1691,7 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 		if title != "" {
 			label += ": " + title
 		}
-		return "\\begin{quote}\n\\textbf{" + escapeLatexTitle(label, options) + "}\\par", "quote"
+		return "\\begin{quote}\n\\textbf{" + escapeLatexTitle(label, options) + "}\\par" + details, "quote"
 	}
 	label := ""
 	if heading != "" {
@@ -1692,7 +1714,7 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 	if label != "" {
 		opened += "[" + label + "]"
 	}
-	return opened, env
+	return opened + details, env
 }
 
 func Prepare(markdown string, options Options) (PrepareResult, error) {

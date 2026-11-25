@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { approvedEdiffMarkdown } from "../../shared/ediff-source.mjs";
 import { parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
-import { splitDocumentWidgetTitle } from "../../shared/document-widget-title.mjs";
+import { hasDocumentWidgetOptions, splitDocumentWidgetTitle } from "../../shared/document-widget-title.mjs";
 import { LATEX_MARKS, LATEX_PROMPT_MARK, latexMark } from "../../shared/latex-marks.mjs";
 import {
   layoutFromAttrs,
@@ -164,8 +164,14 @@ function environmentFor(kind, rules) {
 }
 
 function environmentOpen(kind, title, options) {
-  if (kind === "chart" || kind === "timeline" || kind === "steps" || kind === "table") {
-    title = splitDocumentWidgetTitle(kind, parseOrgEnvIdentityTitle(kind, title).title).title;
+  let details = "";
+  if (hasDocumentWidgetOptions(kind)) {
+    const widget = splitDocumentWidgetTitle(kind, parseOrgEnvIdentityTitle(kind, title).title);
+    title = widget.title;
+    const { attrs } = widget;
+    const entries = kind === "card" ? [attrs.description, attrs.href && `${attrs.action || "Open link"}: ${attrs.href}`]
+      : kind === "panel" ? [attrs.status] : [];
+    details = entries.filter(Boolean).map((entry) => `\n${escapeLatexTitle(entry, options)}\\par`).join("");
   }
   let env = environmentFor(kind, options.rules);
   let heading = title;
@@ -174,13 +180,13 @@ function environmentOpen(kind, title, options) {
     env = "remark";
     if (kind !== "fold") heading ||= kind;
   }
-  if (!env) return { latex: `\\begin{quote}\n\\textbf{${escapeLatexTitle(title ? `${kind}: ${title}` : kind)}}\\par`, env: "quote" };
+  if (!env) return { latex: `\\begin{quote}\n\\textbf{${escapeLatexTitle(title ? `${kind}: ${title}` : kind)}}\\par${details}`, env: "quote" };
   let label = heading ? escapeLatexTitle(heading, options) : "";
   if (kind === "proof" && label && !/^proof\b/i.test(heading)) {
     const direction = heading === "=>" ? "\\(\\Rightarrow\\)" : heading === "<=" ? "\\(\\Leftarrow\\)" : label;
     label = `Proof (${direction})`;
   }
-  return { latex: `\\begin{${env}}${latexEnvironmentTitle(label)}`, env };
+  return { latex: `\\begin{${env}}${latexEnvironmentTitle(label)}${details}`, env };
 }
 
 /**
