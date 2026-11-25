@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "package-blocks-export-authored-metadata-and-npm-code",
+      "markdown": "#+begin npm-badge Package {name=@scope/tool version=1.2.3 downloads=\"120 / week\"}\n#+end npm-badge\n\n#+begin npm-to Install {tabs=\"npm,pnpm\"}\n~~~sh\nnpm install @scope/tool@1.2.3\n~~~\n#+end npm-to",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{npm-badge: Package}\\par\n@scope/tool\\par\nv1.2.3\\par\nDownloads: 120 / week\\par\n```\n\n\n\n\n```{=latex}\n\\end{quote}\n```\n\n\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{npm-to: Install}\\par\n```\n\n\n~~~sh\nnpm install @scope/tool@1.2.3\n~~~\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "chat-keeps-messages-and-does-not-echo-layout-attributes",
       "markdown": "# + example\n\n#+begin chat Review\n### 10:30 {timestamp=true}\n### Lin\nRead the [guide](guide.md).\n### Me {self=true} ###\nCode example follows.\n\n~~~text\n### literal {self=true}\n~~~\n#+end chat",
       "options": {},

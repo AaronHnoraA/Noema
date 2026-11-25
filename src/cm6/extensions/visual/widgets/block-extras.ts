@@ -70,6 +70,8 @@ import { documentDemonstrationKinds } from "../../../../document-demonstrations.
 import { connectDocumentDemonstrations, DEMO_TEXT_SELECTOR, documentWindowScrollbar } from "./document-demonstrations.ts";
 import { CHAT_TEXT_SELECTOR } from "../../../../document-chat.ts";
 import { connectDocumentSourceCopy } from "./document-source-actions.ts";
+import { documentBadgeHasName, documentPackageKinds, PACKAGE_CODE_SELECTOR } from "../../../../document-packages.ts";
+import { connectDocumentPackages } from "./document-packages.ts";
 import { CODE_TREE_TEXT_SELECTOR, connectDocumentTrees } from "./document-trees.ts";
 import {
   COLUMNS_MAX_COUNT,
@@ -686,6 +688,7 @@ function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, scope?: Do
   if (hasDocumentViews) numberDocumentViews(root);
   const hydrate = (content: HTMLElement): void => {
     hydrateRenderedMarkdown(content);
+    connectDocumentPackages(content);
     if (!hasDocumentViews) return;
     connectDocumentTabViews(content, view, hydrate, locate);
     connectDocumentDisclosures(content, view, hydrate, locate);
@@ -718,7 +721,7 @@ function hydrateRenderedMarkdown(root: HTMLElement): void {
  * text, so the editor must not claim pointer or selection events there.
  */
 export const CEIL_READONLY_TEXT_SELECTOR = ".cm-ceil-output, .cm-ceil-source, .cm-ceil-output-popover-body";
-const DOCUMENT_READONLY_TEXT_SELECTOR = `${CODE_TREE_TEXT_SELECTOR}, ${DEMO_TEXT_SELECTOR}, ${CHAT_TEXT_SELECTOR}`;
+const DOCUMENT_READONLY_TEXT_SELECTOR = `${CODE_TREE_TEXT_SELECTOR}, ${DEMO_TEXT_SELECTOR}, ${CHAT_TEXT_SELECTOR}, ${PACKAGE_CODE_SELECTOR}`;
 
 function documentWidgetTextEvent(event: Event): boolean {
   return readOnlyTextEvent(event, DOCUMENT_READONLY_TEXT_SELECTOR) || documentWindowScrollbar(event);
@@ -3696,7 +3699,7 @@ function focusRenderedColumnPane(
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(".cm-column-pane-grip, .cm-columns-toolbar, .cm-columns-divider")) return;
   if (target?.closest(documentNavigationSelector) || target?.closest(
-    `.noema-document-table-view button, .noema-tab-navigation button, .noema-document-diff button, .noema-document-tree button, .noema-demo-footer button, [data-document-source-copy], summary, ${DOCUMENT_READONLY_TEXT_SELECTOR}`,
+    `.noema-document-table-view button, .noema-tab-navigation button, .noema-document-diff button, .noema-document-tree button, .noema-demo-footer button, [data-document-source-copy], [data-copy-package-command], summary, ${DOCUMENT_READONLY_TEXT_SELECTOR}`,
   ) || documentWindowScrollbar(event)) return;
 
   // Cmd/Ctrl-click on a link opens the link directly instead of switching edit focus.
@@ -6332,6 +6335,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 const documentDataEnvironments = new Set([
   "progress", "stats", "chart", "timeline", "steps", "table", ...documentFrameKinds, ...documentReadingKinds,
   "qrcode", ...documentTabKinds, "accordion", "diff", ...documentTreeKinds, ...documentFieldKinds, ...documentDemonstrationKinds, "chat",
+  ...documentPackageKinds,
 ]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "details", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
@@ -6448,7 +6452,7 @@ function addOrgEnvBlockExtraDecos(
   if (documentDataEnvironments.has(block.kind)
       && (block.body.trim() || documentFrameHasDetails(block.kind, block.title)
         || documentStatusHasDetails(block.kind, block.title) || documentQrHasText(block.kind, block.title)
-        || documentFieldHasDetails(block.kind, block.title))
+        || documentFieldHasDetails(block.kind, block.title) || documentBadgeHasName(block.kind, block.title))
       && !opensSource(state, block.from, block.to)) {
     const widget = new DocumentDataWidget(block);
     if (widget.from < widget.to) {

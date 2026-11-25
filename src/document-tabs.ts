@@ -62,22 +62,35 @@ export function renderDocumentTabs(md: MarkdownIt, kind: string, title: string, 
   const { environment, tokens, pages, first } = documentPages(md, kind, body);
   if (pages.length < 2) return null;
   if (!interactive) return `<div class="noema-document-tabs-static">${md.renderer.render(tokens, md.options, environment)}</div>`;
+  const offsets = documentPageOffsets(md, kind, body, pages, source);
+  const preamble = first ? md.renderer.render(tokens.slice(0, first), md.options, environment) : "";
+  return renderDocumentTabGroup(md, kind, title, body, attrs, pages.map(({ label, content }, index) => ({
+    label,
+    html: md.renderer.render(content, md.options, environment),
+    offset: offsets[index],
+  })), preamble);
+}
 
+interface RenderedDocumentTab {
+  label: string;
+  html: string;
+  offset?: number;
+}
+
+export function renderDocumentTabGroup(md: MarkdownIt, kind: string, title: string, body: string, attrs: AttrMap, pages: readonly RenderedDocumentTab[], preamble = ""): string {
   const requested = Number(attrs.selected);
   const selected = Number.isInteger(requested) && requested > 0 && requested <= pages.length ? requested - 1 : 0;
   const accent = documentDataAccents.has(attrs.accent || "") ? attrs.accent : "neutral";
   const controls = pages.map(({ label }, index) => {
     const text = md.utils.escapeHtml(label);
-    return `<button type="button" class="noema-tab-button" data-tab-index="${index}" title="${text}">${text}</button>`;
+    const key = kind === "npm-to" ? ` data-tab-key="${text}"` : "";
+    return `<button type="button" class="noema-tab-button" data-tab-index="${index}"${key} title="${text}">${text}</button>`;
   }).join("");
   const previous = kind === "swiper" ? '<button type="button" class="noema-tab-move" data-move="-1">‹</button>' : "";
   const next = kind === "swiper" ? '<button type="button" class="noema-tab-move" data-move="1">›</button>' : "";
-  const offsets = documentPageOffsets(md, kind, body, pages, source);
-  const preamble = first ? md.renderer.render(tokens.slice(0, first), md.options, environment) : "";
-  const templates = pages.map(({ content }, index) => {
-    const offset = offsets[index];
+  const templates = pages.map(({ html, offset }, index) => {
     return `<template data-view-content="${index}"${offset !== undefined ? ` data-tab-offset="${offset}"` : ""}>`
-      + `${md.renderer.render(content, md.options, environment)}</template>`;
+      + `${html}</template>`;
   }).join("");
   return `<div class="noema-document-tabs" data-tab-kind="${kind}" data-view-kind="${kind}" data-view-source="${documentViewSourceKey(kind, title, body)}" data-tab-selected="${selected}" data-accent="${accent}">`
     + preamble

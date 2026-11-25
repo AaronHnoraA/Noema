@@ -29,6 +29,8 @@ const attributesByKind = new Map([
   ["form", ["separator", "width"]],
   ["window", ["height", "gap", "no-padding"]],
   ["demo", ["open"]],
+  ["npm-badge", ["name", "version", "downloads"]],
+  ["npm-to", ["tabs", "selected"]],
 ]);
 
 export function hasDocumentWidgetOptions(kind) { return attributesByKind.has(kind); }

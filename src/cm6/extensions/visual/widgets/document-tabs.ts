@@ -21,7 +21,7 @@ export function connectDocumentTabViews(root: HTMLElement, view: EditorView, hyd
       const next = group.querySelector<HTMLButtonElement>(":scope > .noema-tab-navigation > [data-move='1']");
       previous?.setAttribute("aria-label", "Previous page");
       next?.setAttribute("aria-label", "Next page");
-      strip.setAttribute("aria-label", "Document pages");
+      strip.setAttribute("aria-label", group.dataset.tabKind === "npm-to" ? "Package managers" : "Document pages");
       const id = `noema-document-tabs-${++nextGroupId}`;
       const panels = buttons.map((button, index) => {
         const panel = document.createElement("div");
@@ -64,7 +64,7 @@ export function connectDocumentTabViews(root: HTMLElement, view: EditorView, hyd
         const from = locate(group);
         const change = () => {
           show(index);
-          if (from !== null) rememberDocumentView(view, from, index);
+          if (from !== null) rememberDocumentView(view, from, buttons[index]?.dataset.tabKey ?? index);
           if (focus) {
             const button = buttons[index]!;
             button.focus({ preventScroll: true });
@@ -78,7 +78,8 @@ export function connectDocumentTabViews(root: HTMLElement, view: EditorView, hyd
         if (!view.dom.contains(group)) return;
         const from = locate(group);
         const remembered = from === null ? undefined : view.state.field(documentViewState, false)?.get(from);
-        show(typeof remembered === "number" && remembered < buttons.length ? remembered : Number(group.dataset.tabSelected));
+        const index = typeof remembered === "string" ? buttons.findIndex((button) => button.dataset.tabKey === remembered) : remembered;
+        show(typeof index === "number" && index >= 0 && index < buttons.length ? index : Number(group.dataset.tabSelected));
       };
       // A reused widget can carry old source offsets until CodeMirror puts it
       // back in the document view. Resolve the selection before mounting media.

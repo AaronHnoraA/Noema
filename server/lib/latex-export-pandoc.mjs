@@ -188,6 +188,11 @@ function environmentOpen(kind, title, options) {
         if (Object.hasOwn(attrs, key)) entries.push(`${label}: ${attrs[key] || '""'}`);
       }
     }
+    if (kind === "npm-badge" && attrs.name?.trim()) {
+      entries.push(attrs.name);
+      if (attrs.version?.trim()) entries.push(/^v/i.test(attrs.version.trim()) ? attrs.version.trim() : "v" + attrs.version.trim());
+      if (attrs.downloads) entries.push(`Downloads: ${attrs.downloads}`);
+    }
     details = entries.filter(Boolean).map((entry) => `\n${escapeLatexTitle(entry, options)}\\par`).join("");
     if (kind === "qrcode" && attrs.text?.trim()) details = `\n${escapeLatexText(attrs.text)}\\par`;
   }

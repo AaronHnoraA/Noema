@@ -6,7 +6,7 @@ interface TreeChoice {
   readonly folders: ReadonlyMap<string, boolean>;
 }
 
-type Choice = number | readonly number[] | TreeChoice;
+type Choice = number | string | readonly number[] | TreeChoice;
 const setDocumentViewChoice = StateEffect.define<{ from: number; choice: Choice }>();
 
 export const documentViewState = StateField.define<ReadonlyMap<number, Choice>>({

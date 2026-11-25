@@ -106,6 +106,8 @@ var documentWidgetOptions = map[string][]string{
 	"form":       {"separator", "width"},
 	"window":     {"height", "gap", "no-padding"},
 	"demo":       {"open"},
+	"npm-badge":  {"name", "version", "downloads"},
+	"npm-to":     {"tabs", "selected"},
 }
 
 var defaultEnvironment = map[string]string{
@@ -1858,6 +1860,19 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 		entries = append(entries, attributes["status"])
 	case "statusbar":
 		entries = append(entries, attributes["mode"], attributes["keys"], attributes["note"])
+	case "npm-badge":
+		if strings.TrimSpace(attributes["name"]) != "" {
+			entries = append(entries, attributes["name"])
+			if version := strings.TrimSpace(attributes["version"]); version != "" {
+				if !strings.HasPrefix(strings.ToLower(version), "v") {
+					version = "v" + version
+				}
+				entries = append(entries, version)
+			}
+			if downloads := attributes["downloads"]; downloads != "" {
+				entries = append(entries, "Downloads: "+downloads)
+			}
+		}
 	case "field":
 		if strings.TrimSpace(attributes["name"]) != "" {
 			entries = append(entries, attributes["name"])

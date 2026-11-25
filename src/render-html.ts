@@ -26,6 +26,7 @@ import { documentCodeTree, documentTreeKinds, renderDocumentTree } from "./docum
 import { documentFieldDelimiter, documentFieldKinds, renderDocumentFields } from "./document-fields.ts";
 import { documentDemonstrationKinds, renderDocumentDemonstration } from "./document-demonstrations.ts";
 import { renderDocumentChat } from "./document-chat.ts";
+import { documentPackageKinds, packageCommandFence, renderDocumentPackage } from "./document-packages.ts";
 import { documentViewSourceKey, forEachDocumentViewTree } from "./document-view.ts";
 import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
@@ -1415,6 +1416,7 @@ function renderOrgEnv(
     : documentFieldKinds.has(kindName) ? renderDocumentFields(md, kindName, meta.body, attrs)
     : documentDemonstrationKinds.has(kindName) ? renderDocumentDemonstration(md, kindName, title, meta.body, attrs, options.documentSourceActions === true, plainSourceBodies)
     : kindName === "chat" ? renderDocumentChat(md, title, meta.body, options.documentSourceActions === true, plainSourceBodies)
+    : documentPackageKinds.has(kindName) ? renderDocumentPackage(md, kindName, title, meta.body, attrs, options.documentTabActions === true)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kindName === "details" && renderedBody !== null) return renderedBody;
@@ -1449,7 +1451,7 @@ function applyTaskCheckboxes(root: ParentNode): void {
   });
 }
 
-const literalFenceEnvironment = /#\+[ \t]*begin[ \t]+(?:qrcode|diff|code-tree)\b/i;
+const literalFenceEnvironment = /#\+[ \t]*begin[ \t]+(?:qrcode|diff|code-tree|npm-to)\b/i;
 const sourceViewOpening = /#\+[ \t]*begin[ \t]+(?:chat|demo)\b/i;
 
 function collectSourceViewBodies(md: MarkdownIt, input: string, sources: Map<string, string[]>): void {
@@ -1481,6 +1483,7 @@ function collectLiteralFenceLines(md: MarkdownIt, markdown: string, start: numbe
     const mode = kind.toLowerCase();
     const fences = mode === "qrcode" && !documentQrHasText("qrcode", title) ? [documentQrFence(md, body)]
       : mode === "diff" ? documentDiffSides(md, body)?.map(({ fence }) => fence)
+      : mode === "npm-to" ? [packageCommandFence(md, body)]
       : mode === "code-tree" ? documentCodeTree(md, body)?.files.map(({ fence }) => fence) : undefined;
     if (fences?.some((fence) => fence?.map)) {
       for (const fence of fences) {

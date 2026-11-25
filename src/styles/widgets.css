@@ -2307,6 +2307,54 @@ ul.noema-tree-list { margin: 0; padding: 0; list-style: none; }
 .noema-chat-footer button:hover { color: var(--chat-accent); }
 .noema-chat-footer button:focus-visible { outline: 1px solid var(--chat-accent); }
 
+.noema-package-badge, .noema-package-script {
+  --package-line: var(--aaron-paper-line, var(--border, currentColor));
+  --package-muted: var(--aaron-muted, currentColor);
+  --package-accent: var(--aaron-link, currentColor);
+  min-inline-size: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.noema-package-badge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.22em 0.5em;
+}
+.noema-package-badge > span {
+  padding: 0.08em 0.4em;
+  border: 1px solid var(--package-line);
+  border-radius: 0.25em;
+}
+.noema-package-name { color: var(--package-accent); }
+.noema-package-version { color: var(--aaron-green, currentColor); }
+.noema-package-downloads { color: var(--package-muted); }
+.noema-package-script .noema-tab-strip { flex-wrap: wrap; overflow: visible; }
+.noema-package-script .noema-tab-strip > .noema-tab-button { padding-inline: 0.32em; }
+.noema-package-script .noema-package-panel > pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+.noema-package-script .noema-package-panel > pre,
+.noema-package-script .noema-package-panel > pre > code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.noema-package-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.2em 0.45em;
+  padding: 0.18em 0.45em;
+  border-block-start: 1px solid var(--package-line);
+}
+.noema-package-original { margin-inline-end: auto; color: var(--package-muted); }
+.noema-package-actions button { background: transparent; border: 0; color: var(--package-muted); font: inherit; cursor: pointer; }
+.noema-package-actions button:hover { color: var(--package-accent); }
+.noema-package-actions button:focus-visible { outline: 1px solid var(--package-accent); }
+.noema-package-manager { margin-block: 0.22em; color: var(--package-muted); }
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);
