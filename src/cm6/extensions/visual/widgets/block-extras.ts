@@ -4947,7 +4947,8 @@ class HtmlWidget extends MeasuredWidget {
   ignoreEvent(): boolean { return true; }
 }
 
-class ProgressWidget extends MeasuredWidget {
+class DocumentDataWidget extends MeasuredWidget {
+  readonly kind: string;
   readonly body: string;
   readonly from: number;
   readonly to: number;
@@ -4955,34 +4956,36 @@ class ProgressWidget extends MeasuredWidget {
 
   constructor(block: OrgEnvBlock) {
     super();
+    this.kind = block.kind;
     this.body = block.body;
     this.from = block.bodyFrom;
     this.to = block.bodyTo - 1;
     this.depth = block.depth;
   }
 
-  protected measureKey(): string { return "progress:" + shortHash(this.body); }
+  protected measureKey(): string { return `${this.kind}:${shortHash(this.body)}`; }
 
   protected measureGroupKey(): string {
-    return `progress:rows:${Math.min(8, Math.ceil(this.body.split("\n").length / 5))}`;
+    return `${this.kind}:rows:${Math.min(8, Math.ceil(this.body.split("\n").length / 5))}`;
   }
 
   protected estimatedHeightFallback(): number {
     return this.body.split("\n").length * 28;
   }
 
-  eq(other: ProgressWidget): boolean {
-    return this.body === other.body && this.from === other.from && this.to === other.to && this.depth === other.depth;
+  eq(other: DocumentDataWidget): boolean {
+    return this.kind === other.kind && this.body === other.body
+      && this.from === other.from && this.to === other.to && this.depth === other.depth;
   }
 
   toDOM(view: EditorView): HTMLElement {
     const block = document.createElement("div");
-    block.className = "cm-progress-env-widget cm-org-env-line";
-    block.dataset.orgEnvKind = "progress";
+    block.className = "cm-document-data-widget cm-org-env-line";
+    block.dataset.orgEnvKind = this.kind;
     block.style.setProperty("--org-env-depth", String(this.depth));
     setSourceRange(block, this.from, this.to);
     block.dataset.cmOpenSource = "true";
-    block.innerHTML = renderMarkdownHTML(buildOrgEnvSource("progress", "", this.body));
+    block.innerHTML = renderMarkdownHTML(buildOrgEnvSource(this.kind, "", this.body));
     const content = block.querySelector(":scope > org-env-block > .org-env-content");
     if (content) block.replaceChildren(content);
     enhanceRenderedMarkdown(block);
@@ -6143,8 +6146,14 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 // Decoration builder (full-doc scan — these constructs are sparse)
 // ---------------------------------------------------------------------------
 
-const sourceRevealEnvironments = new Set(["comment", "fold", "av", "embed", "progress"]);
+const documentDataEnvironments = new Set(["progress", "stats"]);
+const sourceRevealEnvironments = new Set(["comment", "fold", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
+
+export function isDocumentDataBody(state: EditorState, from: number, to: number): boolean {
+  const context = orgEnvContextForRange(state, from, to);
+  return !!context && documentDataEnvironments.has(context.kind);
+}
 
 function addOrgEnvBlockExtraDecos(
   decos: CMRange<Decoration>[],
@@ -6250,8 +6259,8 @@ function addOrgEnvBlockExtraDecos(
     return;
   }
   addOrgEnvBoundaryDecos(decos, state, block);
-  if (block.kind === "progress" && block.body.trim() && !opensSource(state, block.from, block.to)) {
-    const widget = new ProgressWidget(block);
+  if (documentDataEnvironments.has(block.kind) && block.body.trim() && !opensSource(state, block.from, block.to)) {
+    const widget = new DocumentDataWidget(block);
     decos.push(Decoration.replace({
       widget,
       block: true,
@@ -6468,9 +6477,9 @@ function activeBlockExtraKey(state: EditorState): string {
         || (block.kind === "ediff" && opensSource(state, block.from, block.to, "caret-interior"))
         || (block.kind === "tikz" && tikzSourceActive(state, block))) {
       parts.push(`${block.kind}:${block.from}:${block.to}`);
-      // Progress replaces only the body. Its heading and footer still track
-      // caret transitions independently while the body source is open.
-      if (block.kind !== "progress") continue;
+      // Data widgets replace only the body. Environment boundaries still
+      // track caret transitions independently while the body source is open.
+      if (!documentDataEnvironments.has(block.kind)) continue;
     }
     if (opensSource(state, block.openFrom, block.openTo)) {
       parts.push(`org-open:${block.openFrom}:${block.openTo}:${block.from}:${block.to}`);

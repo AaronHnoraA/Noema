@@ -1110,6 +1110,54 @@
   .noema-progress-bar { grid-area: 2 / 1 / 3 / 3; }
 }
 
+.noema-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 0.65em;
+}
+
+.noema-stat-card {
+  --stat-accent: var(--aaron-muted, currentColor);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  align-items: center;
+  column-gap: 0.55em;
+  padding: 0.55em 0.7em;
+  border: 1px solid var(--aaron-paper-line, var(--border, currentColor));
+  background: color-mix(in srgb, var(--aaron-panel, currentColor) 30%, transparent);
+  overflow-wrap: anywhere;
+}
+
+.noema-stat-card[data-accent="primary"] { --stat-accent: var(--aaron-accent, currentColor); }
+.noema-stat-card[data-accent="info"] { --stat-accent: var(--aaron-callout-info, var(--aaron-muted, currentColor)); }
+.noema-stat-card[data-accent="success"] { --stat-accent: var(--aaron-green, currentColor); }
+.noema-stat-card[data-accent="warning"] { --stat-accent: var(--aaron-accent-sand, currentColor); }
+.noema-stat-card[data-accent="danger"] { --stat-accent: var(--aaron-danger, currentColor); }
+.noema-stat-card[data-accent="important"] { --stat-accent: var(--aaron-accent-2, currentColor); }
+
+.noema-stat-name { grid-area: 1 / 1; color: var(--aaron-muted, currentColor); }
+.noema-stat-value { grid-area: 2 / 1; color: var(--aaron-ink, currentColor); }
+.noema-stat-trend {
+  grid-area: 1 / 2;
+  justify-self: end;
+  color: color-mix(in srgb, var(--stat-accent) 55%, var(--aaron-muted, currentColor));
+}
+.noema-stat-note { grid-area: 3 / 1 / 4 / 3; color: var(--aaron-muted, currentColor); }
+
+.noema-stat-spark {
+  grid-area: 2 / 2;
+  justify-self: end;
+  display: flex;
+  align-items: end;
+  gap: 1px;
+  inline-size: 2.7em;
+  block-size: 0.8em;
+  color: color-mix(in srgb, var(--stat-accent) 45%, var(--aaron-paper-line, currentColor));
+}
+
+.noema-stat-spark-bar { flex: 1 1 0; min-inline-size: 0; background: currentColor; }
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);

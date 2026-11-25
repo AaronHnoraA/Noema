@@ -100,7 +100,7 @@ import {
 import { tocIndexFromState } from "./toc-index.ts";
 import { hasViewportDecorationRefresh, viewportDecorationRefreshRanges } from "./viewport-refresh.ts";
 import { changesMightAffectFencedCodeRanges, getFencedCodeRanges } from "./code-ranges.ts";
-import { orgEnvContextForRange } from "./extensions/visual/widgets/block-extras.ts";
+import { isDocumentDataBody, orgEnvContextForRange } from "./extensions/visual/widgets/block-extras.ts";
 import { markdownLinkDestination } from "../markdown-link.ts";
 import { preserveEditorViewport } from "./viewport-stability.ts";
 import {
@@ -2772,7 +2772,9 @@ function buildTableDecoRanges(
   for (let index = firstTableEndingAtOrAfter(tables, from);
        index < tables.length && tables[index]!.from <= to; index++) {
     const table = tables[index]!;
-    if (tableOpened(state, table)) {
+    const opened = tableOpened(state, table);
+    if (!opened && isDocumentDataBody(state, table.from, table.to)) continue;
+    if (opened) {
       const data = parseMarkdownTable(table.source);
       const doc = state.doc;
       const first = doc.lineAt(table.from).number;
@@ -2983,6 +2985,7 @@ const tableConstructSource: ConstructSource = {
   at(state, pos) {
     const table = tableAt(state, pos);
     if (!table || pos >= table.to) return [];
+    if (!tableOpened(state, table) && isDocumentDataBody(state, table.from, table.to)) return [];
     return [{
       from: table.from,
       to: table.to,
