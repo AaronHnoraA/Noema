@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import abbreviations from "markdown-it-abbr";
 import { stripCommentAnchors } from "../shared/comment-anchors.mjs";
 import { full as emoji } from "markdown-it-emoji";
 import type Token from "markdown-it/lib/token.mjs";
@@ -9,6 +10,7 @@ import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { cleanEditorHTML } from "./export-html.ts";
 import { connectImagePreview, connectPublishedImages, openMediaViewer } from "./cm6/image-viewer.ts";
 import { connectStandaloneReading } from "./standalone-reading.ts";
+import { installDefinitionLists } from "./markdown-definition-lists.ts";
 import { approvedEdiffMarkdown } from "../shared/ediff-source.mjs";
 import { markdownItCjkEmphasis } from "./cjk-emphasis.ts";
 import { parseCodeInfo } from "./code-info.ts";
@@ -216,6 +218,7 @@ type MarkdownFootnoteDefinition = { number: number; line: number; body: string }
 export type MarkdownDocumentReferences = {
   readonly footnotes: ReadonlyMap<string, MarkdownFootnoteDefinition>;
   readonly links: Record<string, { href: string; title: string }>;
+  readonly abbreviations: Readonly<Record<string, string>>;
   readonly signature: string;
 };
 
@@ -381,6 +384,34 @@ function envLabel(kind: string): string {
 
 function lineText(state: StateBlock, line: number): string {
   return state.src.slice(state.bMarks[line]! + state.tShift[line]!, state.eMarks[line]);
+}
+
+function htmlCommentBlockRule(state: StateBlock, start: number, end: number, silent: boolean): boolean {
+  if (state.md.options.html || (state.sCount[start] ?? 0) - state.blkIndent >= 4
+      || !lineText(state, start).startsWith("<!--")) return false;
+  if (silent) return true;
+  let next = start;
+  let suffix = "";
+  while (next < end) {
+    const text = lineText(state, next++);
+    const close = text.indexOf("-->");
+    if (close < 0) continue;
+    suffix = text.slice(close + 3).trim();
+    break;
+  }
+  const token = state.push("noema_html_comment", "", 0);
+  token.block = true;
+  token.hidden = true;
+  token.map = [start, next];
+  if (suffix) {
+    state.push("paragraph_open", "p", 1).map = [next - 1, next];
+    const inline = state.push("inline", "", 0);
+    inline.content = suffix;
+    inline.children = [];
+    state.push("paragraph_close", "p", -1);
+  }
+  state.line = next;
+  return true;
 }
 
 function orgEnvBlockRule(state: StateBlock, startLine: number, endLine: number, silent: boolean): boolean {
@@ -675,8 +706,54 @@ export function indexMarkdownDocumentReferences(source: string): MarkdownDocumen
   const footnotes = new Map<string, MarkdownFootnoteDefinition>();
   collectDocumentFootnotes(tokens, footnotes);
   const links = (env.references ?? {}) as MarkdownDocumentReferences["links"];
-  if (!footnotes.size && !Object.keys(links).length) return null;
-  return { footnotes, links, signature: JSON.stringify([[...footnotes.keys()], links]) };
+  const abbreviations = (env.abbreviations ?? {}) as MarkdownDocumentReferences["abbreviations"];
+  if (!footnotes.size && !Object.keys(links).length && !Object.keys(abbreviations).length) return null;
+  return { footnotes, links, abbreviations, signature: JSON.stringify([[...footnotes.keys()], links, abbreviations]) };
+}
+
+export type DefinitionSourceLine = "term" | "body" | "continuation";
+
+/** Source positions of the visible term and definition markers. */
+export function indexMarkdownDefinitionLines(source: string): ReadonlyMap<number, DefinitionSourceLine> | null {
+  const marker = /^[ \t]*(?:>[ \t]*)*[:~](?:[ \t]|$)/;
+  const candidate = /^[ \t>]*[:~](?:[ \t]|$)/m;
+  if (!candidate.test(source)) return null;
+  const md = markdownItForRender();
+  const indexed = new Map<number, DefinitionSourceLine>();
+  const collect = (text: string, offset: number, depth: number) => {
+    const tokens: Token[] = [];
+    md.block.parse(text, md, {}, tokens);
+    const lines = text.split("\n");
+    const definitionLevels: number[] = [];
+    for (const token of tokens) {
+      if (token.type === "dd_close") definitionLevels.pop();
+      if (!token.map) continue;
+      const [from, to] = token.map;
+      if (token.type === "org_env_block" && depth < 32) {
+        const { kind, body } = token.meta as OrgEnvTokenMeta;
+        if (!opaqueReferenceBlocks.has(kind.toLowerCase()) && candidate.test(body)) {
+          collect(body, offset + from + 1, depth + 1);
+        }
+      }
+      if (token.type === "dt_open") indexed.set(offset + from + 1, "term");
+      const definitionLevel = definitionLevels.at(-1);
+      if (token.type === "paragraph_open" && definitionLevel !== undefined && token.level === definitionLevel + 1) {
+        for (let line = from; line < to; line++) {
+          const number = offset + line + 1;
+          if (!indexed.has(number)) indexed.set(number, "continuation");
+        }
+      }
+      if (token.type !== "dd_open") continue;
+      definitionLevels.push(token.level);
+      for (let line = from; line < to; line++) {
+        if (!marker.test(lines[line] ?? "")) continue;
+        indexed.set(offset + line + 1, "body");
+        break;
+      }
+    }
+  };
+  collect(source, 0, 0);
+  return indexed.size ? indexed : null;
 }
 
 function markdownInDocument(md: MarkdownIt, env: Record<string, unknown>, isolated = false): MarkdownIt {
@@ -691,6 +768,7 @@ function markdownInDocument(md: MarkdownIt, env: Record<string, unknown>, isolat
       return child;
     }
     child.references = env.references;
+    child.abbreviations = env.abbreviations;
     child.noemaFootnotes = parentNotes;
     child.noemaReferencesIndexed = true;
     return child;
@@ -1893,10 +1971,12 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainSourceBodies?
     html: options.allowHtml === true,
     linkify: true,
     typographer: false,
-  }).use(emoji).use(markdownItCjkEmphasis);
+  }).use(emoji).use(markdownItCjkEmphasis).use(abbreviations);
+  installDefinitionLists(md);
 
   md.validateLink = () => true;
   md.block.ruler.before("fence", "front_matter", frontMatterRule, { alt: [] });
+  md.block.ruler.before("fence", "noema_html_comment", htmlCommentBlockRule, { alt: ["paragraph", "reference", "blockquote"] });
   md.block.ruler.before("fence", "org_env_block", orgEnvBlockRule, { alt: ["paragraph", "reference", "blockquote"] });
   md.block.ruler.before("fence", "math_block", mathBlockRule, { alt: ["paragraph", "reference", "blockquote"] });
   md.block.ruler.before("paragraph", "semantic_heading_block", semanticHeadingBlockRule, { alt: ["paragraph"] });
@@ -1927,6 +2007,12 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainSourceBodies?
   md.inline.ruler.before("escape", "noema_inline_reading", inlineReadingRule);
 
   md.renderer.rules.math_block = renderMathBlock;
+  md.renderer.rules.noema_html_comment = () => "";
+  md.renderer.rules.dl_open = () => '<dl class="noema-definition-list">\n';
+  md.renderer.rules.abbr_open = (tokens, index, options, _env, renderer) => {
+    tokens[index]!.attrJoin("class", "noema-abbreviation");
+    return renderer.renderToken(tokens, index, options);
+  };
   md.renderer.rules.math_inline = renderMathInline;
   md.renderer.rules.cite_inline = renderCiteInline;
   md.renderer.rules.revision_inline = renderRevisionInline;
@@ -2260,8 +2346,9 @@ function renderMarkdownHTMLUncached(
   const root = document.createElement("div");
   const env: Record<string, unknown> = {};
   if (options?.documentReferences) {
-    const { footnotes, links } = options.documentReferences;
+    const { footnotes, links, abbreviations } = options.documentReferences;
     env.references = Object.assign(Object.create(null), links);
+    if (Object.keys(abbreviations).length) env.abbreviations = Object.assign(Object.create(null), abbreviations);
     env.noemaReferencesIndexed = true;
     for (const label of footnotes.keys()) footnoteNumber(env, label);
   }

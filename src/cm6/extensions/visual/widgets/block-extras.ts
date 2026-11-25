@@ -42,7 +42,7 @@ import {
   type MarkdownDocumentReferences,
   type RenderMarkdownHTMLOptions,
 } from "../../../../render-html.ts";
-import { renderedDocumentReferences } from "../document-references.ts";
+import { referencesForSource, renderedDocumentReferences } from "../document-references.ts";
 import { applyEditorSpoilers } from "../../spoilers.ts";
 import { jumpBackFromFootnote, jumpToFootnoteDefinition } from "./footnotes.ts";
 import {
@@ -3275,7 +3275,7 @@ class FoldWidget extends MeasuredWidget {
     this.kind = kind;
     this.blockId = blockId;
     this.bodyOffset = bodyOffset;
-    this.references = body.includes("[") ? references : undefined;
+    this.references = referencesForSource(references, body);
   }
 
   protected measureKey(): string { return `${this.kind}:` + shortHash(this.title + ":" + this.body); }
@@ -4268,7 +4268,7 @@ class ColumnsWidget extends MeasuredWidget {
     this.to = to;
     this.bodyFrom = bodyFrom;
     this.bodyTo = bodyTo;
-    this.references = body.includes("[") ? references : undefined;
+    this.references = referencesForSource(references, body);
   }
 
   protected measureKey(): string { return `columns:${shortHash(this.title + "\n" + this.body)}`; }
@@ -5289,7 +5289,7 @@ class DocumentDataWidget extends MeasuredWidget {
     this.from = block.bodyFrom;
     this.to = Math.max(this.from, block.bodyTo - 1);
     this.depth = block.depth;
-    this.references = block.body.includes("[") ? references : undefined;
+    this.references = referencesForSource(references, block.body);
   }
 
   protected measureKey(): string { return `${this.kind}:${shortHash(this.title + "\n" + this.body)}`; }

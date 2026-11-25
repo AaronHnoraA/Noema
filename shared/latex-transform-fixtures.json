@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "definitions-preserve-alias-terms-and-abbreviation-expansions",
+      "markdown": "Public API.\n\nEncoder\nWriter\n: Keep **order**.\n\n: Preserve bytes.\n\n*[API]: Application interface.\n\n~~~text\n*[API]: literal example\n~~~",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "Public API.\n\nEncoder / Writer\n: Keep **order**.\n\n: Preserve bytes.\n\n\n`\\textbf{API}: Application interface.`{=latex}\n\n\n~~~text\n*[API]: literal example\n~~~",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "inline-icons-export-labels-and-highlights-retain-fallback-prose",
       "markdown": "Status @@icon [check]{label=\"Reviewed\"} and @@icon [bell-off]. @@highlight [**Check** the `source` @@hidden [PRIVATE]]{tone=warning}. Literal `@@icon [close]`.",
       "options": {},

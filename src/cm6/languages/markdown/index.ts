@@ -14,11 +14,12 @@ import { inlineMathMarkdownExtension } from "../../../inline-math.ts";
 import { nestingAwareLinkExtension } from "./nested-links.ts";
 import { cjkEmphasisMarkdownExtension } from "../../../cjk-emphasis.ts";
 import { footnoteDefinitions } from "./footnote-definitions.ts";
+import { definitionListsMarkdown } from "./definition-lists.ts";
 
 const markdownOptions = {
   addKeymap: false,
   base: markdownLanguage,
-  extensions: [inlineMathMarkdownExtension, nestingAwareLinkExtension, cjkEmphasisMarkdownExtension, footnoteDefinitions],
+  extensions: [inlineMathMarkdownExtension, nestingAwareLinkExtension, cjkEmphasisMarkdownExtension, footnoteDefinitions, definitionListsMarkdown],
 };
 
 const localParser = markdown(markdownOptions).language.parser;

@@ -183,6 +183,37 @@
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
+.cm-editor .noema-abbreviation {
+  text-decoration: underline dotted color-mix(in srgb, var(--aaron-link, currentColor) 66%, transparent);
+  text-underline-offset: 0.2em;
+  cursor: help;
+}
+.cm-editor .noema-definition-list {
+  margin-block: var(--aaron-prose-paragraph-gap, 0.55em);
+  font-family: var(--aaron-font-prose, inherit);
+}
+.cm-editor .noema-definition-list dt,
+.cm-editor .cm-md-definition-term {
+  color: var(--aaron-ink, inherit);
+  font-weight: 650;
+}
+.cm-editor .noema-definition-list dd {
+  margin-inline-start: 0;
+  margin-block-end: 0.45em;
+  padding-inline-start: 0.95em;
+  border-inline-start: 1px solid var(--aaron-paper-line, currentColor);
+}
+.cm-editor :is(.cm-md-definition-body, .cm-md-definition-continuation) {
+  padding-inline-start: 0.95em;
+  border-inline-start: 1px solid var(--aaron-paper-line, currentColor);
+}
+.cm-editor .cm-md-abbreviation-definition :is(.cm-link-text, .syntax-hint) {
+  color: inherit;
+  text-decoration: none;
+}
+.cm-editor .cm-md-abbreviation-definition {
+  color: var(--aaron-muted, inherit);
+}
 .noema-inline-control { position: relative; cursor: pointer; }
 .noema-inline-toggle {
   position: absolute;

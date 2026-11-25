@@ -1606,6 +1606,50 @@ func linkDefinitionFollowsFootnote(lines []string, index int, container containe
 	return false
 }
 
+var definitionMarker = regexp.MustCompile(`^ {0,3}[:~](?:[ \t]|$)`)
+var notDefinitionTerm = regexp.MustCompile("^(?:#{1,6}(?:[ \\t]|$)|#\\+|[><]|(?:[-+*]|\\d{1,9}[.)])[ \\t]|\\*\\[|`{3,}|~{3,}|[-=_]{3,}$|\\\\\\[|\\[[^\\]\\n]+\\]:)")
+var abbreviationDefinition = regexp.MustCompile(`^ {0,3}\*\[((?:\\.|[^\[\]\\])+)\]:[ \t]*(\S.*)$`)
+var abbreviationEscape = regexp.MustCompile(`\\(.)`)
+
+func joinDefinitionAliases(output []string, container containerLine) []string {
+	if len(output) == 0 || !definitionMarker.MatchString(container.Content) {
+		return output
+	}
+	end := len(output)
+	last := markdownContainerLine(output[end-1])
+	if last.QuoteDepth == container.QuoteDepth && strings.TrimSpace(last.Content) == "" {
+		end--
+	}
+	if end <= 0 {
+		return output
+	}
+	terminal := markdownContainerLine(output[end-1])
+	width, _ := leadingIndent(terminal.Content, 0)
+	if width >= 4 {
+		return output
+	}
+	var terms []string
+	start := end
+	for ; start > 0 && len(terms) < 32; start-- {
+		previous := markdownContainerLine(output[start-1])
+		text := strings.TrimSpace(previous.Content)
+		indent, _ := leadingIndent(previous.Content, 0)
+		if text == "" || previous.QuoteDepth != container.QuoteDepth || strings.Contains(previous.Content, "\n") ||
+			indent != width || notDefinitionTerm.MatchString(text) || definitionMarker.MatchString(text) {
+			break
+		}
+		terms = append(terms, text)
+	}
+	if len(terms) < 2 {
+		return output
+	}
+	for left, right := 0, len(terms)-1; left < right; left, right = left+1, right-1 {
+		terms[left], terms[right] = terms[right], terms[left]
+	}
+	output[start] = terminal.Prefix + strings.Repeat(" ", width) + strings.Join(terms, " / ")
+	return append(output[:start+1], output[end:]...)
+}
+
 var listItemPrefix = regexp.MustCompile(`^ *(?:[-+*]|[0-9]{1,9}[.)])[ \t]`)
 
 func leadingIndent(text string, width int) (int, int) {
@@ -2393,6 +2437,7 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 			if linkDefinitionFollowsFootnote(lines, index, container) {
 				output = append(output, strings.TrimRight(container.Prefix, " \t"))
 			}
+			output = joinDefinitionAliases(output, container)
 			if list, end := literalCodeList(lines, index, container); list != nil {
 				output = append(output, list...)
 				index = end
@@ -2437,6 +2482,13 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 		}
 		trimmed := strings.TrimSpace(line)
 		if strings.EqualFold(trimmed, "[toc]") {
+			continue
+		}
+		if abbreviation := abbreviationDefinition.FindStringSubmatch(container.Content); abbreviation != nil {
+			label := abbreviationEscape.ReplaceAllString(abbreviation[1], "$1")
+			term := rawLatexInline("\\textbf{" + escapeLatexText(label) + "}: " + escapeLatexText(strings.TrimSpace(abbreviation[2])))
+			blank := strings.TrimRight(container.Prefix, " \t")
+			output = append(output, blank, container.Prefix+term, blank)
 			continue
 		}
 		if command, state := multilinePrivateStart(line); state != nil {

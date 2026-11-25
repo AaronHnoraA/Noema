@@ -39,6 +39,7 @@
 
 import { syntaxTree } from "@codemirror/language";
 import { markdownLinkNodeDestination } from "./extensions/visual/document-references.ts";
+import { definitionLinesFromText } from "./extensions/visual/definition-lines.ts";
 import { redo, undo } from "@codemirror/commands";
 import {
   Decoration,
@@ -394,6 +395,7 @@ function collectLivePreviewTokens(
 ): LivePreviewToken[] {
   const tokens: LivePreviewToken[] = [];
   const doc = view.state.doc;
+  const definitions = definitionLinesFromText(doc);
   // Math is literal for every construct family (constructs/literal-ranges.ts);
   // code ranges are collected by the walk below, which already visits them.
   const excludedRanges = mathRangesIn(view.state, ranges);
@@ -406,6 +408,19 @@ function collectLivePreviewTokens(
   addHeadingMarkTokens(tokens, view.state, ranges, excludedRanges);
 
   for (const { from, to } of ranges) {
+    if (definitions) {
+      for (let number = doc.lineAt(from).number; number <= doc.lineAt(to).number; number++) {
+        const definition = definitions.get(number);
+        if (!definition || definition === "term") continue;
+        const line = doc.line(number);
+        const marker = definition === "body"
+          ? /^[ \t]*(?:>[ \t]*)*([:~])(?:[ \t]+|$)/.exec(line.text)
+          : /^([ \t]{2,})/.exec(line.text);
+        if (!marker) continue;
+        const at = line.from + marker[0].lastIndexOf(marker[1]!);
+        tokens.push({ kind: "block-mark", from: at, to: line.from + marker[0].length, line: number });
+      }
+    }
     syntaxTree(view.state).iterate({
       from,
       to,
@@ -3061,8 +3076,14 @@ function buildLineDecoRanges(
   if (firstLine > lastWindowLine) return decos;
   const windowFrom = doc.line(firstLine).from;
   const windowTo = doc.line(lastWindowLine).to;
+  const definitions = definitionLinesFromText(doc);
   for (let lineNumber = firstLine; lineNumber <= lastWindowLine; lineNumber++) {
     const line = doc.line(lineNumber);
+    const definition = definitions?.get(lineNumber);
+    if (definition) decos.push(lineClassDecoration(`cm-md-definition-${definition}`).range(line.from));
+    if (/^[ \t]{0,3}\*\[[^\]\n]+\]:[ \t]*\S/.test(line.text)) {
+      decos.push(lineClassDecoration("cm-md-abbreviation-definition").range(line.from));
+    }
     if (line.text.trim().length > 0) continue;
 
     const continued = lineNumber > 1 && doc.line(lineNumber - 1).text.trim().length === 0;

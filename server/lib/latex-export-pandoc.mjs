@@ -453,6 +453,30 @@ function linkDefinitionFollowsFootnote(lines, index, container) {
   return false;
 }
 
+const definitionMarker = /^ {0,3}[:~](?:[ \t]|$)/;
+const notDefinitionTerm = /^(?:#{1,6}(?:[ \t]|$)|#\+|[><]|(?:[-+*]|\d{1,9}[.)])[ \t]|\*\[|`{3,}|~{3,}|[-=_]{3,}$|\\\[|\[[^\]\n]+\]:)/;
+const abbreviationDefinition = /^ {0,3}\*\[((?:\\.|[^\[\]\\])+)\]:[ \t]*(\S.*)$/;
+
+function joinDefinitionAliases(output, container) {
+  if (!definitionMarker.test(container.content)) return;
+  const last = markdownContainerLine(output.at(-1));
+  const end = last.quoteDepth === container.quoteDepth && !last.content.trim() ? output.length - 1 : output.length;
+  if (end <= 0) return;
+  const terminal = markdownContainerLine(output[end - 1]);
+  const { width } = leadingIndent(terminal.content);
+  if (width >= 4) return;
+  const terms = [];
+  let start = end;
+  for (; start > 0 && terms.length < 32; start--) {
+    const previous = markdownContainerLine(output[start - 1]);
+    const text = previous.content.trim();
+    if (!text || previous.quoteDepth !== container.quoteDepth || previous.content.includes("\n")
+        || leadingIndent(previous.content).width !== width || notDefinitionTerm.test(text) || definitionMarker.test(text)) break;
+    terms.unshift(text);
+  }
+  if (terms.length >= 2) output.splice(start, terms.length, terminal.prefix + " ".repeat(width) + terms.join(" / "));
+}
+
 const listItemPrefix = /^ *(?:[-+*]|\d{1,9}[.)])(?=[ \t])/;
 
 function leadingIndent(text, start = 0) {
@@ -886,6 +910,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
 
     if (!htmlComment) {
       if (linkDefinitionFollowsFootnote(lines, index, container)) output.push(container.prefix.trimEnd());
+      joinDefinitionAliases(output, container);
       const list = literalCodeList(lines, index, container);
       if (list) {
         output.push(...list.lines);
@@ -931,6 +956,13 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
     }
 
     if (/^\s*\[(?:toc|TOC)\]\s*$/.test(line)) continue;
+    const abbreviation = abbreviationDefinition.exec(container.content);
+    if (abbreviation) {
+      const label = abbreviation[1].replace(/\\(.)/g, "$1");
+      const term = rawLatexInline(`\\textbf{${escapeLatexText(label)}}: ${escapeLatexText(abbreviation[2].trim())}`);
+      output.push(container.prefix.trimEnd(), container.prefix + term, container.prefix.trimEnd());
+      continue;
+    }
 
     const multilinePrivate = multilinePrivateStart(line);
     if (multilinePrivate) {

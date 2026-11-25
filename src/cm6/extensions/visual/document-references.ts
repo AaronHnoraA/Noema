@@ -23,6 +23,13 @@ export const renderedDocumentReferences = StateField.define<MarkdownDocumentRefe
   },
 });
 
+export function referencesForSource(
+  references: MarkdownDocumentReferences | null | undefined, source: string,
+): MarkdownDocumentReferences | null | undefined {
+  if (!references || source.includes("[")) return references;
+  return Object.keys(references.abbreviations).some((key) => source.includes(key.slice(1))) ? references : undefined;
+}
+
 /** Resolve a full, collapsed or shortcut reference using Markdown's document scope. */
 export function markdownLinkNodeDestination(state: EditorState, node: SyntaxNode): string {
   const url = node.getChild("URL");

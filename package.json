@@ -90,6 +90,8 @@
     "json5": "2.2.3",
     "katex": "^0.16.47",
     "markdown-it": "^14.1.1",
+    "markdown-it-abbr": "2.0.0",
+    "markdown-it-deflist": "4.0.0",
     "markdown-it-emoji": "^3.0.0",
     "mathlive": "0.110.0",
     "mermaid": "^11.15.0",

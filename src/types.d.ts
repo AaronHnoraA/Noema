@@ -14,6 +14,18 @@ declare module "markdown-it-emoji" {
   export const full: MarkdownIt.PluginSimple;
 }
 
+declare module "markdown-it-deflist" {
+  import type MarkdownIt from "markdown-it";
+  const plugin: MarkdownIt.PluginSimple;
+  export default plugin;
+}
+
+declare module "markdown-it-abbr" {
+  import type MarkdownIt from "markdown-it";
+  const plugin: MarkdownIt.PluginSimple;
+  export default plugin;
+}
+
 declare module "turndown-plugin-gfm" {
   import type TurndownService from "turndown";
 
