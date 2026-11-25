@@ -5142,6 +5142,96 @@ iframe.noema-embed-fullscreen {
   max-inline-size: 64rem;
   margin-inline: auto;
   padding-inline: clamp(18px, 5vw, 48px);
+  padding-block: clamp(18px, 3vh, 34px) var(--aaron-prose-page-bottom, 5rem);
+}
+.noema-standalone-toolbar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 5;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  max-inline-size: 64rem;
+  margin-inline: auto;
+  padding: 0.55rem clamp(18px, 5vw, 48px);
+  border-block-end: 1px solid var(--aaron-paper-line, currentColor);
+  background: var(--aaron-paper, Canvas);
+  color: var(--aaron-ink, CanvasText);
+}
+.noema-standalone-toolbar .noema-title,
+.noema-standalone-toolbar .noema-actions {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+}
+.noema-standalone-toolbar .noema-title {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+.noema-standalone-toolbar [data-file-label] {
+  color: var(--aaron-muted, inherit);
+}
+.noema-standalone-toolbar button {
+  padding: 0.24rem 0.52rem;
+  border: 1px solid var(--aaron-paper-line, currentColor);
+  border-radius: 4px;
+  background: var(--aaron-paper-soft, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 0.875em;
+  cursor: pointer;
+}
+.noema-standalone-toolbar button:is([aria-expanded="true"], [aria-pressed="true"], [aria-pressed="mixed"]) {
+  border-color: var(--aaron-link, currentColor);
+  color: var(--aaron-link, currentColor);
+}
+.noema-standalone-toolbar :is(button, a):focus-visible {
+  outline: 1px solid var(--aaron-link, currentColor);
+  outline-offset: 2px;
+}
+.noema-standalone-outline {
+  position: absolute;
+  inset-block-start: calc(100% + 0.5rem);
+  inset-inline-end: clamp(18px, 5vw, 48px);
+  box-sizing: border-box;
+  inline-size: min(17rem, calc(100% - 36px));
+  max-block-size: min(52vh, 24rem);
+  overflow: auto;
+  padding: 0.35rem;
+  border: 1px solid var(--aaron-paper-line, currentColor);
+  border-radius: 5px;
+  background: var(--aaron-paper, Canvas);
+  box-shadow: var(--aaron-shadow);
+}
+.noema-standalone-outline a {
+  display: block;
+  padding: 0.3rem 0.5rem;
+  border-radius: 3px;
+  color: inherit;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.noema-standalone-outline a[data-level="2"] { padding-inline-start: 1rem; }
+.noema-standalone-outline a[data-level="3"] { padding-inline-start: 1.5rem; }
+.noema-standalone-outline a:is([data-level="4"], [data-level="5"], [data-level="6"]) { padding-inline-start: 2rem; }
+.noema-standalone-outline a:is(:hover, :focus-visible) {
+  background: var(--aaron-paper-soft, transparent);
+  color: var(--aaron-link, currentColor);
+}
+@media (max-width: 42rem) {
+  .noema-standalone-outline {
+    position: static;
+    flex: 1 0 100%;
+    inline-size: 100%;
+    box-shadow: none;
+  }
+}
+.noema-standalone-page #content :is(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-block-start: 4.5rem;
 }
 .noema-standalone-page .cm-editor org-env-block > .org-env-heading {
   display: flex;

@@ -9,6 +9,19 @@ import {
 } from "../src/render-html.ts";
 
 describe("shared markdown HTML renderer", () => {
+  test("standalone reader exposes the outline control outside the collapsed panel", () => {
+    const html = renderPublishedNoteHTML("# Note\n\n@@spoiler [Answer].", {
+      title: "Note",
+      standalone: { styles: "" },
+    });
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const toggle = doc.querySelector("header [data-toc-toggle]");
+    const outline = doc.getElementById(toggle?.getAttribute("aria-controls") ?? "");
+    expect(outline?.hasAttribute("hidden")).toBe(true);
+    expect(outline?.contains(toggle)).toBe(false);
+    expect(doc.querySelector("header [data-standalone-spoilers]")?.getAttribute("aria-pressed")).toBe("false");
+  });
+
   test("reads the state of tight and loose task items", () => {
     const host = document.createElement("div");
     host.innerHTML = renderMarkdownHTML("- [x] Complete\n\n- [ ] Continue\n\nA paragraph.\n\n- [ ] Review\n- [x] Ship");

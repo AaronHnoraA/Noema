@@ -8,6 +8,7 @@ import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 
 import { cleanEditorHTML } from "./export-html.ts";
 import { connectImagePreview, connectPublishedImages, openMediaViewer } from "./cm6/image-viewer.ts";
+import { connectStandaloneReading } from "./standalone-reading.ts";
 import { approvedEdiffMarkdown } from "../shared/ediff-source.mjs";
 import { markdownItCjkEmphasis } from "./cjk-emphasis.ts";
 import { parseCodeInfo } from "./code-info.ts";
@@ -2365,17 +2366,25 @@ export function renderPublishedNoteHTML(
   const noteCssHtml = resolvedNoteCssHref && !standalone
     ? `  <link rel="stylesheet" data-noema-note-css href="${escapeAttr(resolvedNoteCssHref)}" />\n`
     : "";
+  const outlineAvailable = Boolean(standalone) && /<h[1-6](?:[ >])/iu.test(contentHtml);
+  const spoilersAvailable = Boolean(standalone) && contentHtml.includes("noema-inline-spoiler");
+  const standaloneOutline = outlineAvailable ? `      <aside id="noema-page-outline" class="noema-standalone-outline" data-published-toc hidden>
+        <nav data-toc-list aria-label="Page outline"></nav>
+      </aside>
+` : "";
+  const outlineButton = outlineAvailable
+    ? '        <button type="button" data-toc-toggle aria-controls="noema-page-outline" aria-expanded="false">Outline</button>\n' : "";
+  const spoilerButton = spoilersAvailable
+    ? '        <button type="button" data-standalone-spoilers aria-pressed="false" title="Reveal or hide all spoilers (S)">Spoilers</button>\n' : "";
   const toolbarHtml = pdf ? "" : standalone ? `    <header class="noema-toolbar noema-standalone-toolbar">
       <div class="noema-title">
         <strong>Noema</strong>
         <span data-file-label>${escapeHtml(title)}</span>
       </div>
       <nav class="noema-actions" aria-label="Standalone note actions">
-        <button type="button" data-standalone-theme>Theme</button>
+${outlineButton}${spoilerButton}        <button type="button" data-standalone-theme>Theme</button>
       </nav>
-      <span class="noema-vim-mode">READ</span>
-      <span class="noema-status">Self-contained HTML</span>
-    </header>
+${standaloneOutline}    </header>
 ` : `    <header class="noema-toolbar">
       <div class="noema-title">
         <strong>Noema</strong>
@@ -2389,7 +2398,7 @@ export function renderPublishedNoteHTML(
       <span class="noema-status">Published HTML</span>
     </header>
 `;
-  const tocHtml = pdf ? "" : `      <aside class="noema-floating-toc is-collapsed" data-floating-toc data-published-toc>
+  const tocHtml = pdf || standalone ? "" : `      <aside class="noema-floating-toc is-collapsed" data-floating-toc data-published-toc>
         <button type="button" data-toc-toggle aria-expanded="false" title="Toggle page outline">Page</button>
         <nav data-toc-list aria-label="Page outline"></nav>
       </aside>
@@ -2400,33 +2409,7 @@ export function renderPublishedNoteHTML(
         </button>
       </div>
 `;
-  const standaloneScript = `  <script>(() => {
-    const root = document.documentElement;
-    const theme = document.querySelector('[data-standalone-theme]');
-    theme?.addEventListener('click', () => {
-      const current = root.dataset.noemaTheme || root.dataset.noemaThemePrimary || 'noema';
-      const next = current === root.dataset.noemaThemePrimary
-        ? root.dataset.noemaThemeAlternate
-        : root.dataset.noemaThemePrimary;
-      if (next) root.dataset.noemaTheme = next;
-    });
-    const list = document.querySelector('[data-toc-list]');
-    const toggle = document.querySelector('[data-toc-toggle]');
-    const headings = Array.from(document.querySelectorAll('#content h1, #content h2, #content h3, #content h4, #content h5, #content h6'));
-    if (list) headings.forEach((heading, index) => {
-      if (!heading.id) heading.id = 'noema-heading-' + (index + 1);
-      const link = document.createElement('a');
-      link.href = '#' + heading.id;
-      link.textContent = heading.textContent || 'Heading';
-      link.dataset.level = heading.tagName.slice(1);
-      list.appendChild(link);
-    });
-    toggle?.addEventListener('click', () => {
-      const toc = document.querySelector('[data-published-toc]');
-      const collapsed = toc?.classList.toggle('is-collapsed') ?? true;
-      toggle.setAttribute('aria-expanded', String(!collapsed));
-    });
-  })();</script>\n`;
+  const standaloneScript = `<script>(${connectStandaloneReading.toString()})(document);</script>\n`;
   const inlineReadingScript = !pdf && contentHtml.includes("data-inline-popover-trigger")
     ? `<script>(${connectInlineReadingPopovers.toString()})(document);</script>\n` : "";
   const adaptiveColumnsScript = !pdf && contentHtml.includes("data-columns-config")
