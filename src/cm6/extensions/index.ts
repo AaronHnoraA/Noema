@@ -18,6 +18,7 @@ import { createMarkdownLanguageExtension } from "../languages/markdown/index.ts"
 import { effectListenersExtension } from "./effect-listeners.ts";
 import { parserWatcher } from "./parser-watcher.ts";
 import { editorSpoilers } from "./spoilers.ts";
+import { renderedDefinitionLines } from "./visual/definition-lines.ts";
 import {
   createVisualMarkdownEditingExtensions,
   createVisualMarkdownExtensions,
@@ -37,6 +38,7 @@ export function createMarkdownFeatureExtensions(
     parserWatcher,
     effectListenersExtension,
     editorSpoilers,
+    renderedDefinitionLines,
     tocIndexExtension,
     orderedListRenumber,
     headingFoldExtension,

@@ -39,7 +39,7 @@
 
 import { syntaxTree } from "@codemirror/language";
 import { markdownLinkNodeDestination } from "./extensions/visual/document-references.ts";
-import { definitionLinesFromText } from "./extensions/visual/definition-lines.ts";
+import { definitionLinesFromState } from "./extensions/visual/definition-lines.ts";
 import { redo, undo } from "@codemirror/commands";
 import {
   Decoration,
@@ -395,7 +395,7 @@ function collectLivePreviewTokens(
 ): LivePreviewToken[] {
   const tokens: LivePreviewToken[] = [];
   const doc = view.state.doc;
-  const definitions = definitionLinesFromText(doc);
+  const definitions = definitionLinesFromState(view.state);
   // Math is literal for every construct family (constructs/literal-ranges.ts);
   // code ranges are collected by the walk below, which already visits them.
   const excludedRanges = mathRangesIn(view.state, ranges);
@@ -3076,7 +3076,7 @@ function buildLineDecoRanges(
   if (firstLine > lastWindowLine) return decos;
   const windowFrom = doc.line(firstLine).from;
   const windowTo = doc.line(lastWindowLine).to;
-  const definitions = definitionLinesFromText(doc);
+  const definitions = definitionLinesFromState(state);
   for (let lineNumber = firstLine; lineNumber <= lastWindowLine; lineNumber++) {
     const line = doc.line(lineNumber);
     const definition = definitions?.get(lineNumber);

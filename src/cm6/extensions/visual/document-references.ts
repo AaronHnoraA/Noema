@@ -2,6 +2,7 @@ import { StateField, type EditorState, type Text } from "@codemirror/state";
 import type { SyntaxNode } from "@lezer/common";
 import { markdownLinkDestination } from "../../../markdown-link.ts";
 import { indexMarkdownDocumentReferences, type MarkdownDocumentReferences } from "../../../render-html.ts";
+import { isIsolatedProseEdit } from "./isolated-prose-edit.ts";
 
 const referenceIndexes = new WeakMap<Text, MarkdownDocumentReferences | null>();
 
@@ -17,7 +18,7 @@ export function documentReferencesForText(doc: Text): MarkdownDocumentReferences
 export const renderedDocumentReferences = StateField.define<MarkdownDocumentReferences | null>({
   create: (state) => documentReferencesForText(state.doc),
   update(previous, transaction) {
-    if (!transaction.docChanged) return previous;
+    if (!transaction.docChanged || isIsolatedProseEdit(transaction)) return previous;
     const next = documentReferencesForText(transaction.newDoc);
     return next?.signature === previous?.signature ? previous : next;
   },

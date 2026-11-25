@@ -1,5 +1,7 @@
 import { expect, test } from "@voidzero-dev/vite-plus-test";
 import { createEditor } from "../src/editor-api.ts";
+import { renderedDefinitionLines } from "../src/cm6/extensions/visual/definition-lines.ts";
+import { renderedDocumentReferences } from "../src/cm6/extensions/visual/document-references.ts";
 import { renderMarkdownHTML } from "../src/render-html.ts";
 
 const sample = [
@@ -66,6 +68,15 @@ test("the editor styles definition markers and updates abbreviation explanations
     editor.view.dispatch({ changes: { from: start, to: start + "Application interface".length, insert: "Public interface" } });
     expect([...host.querySelectorAll("abbr")].map((element) => element.title))
       .toEqual(["Public interface", "Public interface"]);
+    const { state } = editor.view;
+    const definitions = state.field(renderedDefinitionLines);
+    const references = state.field(renderedDocumentReferences);
+    editor.view.dispatch({ changes: { from: state.doc.length, insert: " Continue here." } });
+    expect(editor.view.state.field(renderedDefinitionLines)).toBe(definitions);
+    expect(editor.view.state.field(renderedDocumentReferences)).toBe(references);
+    editor.view.dispatch({ changes: { from: editor.view.state.doc.length, insert: "\n: New definition." } });
+    expect(editor.view.state.field(renderedDefinitionLines)).not.toBe(definitions);
+    expect(host.querySelectorAll(".cm-md-definition-body")).toHaveLength(4);
   } finally {
     editor.destroy();
     host.remove();
