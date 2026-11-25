@@ -1,6 +1,6 @@
 import DOMPurify from "dompurify";
 
-import { forEachTabMarkdownTree } from "./document-tabs.ts";
+import { forEachDocumentViewTree } from "./document-view.ts";
 import { renderMathLazy } from "./math-render.ts";
 
 function renderMathElement(
@@ -251,7 +251,7 @@ function removeEditorOnlyAndStripAttrs(root: ParentNode): void {
 export function cleanEditorHTML(root: HTMLElement, inPlace = false): string {
   const clone = inPlace ? root : root.cloneNode(true) as HTMLElement;
   const protectedSrcdocs: string[] = [];
-  forEachTabMarkdownTree(clone, (tree) => {
+  forEachDocumentViewTree(clone, (tree) => {
     prepareStaticExportHTML(tree);
     removeEditorOnlyAndStripAttrs(tree);
     protectVisualSrcdocAttrs(tree, protectedSrcdocs);

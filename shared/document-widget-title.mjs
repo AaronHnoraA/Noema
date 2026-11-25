@@ -20,6 +20,8 @@ const attributesByKind = new Map([
   ["code-tabs", ["selected", "accent"]],
   ["tab-panel", ["selected", "accent"]],
   ["swiper", ["selected", "accent"]],
+  ["details", ["open"]],
+  ["accordion", ["open", "multiple", "expand"]],
 ]);
 
 export function hasDocumentWidgetOptions(kind) { return attributesByKind.has(kind); }

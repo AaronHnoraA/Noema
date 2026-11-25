@@ -96,6 +96,8 @@ var documentWidgetOptions = map[string][]string{
 	"code-tabs":  {"selected", "accent"},
 	"tab-panel":  {"selected", "accent"},
 	"swiper":     {"selected", "accent"},
+	"details":    {"open"},
+	"accordion":  {"open", "multiple", "expand"},
 }
 
 var defaultEnvironment = map[string]string{

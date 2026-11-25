@@ -1899,6 +1899,54 @@ ul.noema-document-log > li.noema-log-plain { display: block; }
 .noema-document-tabs:is([data-tab-kind="tab-panel"], [data-tab-kind="swiper"]) > .noema-tab-body { padding-inline: 0.6em; }
 .noema-document-tabs[data-tab-kind="code-tabs"] > .noema-tab-body > .noema-tab-pane { padding: 0; }
 
+.noema-document-disclosure, .noema-document-accordion {
+  --disclosure-line: var(--aaron-paper-line, var(--border, currentColor));
+  --disclosure-accent: var(--aaron-link, currentColor);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.noema-document-disclosure { border: 1px solid var(--disclosure-line); }
+.noema-document-accordion > .noema-document-disclosure + .noema-document-disclosure { border-block-start: 0; }
+.noema-document-disclosure > summary {
+  padding: 0.37em 0.62em;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.noema-document-disclosure > summary::marker { color: var(--disclosure-accent); }
+.noema-document-disclosure[open] > summary {
+  background: color-mix(in srgb, var(--disclosure-accent) 8%, transparent);
+  border-block-end: 1px solid var(--disclosure-line);
+}
+.noema-document-disclosure > summary:hover { color: var(--disclosure-accent); }
+.noema-document-disclosure > summary:focus-visible { outline: 1px solid var(--disclosure-accent); outline-offset: -1px; }
+.noema-disclosure-body { padding: 0.45em 0.62em; }
+.noema-disclosure-body > :first-child { margin-block-start: 0; }
+.noema-disclosure-body > :last-child { margin-block-end: 0; }
+.noema-disclosure-body :is(p, li) { white-space: normal; }
+.cm-document-disclosure-widget { position: relative; }
+.cm-document-disclosure-widget:has(> .noema-disclosure-edit) > .noema-document-disclosure > summary { padding-inline-end: 3.4em; }
+.noema-disclosure-edit {
+  position: absolute;
+  inset-block-start: 0.25em;
+  inset-inline-end: 0.45em;
+  border: 0;
+  padding: 0.15em 0.28em;
+  color: var(--aaron-muted, currentColor);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  opacity: 0.72;
+}
+.noema-disclosure-edit:is(:hover, :focus-visible) {
+  color: var(--aaron-link, currentColor);
+  opacity: 1;
+}
+@media print {
+  .noema-document-disclosure::details-content { content-visibility: visible; }
+  .noema-disclosure-edit { display: none; }
+}
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);

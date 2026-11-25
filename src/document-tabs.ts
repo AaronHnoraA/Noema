@@ -1,24 +1,10 @@
 import type MarkdownIt from "markdown-it";
 import Token from "markdown-it/lib/token.mjs";
 import type { AttrMap } from "../shared/layout-attrs.mjs";
-import { approvedEdiffMarkdown } from "../shared/ediff-source.mjs";
-import { stripCommentAnchors } from "../shared/comment-anchors.mjs";
-import { shortHash } from "./cm6/extensions/visual/widgets/measured-observer.ts";
+import { documentViewSourceKey } from "./document-view.ts";
 import { documentDataAccents } from "./document-data-table.ts";
 
 export const documentTabKinds = new Set(["tabs", "code-tabs", "tab-panel", "swiper"]);
-
-export function documentTabSourceKey(kind: string, title: string, body: string): string {
-  const visible = stripCommentAnchors(approvedEdiffMarkdown(body)).replace(/\s+/g, " ").trim();
-  return `${kind}:${shortHash(stripCommentAnchors(title).trim())}:${shortHash(visible)}`;
-}
-
-export function forEachTabMarkdownTree(root: ParentNode, visit: (tree: ParentNode) => void): void {
-  visit(root);
-  for (const template of root.querySelectorAll<HTMLTemplateElement>("template[data-tab-content]")) {
-    forEachTabMarkdownTree(template.content, visit);
-  }
-}
 
 interface Page {
   label: string;
@@ -26,7 +12,7 @@ interface Page {
   line: number;
 }
 
-function headingLabel(md: MarkdownIt, token: Token, environment: object): string {
+export function headingLabel(md: MarkdownIt, token: Token, environment: object): string {
   const children = (token.children ?? []).map((child) => {
     if (child.type !== "code_inline" && child.type !== "math_inline") return child;
     const text = new Token("text", "", 0);
@@ -36,7 +22,7 @@ function headingLabel(md: MarkdownIt, token: Token, environment: object): string
   return md.renderer.renderInlineAsText(children, md.options, environment).trim() || token.content.trim();
 }
 
-function documentPages(md: MarkdownIt, kind: string, body: string) {
+export function documentPages(md: MarkdownIt, kind: string, body: string) {
   const environment = {};
   const tokens = md.parse(body, environment);
   const headings = tokens.flatMap((token, index) => token.type === "heading_open" && token.level === 0 ? [index] : []);
@@ -60,6 +46,16 @@ function documentPages(md: MarkdownIt, kind: string, body: string) {
   return { environment, tokens, pages, first };
 }
 
+export function documentPageOffsets(md: MarkdownIt, kind: string, body: string, pages: readonly Page[], source?: string): number[] {
+  const original = source?.replace(/\n$/u, "");
+  if (original === undefined) return [];
+  const sourcePages = original === body ? pages : documentPages(md, kind, original).pages;
+  if (sourcePages.length !== pages.length) return [];
+  const starts = [0];
+  for (let offset = original.indexOf("\n"); offset >= 0; offset = original.indexOf("\n", offset + 1)) starts.push(offset + 1);
+  return sourcePages.map((page) => starts[page.line]!);
+}
+
 export function renderDocumentTabs(md: MarkdownIt, kind: string, title: string, body: string, attrs: AttrMap, interactive: boolean, source?: string): string | null {
   const { environment, tokens, pages, first } = documentPages(md, kind, body);
   if (pages.length < 2) return null;
@@ -74,22 +70,13 @@ export function renderDocumentTabs(md: MarkdownIt, kind: string, title: string, 
   }).join("");
   const previous = kind === "swiper" ? '<button type="button" class="noema-tab-move" data-move="-1">‹</button>' : "";
   const next = kind === "swiper" ? '<button type="button" class="noema-tab-move" data-move="1">›</button>' : "";
-  const offsets: number[] = [];
-  const original = source?.replace(/\n$/u, "");
-  if (original !== undefined) {
-    const sourcePages = original === body ? pages : documentPages(md, kind, original).pages;
-    if (sourcePages.length === pages.length) {
-      const starts = [0];
-      for (let offset = original.indexOf("\n"); offset >= 0; offset = original.indexOf("\n", offset + 1)) starts.push(offset + 1);
-      for (const page of sourcePages) offsets.push(starts[page.line]!);
-    }
-  }
+  const offsets = documentPageOffsets(md, kind, body, pages, source);
   const templates = pages.map(({ content }, index) => {
     const offset = offsets[index];
-    return `<template data-tab-content="${index}"${offset !== undefined ? ` data-tab-offset="${offset}"` : ""}>`
+    return `<template data-view-content="${index}"${offset !== undefined ? ` data-tab-offset="${offset}"` : ""}>`
       + `${md.renderer.render(content, md.options, environment)}</template>`;
   }).join("");
-  return `<div class="noema-document-tabs" data-tab-kind="${kind}" data-tab-source="${documentTabSourceKey(kind, title, body)}" data-tab-selected="${selected}" data-accent="${accent}">`
+  return `<div class="noema-document-tabs" data-tab-kind="${kind}" data-view-kind="${kind}" data-view-source="${documentViewSourceKey(kind, title, body)}" data-tab-selected="${selected}" data-accent="${accent}">`
     + (first ? md.renderer.render(tokens.slice(0, first), md.options, environment) : "")
     + `<div class="noema-tab-navigation">${previous}<div class="noema-tab-strip" role="tablist">${controls}</div>${next}</div>`
     + `<div class="noema-tab-body"></div>${templates}</div>`;

@@ -59,8 +59,10 @@ import { connectDocumentTableViews, disconnectDocumentTableViews } from "../../.
 import { documentFrameHasDetails, documentFrameKinds } from "../../../../document-frame.ts";
 import { documentReadingKinds, documentStatusHasDetails } from "../../../../document-reading.ts";
 import { documentQrHasText } from "../../../../document-qrcode.ts";
-import { documentTabKinds, documentTabSourceKey } from "../../../../document-tabs.ts";
+import { documentTabKinds } from "../../../../document-tabs.ts";
+import { documentViewSourceKey, numberDocumentViews } from "../../../../document-view.ts";
 import { connectDocumentTabViews } from "./document-tabs.ts";
+import { connectDocumentDisclosures } from "./document-disclosures.ts";
 import {
   COLUMNS_MAX_COUNT,
   COLUMNS_MIN_WIDTH_PCT,
@@ -113,6 +115,7 @@ import {
   transactionHasPointerSelection,
   updateHasPointerSelectionEffect,
   visualSelection,
+  passiveReaderFacet,
 } from "../selection.ts";
 import { persistentVisualStateField } from "../visual-mode.ts";
 import {
@@ -603,16 +606,17 @@ const documentNavigationSelector = [
   '.noema-document-frame:is([data-frame="card"], [data-frame="home-box"], [data-frame="link-card"], [data-frame="image-card"]) a[href]',
   ".noema-document-breadcrumb a[href]",
   ".noema-document-tabs a[href]",
+  ".noema-document-disclosure a[href]",
 ].join(", ");
 
-interface DocumentTabScope {
+interface DocumentViewScope {
   owner: HTMLElement;
   column?: number;
 }
 
-const tabSourceKeys = new WeakMap<OrgEnvBlock, string>();
+const documentViewSourceKeys = new WeakMap<OrgEnvBlock, string>();
 
-function documentTabPosition(view: EditorView, scope: DocumentTabScope, group: HTMLElement): number | null {
+function documentViewPosition(view: EditorView, scope: DocumentViewScope, group: HTMLElement): number | null {
   const { owner, column } = scope;
   const blocks = orgEnvBlocksFromState(view.state);
   let position: number;
@@ -625,23 +629,24 @@ function documentTabPosition(view: EditorView, scope: DocumentTabScope, group: H
   const pane = column === undefined ? undefined : splitColumnPanes(host.body)[column];
   const from = pane ? host.bodyFrom + pane.from : host.from;
   const to = pane ? host.bodyFrom + pane.to : host.to;
-  const occurrence = Number(group.dataset.tabSourceOccurrence);
+  const occurrence = Number(group.dataset.viewOccurrence);
   let found = 0;
   for (const block of blocks) {
     if (block.from >= to) break;
-    if (block.from < from || block.kind !== group.dataset.tabKind) continue;
-    let key = tabSourceKeys.get(block);
+    if (block.from < from || block.kind !== group.dataset.viewKind) continue;
+    let key = documentViewSourceKeys.get(block);
     if (key === undefined) {
-      key = documentTabSourceKey(block.kind, splitDocumentWidgetTitle(block.kind, block.title).title, block.body);
-      tabSourceKeys.set(block, key);
+      key = documentViewSourceKey(block.kind, splitDocumentWidgetTitle(block.kind, block.title).title, block.body);
+      documentViewSourceKeys.set(block, key);
     }
-    if (key === group.dataset.tabSource && found++ === occurrence) return block.from;
+    if (key === group.dataset.viewSource && found++ === occurrence) return block.from;
   }
   return null;
 }
 
-function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, tabScope?: DocumentTabScope): void {
-  if (root.querySelector(`${documentNavigationSelector}, .noema-document-tabs`)) {
+function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, scope?: DocumentViewScope): void {
+  const hasDocumentViews = root.querySelector("[data-view-source]") !== null;
+  if (hasDocumentViews || root.querySelector(documentNavigationSelector)) {
     const openAction = (event: MouseEvent): void => {
       if (event.button !== 0 && event.button !== 1) return;
       const target = event.target instanceof Element ? event.target : null;
@@ -661,10 +666,16 @@ function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, tabScope?:
     root.addEventListener("click", openAction);
     root.addEventListener("auxclick", openAction);
   }
-  hydrateRenderedMarkdown(root);
-  const owner = tabScope?.owner ?? root.closest<HTMLElement>("[data-cm-source-from]");
-  connectDocumentTabViews(root, view, hydrateRenderedMarkdown, (group) =>
-    owner ? documentTabPosition(view, tabScope ?? { owner }, group) : null);
+  const owner = scope?.owner ?? root.closest<HTMLElement>("[data-cm-source-from]");
+  const locate = (group: HTMLElement) => owner ? documentViewPosition(view, scope ?? { owner }, group) : null;
+  if (hasDocumentViews) numberDocumentViews(root);
+  const hydrate = (content: HTMLElement): void => {
+    hydrateRenderedMarkdown(content);
+    if (!hasDocumentViews) return;
+    connectDocumentTabViews(content, view, hydrate, locate);
+    connectDocumentDisclosures(content, view, hydrate, locate);
+  };
+  hydrate(root);
 }
 
 function hydrateRenderedMarkdown(root: HTMLElement): void {
@@ -3098,26 +3109,35 @@ class FoldWidget extends MeasuredWidget {
   from: number;
   to: number;
   depth: number;
+  readonly kind: "fold" | "details";
+  readonly blockId: string;
+  readonly bodyOffset: number;
 
-  constructor(title: string, body: string, from: number, to: number, depth: number) {
+  constructor(title: string, body: string, from: number, to: number, depth: number, kind: "fold" | "details", blockId: string, bodyOffset: number) {
     super();
     this.title = title;
     this.body = body;
     this.from = from;
     this.to = to;
     this.depth = depth;
+    this.kind = kind;
+    this.blockId = blockId;
+    this.bodyOffset = bodyOffset;
   }
 
-  protected measureKey(): string { return "fold:" + shortHash(this.title + ":" + this.body); }
+  protected measureKey(): string { return `${this.kind}:` + shortHash(this.title + ":" + this.body); }
 
   protected measureGroupKey(): string {
-    return `fold:lines:${Math.min(8, Math.ceil(this.body.split(/\n/).length / 5))}`;
+    return `${this.kind}:lines:${Math.min(8, Math.ceil(this.body.split(/\n/).length / 5))}`;
   }
 
   protected estimatedHeightFallback(): number { return 46; }
 
   eq(other: FoldWidget): boolean {
     return this.title === other.title
+      && this.kind === other.kind
+      && this.blockId === other.blockId
+      && this.bodyOffset === other.bodyOffset
       && this.body === other.body
       && this.from === other.from
       && this.to === other.to
@@ -3125,6 +3145,36 @@ class FoldWidget extends MeasuredWidget {
   }
 
   toDOM(view: EditorView): HTMLElement {
+    if (this.kind === "details") {
+      const root = document.createElement("div");
+      root.className = "cm-document-disclosure-widget";
+      setSourceRange(root, this.from, this.to);
+      root.dataset.cmOpenSource = "true";
+      root.dataset.orgEnvKind = this.kind;
+      const title = this.blockId ? `${this.title} {#${this.blockId}}` : this.title;
+      root.innerHTML = renderEditorWidgetHTML(buildOrgEnvSource(this.kind, title, this.body));
+      const content = root.querySelector<HTMLElement>(":scope > details > .noema-disclosure-body");
+      if (this.body.trim() && content) content.dataset.cmSourceOffset = String(this.bodyOffset);
+      if (!view.state.readOnly && !view.state.facet(passiveReaderFacet)) {
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "noema-disclosure-edit";
+        edit.textContent = "</>";
+        edit.title = "Edit source";
+        edit.setAttribute("aria-label", "Edit source");
+        edit.addEventListener("click", () => {
+          const from = view.posAtDOM(root, -1);
+          preserveEditorViewport(view, () => {
+            view.dispatch({ selection: { anchor: from } });
+            view.focus();
+          }, from);
+        });
+        root.append(edit);
+      }
+      enhanceRenderedMarkdown(root, view, { owner: root });
+      stopInteractiveWidgetEvents(root);
+      return this.registerMeasured(root, view);
+    }
     const block = document.createElement("org-env-block");
     block.className = "cm-org-env-fold-widget org-env-block";
     setSourceRange(block, this.from, this.to);
@@ -3352,6 +3402,7 @@ function columnsRenderOptions(): RenderMarkdownHTMLOptions {
   return {
     documentTableActions: true,
     documentTabActions: true,
+    documentDisclosureActions: true,
     ...(resolver ? { assetResolver: (src: string) => resolver(src) } : {}),
     ...(noteFile ? { noteFile } : {}),
   };
@@ -3623,7 +3674,7 @@ function focusRenderedColumnPane(
   if (event.button !== 0) return;
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(".cm-column-pane-grip, .cm-columns-toolbar, .cm-columns-divider")) return;
-  if (target?.closest(documentNavigationSelector) || target?.closest(".noema-document-table-view button, .noema-tab-navigation button")) return;
+  if (target?.closest(documentNavigationSelector) || target?.closest(".noema-document-table-view button, .noema-tab-navigation button, summary")) return;
 
   // Cmd/Ctrl-click on a link opens the link directly instead of switching edit focus.
   const link = target?.closest<HTMLAnchorElement>("a[href]") ?? null;
@@ -5087,7 +5138,7 @@ class DocumentDataWidget extends MeasuredWidget {
     const source = buildOrgEnvSource(this.kind, this.title, this.body);
     block.innerHTML = this.kind === "table"
       ? renderMarkdownHTML(source, { documentTableActions: true, documentTableSource: this.body })
-      : renderEditorWidgetHTML(source, documentTabKinds.has(this.kind) ? this.body : undefined);
+      : renderEditorWidgetHTML(source, (documentTabKinds.has(this.kind) || this.kind === "accordion") ? this.body : undefined);
     const content = block.querySelector(":scope > org-env-block > .org-env-content");
     if (content) block.replaceChildren(content);
     enhanceRenderedMarkdown(block, view);
@@ -6102,7 +6153,7 @@ function buildOrgEnvBodyLineDecoRanges(
 
   for (const block of orgEnvBlocksFromState(state)) {
     if (block.kind === "meta" || block.kind === "columns") continue;
-    if (block.kind === "fold" && !opensSource(state, block.from, block.to)) continue;
+    if ((block.kind === "fold" || block.kind === "details") && !opensSource(state, block.from, block.to)) continue;
     if (block.bodyTo < windowFrom || block.bodyFrom > windowTo) continue;
     const fromLine = doc.lineAt(Math.max(block.bodyFrom, windowFrom));
     const toLine = doc.lineAt(Math.min(block.bodyTo, windowTo));
@@ -6226,6 +6277,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
       block.kind !== "meta"
       && block.kind !== "comment"
       && block.kind !== "fold"
+      && block.kind !== "details"
       && block.kind !== "html"
       && block.kind !== "tikz"
       && block.kind !== "columns"
@@ -6256,9 +6308,9 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 
 const documentDataEnvironments = new Set([
   "progress", "stats", "chart", "timeline", "steps", "table", ...documentFrameKinds, ...documentReadingKinds,
-  "qrcode", ...documentTabKinds,
+  "qrcode", ...documentTabKinds, "accordion",
 ]);
-const sourceRevealEnvironments = new Set(["comment", "fold", "av", "embed", ...documentDataEnvironments]);
+const sourceRevealEnvironments = new Set(["comment", "fold", "details", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
 
 export function isDocumentDataBody(state: EditorState, from: number, to: number): boolean {
@@ -6359,10 +6411,10 @@ function addOrgEnvBlockExtraDecos(
     occupied?.push([block.from, block.to]);
     return;
   }
-  if (block.kind === "fold" && !opensSource(state, block.from, block.to)) {
+  if ((block.kind === "fold" || block.kind === "details") && !opensSource(state, block.from, block.to)) {
     decos.push(
       Decoration.replace({
-        widget: new FoldWidget(block.title, block.body, block.from, block.to, block.depth),
+        widget: new FoldWidget(block.title, block.body, block.from, block.to, block.depth, block.kind, block.blockId, block.bodyFrom - block.from),
         block: true,
       }).range(block.from, block.to),
     );

@@ -19,7 +19,9 @@ import { renderDocumentTableView } from "./document-table-view.ts";
 import { documentFrameKinds, renderDocumentFrame } from "./document-frame.ts";
 import { documentReadingKinds, renderDocumentReading } from "./document-reading.ts";
 import { documentQrFence, documentQrHasText, renderDocumentQrcode } from "./document-qrcode.ts";
-import { documentTabKinds, forEachTabMarkdownTree, renderDocumentTabs } from "./document-tabs.ts";
+import { documentTabKinds, renderDocumentTabs } from "./document-tabs.ts";
+import { documentDisclosureKinds, renderDocumentDisclosure } from "./document-disclosures.ts";
+import { forEachDocumentViewTree } from "./document-view.ts";
 import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
@@ -89,8 +91,12 @@ export type RenderMarkdownHTMLOptions = {
   documentTableSource?: string;
   /** Include live controls and inert inactive pages for tabbed documents. */
   documentTabActions?: boolean;
-  /** Raw body of the one tab environment being mounted as an editor widget. */
-  documentTabSource?: string;
+  /** Raw body of the one sectional environment being mounted as an editor widget. */
+  documentViewSource?: string;
+  /** Keep closed sections inert in the editor. */
+  documentDisclosureActions?: boolean;
+  /** Expose every disclosure in a print document. */
+  expandDisclosures?: boolean;
   /**
    * Pictures for the diagram fences in this document, as `{ [key]: svg }` where
    * the key is `diagramFenceKey(lang, source)`. Mermaid needs a browser to lay
@@ -1390,9 +1396,11 @@ function renderOrgEnv(
     : documentFrameKinds.has(kindName) ? renderDocumentFrame(md, kindName, meta.body, attrs)
     : documentReadingKinds.has(kindName) ? renderDocumentReading(md, kindName, meta.body, attrs)
     : kindName === "qrcode" ? renderDocumentQrcode(md, meta.body, attrs)
-    : documentTabKinds.has(kindName) ? renderDocumentTabs(md, kindName, title, meta.body, attrs, options.documentTabActions === true, options.documentTabSource)
+    : documentTabKinds.has(kindName) ? renderDocumentTabs(md, kindName, title, meta.body, attrs, options.documentTabActions === true, options.documentViewSource)
+    : documentDisclosureKinds.has(kindName) ? renderDocumentDisclosure(md, kindName, title, meta.body, attrs, options.documentDisclosureActions === true, blockId, options.documentViewSource)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
+  if (kindName === "details" && renderedBody !== null) return renderedBody;
   if (kind.toLowerCase() === "fold") {
     return [
       `<details class="org-env-fold" data-kind="fold" data-title="${escapeAttr(title)}" data-label="${escapeAttr(label)}">`,
@@ -1915,9 +1923,11 @@ export function renderMarkdownHTML(
   return renderMarkdownHTMLUncached(markdown, options, topLevelBlocks);
 }
 
-export function renderEditorWidgetHTML(markdown: string, documentTabSource?: string): string {
-  const cacheKind = documentTabSource === undefined ? "editor-widget" : "editor-widget-tabs";
-  return cachedRender(cacheKind, markdown, () => renderMarkdownHTMLUncached(markdown, { documentTableActions: true, documentTabActions: true, documentTabSource }));
+export function renderEditorWidgetHTML(markdown: string, documentViewSource?: string): string {
+  const cacheKind = documentViewSource === undefined ? "editor-widget" : "editor-widget-sections";
+  return cachedRender(cacheKind, markdown, () => renderMarkdownHTMLUncached(markdown, {
+    documentTableActions: true, documentTabActions: true, documentViewSource, documentDisclosureActions: true,
+  }));
 }
 
 function renderMarkdownHTMLUncached(
@@ -1954,9 +1964,18 @@ function renderMarkdownHTMLUncached(
   }
   const firstImage = markdown.indexOf("![");
   const multipleImages = firstImage >= 0 && markdown.indexOf("![", firstImage + 2) >= 0;
-  forEachTabMarkdownTree(root, (tree) => {
+  let accordionNumber = 0;
+  forEachDocumentViewTree(root, (tree) => {
     if (multipleImages) applyImageLayoutRows(tree);
     applyTaskCheckboxes(tree);
+    if (options?.expandDisclosures) {
+      for (const item of tree.querySelectorAll<HTMLDetailsElement>("details.noema-document-disclosure")) item.open = true;
+      return;
+    }
+    for (const accordion of tree.querySelectorAll('.noema-document-accordion[data-accordion-single="true"]:not([data-view-source])')) {
+      const name = `noema-accordion-${++accordionNumber}`;
+      for (const item of accordion.querySelectorAll(":scope > details[data-disclosure-item]")) item.setAttribute("name", name);
+    }
   });
   return restoreIframeNavigationAttrsFromDom(cleanEditorHTML(root, true), protectedHtml.attrs);
 }
@@ -2013,7 +2032,7 @@ export function renderPublishedNoteHTML(
   const hidden = Boolean(options.private && !options.includePrivateContent);
   const contentHtml = hidden
     ? '<p class="sealed-note-message">This note has been sealed by the administrator.</p>'
-    : renderMarkdownHTML(markdown, { assetResolver: options.assetResolver, noteFile: options.noteFile, openingInitial: true });
+    : renderMarkdownHTML(markdown, { assetResolver: options.assetResolver, noteFile: options.noteFile, openingInitial: true, expandDisclosures: pdf });
   const shellClass = classList(
     "noema-shell",
     "published-note-page",

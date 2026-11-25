@@ -138,7 +138,7 @@ import type {
 } from "../editor-api.ts";
 
 import { renderedConstructAt } from "./extensions/visual/constructs/registry.ts";
-import { documentTabState } from "./extensions/visual/widgets/document-tabs.ts";
+import { documentViewState } from "./extensions/visual/widgets/document-view-state.ts";
 
 function sourceRangeElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof Element) {
@@ -513,7 +513,7 @@ export function createEditorCM6(host: HTMLElement, options: EditorOptions): Edit
     const target = event.target;
     if (
       target instanceof Element
-      && target.closest("input, textarea, select, button, a")
+      && target.closest("input, textarea, select, button, a, summary")
     ) {
       return;
     }
@@ -1317,7 +1317,7 @@ function buildExtensions(
   const standalone = mode === "standalone";
   return [
     EditorState.allowMultipleSelections.of(true),
-    documentTabState,
+    documentViewState,
     ...(standalone ? [
       EditorState.readOnly.of(!!options.readOnly),
       EditorView.editable.of(!options.readOnly),

@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "disclosures-retain-all-content-in-latex",
+      "markdown": "#+begin details Notes {open=true}\nAn explanation.\n#+end details\n\n#+begin accordion Reading {open=\"1,2\" multiple=true}\n### Scope\nFirst body.\n\n### Limits\nSecond body.\n#+end accordion\n",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{details: Notes}\\par\n```\n\n\nAn explanation.\n\n\n```{=latex}\n\\end{quote}\n```\n\n\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{accordion: Reading}\\par\n```\n\n\n### Scope\nFirst body.\n\n### Limits\nSecond body.\n\n\n```{=latex}\n\\end{quote}\n```\n\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "tabbed-documents-export-every-page-in-source-order",
       "markdown": "#+begin tabs Guide {selected=2 accent=info}\n### Overview\nFirst page.\n\n### Details\nSecond page.\n#+end tabs\n",
       "options": {},
