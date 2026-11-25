@@ -33,6 +33,14 @@ test("PDF expands spoiler and annotation bodies without adding private content",
   expect(root.textContent).not.toContain("Private draft");
 });
 
+test("inline icons and semantic highlights preserve author labels and rich text", () => {
+  const host = document.createElement("div");
+  host.innerHTML = renderMarkdownHTML('@@icon [check]{label="Reviewed" tone=tip} @@icon [unknown-tool]{label="Custom tool"} @@highlight [**Verify** this]{tone=warning}.');
+  expect(host.querySelector('[role="img"][aria-label="Reviewed"] svg')).not.toBeNull();
+  expect(host.querySelector(".noema-inline-icon-fallback")?.textContent).toBe("Custom tool");
+  expect(host.querySelector('mark[data-tone="warning"] strong')?.textContent).toBe("Verify");
+});
+
 test("source-only comments never survive inside HTML title attributes", () => {
   const body = "#+begin note Visible @@hidden [TITLE_SECRET]\nContent.\n#+end note\n\n"
     + "#+begin details Visible @@hidden [DETAILS_SECRET]\nText.\n#+end details\n\n"

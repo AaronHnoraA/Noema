@@ -217,6 +217,7 @@ function stripAttrs(el: Element): void {
         && !(attr.name === "aria-label" && el.classList.contains("checkbox") && el.getAttribute("role") === "img")
         && !(attr.name === "aria-expanded" && el.classList.contains("noema-inline-popover-button"))
         && !(attr.name === "aria-hidden" && el.classList.contains("noema-inline-swatch"))
+        && !((attr.name === "aria-label" || attr.name === "aria-hidden") && el.closest(".noema-inline-icon"))
         && !((attr.name === "aria-label" || attr.name === "aria-hidden" || attr.name === "aria-current") && el.closest(".noema-document-breadcrumb"))
         && !(attr.name === "aria-current" && el.parentElement?.classList.contains("noema-steps-list")))
     ) {

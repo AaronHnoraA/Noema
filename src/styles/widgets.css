@@ -147,17 +147,42 @@
 .cm-editor .cm-md-callout-important { border-left-color: var(--aaron-callout-quote, currentColor); }
 .cm-editor .cm-md-callout-caution { border-left-color: var(--aaron-callout-danger, currentColor); }
 
-.noema-inline-reading, .noema-inline-key, .noema-inline-badge, .noema-inline-color {
+.noema-inline-reading, .noema-inline-key, .noema-inline-badge, .noema-inline-color, .noema-inline-icon, .noema-inline-highlight {
   --inline-accent: var(--aaron-link, currentColor);
   --inline-border: color-mix(in srgb, var(--aaron-paper-line, currentColor) 80%, transparent);
   --inline-panel: var(--aaron-paper-soft, transparent);
 }
-:is(.noema-inline-badge, .noema-inline-color)[data-tone="tip"] { --inline-accent: var(--aaron-callout-tip, currentColor); }
-:is(.noema-inline-badge, .noema-inline-color)[data-tone="warning"] { --inline-accent: var(--aaron-callout-warning, currentColor); }
-:is(.noema-inline-badge, .noema-inline-color)[data-tone="danger"] { --inline-accent: var(--aaron-callout-danger, currentColor); }
-:is(.noema-inline-badge, .noema-inline-color)[data-tone="important"] { --inline-accent: var(--aaron-callout-quote, currentColor); }
-:is(.noema-inline-badge, .noema-inline-color)[data-tone="info"] { --inline-accent: var(--aaron-callout-info, currentColor); }
-:is(.noema-inline-badge, .noema-inline-color)[data-tone="neutral"] { --inline-accent: var(--aaron-muted, currentColor); }
+:is(.noema-inline-badge, .noema-inline-color, .noema-inline-icon, .noema-inline-highlight)[data-tone="tip"] { --inline-accent: var(--aaron-callout-tip, currentColor); }
+:is(.noema-inline-badge, .noema-inline-color, .noema-inline-icon, .noema-inline-highlight)[data-tone="warning"] { --inline-accent: var(--aaron-callout-warning, currentColor); }
+:is(.noema-inline-badge, .noema-inline-color, .noema-inline-icon, .noema-inline-highlight)[data-tone="danger"] { --inline-accent: var(--aaron-callout-danger, currentColor); }
+:is(.noema-inline-badge, .noema-inline-color, .noema-inline-icon, .noema-inline-highlight)[data-tone="important"] { --inline-accent: var(--aaron-callout-quote, currentColor); }
+:is(.noema-inline-badge, .noema-inline-color, .noema-inline-icon, .noema-inline-highlight)[data-tone="info"] { --inline-accent: var(--aaron-callout-info, currentColor); }
+:is(.noema-inline-badge, .noema-inline-color, .noema-inline-icon, .noema-inline-highlight)[data-tone="neutral"] { --inline-accent: var(--aaron-muted, currentColor); }
+.noema-inline-icon {
+  display: inline-block;
+  inline-size: 1em;
+  block-size: 1em;
+  vertical-align: -0.16em;
+  color: var(--inline-accent);
+}
+.noema-inline-icon svg {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.noema-inline-highlight {
+  padding-inline: 0.24em;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--inline-accent) 23%, transparent);
+  color: inherit;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
 .noema-inline-control { position: relative; cursor: pointer; }
 .noema-inline-toggle {
   position: absolute;

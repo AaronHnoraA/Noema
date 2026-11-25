@@ -33,7 +33,7 @@ const PRIVATE_INLINE = new Set(["todo", "itodo", "project", "milestone", "clock"
 // Review annotations that reach the exported document. Planning bookkeeping
 // (`project`, `milestone`, `clock`) and machine blocks stay private.
 const EXPORTED_ANNOTATIONS = new Set(["todo", "itodo"]);
-const INLINE_READING = new Set(["spoiler", "gloss", "annotation", "symbol", "kbd", "badge", "color", "hidden"]);
+const INLINE_READING = new Set(["spoiler", "gloss", "annotation", "symbol", "kbd", "badge", "color", "icon", "highlight", "hidden"]);
 const readingColor = /^(?:#(?:[\da-f]{3}|[\da-f]{6}|[\da-f]{8})|neutral|note|info|tip|important|warning|danger)$/i;
 
 // `\todo` from todonotes cannot live in a moving argument or a tabular cell.
@@ -287,10 +287,12 @@ function transformInlineCommands(line, options, context = {}) {
       if (command.name === "hidden") {
         // The comment is source-only.
       } else if (command.argsError || !label || (command.name === "color" && !readingColor.test(label))
+        || (command.name === "icon" && !/^[a-z][a-z\d-]{0,39}$/i.test(label))
         || (["annotation", "gloss"].includes(command.name) && !detail)) out += line.slice(command.fullFrom, command.fullTo);
-      else if (command.name === "spoiler") out += body(command.context.trim());
+      else if (command.name === "spoiler" || command.name === "highlight") out += body(command.context.trim());
       else {
-        const shown = command.name === "color" ? command.args.label?.trim() || label : label;
+        const shown = command.name === "icon" ? command.args.label?.trim() || label.replace(/-/g, " ")
+          : command.name === "color" ? command.args.label?.trim() || label : label;
         out += ["kbd", "symbol"].includes(command.name) ? rawLatexInline(`\\texttt{${escapeLatexText(shown)}}`) : literal(shown);
         if (detail && ["annotation", "gloss", "symbol"].includes(command.name)) {
           const shownDetail = body(detail);

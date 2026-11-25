@@ -651,6 +651,7 @@ const documentNavigationSelector = [
   ".noema-document-window a[href]",
   ".noema-document-chat a[href]",
   ".noema-inline-reading a[href]",
+  ".noema-inline-highlight a[href]",
   ".noema-source-excerpt a[href]",
   ".callout a[href]",
 ].join(", ");

@@ -1371,9 +1371,11 @@ type markContext struct {
 }
 
 var inlineReadingKinds = map[string]bool{
-	"spoiler": true, "gloss": true, "annotation": true, "symbol": true, "kbd": true, "badge": true, "color": true, "hidden": true,
+	"spoiler": true, "gloss": true, "annotation": true, "symbol": true, "kbd": true, "badge": true, "color": true,
+	"icon": true, "highlight": true, "hidden": true,
 }
 var readingColor = regexp.MustCompile(`(?i)^(?:#(?:[\da-f]{3}|[\da-f]{6}|[\da-f]{8})|neutral|note|info|tip|important|warning|danger)$`)
+var readingIcon = regexp.MustCompile(`^[A-Za-z][A-Za-z\d-]{0,39}$`)
 var readingLiteral = strings.NewReplacer(`\[`, `[`, `\]`, `]`, `\\`, `\`)
 
 func inlineReadingMarkdown(line string, command inlineCommand, options Options, context markContext, unresolved *[]string) (string, error) {
@@ -1383,7 +1385,7 @@ func inlineReadingMarkdown(line string, command inlineCommand, options Options, 
 	verbatim := strings.TrimSpace(command.Context)
 	label := readingLiteral.Replace(verbatim)
 	detail := strings.TrimSpace(command.Args["text"])
-	if label == "" || command.Name == "color" && !readingColor.MatchString(label) || (command.Name == "annotation" || command.Name == "gloss") && detail == "" {
+	if label == "" || command.Name == "icon" && !readingIcon.MatchString(label) || command.Name == "color" && !readingColor.MatchString(label) || (command.Name == "annotation" || command.Name == "gloss") && detail == "" {
 		return line[command.FullFrom:command.FullTo], nil
 	}
 	nested := func(value string) (string, error) {
@@ -1394,11 +1396,18 @@ func inlineReadingMarkdown(line string, command inlineCommand, options Options, 
 		child.InlineReadingDepth++
 		return transformInlineCommands(value, options, child, unresolved)
 	}
-	if command.Name == "spoiler" {
+	if command.Name == "spoiler" || command.Name == "highlight" {
 		return nested(verbatim)
 	}
 	if colorLabel := strings.TrimSpace(command.Args["label"]); command.Name == "color" && colorLabel != "" {
 		label = colorLabel
+	}
+	if command.Name == "icon" {
+		name := strings.TrimSpace(command.Args["label"])
+		if name == "" {
+			name = strings.ReplaceAll(label, "-", " ")
+		}
+		label = name
 	}
 	var result strings.Builder
 	if command.Name == "symbol" || command.Name == "kbd" {

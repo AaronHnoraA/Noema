@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "inline-icons-export-labels-and-highlights-retain-fallback-prose",
+      "markdown": "Status @@icon [check]{label=\"Reviewed\"} and @@icon [bell-off]. @@highlight [**Check** the `source` @@hidden [PRIVATE]]{tone=warning}. Literal `@@icon [close]`.",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "Status Reviewed and bell off. **Check** the `source` . Literal `@@icon [close]`.",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "adjacent-footnote-and-link-definitions-remain-separate-in-pandoc",
       "markdown": "Text[^a] and [source][cite].\n\n[^a]: First.\n  [nested]: https://example.test/nested\n    Continued.\n[cite]: https://example.test\n\n~~~md\n[^fake]: Literal footnote.\n[fake]: https://example.test/fake\n~~~",
       "options": {},
