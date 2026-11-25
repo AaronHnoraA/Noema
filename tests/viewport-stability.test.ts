@@ -169,7 +169,7 @@ describe("CM6 viewport position mapping", () => {
     }
   });
 
-  test("explicit preserve restores even inside the old scroll-idle window", () => {
+  test("explicit preserve restores even inside the old scroll-idle window", async () => {
     vi.useFakeTimers();
     const scrollHost = document.createElement("div");
     const dom = document.createElement("div");
@@ -209,6 +209,7 @@ describe("CM6 viewport position mapping", () => {
         write: (value: unknown) => void;
       };
       queued.write(queued.read());
+      await Promise.resolve();
       expect(scrollHost.scrollTop).toBe(1_200);
     } finally {
       stabilizer.destroy();
@@ -216,7 +217,7 @@ describe("CM6 viewport position mapping", () => {
     }
   });
 
-  test("keeps multi-phase programmatic scroll acknowledgements from canceling caret restoration", () => {
+  test("preserves the caret after CodeMirror applies its own height-map delta", async () => {
     const scrollHost = document.createElement("div");
     const dom = document.createElement("div");
     const contentDOM = document.createElement("div");
@@ -257,6 +258,8 @@ describe("CM6 viewport position mapping", () => {
         write: (value: unknown) => void;
       };
       queued.write(queued.read());
+      scrollHost.scrollTop += 200; // CodeMirror applies this after measure writes.
+      await Promise.resolve();
       expect(scrollHost.scrollTop).toBe(1_200);
     } finally {
       stabilizer.destroy();
@@ -264,7 +267,7 @@ describe("CM6 viewport position mapping", () => {
     }
   });
 
-  test("does not mistake WebKit height clamping for user scroll during a preserved relayout", () => {
+  test("does not mistake WebKit height clamping for user scroll during a preserved relayout", async () => {
     const scrollHost = document.createElement("div");
     const dom = document.createElement("div");
     const contentDOM = document.createElement("div");
@@ -305,6 +308,7 @@ describe("CM6 viewport position mapping", () => {
         write: (value: unknown) => void;
       };
       queued.write(queued.read());
+      await Promise.resolve();
       expect(scrollHost.scrollTop).toBe(1_200);
     } finally {
       stabilizer.destroy();
@@ -312,7 +316,7 @@ describe("CM6 viewport position mapping", () => {
     }
   });
 
-  test("lets real wheel input cancel a pending preserved relayout", () => {
+  test("lets real wheel input cancel a pending preserved relayout", async () => {
     const scrollHost = document.createElement("div");
     const dom = document.createElement("div");
     const contentDOM = document.createElement("div");
@@ -350,6 +354,7 @@ describe("CM6 viewport position mapping", () => {
         write: (value: unknown) => void;
       };
       queued.write(queued.read());
+      await Promise.resolve();
       expect(scrollHost.scrollTop).toBe(333);
     } finally {
       stabilizer.destroy();

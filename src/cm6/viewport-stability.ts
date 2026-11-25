@@ -953,7 +953,10 @@ export class EditorViewportStabilizer {
     this.restore(snapshot, generation);
     this.view.requestMeasure({
       read: () => snapshot,
-      write: (measured) => this.restore(measured, generation, true),
+      // CodeMirror applies its own height-map scroll delta after measure
+      // writes. Correct the document anchor after that write, before paint,
+      // so a focused editor never applies both corrections to one relayout.
+      write: (measured) => queueMicrotask(() => this.restore(measured, generation, true)),
     });
     this.win.requestAnimationFrame(() => {
       this.restore(snapshot, generation, true);
