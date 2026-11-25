@@ -597,7 +597,10 @@ function renderDiagramPreview(source: string, lang: string, div: HTMLElement): v
     });
 }
 
-const documentNavigationSelector = ".noema-document-card-action[href], .noema-document-breadcrumb a[href]";
+const documentNavigationSelector = [
+  '.noema-document-frame:is([data-frame="card"], [data-frame="home-box"], [data-frame="link-card"], [data-frame="image-card"]) a[href]',
+  ".noema-document-breadcrumb a[href]",
+].join(", ");
 
 function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView): void {
   connectDocumentTableViews(root);

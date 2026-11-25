@@ -20,9 +20,8 @@ const TOLERANCE = 2;
 const prose = (n) => Array.from({ length: n }, (_, i) =>
   `Paragraph ${i}. Ordinary prose keeps the document long enough to scroll; `
   + "the old caret sits far outside the viewport. ".repeat(4)).join("\n\n");
-const image = "data:image/svg+xml;base64," + Buffer.from(
-  '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="520"><rect width="320" height="520" fill="lightblue"/></svg>',
-).toString("base64");
+const imageSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="520"><rect width="320" height="520" fill="lightblue"/></svg>';
+const image = "data:image/svg+xml;base64," + Buffer.from(imageSvg).toString("base64");
 const constructs = [
   `An image ![Plot](${image}){width:320px} in a paragraph.`,
   "| name | value | note |\n|---|---|---|\n| alpha | \\(x^2\\) | first |\n| beta | 2 | second |\n"
@@ -45,6 +44,8 @@ const constructs = [
   "#+begin log Build\n- 09:17:12 WARN Render needs review\n- 09:18:12 INFO Ready\n#+end log",
   "#+begin pros-cons Trade-offs\n- Simpler reading\n\n#+col\n\n- More fixtures\n#+end pros-cons",
   "#+begin qrcode Read on another device {text=https://example.com/notes}\nScan to open the example notes.\n#+end qrcode",
+  "#+begin home-box Project guide {description='Research notes' href=#guide}\nThe guide introduces the working document.\n#+end home-box",
+  "#+begin image-card Cover\n![A landscape](/noema-scroll-cover.svg){width:220px}\n\nThe figure shows the cover preview.\n#+end image-card",
   "#+begin columns\nLeft column prose.\n\n#+col\n\nRight column prose.\n#+end columns",
   "A sentence with @@comment [inline note] attached.",
   "```python\nprint('hello')\nfor i in range(3):\n    print(i)\n```",
@@ -74,6 +75,7 @@ try {
       const page = await browser.newPage({ viewport: { width: 1100, height: 820 } });
       const errors = [];
       page.on("pageerror", (error) => errors.push(error.message));
+      await page.route("**/noema-scroll-cover.svg", (route) => route.fulfill({ contentType: "image/svg+xml", body: imageSvg }));
       await page.route("**/@vite/client", (route) => route.fulfill({
         contentType: "application/javascript",
         body: "export function createHotContext(){return {accept(){},prune(){},dispose(){},on(){},invalidate(){}}} export function updateStyle(id,css){let s=document.createElement('style');s.textContent=css;document.head.append(s)} export function removeStyle(){} export function injectQuery(u){return u}",
@@ -128,6 +130,7 @@ try {
         ["breadcrumb", "- [Home](index.md)"], ["keymap", "- C-x C-f : Open a file"],
         ["log", "- 09:17:12 WARN"], ["pros-cons", "- Simpler reading"],
         ["qrcode", "Scan to open the example notes."],
+        ["home-box", "The guide introduces"], ["image-card", "![A landscape]"],
         ["footnote", "[^1] too", "navigates"],
       ].filter(([family]) => !process.env.ONLY || process.env.ONLY.split(",").includes(family)).map(([family, needle, click = "opens"]) => {
         const at = markdown.indexOf(needle);

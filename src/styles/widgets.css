@@ -1589,7 +1589,12 @@
 .noema-document-frame[data-accent="danger"] { --document-frame-accent: var(--aaron-callout-danger, var(--document-frame-line)); }
 .noema-document-frame[data-accent="important"] { --document-frame-accent: var(--aaron-callout-quote, var(--document-frame-line)); }
 
-.noema-document-frame[data-frame="card"] { border-block-start-color: var(--document-frame-accent); }
+.noema-document-frame:is([data-frame="card"], [data-frame="link-card"], [data-frame="image-card"]) { border-block-start-color: var(--document-frame-accent); }
+.noema-document-frame[data-frame="home-box"] {
+  gap: 0.55em;
+  padding-block: 0.7em;
+  border-inline-start: 2px solid var(--document-frame-accent);
+}
 .noema-document-frame[data-frame="panel"] {
   display: flex;
   flex-wrap: wrap;
@@ -1613,6 +1618,50 @@
 .noema-document-card-icon { margin-inline-end: 0.45em; color: var(--document-frame-accent); }
 .noema-document-card-action { justify-self: start; }
 .noema-document-card-action:focus-visible { outline: 1px solid var(--aaron-link, currentColor); outline-offset: 2px; }
+.noema-document-frame:is([data-frame="home-box"], [data-frame="link-card"], [data-frame="image-card"]) > .noema-document-card-action {
+  max-inline-size: 100%;
+  padding: 0.12em 0.55em;
+  border: 1px solid color-mix(in srgb, var(--aaron-link, currentColor) 52%, var(--document-frame-line));
+  border-radius: 0.15em;
+  background: color-mix(in srgb, var(--aaron-link, currentColor) 8%, transparent);
+  text-decoration: none;
+}
+.noema-document-frame:is([data-frame="home-box"], [data-frame="link-card"], [data-frame="image-card"]) > .noema-document-card-action::before {
+  content: "";
+  display: inline-block;
+  inline-size: 0.37em;
+  block-size: 0.37em;
+  margin-inline-end: 0.55em;
+  vertical-align: 0.14em;
+  border-block-start: 1px solid currentColor;
+  border-inline-end: 1px solid currentColor;
+  transform: rotate(45deg);
+}
+.noema-document-frame:is([data-frame="home-box"], [data-frame="link-card"], [data-frame="image-card"]) > .noema-document-card-action:hover {
+  background: color-mix(in srgb, var(--aaron-link, currentColor) 15%, transparent);
+}
+.noema-document-card-cover {
+  min-inline-size: 0;
+  overflow: clip;
+  color: var(--document-frame-muted);
+}
+.noema-document-card-cover > :is(img, figure) { display: block; max-inline-size: 100%; margin: 0; }
+.noema-document-card-cover > img { block-size: auto; }
+.noema-document-frame[data-card-link="true"] { position: relative; isolation: isolate; }
+.noema-document-frame[data-card-link="true"]:has(> .noema-document-card-action:hover, > .noema-document-card-action:focus-visible) {
+  border-color: color-mix(in srgb, var(--aaron-link, currentColor) 55%, var(--document-frame-line));
+}
+.noema-document-frame[data-card-link="true"] > .noema-document-card-action::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+.noema-document-frame[data-card-link="true"] :is(.noema-document-frame, a, button, input, select, textarea, summary, iframe, audio, video, [tabindex]):not(.noema-document-card-action),
+.cm-content[contenteditable="true"] .noema-document-frame[data-card-link="true"] > .noema-document-frame-body {
+  position: relative;
+  z-index: 2;
+}
 .noema-document-panel-status {
   justify-self: end;
   color: color-mix(in srgb, var(--document-frame-accent) 60%, var(--document-frame-muted));

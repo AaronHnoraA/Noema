@@ -1,6 +1,20 @@
 {
   "cases": [
     {
+      "name": "card-variants-retain-captions-and-destinations",
+      "markdown": "#+begin home-box Guide {description=\"Start here\" href=https://example.com action=\"Open guide\" surface=quiet}\nOrdinary Markdown.\n#+end home-box\n\n#+begin image-card Cover {src=\"media/cover.png\" alt=\"A descriptive alternative\"}\n#+end image-card\n\n#+begin link-card Related\n[Open another page](guide.md)\n#+end link-card",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{home-box: Guide}\\par\nStart here\\par\nOpen guide: https://example.com\\par\n```\n\n\nOrdinary Markdown.\n\n\n```{=latex}\n\\end{quote}\n```\n\n\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{image-card: Cover}\\par\nmedia/cover.png\\par\nA descriptive alternative\\par\n```\n\n\n\n\n```{=latex}\n\\end{quote}\n```\n\n\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{link-card: Related}\\par\n```\n\n\n[Open another page](guide.md)\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "qrcode-retains-metadata-and-literal-fenced-payload",
       "markdown": "#+begin qrcode Guide {text=\"https://example.com/read?a=1&b=2, 50%; path\\\\name\"}\nA caption with **Markdown**.\n#+end qrcode\n\n#+begin qrcode\n~~~text\n{==literal==}{>>#c-abcd<<}\n|first|second|\n{width=50%}\n~~~\n#+end qrcode",
       "options": {},

@@ -83,6 +83,9 @@ var documentWidgetOptions = map[string][]string{
 	"table":      {"sortable", "copy", "highlight-rows", "highlight-columns", "highlight-cells", "highlight", "align", "text-align", "width"},
 	"box":        {"surface", "padding", "text-align", "align", "width"},
 	"card":       {"description", "href", "action", "icon", "accent", "text-align", "align", "width"},
+	"home-box":   {"description", "href", "action", "accent", "surface", "text-align", "align", "width"},
+	"link-card":  {"description", "href", "action", "accent", "surface", "text-align", "align", "width"},
+	"image-card": {"description", "href", "action", "src", "alt", "accent", "surface", "align", "width"},
 	"panel":      {"status", "variant", "focus", "accent", "align", "width"},
 	"statusbar":  {"mode", "keys", "note"},
 	"keymap":     {"columns"},
@@ -1698,7 +1701,7 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 	title, attributes := exportWidgetTitle(kind, title)
 	var entries []string
 	switch kind {
-	case "card":
+	case "card", "home-box", "link-card", "image-card":
 		entries = append(entries, attributes["description"])
 		if href := attributes["href"]; href != "" {
 			action := attributes["action"]
@@ -1707,6 +1710,7 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 			}
 			entries = append(entries, action+": "+href)
 		}
+		entries = append(entries, attributes["src"], attributes["alt"])
 	case "panel":
 		entries = append(entries, attributes["status"])
 	case "statusbar":

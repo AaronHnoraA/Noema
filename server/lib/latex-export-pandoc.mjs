@@ -175,7 +175,8 @@ function environmentOpen(kind, title, options) {
     const widget = splitDocumentWidgetTitle(kind, parseOrgEnvIdentityTitle(kind, title).title);
     title = widget.title;
     const { attrs } = widget;
-    const entries = kind === "card" ? [attrs.description, attrs.href && `${attrs.action || "Open link"}: ${attrs.href}`]
+    const entries = ["card", "home-box", "link-card", "image-card"].includes(kind)
+      ? [attrs.description, attrs.href && `${attrs.action || "Open link"}: ${attrs.href}`, attrs.src, attrs.alt]
       : kind === "panel" ? [attrs.status] : kind === "statusbar" ? [attrs.mode, attrs.keys, attrs.note] : [];
     details = entries.filter(Boolean).map((entry) => `\n${escapeLatexTitle(entry, options)}\\par`).join("");
     if (kind === "qrcode" && attrs.text?.trim()) details = `\n${escapeLatexText(attrs.text)}\\par`;
