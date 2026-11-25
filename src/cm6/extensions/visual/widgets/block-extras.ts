@@ -53,6 +53,7 @@ import {
 import { applyImageLayout, imageLayoutFromAttrs, type ImageLayoutAttrs } from "../../../../image-attrs.ts";
 import { figureLayoutToolbar, figureResizeHandle } from "../../../figure-layout-menu.ts";
 import { readLayoutAttrSuffix } from "../../../../layout-attrs.ts";
+import { parseDocumentChartTitle } from "../../../../document-chart.ts";
 import {
   COLUMNS_MAX_COUNT,
   COLUMNS_MIN_WIDTH_PCT,
@@ -4949,6 +4950,7 @@ class HtmlWidget extends MeasuredWidget {
 
 class DocumentDataWidget extends MeasuredWidget {
   readonly kind: string;
+  readonly title: string;
   readonly body: string;
   readonly from: number;
   readonly to: number;
@@ -4957,13 +4959,14 @@ class DocumentDataWidget extends MeasuredWidget {
   constructor(block: OrgEnvBlock) {
     super();
     this.kind = block.kind;
+    this.title = block.kind === "chart" ? block.title : "";
     this.body = block.body;
     this.from = block.bodyFrom;
     this.to = block.bodyTo - 1;
     this.depth = block.depth;
   }
 
-  protected measureKey(): string { return `${this.kind}:${shortHash(this.body)}`; }
+  protected measureKey(): string { return `${this.kind}:${shortHash(this.title + "\n" + this.body)}`; }
 
   protected measureGroupKey(): string {
     return `${this.kind}:rows:${Math.min(8, Math.ceil(this.body.split("\n").length / 5))}`;
@@ -4974,7 +4977,7 @@ class DocumentDataWidget extends MeasuredWidget {
   }
 
   eq(other: DocumentDataWidget): boolean {
-    return this.kind === other.kind && this.body === other.body
+    return this.kind === other.kind && this.title === other.title && this.body === other.body
       && this.from === other.from && this.to === other.to && this.depth === other.depth;
   }
 
@@ -4985,7 +4988,7 @@ class DocumentDataWidget extends MeasuredWidget {
     block.style.setProperty("--org-env-depth", String(this.depth));
     setSourceRange(block, this.from, this.to);
     block.dataset.cmOpenSource = "true";
-    block.innerHTML = renderMarkdownHTML(buildOrgEnvSource(this.kind, "", this.body));
+    block.innerHTML = renderMarkdownHTML(buildOrgEnvSource(this.kind, this.title, this.body));
     const content = block.querySelector(":scope > org-env-block > .org-env-content");
     if (content) block.replaceChildren(content);
     enhanceRenderedMarkdown(block);
@@ -5666,7 +5669,8 @@ function addOrgEnvBoundaryDecos(
   if (!openActive) {
     decos.push(
       Decoration.replace({
-        widget: new OrgEnvOpenWidget(block.kind, block.title, block.blockId, block.titleAnchor - block.openFrom, block.depth),
+        widget: new OrgEnvOpenWidget(block.kind, block.kind === "chart" ? parseDocumentChartTitle(block.title).title : block.title,
+          block.blockId, block.titleAnchor - block.openFrom, block.depth),
         block: true,
       }).range(block.openFrom, block.openTo),
     );
@@ -6146,7 +6150,7 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 // Decoration builder (full-doc scan — these constructs are sparse)
 // ---------------------------------------------------------------------------
 
-const documentDataEnvironments = new Set(["progress", "stats"]);
+const documentDataEnvironments = new Set(["progress", "stats", "chart"]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
 

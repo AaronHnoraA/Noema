@@ -1,13 +1,10 @@
 import type MarkdownIt from "markdown-it";
-import type Token from "markdown-it/lib/token.mjs";
-
-const accents = new Set(["neutral", "primary", "info", "success", "warning", "danger", "important"]);
-const numberSource = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
+import { documentDataAccents, parseDocumentDataTable, parseDocumentNumber } from "./document-data-table.ts";
 
 function renderSparkline(source: string): string {
   const points = source.split(",").map((point) => point.trim());
-  if (!points.every((point) => numberSource.test(point) && Number.isFinite(Number(point)))) return "";
-  const values = points.map(Number);
+  const values = points.map(parseDocumentNumber);
+  if (!values.every((point) => point !== null)) return "";
   const low = values.reduce((a, b) => Math.min(a, b), Infinity);
   const high = values.reduce((a, b) => Math.max(a, b), -Infinity);
   const spread = high - low;
@@ -18,30 +15,16 @@ function renderSparkline(source: string): string {
   return `<span class="noema-stat-spark" title="${points.join(",")}">${bars}</span>`;
 }
 
-/** Read a single GFM table so nested Markdown and escaped pipes use the normal parser. */
 export function renderStatsBody(md: MarkdownIt, body: string): string | null {
-  const environment = {};
-  const tokens = md.parse(body, environment);
-  if (tokens[0]?.type !== "table_open" || tokens.at(-1)?.type !== "table_close"
-      || tokens.filter((token) => token.type === "table_open").length !== 1) return null;
-  const columns = tokens.filter((token) => token.type === "th_open").length;
-  if (columns < 2 || columns > 6) return null;
-  const bodyStart = tokens.findIndex((token) => token.type === "tbody_open");
-  if (bodyStart < 0) return null;
-
-  const rows: Token[][] = [];
-  for (const token of tokens.slice(bodyStart + 1)) {
-    if (token.type === "tr_open") rows.push([]);
-    if (token.type === "inline") rows.at(-1)?.push(token);
-  }
+  const table = parseDocumentDataTable(md, body);
+  if (!table || table.headings.length < 2 || table.headings.length > 6) return null;
+  const { rows, content } = table;
   if (!rows.every((row) => row[0]?.content.trim() && row[1]?.content.trim())) return null;
 
-  const content = (token: Token | undefined): string =>
-    token?.children ? md.renderer.renderInline(token.children, md.options, environment) : "";
   const cards: string[] = [];
   for (const [name, value, trend, note, series, accent] of rows) {
     const role = accent?.content.trim().toLowerCase() || "neutral";
-    if (!accents.has(role)) return null;
+    if (!documentDataAccents.has(role)) return null;
     const seriesText = series?.content.trim() || "";
     const spark = seriesText ? renderSparkline(seriesText) : "";
     if (seriesText && !spark) return null;

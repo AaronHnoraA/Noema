@@ -68,6 +68,8 @@ var (
 	tikzDocumentPattern   = regexp.MustCompile(`(?i)\\documentclass\b|\\begin\s*\{\s*document\s*\}`)
 	tikzPicturePattern    = regexp.MustCompile(`(?is)\\begin\s*\{\s*tikzpicture\s*\}.*\\end\s*\{\s*tikzpicture\s*\}`)
 	columnsAnchorPattern  = regexp.MustCompile(`\s+\{#[0-9a-fA-F-]+\}\s*$`)
+	chartAnchorPattern    = regexp.MustCompile(`(?:^|[ \t]+)\{#[A-Za-z0-9][A-Za-z0-9._:-]{2,127}(?:[ \t]+[^{}\r\n]*)?\}$`)
+	chartAttributePattern = regexp.MustCompile(`(?:^|[ \t]+)(\{[^{}]*\})$`)
 	colMarkerPattern      = regexp.MustCompile(`(?i)^[ \t]*#\+col(?:[ \t]+(\{[^{}\r\n]*\}))?[ \t]*$`)
 	colOrgOpenPattern     = regexp.MustCompile(`(?i)^[ \t]*#\+begin[ \t]+([A-Za-z][\w-]*)\b`)
 	colOrgClosePattern    = regexp.MustCompile(`(?i)^[ \t]*#\+end[ \t]+([A-Za-z][\w-]*)[ \t]*$`)
@@ -1626,6 +1628,15 @@ func subparagraphLatex(rawTitle string, options Options) string {
 }
 
 func environmentOpen(kind, title string, options Options) (string, string) {
+	if kind == "chart" {
+		title = strings.TrimSpace(chartAnchorPattern.ReplaceAllString(title, ""))
+		if suffix := chartAttributePattern.FindStringSubmatchIndex(title); suffix != nil {
+			attributes := layoutAttrsFromTitle(title[suffix[2]:suffix[3]])
+			if attributes["type"] != "" || attributes["accent"] != "" {
+				title = strings.TrimRight(title[:suffix[0]], " \t")
+			}
+		}
+	}
 	env := strings.TrimSpace(options.Rules.EnvMap[kind])
 	if env == "" {
 		env = defaultEnvironment[kind]

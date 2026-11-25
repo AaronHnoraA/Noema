@@ -207,7 +207,8 @@ function stripAttrs(el: Element): void {
       attr.name === "contenteditable" ||
       attr.name === "data-pos" ||
       attr.name === "data-unsafe-href" ||
-      (attr.name.startsWith("aria-") && !(el.localName === "progress" && attr.name === "aria-label"))
+      (attr.name.startsWith("aria-") && !(el.localName === "progress" && attr.name === "aria-label")
+        && !((attr.name === "aria-label" || attr.name === "aria-hidden") && el.closest(".noema-chart")))
     ) {
       el.removeAttribute(attr.name);
     }

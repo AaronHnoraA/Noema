@@ -32,6 +32,7 @@ const constructs = [
   "#+begin theorem Main\nA statement with \\(x\\) in it.\n#+end theorem",
   "#+begin progress Review\n- Parse: 100%\n- Render: 4/8\n#+end progress",
   "#+begin stats Snapshot\n| Metric | Value | Trend |\n|---|---|---|\n| First paint | 14 ms | -24% |\n| Cases | 403 | +18% |\n#+end stats",
+  "#+begin chart Latency {type=bar}\n| Phase | Duration (ms) |\n|---|---|\n| Parse | 4 |\n| Paint | 14 |\n#+end chart",
   "#+begin columns\nLeft column prose.\n\n#+col\n\nRight column prose.\n#+end columns",
   "A sentence with @@comment [inline note] attached.",
   "```python\nprint('hello')\nfor i in range(3):\n    print(i)\n```",
@@ -107,7 +108,7 @@ try {
         ["columns", "#+begin columns"], ["inline comment", "@@comment [inline note]"],
         ["code block", "```python"], ["task box", "- [ ] open", "edits"], ["rule", "\n---\n"],
         ["ediff", "#+begin ediff"],
-        ["progress", "- Parse: 100%"], ["stats", "| Metric | Value |"],
+        ["progress", "- Parse: 100%"], ["stats", "| Metric | Value |"], ["chart", "| Phase | Duration (ms) |"],
         ["footnote", "[^1] too", "navigates"],
       ].filter(([family]) => !process.env.ONLY || process.env.ONLY.split(",").includes(family)).map(([family, needle, click = "opens"]) => {
         const at = markdown.indexOf(needle);

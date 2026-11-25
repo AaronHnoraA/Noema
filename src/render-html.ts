@@ -13,6 +13,7 @@ import { parseCodeInfo } from "./code-info.ts";
 import { supportedDiagramLang } from "./diagram-langs.ts";
 import { hydrateDiagramForeignObjectMarkup, sanitizeDiagramSvg } from "./diagram-sanitize.ts";
 import { renderStatsBody } from "./document-stats.ts";
+import { parseDocumentChartTitle, renderChartBody } from "./document-chart.ts";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
 import { layoutClasses, layoutFromAttrs, layoutStyle, readLayoutAttrSuffix, readLayoutAttrsLine, type LayoutAttrs } from "./layout-attrs.ts";
@@ -289,6 +290,7 @@ function envLabel(kind: string): string {
     fold: "Fold",
     progress: "Progress",
     stats: "Stats",
+    chart: "Chart",
     tikz: "TikZ",
     convention: "Convention",
     axiom: "Axiom",
@@ -1356,12 +1358,15 @@ function renderOrgEnv(
     }).join("");
     return `<div class="${columnsClasses(spec, panes.length)}" style="${columnsStyle(spec, panes.length)}" data-cols="${panes.length}"${idAttr}>${inner}</div>`;
   }
-  const title = meta.title;
+  const kindName = kind.toLowerCase();
+  const chart = kindName === "chart" ? parseDocumentChartTitle(meta.title) : null;
+  const title = chart?.title ?? meta.title;
   const blockId = meta.blockId;
   const label = envLabel(kind);
-  const kindName = kind.toLowerCase();
   const renderedBody = kindName === "progress" ? renderProgressBody(md, meta.body)
-    : kindName === "stats" ? renderStatsBody(md, meta.body) : null;
+    : kindName === "stats" ? renderStatsBody(md, meta.body)
+    : chart?.type && chart.accent ? renderChartBody(md, meta.body, chart.type, chart.accent)
+    : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kind.toLowerCase() === "fold") {
     return [

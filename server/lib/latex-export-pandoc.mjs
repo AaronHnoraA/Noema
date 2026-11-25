@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { approvedEdiffMarkdown } from "../../shared/ediff-source.mjs";
+import { parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
+import { splitChartTitle } from "../../shared/document-chart.mjs";
 import { LATEX_MARKS, LATEX_PROMPT_MARK, latexMark } from "../../shared/latex-marks.mjs";
 import {
   layoutFromAttrs,
@@ -162,6 +164,7 @@ function environmentFor(kind, rules) {
 }
 
 function environmentOpen(kind, title, options) {
+  if (kind === "chart") title = splitChartTitle(parseOrgEnvIdentityTitle(kind, title).title).title;
   let env = environmentFor(kind, options.rules);
   let heading = title;
   const extraRemarks = new Set(Array.isArray(options.rules?.commentBlocks) ? options.rules.commentBlocks.map((value) => String(value).toLowerCase()) : []);

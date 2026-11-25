@@ -1158,6 +1158,174 @@
 
 .noema-stat-spark-bar { flex: 1 1 0; min-inline-size: 0; background: currentColor; }
 
+.noema-chart {
+  --chart-primary: var(--aaron-callout-info, var(--aaron-accent, currentColor));
+  --chart-accent: var(--chart-primary);
+  --chart-negative: var(--aaron-callout-danger, var(--aaron-danger, currentColor));
+  --chart-line: var(--aaron-paper-line, var(--border, currentColor));
+  --chart-track: var(--aaron-paper-soft, transparent);
+  --chart-muted: var(--aaron-muted, currentColor);
+  --chart-fill: color-mix(in srgb, var(--chart-accent) 58%, var(--chart-line));
+  display: grid;
+  gap: 0.45em;
+  min-inline-size: 0;
+  max-inline-size: 39em;
+  overflow-wrap: anywhere;
+}
+
+.noema-chart [data-accent="primary"] { --chart-accent: var(--chart-primary); }
+:is(.noema-chart, .noema-chart [data-accent])[data-accent="info"] { --chart-accent: var(--aaron-heading-6, var(--chart-muted)); }
+:is(.noema-chart, .noema-chart [data-accent])[data-accent="success"] { --chart-accent: var(--aaron-green, var(--chart-muted)); }
+:is(.noema-chart, .noema-chart [data-accent])[data-accent="warning"] { --chart-accent: var(--aaron-callout-warning, var(--chart-muted)); }
+:is(.noema-chart, .noema-chart [data-accent])[data-accent="danger"] { --chart-accent: var(--chart-negative); }
+:is(.noema-chart, .noema-chart [data-accent])[data-accent="important"] { --chart-accent: var(--aaron-callout-quote, var(--chart-muted)); }
+:is(.noema-chart, .noema-chart [data-accent])[data-accent="neutral"] { --chart-accent: var(--chart-muted); }
+
+.noema-chart :is(.noema-chart-bars, .noema-chart-legend) {
+  display: grid;
+  gap: 0.24em 0.65em;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.noema-chart-axis-label,
+.noema-chart-share { color: var(--chart-muted); }
+
+.noema-chart-bars {
+  position: relative;
+  grid-template-columns: minmax(0, max-content) minmax(1em, 1fr) minmax(0, max-content);
+  grid-template-rows: repeat(var(--chart-row-count), auto);
+}
+
+.noema-chart-bars > li,
+.noema-chart-legend > li {
+  margin: 0;
+  align-items: center;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+.noema-chart-value,
+.noema-chart-share { text-align: end; }
+
+.noema-chart-bar-track {
+  position: relative;
+  align-self: stretch;
+  min-block-size: 0.7em;
+}
+
+.noema-chart-bar-track::before,
+.noema-chart-bar-mark {
+  position: absolute;
+  inset-block: calc(50% - 0.35em);
+}
+
+.noema-chart-bar-track::before { content: ""; inset-inline: 0; background: var(--chart-track); }
+.noema-chart-bar-mark { background: color-mix(in srgb, var(--chart-accent) 58%, var(--chart-line)); }
+.noema-chart-bar-mark[data-negative="true"] { --chart-accent: var(--chart-negative); }
+
+.noema-chart-bars::after {
+  content: "";
+  position: absolute;
+  grid-column: 2 / 3;
+  grid-row: 1 / -1;
+  inset-block: 0;
+  inset-inline-start: clamp(0px, var(--chart-zero), 100% - 1px);
+  border-inline-start: 1px solid color-mix(in srgb, var(--chart-muted) 63%, var(--chart-line));
+  pointer-events: none;
+}
+
+.noema-chart-total { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25em 0.65em; color: var(--chart-muted); }
+.noema-chart-stack { display: flex; block-size: 0.85em; background: var(--chart-track); }
+
+.noema-chart-stack > .noema-chart-segment,
+.noema-chart-legend .noema-chart-key { background: color-mix(in srgb, var(--chart-accent) 80%, var(--chart-line)); }
+
+.noema-chart-stack > .noema-chart-segment + .noema-chart-segment { box-shadow: inset 1px 0 var(--chart-track); }
+.noema-chart-legend { grid-template-columns: auto minmax(0, 1fr) minmax(0, max-content) minmax(0, max-content); }
+.noema-chart-key { inline-size: 0.6em; block-size: 0.6em; }
+
+.noema-chart .noema-chart-table { overflow-x: auto; }
+.noema-chart .noema-chart-table:focus-visible { outline: 1px solid var(--chart-accent); outline-offset: -1px; }
+
+.noema-chart .noema-chart-table table {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.noema-chart .noema-chart-table :is(th, td) {
+  position: static;
+  padding: 0.15em 0.3em;
+  vertical-align: middle;
+  text-align: end;
+  border: 1px solid var(--chart-line);
+  font-weight: inherit;
+  font-variant: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+}
+
+.noema-chart .noema-chart-table :is(th:first-child, th[scope="row"]) { text-align: start; }
+.noema-chart .noema-chart-table :is(th, td) { white-space: nowrap; }
+.noema-chart .noema-chart-table thead { color: var(--chart-muted); }
+.noema-chart-heatmap { --chart-primary: var(--aaron-callout-note, var(--aaron-accent, currentColor)); }
+
+.noema-chart-heatmap td[data-sign="positive"],
+.noema-chart-heatmap td[data-sign="negative"] {
+  background: color-mix(in srgb, var(--chart-accent) calc(12% + var(--chart-intensity) * 0.42), var(--chart-track));
+}
+
+.noema-chart-heatmap td[data-sign="negative"] { --chart-accent: var(--chart-negative); }
+.noema-chart-heatmap td[data-sign="zero"] { background: var(--chart-track); }
+.noema-chart .noema-chart-table td[data-sign="missing"] { color: var(--chart-muted); background: transparent; }
+.noema-chart-heatmap .noema-chart-table td[data-sign="missing"] {
+  background: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--chart-line) 26%, transparent) 6px 7px);
+}
+
+.noema-chart-line-frame {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.1em 0.25em;
+  color: var(--chart-muted);
+}
+
+.noema-chart-line-scale {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+}
+
+.noema-chart-line-scale:has(> span:only-child) { justify-content: flex-end; }
+
+.noema-chart-line-labels {
+  grid-column: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6em;
+}
+
+.noema-chart-line-plot {
+  display: block;
+  inline-size: 100%;
+  block-size: clamp(5.5em, 39vw, 8em);
+  background: color-mix(in srgb, var(--chart-track) 62%, transparent);
+}
+
+.noema-chart-line-plot line { stroke: var(--chart-line); }
+.noema-chart-line-plot line.noema-chart-line-missing { stroke-dasharray: 2 4; }
+.noema-chart-line-plot polyline { fill: none; stroke: var(--chart-fill); stroke-width: 2; }
+.noema-chart-line-plot :is(line, polyline) { vector-effect: non-scaling-stroke; }
+.noema-chart-line-plot circle { fill: var(--chart-fill); }
+.noema-chart-line .noema-chart-table :is(th, td) { border: 0; background: transparent; padding-block: 0.05em; }
+.noema-chart-line .noema-chart-table thead { border-block-end: 1px solid var(--chart-line); }
+.noema-chart-line .noema-chart-table table { border-block-width: 1px; }
+
 /* ── Multi-Column Layout (`#+begin columns` + `#+col`) ──────────────────── */
 .noema-columns {
   --noema-columns-gap: clamp(1.5rem, 3vw, 2.25rem);
