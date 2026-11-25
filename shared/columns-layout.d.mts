@@ -32,7 +32,7 @@ export function normalizeColumnWidths(rawWidths: readonly number[] | null | unde
 export function areEqualColumnWidths(widths: readonly number[] | null | undefined, count: number): boolean;
 export function parseColumnsHeader(title?: string): ColumnsSpec;
 export function serializeColumnsAttrs(spec: ColumnsSpec, paneCount?: number): string;
-export function splitColumnPanes(body?: string): ColumnPane[];
+export function splitColumnPanes(body?: string, options?: { allowIndentedMarkers?: boolean }): ColumnPane[];
 export function resolvedColumnWidths(spec: ColumnsSpec, paneCount: number): number[];
 export function columnsGridTracks(widths: readonly number[]): string;
 export function columnDividerLeftCss(widths: readonly number[], index: number): string;

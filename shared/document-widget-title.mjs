@@ -8,6 +8,10 @@ const attributesByKind = new Map([
   ["box", ["surface", "padding", "text-align", "align", "width"]],
   ["card", ["description", "href", "action", "icon", "accent", "text-align", "align", "width"]],
   ["panel", ["status", "variant", "focus", "accent", "align", "width"]],
+  ["statusbar", ["mode", "keys", "note"]],
+  ["keymap", ["columns"]],
+  ["breadcrumb", ["separator"]],
+  ["pros-cons", ["pros", "cons"]],
 ]);
 
 export function hasDocumentWidgetOptions(kind) { return attributesByKind.has(kind); }

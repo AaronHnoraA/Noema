@@ -128,34 +128,40 @@ function tikzLatexBlock(source, title, lineNumber) {
   return ["", "```{=latex}", ...placed.lines, "```", ""];
 }
 
-function columnsLatexExport(title, body, conversionOptions) {
-  const spec = parseColumnsHeader(title);
+function columnsLatexExport(kind, title, body, conversionOptions) {
+  const comparison = kind === "pros-cons"
+    ? splitDocumentWidgetTitle(kind, parseOrgEnvIdentityTitle(kind, title).title) : null;
+  const spec = parseColumnsHeader(comparison ? "" : title);
   const subOptions = {
     ...conversionOptions,
     disableAnnotations: conversionOptions.exportAnnotations === false,
   };
+  const transform = (markdown) => {
+    const inner = preprocessNoemaForPandoc(markdown, subOptions);
+    if (Array.isArray(conversionOptions.unresolvedCitations)) {
+      for (const warning of inner.warnings) {
+        const key = warning.replace(/^Unresolved Noema citation kept visibly:\s*/, "");
+        if (key) conversionOptions.unresolvedCitations.push(key);
+      }
+    }
+    return inner.markdown;
+  };
   if (spec.mode === "flow") {
-    const inner = preprocessNoemaForPandoc(body, subOptions);
-    if (Array.isArray(conversionOptions.unresolvedCitations)) {
-      for (const warning of inner.warnings) {
-        const key = warning.replace(/^Unresolved Noema citation kept visibly:\s*/, "");
-        if (key) conversionOptions.unresolvedCitations.push(key);
-      }
-    }
-    return columnsLatexBlocks(spec, [{ body: inner.markdown, align: "inherit" }]);
+    return columnsLatexBlocks(spec, [{ body: transform(body), align: "inherit" }]);
   }
-  const panes = splitColumnPanes(body);
-  const transformed = panes.map((pane) => {
-    const inner = preprocessNoemaForPandoc(pane.body, subOptions);
-    if (Array.isArray(conversionOptions.unresolvedCitations)) {
-      for (const warning of inner.warnings) {
-        const key = warning.replace(/^Unresolved Noema citation kept visibly:\s*/, "");
-        if (key) conversionOptions.unresolvedCitations.push(key);
-      }
-    }
-    return { body: inner.markdown, align: pane.align };
+  const panes = splitColumnPanes(body, { allowIndentedMarkers: !comparison });
+  if (comparison && (panes.length !== 2 || panes.some((pane) => !pane.body.trim()))) {
+    const opened = environmentOpen(kind, title, conversionOptions);
+    return [rawLatexBlock(opened.latex), transform(body), rawLatexBlock(`\\end{${opened.env}}`)];
+  }
+  const labels = comparison && panes.length === 2 ? [comparison.attrs.pros || "Pros", comparison.attrs.cons || "Cons"] : [];
+  const transformed = panes.map((pane, index) => {
+    const heading = labels[index] ? rawLatexBlock(`\\textbf{${escapeLatexTitle(labels[index], conversionOptions)}}\\par`) : "";
+    return { body: heading + transform(pane.body), align: pane.align };
   });
-  return columnsLatexBlocks(spec, transformed);
+  const blocks = columnsLatexBlocks(spec, transformed);
+  return comparison?.title
+    ? [rawLatexBlock(`\\textbf{${escapeLatexTitle(comparison.title, conversionOptions)}}\\par`), ...blocks] : blocks;
 }
 
 function environmentFor(kind, rules) {
@@ -170,7 +176,7 @@ function environmentOpen(kind, title, options) {
     title = widget.title;
     const { attrs } = widget;
     const entries = kind === "card" ? [attrs.description, attrs.href && `${attrs.action || "Open link"}: ${attrs.href}`]
-      : kind === "panel" ? [attrs.status] : [];
+      : kind === "panel" ? [attrs.status] : kind === "statusbar" ? [attrs.mode, attrs.keys, attrs.note] : [];
     details = entries.filter(Boolean).map((entry) => `\n${escapeLatexTitle(entry, options)}\\par`).join("");
   }
   let env = environmentFor(kind, options.rules);
@@ -654,15 +660,15 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
         rawColumns.lines.push(line);
         continue;
       }
-      if (orgOpen(line)?.kind === "columns") {
+      if (orgOpen(line)?.kind === rawColumns.kind) {
         rawColumns.depth += 1;
         rawColumns.lines.push(line);
         continue;
       }
-      if (orgClose(line) === "columns") {
+      if (orgClose(line) === rawColumns.kind) {
         rawColumns.depth -= 1;
         if (rawColumns.depth === 0) {
-          output.push(...columnsLatexExport(rawColumns.title, rawColumns.lines.join("\n"), conversionOptions));
+          output.push(...columnsLatexExport(rawColumns.kind, rawColumns.title, rawColumns.lines.join("\n"), conversionOptions));
           rawColumns = null;
         } else {
           rawColumns.lines.push(line);
@@ -788,8 +794,8 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
         rawTikz = { title: begin.title, line: lineNumber, lines: [] };
         continue;
       }
-      if (begin.kind === "columns") {
-        rawColumns = { title: begin.title, line: lineNumber, lines: [], depth: 1, fence: null };
+      if (begin.kind === "columns" || begin.kind === "pros-cons") {
+        rawColumns = { kind: begin.kind, title: begin.title, line: lineNumber, lines: [], depth: 1, fence: null };
         continue;
       }
       const opened = environmentOpen(begin.kind, begin.title, conversionOptions);
@@ -825,7 +831,7 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
   if (privatePlanning) throw new Error("Unclosed Noema planning block");
   if (htmlComment) throw new Error("Unclosed HTML comment");
   if (rawTikz) throw new Error("Unclosed Noema block: tikz");
-  if (rawColumns) throw new Error("Unclosed Noema block: columns");
+  if (rawColumns) throw new Error(`Unclosed Noema block: ${rawColumns.kind}`);
   if (stack.length) throw new Error(`Unclosed Noema block: ${stack.at(-1).kind}`);
   return {
     meta,

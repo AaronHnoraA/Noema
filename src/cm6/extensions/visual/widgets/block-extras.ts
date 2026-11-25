@@ -57,6 +57,7 @@ import { readLayoutAttrSuffix } from "../../../../layout-attrs.ts";
 import { splitDocumentWidgetTitle } from "../../../../../shared/document-widget-title.mjs";
 import { connectDocumentTableViews, disconnectDocumentTableViews } from "../../../../document-table-view.ts";
 import { documentFrameHasDetails, documentFrameKinds } from "../../../../document-frame.ts";
+import { documentReadingKinds, documentStatusHasDetails } from "../../../../document-reading.ts";
 import {
   COLUMNS_MAX_COUNT,
   COLUMNS_MIN_WIDTH_PCT,
@@ -595,13 +596,15 @@ function renderDiagramPreview(source: string, lang: string, div: HTMLElement): v
     });
 }
 
+const documentNavigationSelector = ".noema-document-card-action[href], .noema-document-breadcrumb a[href]";
+
 function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView): void {
   connectDocumentTableViews(root);
-  if (root.querySelector(".noema-document-card-action[href]")) {
-    const openCardAction = (event: MouseEvent): void => {
+  if (root.querySelector(documentNavigationSelector)) {
+    const openAction = (event: MouseEvent): void => {
       if (event.button !== 0 && event.button !== 1) return;
       const target = event.target instanceof Element ? event.target : null;
-      const link = target?.closest<HTMLAnchorElement>(".noema-document-card-action[href]");
+      const link = target?.closest<HTMLAnchorElement>(documentNavigationSelector);
       const href = link?.getAttribute("href");
       if (!link || !href || !root.contains(link)) return;
       const handled = !view.dom.dispatchEvent(new CustomEvent("noema:open-url", {
@@ -614,8 +617,8 @@ function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView): void {
         event.stopPropagation();
       }
     };
-    root.addEventListener("click", openCardAction);
-    root.addEventListener("auxclick", openCardAction);
+    root.addEventListener("click", openAction);
+    root.addEventListener("auxclick", openAction);
   }
   root.querySelectorAll<HTMLElement>("pre > code[class*='language-']").forEach((code) => {
     const langClass = Array.from(code.classList).find((cls) => cls.startsWith("language-")) ?? "";
@@ -3570,7 +3573,7 @@ function focusRenderedColumnPane(
   if (event.button !== 0) return;
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(".cm-column-pane-grip, .cm-columns-toolbar, .cm-columns-divider")) return;
-  if (target?.closest(".noema-document-table-view button, .noema-document-card-action")) return;
+  if (target?.closest(documentNavigationSelector) || target?.closest(".noema-document-table-view button")) return;
 
   // Cmd/Ctrl-click on a link opens the link directly instead of switching edit focus.
   const link = target?.closest<HTMLAnchorElement>("a[href]") ?? null;
@@ -6201,7 +6204,9 @@ function measureOrgEnvRails(view: EditorView): OrgEnvRailMeasure[] {
 // Decoration builder (full-doc scan — these constructs are sparse)
 // ---------------------------------------------------------------------------
 
-const documentDataEnvironments = new Set(["progress", "stats", "chart", "timeline", "steps", "table", ...documentFrameKinds]);
+const documentDataEnvironments = new Set([
+  "progress", "stats", "chart", "timeline", "steps", "table", ...documentFrameKinds, ...documentReadingKinds,
+]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
 
@@ -6314,7 +6319,8 @@ function addOrgEnvBlockExtraDecos(
     return;
   }
   addOrgEnvBoundaryDecos(decos, state, block);
-  if (documentDataEnvironments.has(block.kind) && (block.body.trim() || documentFrameHasDetails(block.kind, block.title))
+  if (documentDataEnvironments.has(block.kind)
+      && (block.body.trim() || documentFrameHasDetails(block.kind, block.title) || documentStatusHasDetails(block.kind, block.title))
       && !opensSource(state, block.from, block.to)) {
     const widget = new DocumentDataWidget(block);
     if (widget.from < widget.to) {

@@ -186,7 +186,7 @@ export function serializeColumnsAttrs(spec, paneCount = 2) {
  *
  * All offsets are relative to BODY start.
  */
-export function splitColumnPanes(body = "") {
+export function splitColumnPanes(body = "", { allowIndentedMarkers = true } = {}) {
   const text = String(body ?? "");
   const lines = [];
   let offset = 0;
@@ -247,7 +247,7 @@ export function splitColumnPanes(body = "") {
       if (envDepth > 0) envDepth--;
       continue;
     }
-    if (envDepth === 0) {
+    if (envDepth === 0 && (allowIndentedMarkers || !/^(?: {4}| {0,3}\t)/.test(raw))) {
       const colMatch = COL_MARKER_RE.exec(raw);
       if (colMatch) {
         const attrs = colMatch[1] ? parseAttrArgs(colMatch[1]) : {};

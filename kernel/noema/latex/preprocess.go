@@ -71,18 +71,23 @@ var (
 	widgetAnchorPattern    = regexp.MustCompile(`(?:^|[ \t]+)\{#[A-Za-z0-9][A-Za-z0-9._:-]{2,127}(?:[ \t]+[^{}\r\n]*)?\}$`)
 	widgetAttributePattern = regexp.MustCompile(`(?:^|[ \t]+)(\{[^{}]*\})$`)
 	colMarkerPattern       = regexp.MustCompile(`(?i)^[ \t]*#\+col(?:[ \t]+(\{[^{}\r\n]*\}))?[ \t]*$`)
+	indentedCodePrefix     = regexp.MustCompile(`^(?: {4}| {0,3}\t)`)
 	colOrgOpenPattern      = regexp.MustCompile(`(?i)^[ \t]*#\+begin[ \t]+([A-Za-z][\w-]*)\b`)
 	colOrgClosePattern     = regexp.MustCompile(`(?i)^[ \t]*#\+end[ \t]+([A-Za-z][\w-]*)[ \t]*$`)
 )
 
 var documentWidgetOptions = map[string][]string{
-	"chart":    {"type", "accent"},
-	"timeline": {"orientation", "card", "list-style"},
-	"steps":    {"list-style"},
-	"table":    {"sortable", "copy", "highlight-rows", "highlight-columns", "highlight-cells", "highlight", "align", "text-align", "width"},
-	"box":      {"surface", "padding", "text-align", "align", "width"},
-	"card":     {"description", "href", "action", "icon", "accent", "text-align", "align", "width"},
-	"panel":    {"status", "variant", "focus", "accent", "align", "width"},
+	"chart":      {"type", "accent"},
+	"timeline":   {"orientation", "card", "list-style"},
+	"steps":      {"list-style"},
+	"table":      {"sortable", "copy", "highlight-rows", "highlight-columns", "highlight-cells", "highlight", "align", "text-align", "width"},
+	"box":        {"surface", "padding", "text-align", "align", "width"},
+	"card":       {"description", "href", "action", "icon", "accent", "text-align", "align", "width"},
+	"panel":      {"status", "variant", "focus", "accent", "align", "width"},
+	"statusbar":  {"mode", "keys", "note"},
+	"keymap":     {"columns"},
+	"breadcrumb": {"separator"},
+	"pros-cons":  {"pros", "cons"},
 }
 
 var defaultEnvironment = map[string]string{
@@ -530,7 +535,7 @@ func parseColumnsHeader(title string) columnsSpec {
 	return columnsSpec{Mode: mode, Cols: cols, Widths: widths, Align: align, Valign: valign, Gap: gap, Rule: rule}
 }
 
-func splitColumnPanes(body string) []columnPane {
+func splitColumnPanes(body string, allowIndentedMarkers bool) []columnPane {
 	lines := strings.Split(body, "\n")
 	type colMarker struct {
 		lineIndex int
@@ -586,7 +591,7 @@ func splitColumnPanes(body string) []columnPane {
 			}
 			continue
 		}
-		if envDepth == 0 {
+		if envDepth == 0 && (allowIndentedMarkers || !indentedCodePrefix.MatchString(raw)) {
 			if match := colMarkerPattern.FindStringSubmatch(raw); match != nil {
 				align := "inherit"
 				if match[1] != "" {
@@ -776,8 +781,15 @@ func columnsLatexBlocks(spec columnsSpec, panes []columnPane) []string {
 	return out
 }
 
-func columnsLatexExport(title, body string, options Options, unresolved *[]string) ([]string, error) {
-	spec := parseColumnsHeader(title)
+func columnsLatexExport(kind, title, body string, options Options, unresolved *[]string) ([]string, error) {
+	specTitle := title
+	comparisonTitle := ""
+	var comparisonAttrs map[string]string
+	if kind == "pros-cons" {
+		specTitle = ""
+		comparisonTitle, comparisonAttrs = exportWidgetTitle(kind, title)
+	}
+	spec := parseColumnsHeader(specTitle)
 	appendWarnings := func(warnings []string) {
 		const prefix = "Unresolved Noema citation kept visibly: "
 		for _, w := range warnings {
@@ -794,7 +806,26 @@ func columnsLatexExport(title, body string, options Options, unresolved *[]strin
 		appendWarnings(inner.Warnings)
 		return columnsLatexBlocks(spec, []columnPane{{Body: inner.Markdown, Align: "inherit"}}), nil
 	}
-	panes := splitColumnPanes(body)
+	panes := splitColumnPanes(body, kind != "pros-cons")
+	if kind == "pros-cons" && (len(panes) != 2 || strings.TrimSpace(panes[0].Body) == "" || strings.TrimSpace(panes[1].Body) == "") {
+		inner, err := Prepare(body, options)
+		if err != nil {
+			return nil, err
+		}
+		appendWarnings(inner.Warnings)
+		opened, env := environmentOpen(kind, title, options)
+		return []string{rawLatexBlock(opened), inner.Markdown, rawLatexBlock("\\end{" + env + "}")}, nil
+	}
+	var labels []string
+	if kind == "pros-cons" && len(panes) == 2 {
+		labels = []string{comparisonAttrs["pros"], comparisonAttrs["cons"]}
+		if labels[0] == "" {
+			labels[0] = "Pros"
+		}
+		if labels[1] == "" {
+			labels[1] = "Cons"
+		}
+	}
 	transformed := make([]columnPane, len(panes))
 	for i, pane := range panes {
 		inner, err := Prepare(pane.Body, options)
@@ -802,9 +833,17 @@ func columnsLatexExport(title, body string, options Options, unresolved *[]strin
 			return nil, err
 		}
 		appendWarnings(inner.Warnings)
-		transformed[i] = columnPane{Body: inner.Markdown, Align: pane.Align}
+		heading := ""
+		if i < len(labels) {
+			heading = rawLatexBlock("\\textbf{" + escapeLatexTitle(labels[i], options) + "}\\par")
+		}
+		transformed[i] = columnPane{Body: heading + inner.Markdown, Align: pane.Align}
 	}
-	return columnsLatexBlocks(spec, transformed), nil
+	blocks := columnsLatexBlocks(spec, transformed)
+	if comparisonTitle != "" {
+		blocks = append([]string{rawLatexBlock("\\textbf{" + escapeLatexTitle(comparisonTitle, options) + "}\\par")}, blocks...)
+	}
+	return blocks, nil
 }
 
 func yamlScalar(value string) string {
@@ -1637,36 +1676,45 @@ func subparagraphLatex(rawTitle string, options Options) string {
 	return result
 }
 
+func exportWidgetTitle(kind, title string) (string, map[string]string) {
+	keys := documentWidgetOptions[kind]
+	if len(keys) == 0 {
+		return title, nil
+	}
+	title = strings.TrimSpace(widgetAnchorPattern.ReplaceAllString(title, ""))
+	if suffix := widgetAttributePattern.FindStringSubmatchIndex(title); suffix != nil {
+		attributes := layoutAttrsFromTitle(title[suffix[2]:suffix[3]])
+		for _, key := range keys {
+			if attributes[key] != "" {
+				return strings.TrimRight(title[:suffix[0]], " \t"), attributes
+			}
+		}
+	}
+	return title, nil
+}
+
 func environmentOpen(kind, title string, options Options) (string, string) {
+	title, attributes := exportWidgetTitle(kind, title)
+	var entries []string
+	switch kind {
+	case "card":
+		entries = append(entries, attributes["description"])
+		if href := attributes["href"]; href != "" {
+			action := attributes["action"]
+			if action == "" {
+				action = "Open link"
+			}
+			entries = append(entries, action+": "+href)
+		}
+	case "panel":
+		entries = append(entries, attributes["status"])
+	case "statusbar":
+		entries = append(entries, attributes["mode"], attributes["keys"], attributes["note"])
+	}
 	details := ""
-	if keys := documentWidgetOptions[kind]; len(keys) > 0 {
-		title = strings.TrimSpace(widgetAnchorPattern.ReplaceAllString(title, ""))
-		if suffix := widgetAttributePattern.FindStringSubmatchIndex(title); suffix != nil {
-			attributes := layoutAttrsFromTitle(title[suffix[2]:suffix[3]])
-			for _, key := range keys {
-				if attributes[key] != "" {
-					title = strings.TrimRight(title[:suffix[0]], " \t")
-					break
-				}
-			}
-			entries := []string{}
-			if kind == "card" {
-				entries = append(entries, attributes["description"])
-				if href := attributes["href"]; href != "" {
-					action := attributes["action"]
-					if action == "" {
-						action = "Open link"
-					}
-					entries = append(entries, action+": "+href)
-				}
-			} else if kind == "panel" {
-				entries = append(entries, attributes["status"])
-			}
-			for _, entry := range entries {
-				if entry != "" {
-					details += "\n" + escapeLatexTitle(entry, options) + "\\par"
-				}
-			}
+	for _, entry := range entries {
+		if entry != "" {
+			details += "\n" + escapeLatexTitle(entry, options) + "\\par"
 		}
 	}
 	env := strings.TrimSpace(options.Rules.EnvMap[kind])
@@ -1743,6 +1791,7 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 		Lines []string
 	}
 	type columnsBlock struct {
+		Kind  string
 		Title string
 		Line  int
 		Lines []string
@@ -1826,15 +1875,15 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 				rawColumns.Lines = append(rawColumns.Lines, line)
 				continue
 			}
-			if begin := orgOpen(line); begin != nil && begin.Kind == "columns" {
+			if begin := orgOpen(line); begin != nil && begin.Kind == rawColumns.Kind {
 				rawColumns.Depth++
 				rawColumns.Lines = append(rawColumns.Lines, line)
 				continue
 			}
-			if orgClose(line) == "columns" {
+			if orgClose(line) == rawColumns.Kind {
 				rawColumns.Depth--
 				if rawColumns.Depth == 0 {
-					block, err := columnsLatexExport(rawColumns.Title, strings.Join(rawColumns.Lines, "\n"), options, &unresolved)
+					block, err := columnsLatexExport(rawColumns.Kind, rawColumns.Title, strings.Join(rawColumns.Lines, "\n"), options, &unresolved)
 					if err != nil {
 						return PrepareResult{}, err
 					}
@@ -1975,8 +2024,8 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 				rawTikz = &tikzBlock{Title: begin.Title, Line: lineNumber, Lines: []string{}}
 				continue
 			}
-			if begin.Kind == "columns" {
-				rawColumns = &columnsBlock{Title: begin.Title, Line: lineNumber, Lines: []string{}, Depth: 1}
+			if begin.Kind == "columns" || begin.Kind == "pros-cons" {
+				rawColumns = &columnsBlock{Kind: begin.Kind, Title: begin.Title, Line: lineNumber, Lines: []string{}, Depth: 1}
 				continue
 			}
 			opened, env := environmentOpen(begin.Kind, begin.Title, options)
@@ -2038,7 +2087,7 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 		return PrepareResult{}, errors.New("Unclosed Noema block: tikz")
 	}
 	if rawColumns != nil {
-		return PrepareResult{}, errors.New("Unclosed Noema block: columns")
+		return PrepareResult{}, fmt.Errorf("Unclosed Noema block: %s", rawColumns.Kind)
 	}
 	if len(stack) > 0 {
 		return PrepareResult{}, fmt.Errorf("Unclosed Noema block: %s", stack[len(stack)-1].Kind)

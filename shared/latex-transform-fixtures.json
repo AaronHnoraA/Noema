@@ -1,6 +1,34 @@
 {
   "cases": [
     {
+      "name": "malformed-pros-cons-keeps-visible-source",
+      "markdown": "#+begin pros-cons Review\nCase 1.\n\n#+col\n\nCase 2.\n\n#+col\n\nCase 3.\n\n#+col\n\nCase 4.\n\n#+col\n\nCase 5.\n\n#+col\n\nCase 6.\n\n#+col\n\nCase 7.\n\n#+col\n\nCase 8.\n#+end pros-cons",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{pros-cons: Review}\\par\n```\n\n\nCase 1.\n\n#+col\n\nCase 2.\n\n#+col\n\nCase 3.\n\n#+col\n\nCase 4.\n\n#+col\n\nCase 5.\n\n#+col\n\nCase 6.\n\n#+col\n\nCase 7.\n\n#+col\n\nCase 8.\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
+      "name": "reading-widgets-retain-status-and-comparison-labels",
+      "markdown": "#+begin statusbar Context {mode=READ keys='C-f:Find, C-x C-s:Save' note='Pending'}\n#+end statusbar\n\n#+begin pros-cons Evaluation {pros=Advantages cons=Limits}\n- Editable Markdown\n\n#+col\n\n- Review needed\n#+end pros-cons",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{statusbar: Context}\\par\nREAD\\par\nC-f:Find, C-x C-s:Save\\par\nPending\\par\n```\n\n\n\n\n```{=latex}\n\\end{quote}\n```\n\n\n\n\n\n```{=latex}\n\\textbf{Evaluation}\\par\n```\n\n\n\n```{=latex}\n\\noindent\\begin{minipage}[t]{0.485\\textwidth}\n```\n\n```{=latex}\n\\textbf{Advantages}\\par\n```\n\n- Editable Markdown\n\n```{=latex}\n\\end{minipage}%\n\\hfill\\begin{minipage}[t]{0.485\\textwidth}\n```\n\n```{=latex}\n\\textbf{Limits}\\par\n```\n\n\n- Review needed\n\n```{=latex}\n\\end{minipage}\n```\n",
+        "warnings": [],
+        "features": {
+          "usesSideComment": false,
+          "usesTikz": false
+        }
+      }
+    },
+    {
       "name": "frames-keep-description-action-and-status",
       "markdown": "#+begin card Guide {description='Read, then compare; **manual**' href='https://example.com/a,b' action='Open, please'}\nDetails.\n#+end card\n\n#+begin panel Progress {status='In review; awaiting sign-off' focus=true}\n#+end panel",
       "options": {},

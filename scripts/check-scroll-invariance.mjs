@@ -40,6 +40,10 @@ const constructs = [
   "#+begin card Guide {description='Read the manual' href=https://example.com}\nThe card explains where to start.\n#+end card",
   "#+begin panel Progress {status='In review' focus=true}\nThe panel shows the current review status.\n#+end panel",
   "#+begin center An aligned paragraph\nThis line is centered.\n#+end center",
+  "#+begin breadcrumb Navigation\n- [Home](index.md)\n- Current\n#+end breadcrumb",
+  "#+begin keymap Keys\n- C-x C-f : Open a file\n- C-x C-s : Save\n#+end keymap",
+  "#+begin log Build\n- 09:17:12 WARN Render needs review\n- 09:18:12 INFO Ready\n#+end log",
+  "#+begin pros-cons Trade-offs\n- Simpler reading\n\n#+col\n\n- More fixtures\n#+end pros-cons",
   "#+begin columns\nLeft column prose.\n\n#+col\n\nRight column prose.\n#+end columns",
   "A sentence with @@comment [inline note] attached.",
   "```python\nprint('hello')\nfor i in range(3):\n    print(i)\n```",
@@ -120,6 +124,8 @@ try {
         ["table-view", "| Work | Latency (ms) |"],
         ["box", "The reading box holds"], ["card", "The card explains"],
         ["panel", "The panel shows"], ["center", "This line is centered"],
+        ["breadcrumb", "- [Home](index.md)"], ["keymap", "- C-x C-f : Open a file"],
+        ["log", "- 09:17:12 WARN"], ["pros-cons", "- Simpler reading"],
         ["footnote", "[^1] too", "navigates"],
       ].filter(([family]) => !process.env.ONLY || process.env.ONLY.split(",").includes(family)).map(([family, needle, click = "opens"]) => {
         const at = markdown.indexOf(needle);

@@ -17,6 +17,7 @@ import { parseDocumentChartOptions, renderChartBody } from "./document-chart.ts"
 import { renderDocumentSequence } from "./document-sequence.ts";
 import { renderDocumentTableView } from "./document-table-view.ts";
 import { documentFrameKinds, renderDocumentFrame } from "./document-frame.ts";
+import { documentReadingKinds, renderDocumentReading } from "./document-reading.ts";
 import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
 import { imageLayoutClasses, imageLayoutFromAttrs, imageLayoutStyle, readImageTrailingAttrs } from "./image-attrs.ts";
@@ -1380,6 +1381,7 @@ function renderOrgEnv(
     : kindName === "timeline" || kindName === "steps" ? renderDocumentSequence(md, meta.body, kindName, attrs)
     : kindName === "table" ? renderDocumentTableView(md, meta.body, attrs, options.documentTableActions === true, options.documentTableSource)
     : documentFrameKinds.has(kindName) ? renderDocumentFrame(md, kindName, meta.body, attrs)
+    : documentReadingKinds.has(kindName) ? renderDocumentReading(md, kindName, meta.body, attrs)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kind.toLowerCase() === "fold") {

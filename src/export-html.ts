@@ -211,6 +211,7 @@ function stripAttrs(el: Element): void {
         && !((attr.name === "aria-label" || attr.name === "aria-hidden") && el.closest(".noema-chart"))
         && !((attr.name === "aria-label" || attr.name === "aria-sort") && el.closest(".noema-document-table-view"))
         && !(attr.name === "aria-hidden" && el.classList.contains("noema-document-card-icon"))
+        && !((attr.name === "aria-label" || attr.name === "aria-hidden" || attr.name === "aria-current") && el.closest(".noema-document-breadcrumb"))
         && !(attr.name === "aria-current" && el.parentElement?.classList.contains("noema-steps-list")))
     ) {
       el.removeAttribute(attr.name);
