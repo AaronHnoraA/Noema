@@ -1,5 +1,5 @@
-import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { copyFile, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants as fsConstants, existsSync, realpathSync, statSync } from "node:fs";
 import { basename, delimiter, dirname, extname, isAbsolute, join, posix as posixPath, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { execFile, spawn } from "node:child_process";
@@ -17,6 +17,7 @@ import { loadKatexMacros } from "./katex-macros.mjs";
 import { loadMacroSourceFiles, loadUserKatexMacros, MACRO_SOURCE_BYTES_LIMIT, readLocalMacroSource } from "./user-katex-macros.mjs";
 import { noteMacroSpec, parseNoteLocalMacros } from "../../shared/note-macros.mjs";
 import { durationFromEnv } from "./jupyter-cell.mjs";
+import { DOCUMENT_EXCERPT_FILE_BYTES, documentAssetError, selectDocumentExcerpt } from "./document-excerpts.mjs";
 import { moveWindowsPathToRecycleBin } from "./windows-shell.mjs";
 import { scanPlanningDocument, planningSourceIsLive } from "../../shared/planning-document.mjs";
 import { maskMetaSummaryContent, orgMetaSummaryRange } from "../../shared/meta-summary.mjs";
@@ -943,6 +944,60 @@ export async function readNoteCodeRegion(body) {
     throw err;
   }
   return { ok: true, file, path: rawPath, id, body: region.body, language: languageForFile(file), mtimeMs: info.mtimeMs, size: info.size };
+}
+
+async function documentAssetPath(noteInput, rawPath) {
+  const current = String(noteInput || "").trim();
+  if (!current || !rawPath) throw documentAssetError("A saved note and a source path are required", 400);
+  const note = safeOpenFile(current);
+  const allowedRoot = contentRootForFile(note);
+  const root = await realpath(allowedRoot);
+  const savedNote = await realpath(note).catch(() => "");
+  if (!savedNote || !relativeInsideP(relative(root, savedNote))) throw documentAssetError("The note is outside the current document root", 403);
+  if (!(await stat(savedNote)).isFile()) throw documentAssetError("The current note must be a regular file", 400);
+  const path = resolveNoteCodePath(rawPath, dirname(note), allowedRoot);
+  if (!path) throw documentAssetError("The source is outside the current document root", 403);
+  let file;
+  try { file = await realpath(path); }
+  catch (error) {
+    if (error?.code === "ENOENT") throw documentAssetError("Source file not found", 404);
+    throw error;
+  }
+  if (!relativeInsideP(relative(root, file))) throw documentAssetError("The source is outside the current document root", 403);
+  return { path, file };
+}
+
+export async function readNoteCodeExcerpt(body) {
+  const rawPath = String(body?.path || "").trim();
+  const { path, file } = await documentAssetPath(body?.notePath, rawPath);
+  const handle = await open(file, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw documentAssetError("The source must be a regular file", 400);
+    if (info.size > DOCUMENT_EXCERPT_FILE_BYTES) throw documentAssetError("The source exceeds the 2 MiB preview limit", 413);
+    const data = Buffer.alloc(Math.min(info.size + 1, DOCUMENT_EXCERPT_FILE_BYTES + 1));
+    let end = 0;
+    while (end < data.length) {
+      const result = await handle.read(data, end, data.length - end, end);
+      if (!result.bytesRead) break;
+      end += result.bytesRead;
+    }
+    if (end > info.size) throw documentAssetError("The source changed while it was read", 409);
+    const bytes = data.subarray(0, end);
+    if (bytes.includes(0)) throw documentAssetError("The source is not a UTF-8 text file", 415);
+    let content;
+    try { content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
+    catch { throw documentAssetError("The source is not a UTF-8 text file", 415); }
+    const sourceLanguage = languageForFile(path);
+    const displayLanguage = String(body?.lang || "").trim() || sourceLanguage;
+    const extension = extname(path).toLowerCase();
+    const selectionLanguage = [".tsx", ".jsx"].includes(extension) ? extension.slice(1)
+      : [".txt", ""].includes(extension) ? displayLanguage : sourceLanguage;
+    return { ok: true, file: path, path: rawPath, ...selectDocumentExcerpt(content, body ?? {}, selectionLanguage),
+      language: displayLanguage, mtimeMs: info.mtimeMs };
+  } finally {
+    await handle.close();
+  }
 }
 
 function assetCandidateFile(file) {

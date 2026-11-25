@@ -626,6 +626,19 @@ export type AgendaMsg = {
   logByDay?: Record<string, number>;
   stats?: { open?: number; doing?: number; done?: number; cancelled?: number; blocked?: number; overdue?: number };
 };
+export type NoteCodeExcerpt = {
+  ok: boolean;
+  file: string;
+  path: string;
+  body: string;
+  language: string;
+  startLine: number;
+  endLine: number;
+  totalLines: number;
+  truncated: boolean;
+  mtimeMs: number;
+};
+
 type NativeApi = {
   connection?: {
     status?: () => CoreConnectionStatus;
@@ -680,6 +693,7 @@ type NativeApi = {
   };
   noteCode?: {
     readRegion?: (body?: unknown) => Promise<unknown>;
+    readExcerpt?: (body?: unknown) => Promise<unknown>;
   };
   slides?: {
     mirror?: (body?: unknown) => Promise<unknown>;
@@ -1415,6 +1429,11 @@ export const api = {
     async readRegion(body: unknown): Promise<Record<string, unknown>> {
       const call = requireMethod(nativeApi().noteCode?.readRegion, "Note code");
       return ensureOk(await call(body) as Record<string, unknown>, "Note code failed");
+    },
+    async readExcerpt(body: unknown): Promise<NoteCodeExcerpt> {
+      const call = requireMethod(nativeApi().noteCode?.readExcerpt, "Document source excerpt");
+      const result = await call(body) as NoteCodeExcerpt;
+      return ensureOk(result, "Loading source excerpt failed");
     },
   },
   jupyterCell: {

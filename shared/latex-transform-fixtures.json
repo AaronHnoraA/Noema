@@ -1,6 +1,17 @@
 {
   "cases": [
     {
+      "name": "workspace-excerpts-export-authored-fallback-without-local-file-access",
+      "markdown": "#+begin include Current {src=\"docs/cache.md\" section=\"Cache hit\"}\nPublic fallback.\n#+end include\n\n#+begin code-ref Parser {src=\"src/cache.el\" symbol=noema-load-example context=2}\n~~~elisp\n(message \"Public example\")\n~~~\n#+end code-ref",
+      "options": {},
+      "expected": {
+        "meta": {},
+        "markdown": "\n\n```{=latex}\n\\begin{quote}\n\\textbf{include: Current}\\par\ndocs/cache.md\\par\n```\n\n\nPublic fallback.\n\n\n```{=latex}\n\\end{quote}\n```\n\n\n\n\n\n```{=latex}\n\\begin{quote}\n\\textbf{code-ref: Parser}\\par\nsrc/cache.el\\par\n```\n\n\n~~~elisp\n(message \"Public example\")\n~~~\n\n\n```{=latex}\n\\end{quote}\n```\n\n",
+        "warnings": [],
+        "features": { "usesSideComment": false, "usesTikz": false }
+      }
+    },
+    {
       "name": "hidden-inline-marker-in-a-code-span-remains-literal-in-environment-title",
       "markdown": "#+begin note Example `@@hidden [LITERAL_SENTINEL]` @@hidden [SECRET]\nText.\n#+end note",
       "options": {},

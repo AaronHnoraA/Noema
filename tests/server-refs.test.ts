@@ -1,5 +1,5 @@
 import { describe, expect, test } from "@voidzero-dev/vite-plus-test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -17,6 +17,7 @@ const {
   notesIndexPayload,
   pathSuggestionsForFile,
   readNoteCodeRegion,
+  readNoteCodeExcerpt,
   refsFromContent,
   rewriteMarkdownPathReferences,
   roamDbRefsFromContent,
@@ -321,6 +322,51 @@ describe("server note refs", () => {
       expect(msg.body).toContain("x = 1");
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reads document excerpts by lines, region, section, and definition without rewriting code", async () => {
+    const root = await setupRoot("noema-document-excerpt-");
+    try {
+      const notePath = join(root, "review.md");
+      await writeFile(notePath, "# Review\n", "utf8");
+      await writeFile(join(root, "sample.el"), ["(message \"prep\")", ";; #region demo", "(defun sample ()", "  ; ) is a comment", "  (message \"(value)\"))", ";; #endregion", "(other)"].join("\r\n"), "utf8");
+      await writeFile(join(root, "guide.md"), "# Earlier\n\n~~~md\n## Target\n~~~\n\n## Target\nUse the current example.\n### Detail\nMore.\n\n## Later\nTail.\n", "utf8");
+      await writeFile(join(root, "sample.ts"), "const demo中文 = 0;\r\nexport function demo(options: { port: number }) {\r\n  return options.port;\r\n}\r\n", "utf8");
+      const request = { notePath, path: "sample.el" };
+      const region = await readNoteCodeExcerpt({ ...request, region: "demo" });
+      expect(region).toMatchObject({ startLine: 3, endLine: 5, language: "elisp", body: '(defun sample ()\r\n  ; ) is a comment\r\n  (message "(value)"))' });
+      const definition = await readNoteCodeExcerpt({ ...request, symbol: "sample", context: 1 });
+      expect(definition).toMatchObject({ startLine: 2, endLine: 6 });
+      expect(await readNoteCodeExcerpt({ ...request, lines: "4-5" })).toMatchObject({ startLine: 4, endLine: 5 });
+      const section = await readNoteCodeExcerpt({ notePath, path: "guide.md", section: "Target" });
+      expect(section).toMatchObject({ startLine: 7 });
+      expect(section.body).toContain("### Detail");
+      expect(section.body).not.toContain("Later");
+      const script = await readNoteCodeExcerpt({ notePath, path: "sample.ts", symbol: "demo", lang: "text" });
+      expect(script).toMatchObject({ startLine: 2, endLine: 4, language: "text" });
+      expect(script.body).toContain("return options.port;\r\n}");
+      await expect(readNoteCodeExcerpt({ ...request, lines: "5-3" })).rejects.toMatchObject({ statusCode: 400 });
+      await expect(readNoteCodeExcerpt({ ...request, symbol: "missing" })).rejects.toMatchObject({ statusCode: 404 });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("workspace excerpts stay inside the canonical content root", async () => {
+    const root = await setupRoot("noema-excerpt-root-");
+    const outside = await mkdtemp(join(tmpdir(), "noema-excerpt-outside-"));
+    try {
+      const notePath = join(root, "review.md");
+      const privatePath = join(outside, "draft.txt");
+      await writeFile(notePath, "# Review\n", "utf8");
+      await writeFile(privatePath, "Outside the document's project\n", "utf8");
+      await symlink(privatePath, join(root, "linked.txt"));
+      await expect(readNoteCodeExcerpt({ notePath, path: "linked.txt" })).rejects.toMatchObject({ statusCode: 403 });
+      await writeFile(join(root, "binary.dat"), new Uint8Array([13, 10, 0, 255]));
+      await expect(readNoteCodeExcerpt({ notePath, path: "binary.dat" })).rejects.toMatchObject({ statusCode: 415 });
+    } finally {
+      await Promise.all([rm(root, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]);
     }
   });
 

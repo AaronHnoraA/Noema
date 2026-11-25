@@ -73,6 +73,8 @@ import { CHAT_TEXT_SELECTOR } from "../../../../document-chat.ts";
 import { connectDocumentSourceCopy } from "./document-source-actions.ts";
 import { INLINE_READING_CONTROL_SELECTOR, connectInlineReadingPopovers } from "../../../../document-inline-popovers.ts";
 import { documentBadgeHasName, documentPackageKinds, PACKAGE_CODE_SELECTOR } from "../../../../document-packages.ts";
+import { DOCUMENT_EXCERPT_CONTROL_SELECTOR, documentExcerptHasPath, documentExcerptKinds } from "../../../../document-excerpts.ts";
+import { connectDocumentExcerpts } from "./document-excerpts.ts";
 import { connectDocumentPackages } from "./document-packages.ts";
 import { hasNativeCalloutLayout, nativeCalloutKinds, nativeCalloutOpening } from "../../../../document-callouts.ts";
 import { documentViewState, rememberDocumentView } from "./document-view-state.ts";
@@ -633,6 +635,7 @@ const documentNavigationSelector = [
   ".noema-document-window a[href]",
   ".noema-document-chat a[href]",
   ".noema-inline-reading a[href]",
+  ".noema-source-excerpt a[href]",
   ".callout a[href]",
 ].join(", ");
 
@@ -724,6 +727,7 @@ export function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, sco
   const hydrate = (content: HTMLElement): void => {
     hydrateRenderedMarkdown(content);
     connectDocumentPackages(content);
+    connectDocumentExcerpts(content, view);
     connectInlineReadingPopovers(content, () => view.requestMeasure());
     if (!hasDocumentViews) return;
     connectDocumentTabViews(content, view, hydrate, locate);
@@ -760,7 +764,7 @@ export const CEIL_READONLY_TEXT_SELECTOR = ".cm-ceil-output, .cm-ceil-source, .c
 const DOCUMENT_READONLY_TEXT_SELECTOR = `${CODE_TREE_TEXT_SELECTOR}, ${DEMO_TEXT_SELECTOR}, ${CHAT_TEXT_SELECTOR}, ${PACKAGE_CODE_SELECTOR}`;
 
 function documentWidgetTextEvent(event: Event): boolean {
-  return readOnlyTextEvent(event, `${DOCUMENT_READONLY_TEXT_SELECTOR}, ${INLINE_READING_CONTROL_SELECTOR}`) || documentWindowScrollbar(event);
+  return readOnlyTextEvent(event, `${DOCUMENT_READONLY_TEXT_SELECTOR}, ${INLINE_READING_CONTROL_SELECTOR}, ${DOCUMENT_EXCERPT_CONTROL_SELECTOR}`) || documentWindowScrollbar(event);
 }
 
 function nodeElement(node: Node | null | undefined): Element | null {
@@ -1980,6 +1984,8 @@ function envLabel(kind: string): string {
     warning: "Warning",
     note: "Note",
     info: "Info",
+    include: "Include",
+    "code-ref": "Code reference",
     comment: "Comment",
     summary: "Summary",
     fold: "Fold",
@@ -3763,7 +3769,7 @@ function focusRenderedColumnPane(
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(".cm-column-pane-grip, .cm-columns-toolbar, .cm-columns-divider")) return;
   if (target?.closest(documentNavigationSelector) || target?.closest(
-    `.noema-document-table-view button, .noema-tab-navigation button, .noema-document-diff button, .noema-document-tree button, .noema-demo-footer button, [data-document-source-copy], [data-copy-package-command], ${INLINE_READING_CONTROL_SELECTOR}, summary, ${DOCUMENT_READONLY_TEXT_SELECTOR}`,
+    `.noema-document-table-view button, .noema-tab-navigation button, .noema-document-diff button, .noema-document-tree button, .noema-demo-footer button, [data-document-source-copy], [data-copy-package-command], ${INLINE_READING_CONTROL_SELECTOR}, ${DOCUMENT_EXCERPT_CONTROL_SELECTOR}, summary, ${DOCUMENT_READONLY_TEXT_SELECTOR}`,
   ) || documentWindowScrollbar(event)) return;
 
   // Cmd/Ctrl-click on a link opens the link directly instead of switching edit focus.
@@ -6403,6 +6409,7 @@ const documentDataEnvironments = new Set([
   "progress", "stats", "chart", "timeline", "steps", "table", ...documentFrameKinds, ...documentReadingKinds,
   "qrcode", ...documentTabKinds, "accordion", "diff", ...documentTreeKinds, ...documentFieldKinds, ...documentDemonstrationKinds, "chat",
   ...documentPackageKinds,
+  ...documentExcerptKinds,
 ]);
 const sourceRevealEnvironments = new Set(["comment", "fold", "details", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
@@ -6523,7 +6530,8 @@ function addOrgEnvBlockExtraDecos(
   if (hasDocumentDataBody(block)
       && (block.body.trim() || documentFrameHasDetails(block.kind, block.title)
         || documentStatusHasDetails(block.kind, block.title) || documentQrHasText(block.kind, block.title)
-        || documentFieldHasDetails(block.kind, block.title) || documentBadgeHasName(block.kind, block.title))
+        || documentFieldHasDetails(block.kind, block.title) || documentBadgeHasName(block.kind, block.title)
+        || documentExcerptHasPath(block.kind, block.title))
       && !opensSource(state, block.from, block.to)) {
     const widget = new DocumentDataWidget(block);
     if (widget.from < widget.to) {

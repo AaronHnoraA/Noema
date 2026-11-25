@@ -50,6 +50,7 @@ export {
   bibliographyVersion,
   clearBibliographyCache,
   readNoteCodeRegion,
+  readNoteCodeExcerpt,
   syncRoamDb,
   runtimeDebugSnapshot,
   maybeScheduleWeeklyFullSync,

@@ -42,6 +42,7 @@ import {
   bibliographyCompletions,
   bibliographyForDocument,
   readNoteCodeRegion,
+  readNoteCodeExcerpt,
   scanSnippets,
   scanTemplates,
   renameRoamTag,
@@ -2686,6 +2687,7 @@ const apiRouter = new ApiRouter().register({
   },
   "noema:api:runtime:debug": async () => ({ type: "runtime-debug", ...runtimeDebugSnapshot() }),
   "noema:api:note-code:read-region": (body) => readNoteCodeRegion(body || {}),
+  "noema:api:note-code:read-excerpt": (body) => readNoteCodeExcerpt(body || {}),
   "noema:api:slides:mirror": async (body) => applyWikiMutationResult(await slidesMirror(body || {})),
   ...(jupyterCell ? withWikiMutationHooks(createJupyterApiHandlers(jupyterCell), {
     only: [
@@ -3489,7 +3491,8 @@ function adapterScript(origin, appConfigPayload = initialAppConfig) {
       document: function(body) { return call("noema:api:bibliography:document", [body || {}]); },
     },
     noteCode: {
-      readRegion: function(body) { return call("noema:api:note-code:read-region", [body || {}]); }
+      readRegion: function(body) { return call("noema:api:note-code:read-region", [body || {}]); },
+      readExcerpt: function(body) { return call("noema:api:note-code:read-excerpt", [body || {}]); }
     },
     slides: {
       mirror: function(body) { return call("noema:api:slides:mirror", [body || {}]); }

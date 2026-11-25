@@ -107,6 +107,8 @@ var documentWidgetOptions = map[string][]string{
 	"demo":       {"open"},
 	"npm-badge":  {"name", "version", "downloads"},
 	"npm-to":     {"tabs", "selected"},
+	"include":    {"src", "lines", "region", "section", "lang"},
+	"code-ref":   {"src", "lines", "region", "section", "symbol", "context", "lang"},
 }
 
 var defaultEnvironment = map[string]string{
@@ -2023,6 +2025,8 @@ func environmentOpen(kind, title string, options Options) (string, string) {
 		entries = append(entries, attributes["status"])
 	case "statusbar":
 		entries = append(entries, attributes["mode"], attributes["keys"], attributes["note"])
+	case "include", "code-ref":
+		entries = append(entries, attributes["src"])
 	case "npm-badge":
 		if strings.TrimSpace(attributes["name"]) != "" {
 			entries = append(entries, attributes["name"])
