@@ -57,6 +57,8 @@ const constructs = [
   "#+begin window Preview {height=4lh}\nThe document window contains ordinary Markdown.\n#+end window",
   "#+begin chat Conversation\n### Lin\nThis is the first message.\n### Editor {self=true}\nThis is the reply.\n#+end chat",
   '#+begin npm-to Install {tabs="npm,pnpm,deno"}\n~~~sh\nnpm install example-tool\n~~~\n#+end npm-to',
+  "> [!NOTE]\n> A quotation with a semantic label retains its body.",
+  "#+begin warning Native {collapsible=true open=true}\nThe native frame keeps its heading and source.\n#+end warning",
   "#+begin columns\nLeft column prose.\n\n#+col\n\nRight column prose.\n#+end columns",
   "A sentence with @@comment [inline note] attached.",
   "```python\nprint('hello')\nfor i in range(3):\n    print(i)\n```",
@@ -153,6 +155,8 @@ try {
         ["window", "The document window contains"],
         ["chat", "### Lin\nThis is the first message."],
         ["npm-to", "~~~sh\nnpm install example-tool"],
+        ["quoted-callout", "> [!NOTE]\n> A quotation"],
+        ["native-callout", "The native frame keeps its heading"],
         ["footnote", "[^1] too", "navigates"],
       ].filter(([family]) => !process.env.ONLY || process.env.ONLY.split(",").includes(family)).map(([family, needle, click = "opens"]) => {
         const at = markdown.indexOf(needle);

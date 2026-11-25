@@ -79,7 +79,7 @@ describe("shared markdown HTML renderer", () => {
     const root = document.createElement("div");
     root.innerHTML = html;
     const [note, warning] = [...root.querySelectorAll("blockquote.callout")];
-    expect(note?.querySelector(".callout-title")?.textContent?.trim()).toBe("");
+    expect(note?.querySelector(".callout-title")?.textContent?.trim()).toBe("Note");
     expect(note?.querySelector("p")?.innerHTML).toContain("first <strong>body</strong> line");
     expect(note?.querySelector("p")?.textContent).toContain("second line");
     expect(warning?.querySelector(".callout-title")?.innerHTML.trim()).toBe("Mind <em>this</em>");

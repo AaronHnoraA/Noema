@@ -144,6 +144,70 @@
 .cm-editor .cm-md-callout-error   { border-left-color: var(--aaron-callout-danger,  #e74c3c); }
 .cm-editor .cm-md-callout-quote   { border-left-color: var(--aaron-callout-quote,   #9b59b6); }
 .cm-editor .cm-md-callout-title   { font-weight: 600; }
+.cm-editor .cm-md-callout-important { border-left-color: var(--aaron-callout-quote, currentColor); }
+.cm-editor .cm-md-callout-caution { border-left-color: var(--aaron-callout-danger, currentColor); }
+
+.callout, .noema-native-callout-body {
+  --callout-accent: var(--aaron-callout-note, var(--aaron-link, currentColor));
+}
+:is(.callout, .noema-native-callout-body).noema-document-disclosure { --disclosure-accent: var(--callout-accent); }
+:is(.callout, .noema-native-callout-body)[data-callout="tip"] { --callout-accent: var(--aaron-callout-tip, currentColor); }
+:is(.callout, .noema-native-callout-body)[data-callout="info"] { --callout-accent: var(--aaron-callout-info, currentColor); }
+:is(.callout, .noema-native-callout-body)[data-callout="important"] { --callout-accent: var(--aaron-callout-quote, currentColor); }
+:is(.callout, .noema-native-callout-body)[data-callout="warning"] { --callout-accent: var(--aaron-callout-warning, currentColor); }
+:is(.callout, .noema-native-callout-body):is([data-callout="danger"], [data-callout="caution"]) { --callout-accent: var(--aaron-callout-danger, currentColor); }
+.noema-callout-widget { position: relative; }
+.noema-callout-widget > .callout { margin: 0; }
+.noema-callout-widget:has(> .noema-disclosure-edit) > .callout > summary { padding-inline-end: 3.4em; }
+.callout {
+  border-inline-start: 2px solid var(--callout-accent);
+  padding: 0.38em 0.62em;
+  color: inherit;
+  min-inline-size: 0;
+  white-space: normal;
+}
+.callout.noema-document-disclosure { border: 0; border-inline-start: 2px solid var(--callout-accent); padding: 0; }
+.callout.noema-document-disclosure[open] > summary { background: transparent; border-block-end: 0; }
+.callout > .callout-title { color: var(--callout-accent); }
+.callout > p { margin-block: 0.4em; }
+.callout > :last-child { margin-block-end: 0; }
+.noema-native-callout-body.noema-document-disclosure {
+  position: relative;
+  border: 0;
+  min-block-size: 1lh;
+}
+.noema-native-callout-body.noema-document-disclosure > summary {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  min-block-size: 1lh;
+  padding: 0 0.25em;
+  border: 0;
+  background: transparent;
+  color: var(--callout-accent);
+}
+.noema-native-callout-body.noema-document-disclosure[open] > summary { background: transparent; border: 0; }
+.noema-native-callout-body.noema-document-disclosure > .noema-disclosure-body { padding: 0 0.45em 0 1.36em; }
+.cm-document-data-widget[data-native-callout-header] > .org-env-content > .noema-native-callout-body { min-block-size: 0; }
+.cm-document-data-widget[data-native-callout-header] > .org-env-content > .noema-native-callout-body > summary { display: none; }
+.cm-document-data-widget[data-native-callout-header] > .org-env-content > .noema-native-callout-body > .noema-disclosure-body { padding: 0 0.45em; }
+.noema-native-callout-body[open] .noema-native-callout-toggle-label {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.noema-native-callout-body[data-background="quote"]:not(details),
+.noema-native-callout-body[data-background="quote"] > .noema-disclosure-body { background: color-mix(in srgb, var(--callout-accent) 8%, transparent); }
+.noema-native-callout-body[data-background="quiet"]:not(details),
+.noema-native-callout-body[data-background="quiet"] > .noema-disclosure-body { background: color-mix(in srgb, var(--aaron-panel, currentColor) 45%, transparent); }
+.noema-native-callout-body[data-background="raised"]:not(details),
+.noema-native-callout-body[data-background="raised"] > .noema-disclosure-body { background: var(--aaron-panel, transparent); }
+.noema-native-callout-body[style*="--native-callout-rail"],
+.noema-native-callout-body.noema-document-disclosure[style*="--native-callout-rail"] {
+  border-inline-start: var(--native-callout-rail) solid var(--callout-accent);
+}
 
 /* Code block lines — monospace background */
 .cm-editor .cm-md-code-block {
@@ -3555,6 +3619,29 @@ iframe.noema-embed-fullscreen {
 .cm-editor .cm-org-env-heading-widget .org-env-heading-title[data-empty="true"] {
   display: none;
 }
+.cm-editor .cm-org-env-heading-widget .cm-org-env-disclosure-toggle {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  inline-size: 1.55em;
+  block-size: 1.55em;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.cm-org-env-disclosure-toggle::after {
+  content: "";
+  inline-size: 0.38em;
+  block-size: 0.38em;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(-45deg);
+}
+.cm-org-env-disclosure-toggle[aria-expanded="true"]::after { transform: rotate(45deg); }
 .cm-editor .org-env-block-id {
   display: inline-flex;
   align-items: center;

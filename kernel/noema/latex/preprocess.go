@@ -62,7 +62,6 @@ var (
 	semanticAtx            = regexp.MustCompile(`^( {0,3})(#{1,6})(?:[ \t]+(.*)|[ \t]*)$`)
 	atxClosing             = regexp.MustCompile(`[ \t]+#+[ \t]*$`)
 	setextUnderline        = regexp.MustCompile(`^ {0,3}(?:=+|-+)[ \t]*$`)
-	calloutPattern         = regexp.MustCompile(`^(\s*>\s*)\[!([A-Za-z]+)\](?:\s+(.+))?\s*$`)
 	proofTitleWordPattern  = regexp.MustCompile(`(?i)^proof\b`)
 	layoutAttrPattern      = regexp.MustCompile(`(?i)([A-Za-z][A-Za-z0-9_-]*)\s*[:=]\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,;\s]+)|([A-Za-z][A-Za-z0-9_-]*)`)
 	layoutDimension        = regexp.MustCompile(`^(\d+(?:\.\d+)?)(%|px|em|rem|vw|vh|ch)?$`)
@@ -117,6 +116,34 @@ var defaultEnvironment = map[string]string{
 
 var defaultRemarkBlocks = map[string]bool{
 	"comment": true, "summary": true, "note": true, "important": true, "warning": true, "attention": true, "fold": true,
+}
+var nativeCalloutKinds = map[string]bool{
+	"note": true, "tip": true, "important": true, "warning": true, "caution": true, "info": true, "danger": true,
+}
+var quotedCalloutPattern = regexp.MustCompile(`^\[!([\w-]+)\]([+-])?(?:[ \t]+(.*))?$`)
+var boldCalloutTitle = regexp.MustCompile(`^\*\*.+\*\*$`)
+
+func quotedCalloutTitle(content string) (string, bool) {
+	match := quotedCalloutPattern.FindStringSubmatch(strings.TrimRight(content, " \t"))
+	if match == nil {
+		return "", false
+	}
+	fold := match[2] != ""
+	if label := strings.TrimSpace(match[3]); label != "" {
+		if !boldCalloutTitle.MatchString(label) {
+			label = "**" + label + "**"
+		}
+		return label, fold
+	}
+	kind := strings.ToLower(match[1])
+	switch kind {
+	case "faq":
+		return "**FAQ**", fold
+	case "todo":
+		return "**To do**", fold
+	default:
+		return "**" + strings.ToUpper(kind[:1]) + kind[1:] + "**", fold
+	}
 }
 
 var defaultHiddenBlocks = map[string]bool{"lean4": true, "src": true, "source": true, "meta": true}
@@ -1823,6 +1850,9 @@ func subparagraphLatex(rawTitle string, options Options) string {
 
 func exportWidgetTitle(kind, title string) (string, map[string]string) {
 	keys := documentWidgetOptions[kind]
+	if nativeCalloutKinds[kind] {
+		keys = []string{"collapsible", "open", "background", "border-left-width"}
+	}
 	if len(keys) == 0 {
 		return title, nil
 	}
@@ -2281,13 +2311,14 @@ func Prepare(markdown string, options Options) (PrepareResult, error) {
 				singletons[key] = true
 			}
 		}
-		if callout := calloutPattern.FindStringSubmatch(line); callout != nil {
-			label := callout[2]
-			if callout[3] != "" {
-				label = callout[3]
+		if container.QuoteDepth > 0 && (index == 0 || markdownContainerLine(lines[index-1]).QuoteDepth < container.QuoteDepth) {
+			if title, fold := quotedCalloutTitle(container.Content); title != "" {
+				output = append(output, container.Prefix+title)
+				if fold && index+1 < len(lines) && markdownContainerLine(lines[index+1]).QuoteDepth == container.QuoteDepth {
+					output = append(output, strings.TrimRight(container.Prefix, " \t"))
+				}
+				continue
 			}
-			output = append(output, callout[1]+"**"+strings.TrimSpace(label)+"**")
-			continue
 		}
 		transformed, err := transformInlineCommands(line, options, context, &unresolved)
 		if err != nil {

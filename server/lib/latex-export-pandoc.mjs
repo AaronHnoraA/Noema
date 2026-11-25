@@ -3,6 +3,7 @@ import { scanInlineCommands } from "../../shared/command-syntax.mjs";
 import { approvedEdiffMarkdown } from "../../shared/ediff-source.mjs";
 import { parseOrgEnvIdentityTitle } from "../../shared/block-identity.mjs";
 import { hasDocumentWidgetOptions, splitDocumentWidgetAttrs, splitDocumentWidgetTitle } from "../../shared/document-widget-title.mjs";
+import { parseQuotedCallout } from "../../shared/callout-syntax.mjs";
 import { LATEX_MARKS, LATEX_PROMPT_MARK, latexMark } from "../../shared/latex-marks.mjs";
 import {
   layoutFromAttrs,
@@ -938,10 +939,14 @@ export function preprocessNoemaForPandoc(markdown, options = {}) {
       if (spec.placement === "block-once" && singletonMarks.has(key)) throw new Error(`@@latexmk(${key}) may appear only once`);
       if (spec.placement === "block-once") singletonMarks.add(key);
     }
-    const callout = line.match(/^(\s*>\s*)\[!([A-Za-z]+)\](?:\s+(.+))?\s*$/);
+    const callout = container.quoteDepth > markdownContainerLine(lines[index - 1]).quoteDepth
+      ? parseQuotedCallout(container.content) : null;
     if (callout) {
-      const label = String(callout[3] || callout[2]).trim();
-      output.push(`${callout[1]}**${label}**`);
+      const label = /^\*\*.+\*\*$/.test(callout.title) ? callout.title : `**${callout.title}**`;
+      output.push(container.prefix + label);
+      if (callout.fold && markdownContainerLine(lines[index + 1]).quoteDepth === container.quoteDepth) {
+        output.push(container.prefix.trimEnd());
+      }
       continue;
     }
     const transformed = transformInlineCommands(line, conversionOptions, markContext);

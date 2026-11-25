@@ -38,6 +38,7 @@ import {
   renderMarkdownInlineHTML,
   renderMarkdownHTML,
   renderEditorWidgetHTML,
+  indexQuotedCallouts,
   type RenderMarkdownHTMLOptions,
 } from "../../../../render-html.ts";
 import {
@@ -72,6 +73,8 @@ import { CHAT_TEXT_SELECTOR } from "../../../../document-chat.ts";
 import { connectDocumentSourceCopy } from "./document-source-actions.ts";
 import { documentBadgeHasName, documentPackageKinds, PACKAGE_CODE_SELECTOR } from "../../../../document-packages.ts";
 import { connectDocumentPackages } from "./document-packages.ts";
+import { hasNativeCalloutLayout, nativeCalloutKinds, nativeCalloutOpening } from "../../../../document-callouts.ts";
+import { documentViewState, rememberDocumentView } from "./document-view-state.ts";
 import { CODE_TREE_TEXT_SELECTOR, connectDocumentTrees } from "./document-trees.ts";
 import {
   COLUMNS_MAX_COUNT,
@@ -538,7 +541,7 @@ function orgEnvContainerIndex(state: EditorState): OrgEnvContainerIndex {
  * implementation filtered and sorted the note's entire org-env block list on
  * every call, making a decoration rebuild O(widgets x blocks).
  */
-export function orgEnvContextForRange(state: EditorState, from: number, to: number): OrgEnvContext | null {
+function containingOrgEnvBlock(state: EditorState, from: number, to: number): OrgEnvBlock | null {
   const { blocks, maxBodyTo } = orgEnvContainerIndex(state);
   if (blocks.length === 0) return null;
   // Last block whose body can start at or before `from`.
@@ -555,10 +558,15 @@ export function orgEnvContextForRange(state: EditorState, from: number, to: numb
     // Blocks are properly nested, so the latest-starting container is the
     // innermost one.
     if (block.bodyFrom <= from && to <= block.bodyTo) {
-      return { kind: block.kind, depth: block.depth };
+      return block;
     }
   }
   return null;
+}
+
+export function orgEnvContextForRange(state: EditorState, from: number, to: number): OrgEnvContext | null {
+  const block = containingOrgEnvBlock(state, from, to);
+  return block ? { kind: block.kind, depth: block.depth } : null;
 }
 
 function buildOrgEnvSource(kind: string, title: string, body: string): string {
@@ -623,6 +631,7 @@ const documentNavigationSelector = [
   ".noema-document-demo a[href]",
   ".noema-document-window a[href]",
   ".noema-document-chat a[href]",
+  ".callout a[href]",
 ].join(", ");
 
 interface DocumentViewScope {
@@ -631,12 +640,35 @@ interface DocumentViewScope {
 }
 
 const documentViewSourceKeys = new WeakMap<OrgEnvBlock, string>();
+const quotedCalloutPositions = new WeakMap<Text, Map<string, Map<string, number[]>>>();
+
+function quotedCalloutPosition(doc: Text, group: HTMLElement, from: number, to: number): number | null {
+  let index = quotedCalloutPositions.get(doc);
+  if (!index) {
+    index = new Map();
+    quotedCalloutPositions.set(doc, index);
+  }
+  const rangeKey = `${from}:${to}`;
+  let matches = index.get(rangeKey);
+  if (!matches) {
+    matches = indexQuotedCallouts(doc.sliceString(from, to)).positions;
+    if (index.size === 32) index.delete(index.keys().next().value!);
+    index.set(rangeKey, matches);
+  }
+  const offset = matches.get(group.dataset.viewSource || "")?.[Number(group.dataset.viewOccurrence)];
+  return offset === undefined ? null : from + offset;
+}
 
 function documentViewPosition(view: EditorView, scope: DocumentViewScope, group: HTMLElement): number | null {
   const { owner, column } = scope;
   const blocks = orgEnvBlocksFromState(view.state);
   let position: number;
   try { position = view.posAtDOM(owner, -1); } catch { return null; }
+  const quote = group.dataset.viewKind === "quoted-callout";
+  if (quote && owner.classList.contains("noema-callout-widget")) {
+    const length = Number(owner.dataset.cmSourceTo) - Number(owner.dataset.cmSourceFrom);
+    return quotedCalloutPosition(view.state.doc, group, position, position + length);
+  }
   const host = column !== undefined || owner.classList.contains("cm-columns-widget")
     ? liveColumnsBlockForElement(view, owner)
     : blocks.find((block) => owner.dataset.orgEnvKind === block.kind
@@ -645,6 +677,7 @@ function documentViewPosition(view: EditorView, scope: DocumentViewScope, group:
   const pane = column === undefined ? undefined : splitColumnPanes(host.body)[column];
   const from = pane ? host.bodyFrom + pane.from : host.from;
   const to = pane ? host.bodyFrom + pane.to : host.to;
+  if (quote) return quotedCalloutPosition(view.state.doc, group, from, to);
   const occurrence = Number(group.dataset.viewOccurrence);
   let found = 0;
   for (const block of blocks) {
@@ -660,7 +693,7 @@ function documentViewPosition(view: EditorView, scope: DocumentViewScope, group:
   return null;
 }
 
-function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, scope?: DocumentViewScope): void {
+export function enhanceRenderedMarkdown(root: HTMLElement, view: EditorView, scope?: DocumentViewScope): void {
   const hasDocumentViews = root.querySelector("[data-view-source]") !== null;
   if (hasDocumentViews || root.querySelector(documentNavigationSelector)) {
     const openAction = (event: MouseEvent): void => {
@@ -1791,14 +1824,16 @@ class OrgEnvOpenWidget extends MeasuredWidget {
   blockId: string;
   titleOffset: number;
   depth: number;
+  calloutOpen: boolean | null;
 
-  constructor(kind: string, title: string, blockId: string, titleOffset: number, depth: number) {
+  constructor(kind: string, title: string, blockId: string, titleOffset: number, depth: number, calloutOpen: boolean | null) {
     super();
     this.kind = kind;
     this.title = title;
     this.blockId = blockId;
     this.titleOffset = titleOffset;
     this.depth = depth;
+    this.calloutOpen = calloutOpen;
   }
 
   protected measureKey(): string { return "oopen:" + this.kind + ":" + this.title + ":" + this.blockId; }
@@ -1812,6 +1847,7 @@ class OrgEnvOpenWidget extends MeasuredWidget {
       && this.title === other.title
       && this.blockId === other.blockId
       && this.titleOffset === other.titleOffset
+      && this.calloutOpen === other.calloutOpen
       && this.depth === other.depth;
   }
 
@@ -1829,6 +1865,31 @@ class OrgEnvOpenWidget extends MeasuredWidget {
     title.dataset.empty = this.title ? "false" : "true";
     title.innerHTML = renderMarkdownInlineHTML(this.title);
     div.append(label, title);
+    if (this.calloutOpen !== null) {
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "cm-org-env-disclosure-toggle";
+      toggle.title = "Toggle contents";
+      toggle.setAttribute("aria-label", "Toggle contents");
+      const update = () => {
+        if (!view.dom.contains(div)) return;
+        const from = view.posAtDOM(div, -1);
+        const remembered = view.state.field(documentViewState, false)?.get(from);
+        toggle.setAttribute("aria-expanded", String(Array.isArray(remembered) ? remembered.includes(0) : this.calloutOpen));
+      };
+      queueMicrotask(update);
+      toggle.addEventListener("mousedown", stopEditorPropagation);
+      toggle.addEventListener("keydown", stopEditorPropagation);
+      toggle.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const from = view.posAtDOM(div, -1);
+        const summary = div.nextElementSibling?.querySelector<HTMLElement>("details.noema-native-callout-body > summary");
+        if (summary) summary.click();
+        else rememberDocumentView(view, from, toggle.getAttribute("aria-expanded") === "true" ? [] : [0]);
+        update();
+      });
+      div.append(toggle);
+    }
     if (this.blockId) {
       const badge = document.createElement("button");
       badge.type = "button";
@@ -5156,6 +5217,7 @@ class DocumentDataWidget extends MeasuredWidget {
     const block = document.createElement("div");
     block.className = "cm-document-data-widget cm-org-env-line";
     block.dataset.orgEnvKind = this.kind;
+    if (nativeCalloutOpening(this.kind, this.title) !== null) block.dataset.nativeCalloutHeader = "true";
     block.style.setProperty("--org-env-depth", String(this.depth));
     if (this.from < this.to) {
       setSourceRange(block, this.from, this.to);
@@ -5848,10 +5910,12 @@ function addOrgEnvBoundaryDecos(
   const closeActive = orgEnvCloseBoundaryActive(state, block);
 
   if (!openActive) {
+    const calloutOpen = block.body.trim() && !opensSource(state, block.from, block.to)
+      ? nativeCalloutOpening(block.kind, block.title) : null;
     decos.push(
       Decoration.replace({
         widget: new OrgEnvOpenWidget(block.kind, splitDocumentWidgetTitle(block.kind, block.title).title,
-          block.blockId, block.titleAnchor - block.openFrom, block.depth),
+          block.blockId, block.titleAnchor - block.openFrom, block.depth, calloutOpen),
         block: true,
       }).range(block.openFrom, block.openTo),
     );
@@ -6340,9 +6404,13 @@ const documentDataEnvironments = new Set([
 const sourceRevealEnvironments = new Set(["comment", "fold", "details", "av", "embed", ...documentDataEnvironments]);
 const wholeBlockEnvironments = new Set([...sourceRevealEnvironments, "meta", "html", "tikz", "ediff"]);
 
+function hasDocumentDataBody(block: OrgEnvBlock): boolean {
+  return documentDataEnvironments.has(block.kind) || hasNativeCalloutLayout(block.kind, block.title);
+}
+
 export function isDocumentDataBody(state: EditorState, from: number, to: number): boolean {
-  const context = orgEnvContextForRange(state, from, to);
-  return !!context && documentDataEnvironments.has(context.kind);
+  const block = containingOrgEnvBlock(state, from, to);
+  return !!block && hasDocumentDataBody(block);
 }
 
 function addOrgEnvBlockExtraDecos(
@@ -6449,7 +6517,7 @@ function addOrgEnvBlockExtraDecos(
     return;
   }
   addOrgEnvBoundaryDecos(decos, state, block);
-  if (documentDataEnvironments.has(block.kind)
+  if (hasDocumentDataBody(block)
       && (block.body.trim() || documentFrameHasDetails(block.kind, block.title)
         || documentStatusHasDetails(block.kind, block.title) || documentQrHasText(block.kind, block.title)
         || documentFieldHasDetails(block.kind, block.title) || documentBadgeHasName(block.kind, block.title))
@@ -6668,13 +6736,14 @@ function activeBlockExtraKey(state: EditorState): string {
       }
       continue;
     }
-    if ((sourceRevealEnvironments.has(block.kind) && opensSource(state, block.from, block.to))
+    const dataBody = hasDocumentDataBody(block);
+    if (((sourceRevealEnvironments.has(block.kind) || dataBody) && opensSource(state, block.from, block.to))
         || (block.kind === "ediff" && opensSource(state, block.from, block.to, "caret-interior"))
         || (block.kind === "tikz" && tikzSourceActive(state, block))) {
       parts.push(`${block.kind}:${block.from}:${block.to}`);
       // Data widgets replace only the body. Environment boundaries still
       // track caret transitions independently while the body source is open.
-      if (!documentDataEnvironments.has(block.kind)) continue;
+      if (!dataBody) continue;
     }
     if (opensSource(state, block.openFrom, block.openTo)) {
       parts.push(`org-open:${block.openFrom}:${block.openTo}:${block.from}:${block.to}`);
@@ -6727,7 +6796,7 @@ function canMapBlockExtraDecos(state: EditorState, changes: ChangeSet): boolean 
   if (blocks.some((block) => (
     block.kind === "columns"
       ? changesTouchColumnsStructure(state, changes, block)
-      : wholeBlockEnvironments.has(block.kind) && changesTouchRange(changes, block.from, block.to)
+      : (wholeBlockEnvironments.has(block.kind) || hasDocumentDataBody(block)) && changesTouchRange(changes, block.from, block.to)
   ))) {
     return false;
   }
@@ -6747,7 +6816,7 @@ function canPatchBlockExtraDecosNearChanges(state: EditorState, changes: ChangeS
   return !blocks.some((block) => (
     block.kind === "columns"
       ? changesTouchColumnsStructure(state, changes, block)
-      : wholeBlockEnvironments.has(block.kind) && changesTouchRange(changes, block.from, block.to)
+      : (wholeBlockEnvironments.has(block.kind) || hasDocumentDataBody(block)) && changesTouchRange(changes, block.from, block.to)
   ));
 }
 
@@ -6796,6 +6865,7 @@ function patchBlockExtraDecosForOrgEnvTitleChange(
   const fullBlockWidgetActive = block.kind === "meta"
     || block.kind === "html"
     || block.kind === "columns"
+    || nativeCalloutKinds.has(block.kind)
     || (block.kind === "ediff" && !opensSource(state, block.from, block.to, "caret-interior"))
     || (block.kind === "tikz" && !tikzSourceActive(state, block))
     || (sourceRevealEnvironments.has(block.kind) && !opensSource(state, block.from, block.to));
@@ -6907,6 +6977,14 @@ const blockExtrasDecorations = StateField.define<DecorationSet>({
   },
   provide: (f) => EditorView.decorations.from(f),
 });
+
+export function blockExtraReplacesRange(state: EditorState, from: number, to: number): boolean {
+  let covered = false;
+  state.field(blockExtrasDecorations, false)?.between(from, to, (start, end, value) => {
+    if (start <= from && end >= to && value.spec.widget) covered = true;
+  });
+  return covered;
+}
 
 const orgEnvRailExtension = ViewPlugin.fromClass(OrgEnvRailPlugin);
 

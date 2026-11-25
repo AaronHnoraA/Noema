@@ -6,7 +6,7 @@ import { documentViewState, rememberDocumentView } from "./document-view-state.t
 const connectedGroups = new WeakSet<HTMLElement>();
 
 export function connectDocumentDisclosures(root: HTMLElement, view: EditorView, hydrate: (body: HTMLElement) => void, locate: (group: HTMLElement) => number | null): void {
-  const groups = root.querySelectorAll<HTMLElement>(".noema-document-disclosure[data-view-kind='details'], .noema-document-accordion[data-view-source]");
+  const groups = root.querySelectorAll<HTMLElement>(".noema-document-disclosure[data-view-source], .noema-document-accordion[data-view-source]");
   for (const group of groups) {
     if (connectedGroups.has(group)) continue;
     connectedGroups.add(group);
@@ -52,6 +52,7 @@ export function connectDocumentDisclosures(root: HTMLElement, view: EditorView, 
     else queueMicrotask(initialize);
 
     entries.forEach(({ summary }, index) => summary?.addEventListener("click", (event) => {
+      if (event.target instanceof Element && event.target.closest("a[href]")) return;
       event.preventDefault();
       event.stopPropagation();
       const indexes = opened.has(index) ? [...opened].filter((item) => item !== index)

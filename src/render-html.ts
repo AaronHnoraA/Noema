@@ -27,6 +27,7 @@ import { documentFieldDelimiter, documentFieldKinds, renderDocumentFields } from
 import { documentDemonstrationKinds, renderDocumentDemonstration } from "./document-demonstrations.ts";
 import { renderDocumentChat } from "./document-chat.ts";
 import { documentPackageKinds, packageCommandFence, renderDocumentPackage } from "./document-packages.ts";
+import { nativeCalloutKinds, parseQuotedCallout, renderNativeCallout } from "./document-callouts.ts";
 import { documentViewSourceKey, forEachDocumentViewTree } from "./document-view.ts";
 import { splitDocumentWidgetTitle } from "../shared/document-widget-title.mjs";
 import { sanitizeEmbeddedHtml } from "./sanitize-html.ts";
@@ -1417,6 +1418,7 @@ function renderOrgEnv(
     : documentDemonstrationKinds.has(kindName) ? renderDocumentDemonstration(md, kindName, title, meta.body, attrs, options.documentSourceActions === true, plainSourceBodies)
     : kindName === "chat" ? renderDocumentChat(md, title, meta.body, options.documentSourceActions === true, plainSourceBodies)
     : documentPackageKinds.has(kindName) ? renderDocumentPackage(md, kindName, title, meta.body, attrs, options.documentTabActions === true)
+    : nativeCalloutKinds.has(kindName) ? renderNativeCallout(md, kindName, title, meta.body, attrs, options.documentDisclosureActions === true)
     : null;
   const body = renderedBody ?? (meta.body.trim() ? md.render(meta.body) : "");
   if (kindName === "details" && renderedBody !== null) return renderedBody;
@@ -1514,62 +1516,59 @@ function isolateBlockLayoutAttrLines(markdown: string, literalLines?: ReadonlySe
   return out.join("\n");
 }
 
-// Obsidian-style callout blocks: `> [!type] Optional title`
-// Transforms blockquotes whose first paragraph starts with [!type] into
-// `<blockquote class="callout callout-<type>" data-callout="<type>">` with a
-// `<div class="callout-title">` header. Body content is unchanged.
-function noemaCalloutsRule(state: StateCore): void {
+// GitHub callout headings and the Obsidian folding modifiers use the ordinary
+// quotation token stream so inline formatting and nested Markdown survive.
+function quotedCalloutKey(kind: string, title: string, firstParagraphBody: string): string {
+  return documentViewSourceKey("quoted-callout", `${kind}:${title}`, firstParagraphBody);
+}
+
+function noemaCalloutsRule(state: StateCore, interactive: boolean): void {
+  if (!state.src.includes("[!")) return;
   const { tokens } = state;
   for (let i = 0; i < tokens.length; i++) {
     const bqOpen = tokens[i];
     if (!bqOpen || bqOpen.type !== "blockquote_open") continue;
 
-    let paraOpen = -1, inlineIdx = -1, paraClose = -1;
-    let depth = 1;
-    for (let j = i + 1; j < tokens.length; j++) {
-      const t = tokens[j]!;
-      if (t.type === "blockquote_open") { depth++; continue; }
-      if (t.type === "blockquote_close") { if (--depth === 0) break; continue; }
-      if (depth !== 1) continue;
-      if (t.type === "paragraph_open" && paraOpen < 0) paraOpen = j;
-      if (t.type === "inline" && inlineIdx < 0 && paraOpen >= 0) inlineIdx = j;
-      if (t.type === "paragraph_close" && paraClose < 0 && inlineIdx >= 0) { paraClose = j; break; }
-    }
+    const heading = tokens[i + 1];
+    const inline = tokens[i + 2];
+    const headingEnd = tokens[i + 3];
+    if (heading?.type !== "paragraph_open" || inline?.type !== "inline" || headingEnd?.type !== "paragraph_close") continue;
+    const [firstLine, ...lines] = inline.content.split("\n");
+    const callout = parseQuotedCallout(firstLine!);
+    if (!callout) continue;
 
-    if (inlineIdx < 0) continue;
-
-    const inline = tokens[inlineIdx]!;
-    const firstLine = inline.content.split("\n")[0] ?? "";
-    const m = /^\[!(\w+)\](?:[ \t]+(.*))?$/.exec(firstLine);
-    if (!m) continue;
-
-    const calloutType = m[1]!.toLowerCase();
-    const titleText = m[2] ?? "";
-
-    bqOpen.attrJoin("class", `callout callout-${calloutType}`);
-    bqOpen.attrSet("data-callout", calloutType);
-
-    if (paraOpen >= 0 && paraClose >= 0) {
-      tokens[paraOpen]!.tag = "div";
-      tokens[paraOpen]!.attrJoin("class", "callout-title");
-      tokens[paraClose]!.tag = "div";
+    bqOpen.attrJoin("class", `callout callout-${callout.kind}`);
+    bqOpen.attrSet("data-callout", callout.kind);
+    heading.tag = headingEnd.tag = callout.fold ? "summary" : "div";
+    heading.attrJoin("class", "callout-title");
+    let quoteEnd: Token | undefined;
+    if (callout.fold) {
+      for (let end = i + 4; end < tokens.length; end++) {
+        const close = tokens[end]!;
+        if (close.type !== "blockquote_close" || close.level !== bqOpen.level) continue;
+        close.tag = bqOpen.tag = "details";
+        quoteEnd = close;
+        break;
+      }
+      bqOpen.attrJoin("class", "noema-document-disclosure");
+      if (callout.fold === "+") bqOpen.attrSet("open", "");
     }
 
     // Strip [!type]; re-tokenize so inline formatting in the title survives.
     // Lines after the first are the callout's body, as in the editor, where
     // only the first line carries the title style.
-    const body = inline.content.split("\n").slice(1).join("\n");
+    const body = lines.join("\n");
     const inlineTokens = (content: string) => (
       state.md.parseInline(content, state.env as Record<string, unknown>)[0]?.children ?? []
     );
-    inline.content = titleText;
-    inline.children = inlineTokens(titleText);
-    if (body.trim() && paraClose >= 0) {
+    inline.content = callout.title;
+    inline.children = inlineTokens(callout.title);
+    if (body.trim()) {
       const open = new state.Token("paragraph_open", "p", 1);
       const text = new state.Token("inline", "", 0);
       const close = new state.Token("paragraph_close", "p", -1);
       open.block = text.block = close.block = true;
-      open.level = close.level = tokens[paraOpen]!.level;
+      open.level = close.level = heading.level;
       text.level = inline.level;
       text.content = body;
       text.children = inlineTokens(body);
@@ -1577,7 +1576,17 @@ function noemaCalloutsRule(state: StateCore): void {
         open.map = [Math.min(inline.map[0] + 1, inline.map[1]), inline.map[1]];
         text.map = open.map;
       }
-      tokens.splice(paraClose + 1, 0, open, text, close);
+      tokens.splice(i + 4, 0, open, text, close);
+    }
+    if (quoteEnd && interactive) {
+      bqOpen.attrSet("data-view-kind", "quoted-callout");
+      bqOpen.attrSet("data-view-source", quotedCalloutKey(callout.kind, callout.title, body));
+      const before = new state.Token("html_block", "", 0);
+      before.content = '<div class="noema-disclosure-body"></div><template data-view-content>';
+      const after = new state.Token("html_block", "", 0);
+      after.content = "</template>";
+      tokens.splice(tokens.indexOf(quoteEnd, i + 4), 0, after);
+      tokens.splice(i + 4, 0, before);
     }
   }
 }
@@ -1732,7 +1741,7 @@ function createMarkdownIt(options: RenderMarkdownHTMLOptions, plainSourceBodies?
   md.block.ruler.before("paragraph", "toc_block", tocRule, { alt: ["paragraph"] });
   md.block.ruler.before("paragraph", "private_command_line", privateCommandLineRule, { alt: ["paragraph"] });
   md.block.ruler.before("reference", "footnote_definition", footnoteDefinitionRule, { alt: ["paragraph", "reference", "blockquote"] });
-  md.core.ruler.push("noema_callouts", noemaCalloutsRule);
+  md.core.ruler.push("noema_callouts", (state) => noemaCalloutsRule(state, options.documentDisclosureActions === true));
   md.core.ruler.before("text_join", "noema_field_delimiter", documentFieldDelimiter);
   md.core.ruler.push("noema_block_identity", blockIdentityRule);
   md.inline.ruler.before("link", "empty_html_link_embed", emptyHtmlLinkEmbedRule);
@@ -1877,6 +1886,57 @@ let defaultMarkdownIt: MarkdownIt | undefined;
 
 function markdownItForRender(options?: RenderMarkdownHTMLOptions, plainSourceBodies?: Map<string, string[]>): MarkdownIt {
   return options ? createMarkdownIt(options, plainSourceBodies) : (defaultMarkdownIt ??= createMarkdownIt({}));
+}
+
+export function indexQuotedCallouts(markdown: string): {
+  ranges: Array<{ from: number; to: number }>;
+  positions: Map<string, number[]>;
+} {
+  const md = markdownItForRender();
+  const lines = markdown.split("\n");
+  const starts = [0];
+  for (const line of lines) starts.push(starts.at(-1)! + line.length + 1);
+  const spans = new Map<number, number>();
+  const positions = new Map<string, number[]>();
+  function collect(source: string, base: number): void {
+    if (!source.includes("[!")) return;
+    const tokens: Token[] = [];
+    md.block.parse(source, md, {}, tokens);
+    const ancestors: Token[] = [];
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index]!;
+      if (token.type === "org_env_block" && token.map) {
+        const { kind, body } = token.meta as OrgEnvTokenMeta;
+        if (!/^(?:html|tikz|meta)$/i.test(kind)) collect(body, base + token.map[0] + 1);
+      } else if (token.type === "blockquote_open" && token.map && tokens[index + 1]?.type === "paragraph_open") {
+        const [heading, ...body] = (tokens[index + 2]?.content || "").split("\n");
+        const callout = parseQuotedCallout(heading!);
+        if (callout) {
+          const owner = ancestors.find((parent) => parent.type === "blockquote_open" || parent.type === "list_item_open") ?? token;
+          const [first, last] = owner.map!;
+          const from = starts[base + first]!;
+          let endLine = base + last;
+          while (endLine > base + first + 1 && !lines[endLine - 1]?.trim()) endLine--;
+          spans.set(from, Math.min(markdown.length, starts[endLine]! - 1));
+          if (callout.fold) {
+            const key = quotedCalloutKey(callout.kind, callout.title, body.join("\n"));
+            const point = starts[base + token.map[0]]!;
+            const previous = positions.get(key);
+            if (previous) previous.push(point);
+            else positions.set(key, [point]);
+          }
+        }
+      }
+      if (token.nesting === 1) ancestors.push(token);
+      else if (token.nesting === -1) ancestors.pop();
+    }
+  }
+  collect(markdown, 0);
+  const ranges: Array<{ from: number; to: number }> = [];
+  for (const [from, to] of [...spans].sort((a, b) => a[0] - b[0] || b[1] - a[1])) {
+    if (from >= (ranges.at(-1)?.to ?? 0)) ranges.push({ from, to });
+  }
+  return { ranges, positions };
 }
 
 /** Source spans for top-level rendered blocks, using the same Markdown parser

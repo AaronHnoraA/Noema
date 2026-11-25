@@ -32,6 +32,9 @@ const attributesByKind = new Map([
   ["npm-badge", ["name", "version", "downloads"]],
   ["npm-to", ["tabs", "selected"]],
 ]);
+for (const kind of ["note", "tip", "important", "warning", "caution", "info", "danger"]) {
+  attributesByKind.set(kind, ["collapsible", "open", "background", "border-left-width"]);
+}
 
 export function hasDocumentWidgetOptions(kind) { return attributesByKind.has(kind); }
 

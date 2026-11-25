@@ -10,6 +10,7 @@ import type { Extension } from "@codemirror/state";
 import { blockMathRangesExtension } from "../../math-ranges.ts";
 import { livePreviewExtension } from "../../live-preview.ts";
 import { blockExtrasExtension } from "./widgets/block-extras.ts";
+import { quotedCalloutExtension } from "./widgets/quoted-callout.ts";
 import { blockAnchorExtension } from "./widgets/block-anchor.ts";
 import { blockRefExtension } from "./widgets/block-ref.ts";
 import { fencedCodeExtension } from "./widgets/fenced-code.ts";
@@ -43,6 +44,7 @@ export function createVisualMarkdownExtensions(): Extension {
     blockMathRangesExtension,
     livePreviewExtension,
     blockExtrasExtension,
+    quotedCalloutExtension,
     blockAnchorExtension,
     blockRefExtension,
     mathExtension,
